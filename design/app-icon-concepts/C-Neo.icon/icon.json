@@ -1,0 +1,61 @@
+{
+  "fill": {
+    "solid": "srgb:1.00000,1.00000,1.00000,1.00000"
+  },
+  "groups": [
+    {
+      "layers": [
+        {
+          "image-name": "Right.svg",
+          "name": "右 · 薄荷节拍",
+          "glass": true
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.35
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.3
+      }
+    },
+    {
+      "layers": [
+        {
+          "image-name": "Bridge.svg",
+          "name": "中 · 金色连音",
+          "glass": true
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.35
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.3
+      }
+    },
+    {
+      "layers": [
+        {
+          "image-name": "Left.svg",
+          "name": "左 · 珊瑚节拍",
+          "glass": true
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.35
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.3
+      }
+    }
+  ],
+  "supported-platforms": {
+    "squares": "shared"
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "fill": {
+    "solid": "srgb:1.00000,1.00000,1.00000,1.00000"
+  },
+  "groups": [
+    {
+      "layers": [
+        {
+          "image-name": "Note.svg",
+          "name": "前 · 连音",
+          "glass": true,
+          "opacity": 1.0
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.42
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.3
+      }
+    },
+    {
+      "layers": [
+        {
+          "image-name": "Echo.svg",
+          "name": "后 · 回声",
+          "glass": true,
+          "opacity": 0.28
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.42
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.3
+      }
+    }
+  ],
+  "supported-platforms": {
+    "squares": "shared"
+  }
+}

@@ -1,0 +1,119 @@
+name: NeoMusic
+options:
+  bundleIdPrefix: com.elsterlee
+  deploymentTarget:
+    iOS: "27.0"
+  xcodeVersion: "27.0"
+  developmentLanguage: zh-Hans
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+packages:
+  LNPopupUI:
+    path: Packages/LNPopupUI
+  LNPopupController:
+    path: Packages/LNPopupController
+  Nuke:
+    url: https://github.com/kean/Nuke
+    exactVersion: 13.2.0
+  LNSwiftUIUtils:
+    url: https://github.com/LeoNatan/LNSwiftUIUtils.git
+    exactVersion: 1.1.5
+  LNSystemMarqueeLabel:
+    url: https://github.com/LeoNatan/LNSystemMarqueeLabel
+    exactVersion: 0.1.2
+targets:
+  NeoMusic:
+    type: application
+    platform: iOS
+    sources:
+      - path: NeoMusic
+    dependencies:
+      - package: LNPopupUI
+        product: LNPopupUI-Static
+      - package: Nuke
+        product: Nuke
+      - package: Nuke
+        product: NukeUI
+    info:
+      path: NeoMusic/Info.plist
+      properties:
+        CADisableMinimumFrameDurationOnPhone: true
+        UIBackgroundModes: [audio]
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+    settings:
+      base:
+        ASSETCATALOG_COMPILER_APPICON_NAME: NeoMusicIcon
+        PRODUCT_BUNDLE_IDENTIFIER: com.elsterlee.NeoMusic
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: NeoMusic
+        INFOPLIST_KEY_NSCameraUsageDescription: 拍摄照片作为播放列表封面。
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        MARKETING_VERSION: 0.1.0
+        CURRENT_PROJECT_VERSION: 1
+        TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_OBJC_BRIDGING_HEADER: NeoMusic/NeoMusic-Bridging-Header.h
+  NeoMusicTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: NeoMusicTests
+    dependencies:
+      - target: NeoMusic
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        TARGETED_DEVICE_FAMILY: "1"
+  NeoMusicNavigationUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: NeoMusicNavigationUITests
+    dependencies:
+      - target: NeoMusic
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        TARGETED_DEVICE_FAMILY: "1"
+        TEST_TARGET_NAME: NeoMusic
+
+
+  NeoMusicFunctionalParityTests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: NeoMusicFunctionalParityTests
+    dependencies:
+      - target: NeoMusic
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        TARGETED_DEVICE_FAMILY: "1"
+        TEST_TARGET_NAME: NeoMusic
+
+schemes:
+  NeoMusicFunctionalParity:
+    build:
+      targets:
+        NeoMusic: all
+    test:
+      targets:
+        - NeoMusicFunctionalParityTests
+    run:
+      config: Debug
+  NeoMusic:
+    build:
+      targets:
+        NeoMusic: all
+    test:
+      targets:
+        - NeoMusicTests
+        - NeoMusicNavigationUITests
+    run:
+      config: Debug
+    archive:
+      config: Release

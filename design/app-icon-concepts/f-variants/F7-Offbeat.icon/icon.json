@@ -1,0 +1,82 @@
+{
+  "fill": {
+    "solid": "srgb:1.00000,1.00000,1.00000,1.00000"
+  },
+  "groups": [
+    {
+      "layers": [
+        {
+          "image-name": "Bar-4.svg",
+          "name": "声部 4",
+          "glass": true,
+          "opacity": 1.0
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.42
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.3
+      }
+    },
+    {
+      "layers": [
+        {
+          "image-name": "Bar-3.svg",
+          "name": "声部 3",
+          "glass": true,
+          "opacity": 0.78
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.42
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.3
+      }
+    },
+    {
+      "layers": [
+        {
+          "image-name": "Bar-2.svg",
+          "name": "声部 2",
+          "glass": true,
+          "opacity": 0.56
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.42
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.3
+      }
+    },
+    {
+      "layers": [
+        {
+          "image-name": "Bar-1.svg",
+          "name": "声部 1",
+          "glass": true,
+          "opacity": 0.35
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.42
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.3
+      }
+    }
+  ],
+  "supported-platforms": {
+    "squares": "shared"
+  }
+}

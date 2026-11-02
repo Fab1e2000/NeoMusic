@@ -1,0 +1,64 @@
+{
+  "fill": {
+    "solid": "srgb:1.00000,1.00000,1.00000,1.00000"
+  },
+  "groups": [
+    {
+      "layers": [
+        {
+          "image-name": "Front.svg",
+          "name": "前 · 短声部",
+          "glass": true,
+          "opacity": 1
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.42
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.3
+      }
+    },
+    {
+      "layers": [
+        {
+          "image-name": "Middle.svg",
+          "name": "中 · 主声部",
+          "glass": true,
+          "opacity": 0.65
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.42
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.3
+      }
+    },
+    {
+      "layers": [
+        {
+          "image-name": "Back.svg",
+          "name": "后 · 低声部",
+          "glass": true,
+          "opacity": 0.35
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.42
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.3
+      }
+    }
+  ],
+  "supported-platforms": {
+    "squares": "shared"
+  }
+}

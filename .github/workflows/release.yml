@@ -1,0 +1,55 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    runs-on: xcode-27
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Build unsigned IPA
+        id: package
+        run: bash scripts/release.sh
+      - name: Upload package
+        uses: actions/upload-artifact@v7
+        with:
+          name: NeoMusic-${{ steps.package.outputs.tag }}-unsigned
+          path: |
+            dist/*.ipa
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
+      - name: Create release draft
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.package.outputs.tag }}
+        run: |
+          gh release create "$TAG" dist/*.ipa dist/SHA256SUMS.txt \
+            --draft --verify-tag --title "NeoMusic $TAG" \
+            --notes-file "docs/releases/$TAG.md"
+      - name: Upload build log
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-build-log
+          path: build/release/xcodebuild.log
+          if-no-files-found: warn
+          retention-days: 7

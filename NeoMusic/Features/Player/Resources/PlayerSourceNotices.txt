@@ -1,0 +1,27 @@
+NeoMusic reference player source notices
+
+The imported player frontend is adapted directly from NeoDizzy, baseline
+bccecb66d32030ea55a564fe06fe0bda5598202b with its current player worktree changes.
+It is not an independently authored replacement.
+
+NeoDizzy identifies the full-screen player, motion/layout helpers, queue and
+related presentation code as derived from MeloX / MeloX_Modified (including
+reference b8bc60f): https://github.com/youshen2/MeloX
+These copied portions retain GPL version 3 licensing. Full license text is
+included in GPL-3.0.txt. Original file attribution comments are retained.
+NeoMusic changes adapt source-neutral data, local playback actions and Swift
+concurrency; they do not imply that upstream code is original NeoMusic work.
+
+LNPopupUI: https://github.com/LeoNatan/LNPopupUI
+Baseline 60853564423524c9ed15cc74c5969d3e1ca666f1, MIT.
+LNPopupController: https://github.com/LeoNatan/LNPopupController
+Baseline 4.6.1 / 18847353e7cbec66e53a89edb1aec6d00967281c, MIT.
+Only currently used artwork-host, binding synchronization and title gesture
+patches from NeoDizzy are applied. There is no external-accessory portal fork
+in this imported runtime. Package NEOMUSIC-PATCHES.md files describe changes.
+MIT license texts for LNPopup and its utilities accompany this application in
+ThirdPartyLicenses.txt.
+
+Nuke: https://github.com/kean/Nuke, version 13.2.0, MIT.
+Used for the original player image loading, decode and caching behavior.
+Full license text accompanies this file in Nuke-LICENSE.txt.

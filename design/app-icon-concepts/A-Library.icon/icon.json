@@ -1,0 +1,66 @@
+{
+  "fill": {
+    "solid": "srgb:1.00000,1.00000,1.00000,1.00000"
+  },
+  "groups": [
+    {
+      "layers": [
+        {
+          "image-name": "Note.svg",
+          "name": "白色双音符",
+          "glass": true
+        },
+        {
+          "image-name": "Cover.svg",
+          "name": "前 · 珊瑚封套",
+          "glass": true
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.35
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.3
+      }
+    },
+    {
+      "layers": [
+        {
+          "image-name": "Middle.svg",
+          "name": "中 · 杏色封套",
+          "glass": true
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.35
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.3
+      }
+    },
+    {
+      "layers": [
+        {
+          "image-name": "Back.svg",
+          "name": "后 · 奶油封套",
+          "glass": true
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.35
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.3
+      }
+    }
+  ],
+  "supported-platforms": {
+    "squares": "shared"
+  }
+}

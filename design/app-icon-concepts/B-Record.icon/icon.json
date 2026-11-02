@@ -1,0 +1,54 @@
+{
+  "fill": {
+    "solid": "srgb:1.00000,1.00000,1.00000,1.00000"
+  },
+  "groups": [
+    {
+      "layers": [
+        {
+          "image-name": "Sleeve.svg",
+          "name": "前 · 紫色封套",
+          "glass": true
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.35
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.3
+      }
+    },
+    {
+      "layers": [
+        {
+          "image-name": "Hole.svg",
+          "name": "唱片中心",
+          "glass": true
+        },
+        {
+          "image-name": "Label.svg",
+          "name": "唱片标签",
+          "glass": true
+        },
+        {
+          "image-name": "Disc.svg",
+          "name": "后 · 薄荷唱片",
+          "glass": true
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.35
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.3
+      }
+    }
+  ],
+  "supported-platforms": {
+    "squares": "shared"
+  }
+}

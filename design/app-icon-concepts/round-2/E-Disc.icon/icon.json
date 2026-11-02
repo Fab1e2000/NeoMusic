@@ -1,0 +1,76 @@
+{
+  "fill": {
+    "solid": "srgb:1.00000,1.00000,1.00000,1.00000"
+  },
+  "groups": [
+    {
+      "layers": [
+        {
+          "image-name": "Hole.svg",
+          "name": "唱片中心",
+          "glass": true,
+          "opacity": 1.0
+        },
+        {
+          "image-name": "Groove.svg",
+          "name": "唱片纹路",
+          "glass": true,
+          "opacity": 0.3
+        },
+        {
+          "image-name": "Disc.svg",
+          "name": "前 · 唱片",
+          "glass": true,
+          "opacity": 1.0
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.42
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.3
+      }
+    },
+    {
+      "layers": [
+        {
+          "image-name": "Middle.svg",
+          "name": "中 · 唱片",
+          "glass": true,
+          "opacity": 0.55
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.42
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.3
+      }
+    },
+    {
+      "layers": [
+        {
+          "image-name": "Back.svg",
+          "name": "后 · 唱片",
+          "glass": true,
+          "opacity": 0.28
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.42
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0.3
+      }
+    }
+  ],
+  "supported-platforms": {
+    "squares": "shared"
+  }
+}
