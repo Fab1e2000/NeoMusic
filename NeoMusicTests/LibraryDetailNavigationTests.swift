@@ -779,7 +779,9 @@ final class AlbumInitialAppearanceTests: XCTestCase {
                             } catch { XCTFail("Unable to inspect prepared album appearance: \(error)") }
                             appearances.append(id)
                         }, onDisplayed: { probe in
-                            defer { nextAppearance?.fulfill() }
+                            // Signal the UIKit event before rendering/encoding diagnostic
+                            // attachments, so their cost is not part of the lifecycle wait.
+                            nextAppearance?.fulfill()
                             // All pushes are nonanimated. This observes the first completed
                             // appearance, not the compositor's first frame of an animated zoom.
                             do {
