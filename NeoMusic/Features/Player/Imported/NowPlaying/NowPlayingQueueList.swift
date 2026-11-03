@@ -232,7 +232,6 @@ struct NowPlayingQueueList: UIViewRepresentable {
             if case .track = item {
                 var background = cell.defaultBackgroundConfiguration()
                 background.backgroundColor = .clear
-                background.shadowProperties.opacity = 0.3
                 cell.backgroundConfiguration = background
             } else {
                 // A cell reused for a header/empty row must shed its track accessory.
@@ -245,6 +244,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
                 let height = latest.headerHeight + 44
                 cell.contentConfiguration = UIHostingConfiguration {
                     Color.clear.frame(height: height)
+                        .listRowSeparator(.hidden)
                 }
                 .margins(.all, 0)
                 .minSize(height: 0)
@@ -259,6 +259,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .listRowSeparator(.hidden)
                     .environment(\.nowPlayingBackdropImage, latest.backdropImage)
                     .environment(\.nowPlayingUndimmedBackdropImage, latest.undimmedBackdropImage)
                     .environment(\.nowPlayingBackdropAnchor, latest.backdropAnchor)
@@ -277,6 +278,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
                         systemImage: "list.bullet"
                     )
                     .foregroundStyle(.white)
+                    .listRowSeparator(.hidden)
                     .frame(maxWidth: .infinity)
                 }
                 .margins(.horizontal, inset)
@@ -295,6 +297,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
                     .environment(latest.player)
                     .environment(latest.actions)
                     .environment(latest.library)
+                    .listRowSeparator(.hidden)
                     .environment(\.nowPlayingBackdropImage, latest.backdropImage)
                     .environment(\.nowPlayingUndimmedBackdropImage, latest.undimmedBackdropImage)
                     .environment(\.nowPlayingBackdropAnchor, latest.backdropAnchor)
