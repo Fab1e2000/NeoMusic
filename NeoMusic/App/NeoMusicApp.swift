@@ -17,7 +17,9 @@ struct NeoMusicApp: App {
     var body: some Scene {
         WindowGroup {
             #if DEBUG
-            if let mode = homePreviewMode {
+            if ProcessInfo.processInfo.arguments.contains("-artistPagePreview") {
+                ArtistPagePreview()
+            } else if let mode = homePreviewMode {
                 HomeRecommendationPreview(mode: mode)
                     .environment(account)
                     .task {

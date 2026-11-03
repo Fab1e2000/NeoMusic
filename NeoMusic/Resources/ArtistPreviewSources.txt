@@ -1,0 +1,18 @@
+Isolated artist preview artwork. Copyright belongs to KAMITSUBAKI STUDIO and respective artists.
+Source: https://kamitsubaki.jp/artist/rim/
+https://kamitsubaki.jp/wp-content/uploads/2020/09/KT_HP_1280x600.jpg
+https://kamitsubaki.jp/wp-content/uploads/2026/10/fukai_jacket_1080.jpg
+https://kamitsubaki.jp/wp-content/uploads/2026/08/HowMany_JKT_1080.jpg
+https://kamitsubaki.jp/wp-content/uploads/2026/05/RIM_Prayer_JKT_1080.jpg
+https://kamitsubaki.jp/wp-content/uploads/2025/10/RIM_nomoney_JKT_1080.jpg
+https://kamitsubaki.jp/artist/kaf/
+https://kamitsubaki.jp/wp-content/uploads/2020/09/KAF_ArtistVisual_OWL.jpg
+https://kamitsubaki.jp/artist/isekaijoucho/
+https://kamitsubaki.jp/wp-content/uploads/2020/09/221b6b4b1d9a1b1fb454b25cc05e2b1e-scaled.jpg
+https://kamitsubaki.jp/artist/koko/
+https://kamitsubaki.jp/wp-content/uploads/2020/10/KOKO_Visual_2026_1280.jpg
+
+https://theluvbugs.lnk.to/kotowari
+https://linkstorage.linkfire.com/medialinks/images/fe5964bc-5938-4266-a6e3-13057bfede4a/artwork-440x440.jpg
+
+ArtistPreviewRIMTop: artwork-only top 62 pixels from the user-supplied artist recording (0.5 s); excludes status bar and controls.
