@@ -6,7 +6,7 @@ enum LocalLibrary {
     static let runtime = LocalLibraryRuntime()
     static let songLibrary = SongLibrary(songs: [])
     static var songs: [LibrarySongItem] { songLibrary.songs.filter { !deletedAlbums.ids.contains($0.albumID) } }
-    static var allSongs: [LibrarySongItem] { songs + songLibrary.onlineSongs }
+    static var allSongs: [LibrarySongItem] { songLibrary.allSongs.filter { $0.isOnline || !deletedAlbums.ids.contains($0.albumID) } }
     static var favorites: [LibrarySongItem] { SongLibrary.orderedFavorites(allSongs) }
     static let pinnedAlbums = LibrarySelectionSet(ids: [], key: "pinnedAlbums")
     private static let pinnedOrder = PinnedOrderStore()
@@ -139,6 +139,22 @@ enum LocalLibrary {
         }
     }
 
+    static var playbackAccountID: String?
+
+    static func playbackCollection(_ route: LibraryRoute) -> PlaybackCollectionReference? {
+        switch route {
+        case .album(let id):
+            guard let detail = albumDetail(id) else { return nil }
+            return .init(kind: .localAlbum, id: id, ownerID: nil, title: detail.title)
+        case .playlist(let id):
+            guard let item = playlistLibrary.playlist(id) else { return nil }
+            if item.isSystem { return .init(kind: .favorites, id: id, ownerID: playbackAccountID, title: item.title) }
+            return .init(kind: item.sourceOwnerID == nil ? .localPlaylist : .onlinePlaylist,
+                         id: id, ownerID: item.sourceOwnerID, title: item.title)
+        default: return nil
+        }
+    }
+
     /// Online menus resolve the complete collection before committing an action.
     private static func withCollection(_ route: LibraryRoute,
                                        perform: @escaping @MainActor ((title: String, songs: [LibrarySongItem])) -> Void) {
@@ -172,8 +188,7 @@ enum LocalLibrary {
             play: { route, shuffled in
                 withCollection(route) { collection in
                     guard !collection.songs.isEmpty else { return }
-                    if case .playlist(let id) = route { playlistLibrary.markPlayed(id) }
-                    player.requestPlay(collection.songs, from: collection.title, shuffled: shuffled)
+                    player.requestPlay(collection.songs, from: collection.title, shuffled: shuffled, collection: playbackCollection(route))
                 }
             },
             playNext: { route in withCollection(route) { player.insertNext($0.songs) } },
@@ -257,6 +272,14 @@ enum LocalLibrary {
             // 对照 Apple Music：播放中显示“随后播放”与来源；暂停时为“添加到队列”。
             playbackSource: { player.isPlaying ? player.sourceTitle : nil }
         )
+    }
+
+    static func songActions(for route: LibraryRoute) -> SongMenuActions {
+        var actions = songActions
+        actions.play = { songs, index, source in
+            player.requestPlay(songs, startingAt: index, from: source, collection: playbackCollection(route))
+        }
+        return actions
     }
 
     /// 应用装配：标签栏、迷你播放条与资料库各页。
@@ -363,7 +386,7 @@ private struct LocalDestination: View {
     @ViewBuilder var body: some View {
         switch route {
         case .album, .playlist:
-            LocalLibrary.destination(route).navigationDiagnostics(route.diagnosticPage).libraryZoomTransition(route, in: zoomNamespace)
+            LocalLibrary.destination(route).environment(\.songMenuActions, LocalLibrary.songActions(for: route)).navigationDiagnostics(route.diagnosticPage).libraryZoomTransition(route, in: zoomNamespace)
         default:
             LocalLibrary.destination(route).navigationDiagnostics(route.diagnosticPage)
         }
@@ -469,7 +492,15 @@ final class LibrarySelectionSet {
 final class SongLibrary {
     private(set) var songs: [LibrarySongItem]
     private(set) var onlineSongs: [LibrarySongItem] = []
-    var allSongs: [LibrarySongItem] { songs + onlineSongs }
+    private(set) var externalSongs: [LibrarySongItem] = []
+    var allSongs: [LibrarySongItem] {
+        let existing = Set((songs + onlineSongs).map(\.id))
+        return songs + onlineSongs + externalSongs.filter { !existing.contains($0.id) }
+    }
+    func replaceExternalSongs(_ values: [LibrarySongItem]) {
+        var seen = Set<String>()
+        externalSongs = values.filter { $0.isOnline && seen.insert($0.id).inserted }
+    }
     @ObservationIgnored var onlineFavoriteAction: (@MainActor (String, Bool) -> Void)?
     private let defaults: UserDefaults
     init(songs: [LibrarySongItem], defaults: UserDefaults = .standard) {
@@ -504,7 +535,7 @@ final class SongLibrary {
     }
 
     func setFavorite(_ id: String, _ value: Bool) {
-        if let song = onlineSongs.first(where: { $0.id == id }) {
+        if let song = allSongs.first(where: { $0.id == id && $0.isOnline }) {
             if song.isFavorite != value { onlineFavoriteAction?(id, value) }
             return
         }

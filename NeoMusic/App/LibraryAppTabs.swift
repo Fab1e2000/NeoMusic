@@ -10,12 +10,22 @@ struct LibraryAppTabs<Library: View>: UIViewControllerRepresentable {
     let destination: (LibraryRoute) -> AnyView
     var initialPath: [LibraryRoute] = []
     var colorScheme: ColorScheme?
+    var homeNavigation: LibraryDetailNavigation? = nil
+    var homeContent: AnyView? = nil
+    var homeDestination: ((LibraryRoute) -> AnyView)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(selection: $selection) }
     func makeUIViewController(context: Context) -> UITabBarController {
         let account = context.environment[NeteaseAccount.self]
         navigation.configure(environment: context.environment, destination: destination)
         let libraryController = navigation.makeNavigationController(root: AnyView(library), initialPath: initialPath)
+        let homeBridge = homeNavigation ?? context.coordinator.homeNavigation
+        context.coordinator.libraryBridge = navigation
+        context.coordinator.homeBridge = homeBridge
+        homeBridge.configure(environment: context.environment, destination: homeDestination ?? destination)
+        let homeController = homeBridge.makeNavigationController(
+            root: homeContent ?? AnyView(HomeFeedView(model: context.coordinator.emptyHome)),
+            rootTitle: "主页", rootColorScheme: .light)
         let controller = UITabBarController()
         controller.delegate = context.coordinator
         context.coordinator.preferredStyle = colorScheme.map { UIUserInterfaceStyle($0) }
@@ -31,9 +41,7 @@ struct LibraryAppTabs<Library: View>: UIViewControllerRepresentable {
         context.coordinator.searchIdentifier = search.identifier
         controller.tabs = [
             UITab(title: "主页", image: UIImage(named: "HomeTabIcon"), identifier: AppTab.home.rawValue) { _ in
-                let home = UIHostingController(rootView: HomeFeedView().environment(account))
-                home.overrideUserInterfaceStyle = .light
-                return home
+                homeController
             },
             tab(.discover, "新发现", "square.grid.2x2.fill"),
             tab(.radio, "广播", "dot.radiowaves.left.and.right"),
@@ -42,10 +50,10 @@ struct LibraryAppTabs<Library: View>: UIViewControllerRepresentable {
         ]
         controller.selectedTab = controller.tabs.first { $0.identifier == selection.rawValue }
         // Resolve system appearance from the container when a page has no preference.
-        controller.registerForTraitChanges([UITraitUserInterfaceStyle.self]) { [weak coordinator = context.coordinator, weak navigationBar = libraryController.navigationBar] (controller: UITabBarController, _) in
+        controller.registerForTraitChanges([UITraitUserInterfaceStyle.self]) { [weak coordinator = context.coordinator] (controller: UITabBarController, _) in
             let style = coordinator?.preferredStyle ?? controller.traitCollection.userInterfaceStyle
-            Self.applyAppearance(style, to: controller.tabBar,
-                                 navigationBar: navigationBar)
+            coordinator?.updateNavigationAppearance(systemStyle: controller.traitCollection.userInterfaceStyle)
+            Self.applyAppearance(style, to: controller.tabBar, navigationBar: nil)
         }
         updateAppearance(of: controller)
         return controller
@@ -54,6 +62,8 @@ struct LibraryAppTabs<Library: View>: UIViewControllerRepresentable {
         context.coordinator.selection = $selection
         context.coordinator.preferredStyle = colorScheme.map { UIUserInterfaceStyle($0) }
         navigation.configure(environment: context.environment, destination: destination)
+        (homeNavigation ?? context.coordinator.homeNavigation).configure(environment: context.environment,
+                                                                        destination: homeDestination ?? destination)
         let id = selection == .search ? context.coordinator.searchIdentifier : selection.rawValue
         if controller.selectedTab?.identifier != id {
             controller.selectedTab = controller.tabs.first { $0.identifier == id }
@@ -63,8 +73,12 @@ struct LibraryAppTabs<Library: View>: UIViewControllerRepresentable {
     private func updateAppearance(of controller: UITabBarController) {
         let style = colorScheme.map { UIUserInterfaceStyle($0) }
             ?? controller.traitCollection.userInterfaceStyle
-        Self.applyAppearance(style, to: controller.tabBar,
-                             navigationBar: navigation.navigationController?.navigationBar)
+        let libraryStyle = navigation.colorScheme.map { UIUserInterfaceStyle($0) } ?? controller.traitCollection.userInterfaceStyle
+        navigation.navigationController?.navigationBar.overrideUserInterfaceStyle = libraryStyle
+        if let homeNavigation {
+            homeNavigation.navigationController?.navigationBar.overrideUserInterfaceStyle = homeNavigation.colorScheme.map { UIUserInterfaceStyle($0) } ?? .light
+        }
+        Self.applyAppearance(style, to: controller.tabBar, navigationBar: nil)
     }
     private static func applyAppearance(_ style: UIUserInterfaceStyle, to tabBar: UITabBar,
                                         navigationBar: UINavigationBar?) {
@@ -92,6 +106,14 @@ struct LibraryAppTabs<Library: View>: UIViewControllerRepresentable {
         var selection: Binding<AppTab>
         var searchIdentifier = ""
         var preferredStyle: UIUserInterfaceStyle?
+        weak var libraryBridge: LibraryDetailNavigation?
+        weak var homeBridge: LibraryDetailNavigation?
+        func updateNavigationAppearance(systemStyle: UIUserInterfaceStyle) {
+            libraryBridge?.navigationController?.navigationBar.overrideUserInterfaceStyle = libraryBridge?.colorScheme.map { UIUserInterfaceStyle($0) } ?? systemStyle
+            homeBridge?.navigationController?.navigationBar.overrideUserInterfaceStyle = homeBridge?.colorScheme.map { UIUserInterfaceStyle($0) } ?? .light
+        }
+        let homeNavigation = LibraryDetailNavigation()
+        let emptyHome = HomeContentModel()
         init(selection: Binding<AppTab>) { self.selection = selection }
         func tabBarController(_ tabBarController: UITabBarController, didSelectTab selectedTab: UITab, previousTab: UITab?) {
             let value = selectedTab.identifier == searchIdentifier ? AppTab.search : AppTab(rawValue: selectedTab.identifier)

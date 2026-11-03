@@ -33,12 +33,15 @@ final class NowPlayingModel {
     private var userQueuedIDs: Set<UUID> = []
     /// 等待确认的整组播放：队列里还有手动加入的歌曲时，替换前先确认，与 Apple Music 一致。
     var pendingPlay: PendingPlay?
+    var onCollectionPlaybackStarted: ((PlaybackCollectionReference) -> Void)?
+    private var pendingCollection: PlaybackCollectionReference?
 
     struct PendingPlay: Identifiable {
         let songs: [LibrarySongItem]
         let source: String
         let shuffled: Bool
         var startingIndex: Int? = nil
+        var collection: PlaybackCollectionReference? = nil
         let id = UUID()
     }
 
@@ -153,22 +156,22 @@ final class NowPlayingModel {
     }
 
     /// 请求从头播放一组歌曲：会清除手动加入的歌曲时先挂起，由宿主弹出确认。
-    func requestPlay(_ songs: [LibrarySongItem], from source: String, shuffled: Bool) {
+    func requestPlay(_ songs: [LibrarySongItem], from source: String, shuffled: Bool, collection: PlaybackCollectionReference? = nil) {
         guard !songs.isEmpty else { return }
         if hasUserQueuedUpcoming {
-            pendingPlay = PendingPlay(songs: songs, source: source, shuffled: shuffled)
+            pendingPlay = PendingPlay(songs: songs, source: source, shuffled: shuffled, collection: collection)
         } else {
-            play(songs, from: source, shuffled: shuffled)
+            play(songs, from: source, shuffled: shuffled, collection: collection)
         }
     }
 
     /// 点击具体歌曲也遵循手动队列清除确认，并保留用户选择的位置。
-    func requestPlay(_ songs: [LibrarySongItem], startingAt index: Int, from source: String) {
+    func requestPlay(_ songs: [LibrarySongItem], startingAt index: Int, from source: String, collection: PlaybackCollectionReference? = nil) {
         guard songs.indices.contains(index) else { return }
         if hasUserQueuedUpcoming {
-            pendingPlay = PendingPlay(songs: songs, source: source, shuffled: false, startingIndex: index)
+            pendingPlay = PendingPlay(songs: songs, source: source, shuffled: false, startingIndex: index, collection: collection)
         } else {
-            play(songs, startingAt: index, from: source)
+            play(songs, startingAt: index, from: source, collection: collection)
         }
     }
 
@@ -177,15 +180,17 @@ final class NowPlayingModel {
         guard let pending = pendingPlay else { return }
         pendingPlay = nil
         if let index = pending.startingIndex {
-            play(pending.songs, startingAt: index, from: pending.source)
+            play(pending.songs, startingAt: index, from: pending.source, collection: pending.collection)
         } else {
-            play(pending.songs, from: pending.source, shuffled: pending.shuffled)
+            play(pending.songs, from: pending.source, shuffled: pending.shuffled, collection: pending.collection)
         }
     }
 
     /// 从头播放一组歌曲，替换当前队列。
-    func play(_ songs: [LibrarySongItem], from source: String, shuffled: Bool) {
+    func play(_ songs: [LibrarySongItem], from source: String, shuffled: Bool, collection: PlaybackCollectionReference? = nil) {
         guard !songs.isEmpty else { return }
+        pendingPlay = nil
+        pendingCollection = collection
         userQueuedIDs = []
         applyingState = true
         let original = songs.map { (UUID(), $0) }
@@ -203,8 +208,10 @@ final class NowPlayingModel {
     }
 
     /// 从一组歌曲中的某一首开始播放，替换当前队列。
-    func play(_ songs: [LibrarySongItem], startingAt index: Int, from source: String) {
+    func play(_ songs: [LibrarySongItem], startingAt index: Int, from source: String, collection: PlaybackCollectionReference? = nil) {
         guard songs.indices.contains(index) else { return }
+        pendingPlay = nil
+        pendingCollection = collection
         userQueuedIDs = []
         applyingState = true
         queue = songs
@@ -304,6 +311,8 @@ final class NowPlayingModel {
     }
 
     func invalidateOnlinePlayback(ownerID: String?) {
+        if let owner = pendingCollection?.ownerID, owner != ownerID { pendingCollection = nil }
+        if let owner = pendingPlay?.collection?.ownerID, owner != ownerID { pendingPlay = nil }
         resourceRevision = UUID()
         resourceTask?.cancel(); nextResourceTask?.cancel(); resourceTask = nil; resolvingResource = false
         for index in queue.indices where queue[index].id.hasPrefix("netease:") {
@@ -423,6 +432,10 @@ final class NowPlayingModel {
         elapsed = audio.elapsed
         updatingTime = false
         isPlaying = audio.isPlaying
+        if audio.isPlaying, let collection = pendingCollection {
+            pendingCollection = nil
+            onCollectionPlaybackStarted?(collection)
+        }
         if let error = audio.error { errorMessage = error }
         if Date().timeIntervalSince(lastSavedPlaybackTime) >= 5 || stopped { saveQueue() }
         if publishNowPlaying { updateNowPlaying() }
@@ -515,6 +528,8 @@ final class NowPlayingModel {
     }
 
     func shutdownPlayback() {
+        pendingCollection = nil
+        pendingPlay = nil
         resourceRevision = UUID(); resourceTask?.cancel(); nextResourceTask?.cancel(); resourceTask = nil; resolvingResource = false
         audio?.onStateChange = nil; audio?.onTimeChange = nil; audio?.onAdvanced = nil; audio?.onFinished = nil
         audio?.shutdown(); audio = nil; mediaSession?.shutdown(); mediaSession = nil

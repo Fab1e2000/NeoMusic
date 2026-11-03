@@ -1,5 +1,9 @@
 import SwiftUI
 
+extension EnvironmentValues {
+    @Entry var homeMusicIntegration: HomeMusicIntegration? = nil
+}
+
 enum AppTab: String, Hashable {
     case home, discover, radio, library, search
 }
@@ -20,9 +24,13 @@ struct AppShell<Library: View>: View {
     @State var libraryPath: [LibraryRoute] = []
     @State var isPlayerPresented = false
     @State private var detailNavigation = LibraryDetailNavigation()
+    @State private var homeNavigation = LibraryDetailNavigation()
+    @State private var emptyHome = HomeContentModel()
+    @Environment(\.homeMusicIntegration) private var home
+    @Environment(NeteaseAccount.self) private var account
     private var chromeColorScheme: ColorScheme? {
         switch selection {
-        case .home: .light
+        case .home: homeNavigation.colorScheme ?? .light
         case .library: detailNavigation.colorScheme
         default: nil
         }
@@ -32,8 +40,21 @@ struct AppShell<Library: View>: View {
         LibraryAppTabs(selection: $selection, navigation: detailNavigation,
             library: library.libraryToasts(toasts).playlistDeletionConfirmation(playlistLibrary),
             destination: { AnyView(detailDestination($0).libraryToasts(toasts)) },
-            initialPath: libraryPath, colorScheme: chromeColorScheme)
+            initialPath: libraryPath, colorScheme: chromeColorScheme,
+            homeNavigation: homeNavigation,
+            homeContent: AnyView(HomeFeedView(model: home?.model ?? emptyHome)),
+            homeDestination: { home?.destination(for: $0) ?? detailDestination($0) })
         .ignoresSafeArea()
+        .sheet(isPresented: Binding(get: { home?.showsLogin == true }, set: { home?.showsLogin = $0 }),
+               onDismiss: { home?.loginDismissed() }) {
+            AccountPage(account: account, initialRoute: .login)
+        }
+        .onChange(of: account.profile?.userID) { _, id in
+            if id != nil { home?.resumePendingPlayback() }
+        }
+        .onChange(of: selection) { _, tab in
+            if tab != .home { home?.cancelPendingPlayback() }
+        }
         .libraryToastFeedback(toasts)
         .addToPlaylistSheet(playlistLibrary, toasts: toasts)
         .moveToFolderSheet(playlistLibrary)

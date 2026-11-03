@@ -12,6 +12,7 @@ final class OnlineMusicIntegration {
         music.onChange = { [weak self] in self?.publish() }
         music.onSessionInvalidated = {
             LocalLibrary.player.invalidateOnlinePlayback(ownerID: nil)
+            LocalLibrary.songLibrary.replaceExternalSongs([])
             LocalLibrary.songLibrary.replaceOnline([])
             LocalLibrary.playlistLibrary.replaceOnlinePlaylists(items: [], songs: [:], ownerID: nil)
         }
@@ -77,6 +78,7 @@ final class OnlineMusicIntegration {
         LocalLibrary.playlistLibrary.onlineStatus = music.error
         LocalLibrary.playlistLibrary.isRefreshingOnline = music.isLoading
         guard let owner = music.userID else {
+            LocalLibrary.songLibrary.replaceExternalSongs([])
             LocalLibrary.songLibrary.replaceOnline([])
             LocalLibrary.playlistLibrary.replaceOnlinePlaylists(items: [], songs: [:], ownerID: nil)
             return
@@ -113,7 +115,7 @@ final class OnlineMusicIntegration {
             }
         }
         LocalLibrary.playlistLibrary.replaceOnlinePlaylists(items: playlists, songs: contents, ownerID: ownerID)
-        LocalLibrary.playlistLibrary.reconcileOnlineSongs(songs)
+        LocalLibrary.playlistLibrary.reconcileOnlineSongs(LocalLibrary.allSongs)
         for item in playlists {
             if let id = item.id.split(separator: ":").last.flatMap({ Int64($0) }) {
                 LocalLibrary.playlistLibrary.updateOnlineSongs(playlistID: item.id, songs: contents[item.id] ?? [],

@@ -4,18 +4,28 @@ import SwiftUI
 struct NeoMusicApp: App {
     @State private var account: NeteaseAccount
     @State private var integration: OnlineMusicIntegration
+    @State private var home: HomeMusicIntegration
     init() {
         ArtworkImagePipeline.configureMemoryCache()
         let account = NeteaseAccount(client: NeteaseAccountClient(), credentialStore: NeteaseCredentialStore(),
                                      avatarClient: NeteaseAvatarClient())
         _account = State(initialValue: account)
         _integration = State(initialValue: OnlineMusicIntegration(account: account))
+        _home = State(initialValue: HomeMusicIntegration(account: account))
     }
     @Environment(\.scenePhase) private var scenePhase
     var body: some Scene {
         WindowGroup {
             #if DEBUG
-            if let page = onlinePreviewPage {
+            if let mode = homePreviewMode {
+                HomeRecommendationPreview(mode: mode)
+                    .environment(account)
+                    .task {
+                        if ProcessInfo.processInfo.arguments.contains("-homeReadProbe") {
+                            await NeteaseHomeReadProbe.run()
+                        }
+                    }
+            } else if let page = onlinePreviewPage {
                 if page == "quality" {
                     OnlineLibraryPreviewRoot()
                 } else {
@@ -35,7 +45,9 @@ struct NeoMusicApp: App {
     private var libraryApp: some View {
         LocalLibrary.app
             .environment(account)
+            .environment(\.homeMusicIntegration, home)
             .task {
+                home.connect()
                 integration.connect()
                 await integration.connectLyrics()
                 async let local: Void = LocalLibrary.runtime.refresh()
@@ -52,6 +64,13 @@ struct NeoMusicApp: App {
     }
 
     #if DEBUG
+    private var homePreviewMode: HomeRecommendationPreview.Mode? {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let index = arguments.firstIndex(of: "-homeRecommendationPreview"),
+              arguments.indices.contains(index + 1) else { return nil }
+        return HomeRecommendationPreview.Mode(rawValue: arguments[index + 1])
+    }
+
     private var onlinePreviewPage: String? {
         let arguments = ProcessInfo.processInfo.arguments
         guard let index = arguments.firstIndex(of: "-onlineLibraryPreview"),

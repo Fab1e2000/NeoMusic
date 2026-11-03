@@ -43,94 +43,60 @@ final class HomeFeedTests: XCTestCase {
         }
     }
 
-    func testHomeLayoutCarouselsAndTabState() {
+    func testHomeLayoutAndIndependentDetailNavigation() {
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launch()
         let homeTab = app.tabBars.buttons["主页"]
         XCTAssertTrue(homeTab.waitForExistence(timeout: 10))
         homeTab.tap()
-
-        let hero = element("home.item.featured.favorites", in: app)
+        let hero = element("home.item.favorites", in: app)
         XCTAssertTrue(hero.waitForExistence(timeout: 5))
-        let recent = element("home.item.recent.album-17", in: app)
-        XCTAssertEqual(hero.frame.minX, 20, accuracy: 1 / 3)
-        XCTAssertEqual(hero.frame.width, 248, accuracy: 1 / 3)
-        XCTAssertEqual(hero.frame.height, 330, accuracy: 1 / 3)
-        XCTAssertEqual(recent.frame.minX, 20, accuracy: 1 / 3)
-        XCTAssertEqual(recent.frame.width, 161, accuracy: 1 / 3)
-        if app.frame.width == 402 {
-            XCTAssertEqual(hero.frame.minY, 169, accuracy: 1 / 3)
-            XCTAssertEqual(recent.frame.minY, 569, accuracy: 1 / 3)
-        }
-        attachScreenshot("Home first screen", app: app)
-
-        app.buttons["account.open"].tap()
-        let identity = app.buttons["account.identity"]
-        XCTAssertTrue(identity.waitForExistence(timeout: 5))
-        XCTAssertTrue(identity.label.contains("登录网易云音乐"))
-        identity.tap()
-        let completeLogin = app.buttons["account.login.complete"]
-        XCTAssertTrue(completeLogin.waitForExistence(timeout: 5))
-        completeLogin.tap()
-        XCTAssertTrue(element("account.login.error", in: app).waitForExistence(timeout: 5))
-        app.navigationBars.buttons["BackButton"].tap()
-        XCTAssertTrue(identity.waitForExistence(timeout: 5))
-        app.buttons["account.close"].tap()
-
-        let originalHero = hero.frame
-        let originalRecent = recent.frame
-        app.scrollViews["home.shelf.featured"].swipeLeft(velocity: .slow)
-        XCTAssertLessThan(hero.frame.minX, originalHero.minX - 100)
-        XCTAssertEqual(hero.frame.minY, originalHero.minY, accuracy: 1)
-        XCTAssertEqual(recent.frame, originalRecent)
-        let scrolledHero = hero.frame
-
+        XCTAssertEqual(hero.frame.minX, 20, accuracy: 1)
+        XCTAssertEqual(hero.frame.width, 248, accuracy: 1)
+        XCTAssertEqual(hero.frame.height, 330, accuracy: 1)
+        XCTAssertFalse(element("home.heading.jpop", in: app).exists)
+        let original = hero.frame
+        attachScreenshot("Home production content", app: app)
+        hero.tap()
+        XCTAssertTrue(app.navigationBars.buttons["BackButton"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["喜爱歌曲"].isHittable)
         app.tabBars.buttons["资料库"].tap()
         XCTAssertTrue(app.navigationBars["资料库"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["新建播放列表"].isHittable)
-        XCTAssertTrue(app.buttons["更多"].isHittable)
-        XCTAssertTrue(app.buttons["account.open"].isHittable)
-        app.buttons["account.open"].tap()
-        XCTAssertTrue(identity.waitForExistence(timeout: 5))
-        XCTAssertTrue(identity.label.contains("登录网易云音乐"))
-        app.buttons["account.close"].tap()
         homeTab.tap()
-        XCTAssertEqual(hero.frame, scrolledHero)
-        XCTAssertEqual(recent.frame, originalRecent)
+        XCTAssertTrue(app.navigationBars.buttons["BackButton"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["喜爱歌曲"].isHittable)
+        app.navigationBars.buttons["BackButton"].tap()
+        XCTAssertTrue(hero.waitForExistence(timeout: 5))
+        XCTAssertEqual(hero.frame.minY, original.minY, accuracy: 1)
+        XCTAssertEqual(hero.frame.minX, original.minX, accuracy: 1)
+        attachScreenshot("Home restored after detail", app: app)
+    }
 
-        let feed = app.scrollViews["home.feed"]
-        let sections = ["recent", "jpop", "playlists", "fans", "stations", "moods",
-                        "chinese-rock", "mandarin", "vocaloid", "2000s", "anime",
-                        "games", "jrock", "2010s"]
-        for section in sections {
-            let heading = element("home.heading.\(section)", in: app)
-            for _ in 0..<5 {
-                if heading.isHittable { break }
-                feed.swipeUp(velocity: .slow)
-            }
-            XCTAssertTrue(heading.isHittable, "Missing home section: \(section)")
-            if section == "moods" { attachScreenshot("Home moods", app: app) }
-        }
-
-        let lastCard = element("home.item.2010s.album-14", in: app)
-        feed.swipeUp(velocity: .slow)
-        XCTAssertTrue(lastCard.isHittable)
-        XCTAssertLessThanOrEqual(lastCard.frame.maxY, app.tabBars.firstMatch.frame.minY)
-        let miniPlayer = app.buttons["mini.playPause"]
-        if miniPlayer.exists {
-            XCTAssertLessThanOrEqual(lastCard.frame.maxY, miniPlayer.frame.minY)
-        }
-        attachScreenshot("Home final section", app: app)
-
-        let title = app.navigationBars["主页"]
-        for _ in 0..<18 {
-            if recent.exists, abs(recent.frame.minY - originalRecent.minY) <= 1 { break }
-            feed.swipeDown(velocity: .fast)
-        }
-        XCTAssertTrue(title.isHittable)
-        XCTAssertEqual(recent.frame, originalRecent)
-        XCTAssertTrue(homeTab.isHittable)
+    func testPublicRecommendationOpensDetailAndRequestsLoginForPlayback() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launch()
+        let home = app.tabBars.buttons["主页"]
+        XCTAssertTrue(home.waitForExistence(timeout: 10))
+        home.tap()
+        let shelf = app.scrollViews["home.shelf.recommendations"]
+        XCTAssertTrue(shelf.waitForExistence(timeout: 30))
+        app.scrollViews["home.feed"].swipeUp(velocity: .slow)
+        let recommendation = shelf.buttons.firstMatch
+        XCTAssertTrue(recommendation.waitForExistence(timeout: 5))
+        attachScreenshot("Home recommendation artwork", app: app)
+        recommendation.tap()
+        let play = app.buttons.matching(NSPredicate(format: "label == %@ AND identifier != %@", "播放", "mini.playPause")).firstMatch
+        XCTAssertTrue(play.waitForExistence(timeout: 30))
+        attachScreenshot("Public recommendation detail", app: app)
+        play.tap()
+        XCTAssertTrue(app.buttons["account.login.complete"].waitForExistence(timeout: 10))
+        app.navigationBars["登录网易云音乐"].buttons["BackButton"].tap()
+        XCTAssertTrue(app.buttons["account.close"].waitForExistence(timeout: 5))
+        app.buttons["account.close"].tap()
+        XCTAssertTrue(play.waitForExistence(timeout: 5))
+        XCTAssertEqual(app.buttons["mini.playPause"].label, "播放")
     }
 
     private func attachScreenshot(_ name: String, app: XCUIApplication) {

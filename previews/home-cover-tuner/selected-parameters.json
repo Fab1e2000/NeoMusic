@@ -1,0 +1,26 @@
+{
+  "scheme": "NeoMusic cover A v4",
+  "blurEdgeMode": "clamp",
+  "backgroundExtension": "edge",
+  "edgeSampleFraction": 0.09,
+  "coverFadeExponent": 2.8,
+  "bottomShadeExponent": 3,
+  "cardSize": [
+    248,
+    330
+  ],
+  "coverSize": [
+    248,
+    248
+  ],
+  "blurRadius": 7,
+  "backgroundOpacity": 1,
+  "backgroundDimOpacity": 0.2,
+  "backgroundScale": 1,
+  "coverOpacity": 1,
+  "coverFadeStart": 0.5,
+  "coverFadeEnd": 1,
+  "bottomShadeOpacity": 0,
+  "bottomShadeStart": 0.95,
+  "coverFadeEasing": "smoothstep-power"
+}

@@ -7,6 +7,8 @@ struct PlaylistDetailView: View {
     let playlistID: String
     let library: PlaylistLibrary
     let songs: [LibrarySongItem]
+    var externalActions: ExternalPlaylistActions? = nil
+    var externalArtwork: AnyView? = nil
     /// 宿主提供示例最近播放，不将资料库顺序当作播放历史。
     var recentlyPlayedSongs: [LibrarySongItem] = []
     @Environment(\.displayScale) private var displayScale
@@ -153,14 +155,22 @@ struct PlaylistDetailView: View {
 
     private func header(_ playlist: LibraryPlaylistItem) -> some View {
         VStack(spacing: 0) {
-            detailArtwork(playlist.artwork)
+            Group {
+                if let externalArtwork {
+                    externalArtwork.clipShape(.rect(cornerRadius: 10))
+                } else {
+                    detailArtwork(playlist.artwork)
+                }
+            }
                 .frame(width: 266, height: 266)
                 .shadow(color: .black.opacity(0.06), radius: 12, y: 6)
                 .padding(.top, 14)
                 .padding(.bottom, 22)
             Text(playlist.title).font(.title2.bold()).multilineTextAlignment(.center)
             Text(playlist.subtitle ?? "我").font(.title3).padding(.top, 4)
-            Text("刚刚更新").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary).padding(.top, 4 + 1.0 / 3)
+            if externalActions == nil {
+                Text("刚刚更新").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary).padding(.top, 4 + 1.0 / 3)
+            }
             if !tracks.isEmpty {
                 HStack(spacing: 14) {
                     Button {
@@ -248,6 +258,39 @@ struct PlaylistDetailView: View {
     }
 
     @ViewBuilder private func detailMenu(_ playlist: LibraryPlaylistItem) -> some View {
+        if let actions = externalActions {
+            externalMenu(playlist, actions: actions)
+        } else {
+            libraryMenu(playlist)
+        }
+    }
+
+    @ViewBuilder private func externalMenu(_ playlist: LibraryPlaylistItem, actions: ExternalPlaylistActions) -> some View {
+        if let toggleFavorite = actions.toggleFavorite {
+            Button(playlist.isFavorite ? "撤销喜爱" : "喜爱", systemImage: playlist.isFavorite ? "star.slash.fill" : "star.fill", action: toggleFavorite)
+        }
+        if let togglePin = actions.togglePin {
+            Button(playlist.isPinned ? "取消置顶播放列表" : "置顶播放列表", systemImage: playlist.isPinned ? "pin.slash" : "pin", action: togglePin)
+        }
+        Button("添加到播放列表", systemImage: "text.badge.plus", action: actions.addSongs).disabled(tracks.isEmpty)
+        if let moveToFolder = actions.moveToFolder {
+            Button("移到文件夹", systemImage: "folder", action: moveToFolder)
+        }
+        Menu("排序方式", systemImage: "arrow.up.arrow.down") {
+            Picker("排序方式", selection: $sort) {
+                ForEach(DetailSort.allCases) { value in Text(value.rawValue).tag(value) }
+            }
+        }
+        LibraryMenuContents(sections: [
+            libraryQueueMenuItems(
+                playbackSource: collectionActions.playbackSource(),
+                isDisabled: tracks.isEmpty,
+                playNext: { collectionActions.playNext(.playlist(playlistID)) },
+                playLater: { collectionActions.playLater(.playlist(playlistID)) })
+        ], firstSectionIsRow: false)
+    }
+
+    @ViewBuilder private func libraryMenu(_ playlist: LibraryPlaylistItem) -> some View {
         ControlGroup {
             Button("下载", systemImage: "arrow.down.circle.fill") {}.disabled(true)
             Button(playlist.isFavorite ? "撤销" : "喜爱", systemImage: playlist.isFavorite ? "star.slash.fill" : "star.fill") {

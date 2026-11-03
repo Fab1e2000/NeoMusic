@@ -19,8 +19,11 @@ final class LibraryDetailNavigation: NSObject, UINavigationControllerDelegate {
         }
     }
 
-    func makeNavigationController(root: AnyView, initialPath: [LibraryRoute] = []) -> UINavigationController {
-        let nav = UINavigationController(rootViewController: makePage(root, route: nil))
+    func makeNavigationController(root: AnyView, initialPath: [LibraryRoute] = [], rootTitle: String = "资料库", rootColorScheme: ColorScheme? = nil) -> UINavigationController {
+        let page = makePage(root, route: nil)
+        page.chrome.title = rootTitle
+        page.chrome.setColorScheme(rootColorScheme)
+        let nav = UINavigationController(rootViewController: page)
         nav.navigationBar.prefersLargeTitles = true
         navigationController = nav
         nav.delegate = self
@@ -286,7 +289,7 @@ extension EnvironmentValues {
 extension View {
     func libraryNavigationTitle(_ title: String) -> some View { modifier(LibraryTitle(title: title)) }
     func libraryTitleDisplayMode(_ mode: NavigationBarItem.TitleDisplayMode) -> some View { modifier(LibraryTitleMode(mode: mode)) }
-    func libraryHomeNavigation() -> some View { modifier(LibraryHomeChrome()) }
+    func libraryHomeNavigation(title: String = "资料库") -> some View { modifier(LibraryHomeChrome(title: title)) }
     func librarySearchable(text: Binding<String>, prompt: String, enabled: Bool = true) -> some View {
         modifier(LibrarySearch(query: text, prompt: prompt, enabled: enabled))
     }
@@ -318,6 +321,7 @@ private struct LibraryTitleMode: ViewModifier {
     }
 }
 private struct LibraryHomeChrome: ViewModifier {
+    let title: String
     @Environment(\.libraryNavigationChrome) private var chrome
     @ViewBuilder func body(content: Content) -> some View {
         if chrome != nil {
@@ -329,7 +333,7 @@ private struct LibraryHomeChrome: ViewModifier {
                 .toolbarMinimizationSafeAreaAdjustment(.disabled, for: .navigationBar)
         }
         else {
-            content.navigationTitle("资料库").toolbarTitleDisplayMode(.inlineLarge)
+            content.navigationTitle(title).toolbarTitleDisplayMode(.inlineLarge)
                 .toolbarMinimizationBehavior(.onScrollDown, for: .navigationBar)
                 .toolbarMinimizationRestoration(.atScrollEdge, for: .navigationBar)
                 .toolbarMinimizationSafeAreaAdjustment(.disabled, for: .navigationBar)

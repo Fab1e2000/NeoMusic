@@ -21,7 +21,8 @@ struct LibraryPlaylistItem: Identifiable {
     var updatedAt: Date? = nil
     var sourceOwnerID: String? = nil
     var subtitle: String? = nil
-    var isReadOnly: Bool { sourceOwnerID != nil }
+    var isReadOnlyContent = false
+    var isReadOnly: Bool { sourceOwnerID != nil || isReadOnlyContent }
 
     /// 菜单与预览卡片共用的展示数据。
     var shelfItem: LibraryShelfItem {
@@ -69,8 +70,41 @@ final class PlaylistLibrary {
         var folder: String?
         var firstSeen: Date?
         var lastPlayed: Date?
+        var retained: RetainedOnlinePlaylist? = nil
+    }
+    private struct RetainedOnlinePlaylist: Codable, Equatable {
+        var title: String
+        var subtitle: String?
+        var artworkFile: URL?
+        var songIDs: [String]
     }
     private var onlinePreferences: [String: OnlinePreference] = [:]
+
+    func setExternalCollection(item: LibraryPlaylistItem, songs: [LibrarySongItem], error: String? = nil) {
+        guard persistenceURL == nil else { return }
+        if let index = playlists.firstIndex(where: { $0.id == item.id }) { playlists[index] = item }
+        else { playlists.append(item) }
+        contents[item.id] = songs
+        onlineErrors[item.id] = error
+        if error == nil { loadedOnlinePlaylistIDs.insert(item.id) }
+        else { loadedOnlinePlaylistIDs.remove(item.id) }
+    }
+
+    /// Explicit local organization retains a reference without subscribing in the cloud.
+    func retainOnlinePlaylist(_ item: LibraryPlaylistItem, songs: [LibrarySongItem]) {
+        guard let owner = onlineOwnerID, item.sourceOwnerID == owner else { return }
+        var artworkFile: URL?
+        if case .file(let url) = item.artwork { artworkFile = url }
+        let retained = RetainedOnlinePlaylist(title: item.title, subtitle: item.subtitle,
+                                             artworkFile: artworkFile, songIDs: songs.map(\.id))
+        var preference = onlinePreferences[item.id] ?? OnlinePreference(favorite: item.isFavorite,
+            pinned: item.isPinned, folder: nil, firstSeen: item.addedAt ?? Date(), lastPlayed: item.lastPlayedAt)
+        preference.retained = retained
+        onlinePreferences[item.id] = preference
+        if !playlists.contains(where: { $0.id == item.id }) { playlists.append(item) }
+        contents[item.id] = songs
+        saveOnlinePreferences(force: true)
+    }
 
     func replaceOnlinePlaylists(items: [LibraryPlaylistItem], songs: [String: [LibrarySongItem]], ownerID: String?) {
         if onlineOwnerID != ownerID {
@@ -87,7 +121,18 @@ final class PlaylistLibrary {
         for id in oldOnline { contents[id] = nil; placement[id] = nil }
         playlists.removeAll(where: \.isReadOnly)
         let discoveredAt = Date()
-        for var item in items where item.sourceOwnerID == ownerID && ownerID != nil {
+        var visible = items
+        let supplied = Set(items.map(\.id))
+        if let ownerID {
+            for (id, preference) in onlinePreferences.sorted(by: { $0.key < $1.key }) where !supplied.contains(id) {
+                guard let retained = preference.retained else { continue }
+                visible.append(LibraryPlaylistItem(id: id, title: retained.title,
+                    artwork: retained.artworkFile.map(Artwork.file) ?? .playlist,
+                    sourceOwnerID: ownerID, subtitle: retained.subtitle))
+            }
+        }
+        var inserted = Set<String>()
+        for var item in visible where item.sourceOwnerID == ownerID && ownerID != nil && inserted.insert(item.id).inserted {
             if let preference = onlinePreferences[item.id] {
                 item.addedAt = preference.firstSeen
                 item.lastPlayedAt = preference.lastPlayed
@@ -97,7 +142,7 @@ final class PlaylistLibrary {
             }
             if item.addedAt == nil { item.addedAt = discoveredAt }
             playlists.append(item)
-            contents[item.id] = songs[item.id] ?? []
+            contents[item.id] = songs[item.id] ?? onlinePreferences[item.id]?.retained?.songIDs.map(LibrarySongItem.unavailable) ?? []
         }
         saveOnlinePreferences()
         for id in contents.keys where !oldOnline.contains(id) {
@@ -138,12 +183,12 @@ final class PlaylistLibrary {
         return persistenceURL.deletingLastPathComponent().appendingPathComponent("online-playlist-preferences-\(owner).json")
     }
 
-    private func saveOnlinePreferences() {
+    private func saveOnlinePreferences(force: Bool = false) {
         let previous = onlinePreferences
         for item in playlists where item.isReadOnly {
-            onlinePreferences[item.id] = OnlinePreference(favorite: item.isFavorite, pinned: item.isPinned, folder: placement[item.id], firstSeen: item.addedAt, lastPlayed: item.lastPlayedAt)
+            onlinePreferences[item.id] = OnlinePreference(favorite: item.isFavorite, pinned: item.isPinned, folder: placement[item.id], firstSeen: item.addedAt, lastPlayed: item.lastPlayedAt, retained: onlinePreferences[item.id]?.retained)
         }
-        guard previous != onlinePreferences, let url = onlinePreferencesURL else { return }
+        guard force || previous != onlinePreferences, let url = onlinePreferencesURL else { return }
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try JSONEncoder().encode(onlinePreferences).write(to: url, options: .atomic)

@@ -59,13 +59,14 @@ final class NeteaseAccountClient {
         return NeteaseProfile(userID: profile.userId, nickname: profile.nickname, avatarURL: avatarURL)
     }
 
-    func makeRequest(credential: NeteaseCredential, path: String = "/api/w/nuser/account/get", fields: [String: Any] = [:]) throws -> URLRequest {
+    func makeRequest(credential: NeteaseCredential?, path: String = "/api/w/nuser/account/get", fields: [String: Any] = [:]) throws -> URLRequest {
         var header = [
             "os": "pc", "appver": "3.1.17.204416", "osver": "Microsoft-Windows-10-Professional-build-19045-64bit",
             "channel": "netease", "versioncode": "140", "mobilename": "", "resolution": "1920x1080",
-            "deviceId": deviceID, "__csrf": credential.csrf ?? "", "MUSIC_U": credential.musicU,
+            "deviceId": deviceID, "__csrf": credential?.csrf ?? "", "MUSIC_U": credential?.musicU ?? "",
             "buildver": String(Int(Date().timeIntervalSince1970))
         ]
+        if credential == nil { header.removeValue(forKey: "MUSIC_U") }
         header["requestId"] = "\(Int64(Date().timeIntervalSince1970 * 1000))_\(Int.random(in: 1000...9999))"
         var payload = fields
         payload["header"] = header
@@ -92,7 +93,7 @@ final class NeteaseAccountClient {
         return request
     }
 
-    func request(path: String, fields: [String: Any] = [:], credential: NeteaseCredential) async throws -> Data {
+    func request(path: String, fields: [String: Any] = [:], credential: NeteaseCredential?) async throws -> Data {
         try Task.checkCancellation()
         let request = try makeRequest(credential: credential, path: path, fields: fields)
         let (data, response) = try await session.data(for: request)

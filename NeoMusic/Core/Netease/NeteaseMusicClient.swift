@@ -4,7 +4,7 @@ import Foundation
 @MainActor final class NeteaseMusicClient {
     private let transport: NeteaseAccountClient
     init(transport: NeteaseAccountClient = NeteaseAccountClient()) { self.transport = transport }
-    private func read<T: Decodable>(_ path: String, _ fields: [String: Any], _ credential: NeteaseCredential) async throws -> T {
+    private func read<T: Decodable>(_ path: String, _ fields: [String: Any], _ credential: NeteaseCredential?) async throws -> T {
         try await JSONDecoder().decode(T.self, from: transport.request(path: path, fields: fields, credential: credential))
     }
     func playlists(userID: Int64, credential: NeteaseCredential) async throws -> [NeteaseMusicPlaylist] {
@@ -20,7 +20,7 @@ import Foundation
             offset += 200
         }
     }
-    func detail(id: Int64, credential: NeteaseCredential) async throws -> NeteasePlaylistDetail {
+    func detail(id: Int64, credential: NeteaseCredential?) async throws -> NeteasePlaylistDetail {
         struct Response: Decodable { let playlist: Playlist }
         struct Songs: Decodable { let songs: [Song] }
         let response: Response = try await read("/api/v6/playlist/detail", ["id": id, "n": 0, "s": 0], credential)
@@ -35,6 +35,28 @@ import Foundation
         var dates: [Int64: Date] = [:]
         for item in ids { if let at = item.at, at > 0 { dates[item.id] = Date(timeIntervalSince1970: at / 1000) } }
         return .init(playlist: response.playlist.model, songs: ids.map { lookup[$0.id] ?? .init(id: $0.id, title: "歌曲不可用", artist: "网易云音乐", album: "", artworkURL: nil, duration: 0, unavailable: true) }, addedTimes: dates)
+    }
+    func homeRecommendations(credential: NeteaseCredential?) async throws -> [NeteaseMusicPlaylist] {
+        struct Item: Decodable {
+            let id: Int64; let name: String; let picUrl: String?; let trackCount: Int?
+            struct Creator: Decodable { let userId: Int64; let nickname: String }
+            let creator: Creator?
+        }
+        struct Response: Decodable { let result: [Item]?; let recommend: [Item]? }
+        let response: Response = try await read(credential == nil ? "/api/personalized/playlist" : "/api/v1/discovery/recommend/resource", ["limit": 30, "total": true, "n": 1000], credential)
+        guard let items = response.result ?? response.recommend else { throw NeteaseAccountError.invalidResponse }
+        var seen = Set<Int64>()
+        return items.filter { seen.insert($0.id).inserted }.map {
+            .init(id: $0.id, title: $0.name, creator: $0.creator?.nickname ?? "", creatorID: $0.creator?.userId ?? 0,
+                  artworkURL: Self.url($0.picUrl), trackCount: $0.trackCount ?? 0, isFavorites: false)
+        }
+    }
+    func dailyRecommendations(credential: NeteaseCredential) async throws -> [NeteaseMusicSong] {
+        struct Payload: Decodable { let dailySongs: [Song] }
+        struct Response: Decodable { let data: Payload }
+        let response: Response = try await read("/api/v3/discovery/recommend/songs", [:], credential)
+        var seen = Set<Int64>()
+        return response.data.dailySongs.filter { seen.insert($0.id).inserted }.map(\.model)
     }
     func likedIDs(userID: Int64, credential: NeteaseCredential) async throws -> Set<Int64> {
         struct Response: Decodable { let ids: [Int64] }
