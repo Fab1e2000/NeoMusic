@@ -9,6 +9,7 @@ The official-site WebKit authentication flow is adapted from the same
 NeoDizzy / MeloX family. These portions remain under GNU GPL version 3.0.
 The full license accompanies the application as GPL-3.0.txt.
 
-NeoMusic limits transport to account validation, isolates website and API
-sessions, and supplies its own account lifecycle, credential storage,
+The playlist, song, lyrics, likes and stream endpoint parameters also follow
+NeoDizzy / MeloX. NeoMusic isolates website and API sessions, and supplies
+its own account lifecycle, credential storage,
 cancellation handling and native account presentation.

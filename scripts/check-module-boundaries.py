@@ -25,6 +25,7 @@ def check_source(relative: Path, text: str) -> list[str]:
             allowed |= player and module in PLAYER_IMPORTS
             allowed |= account_ui and module == "WebKit"
             allowed |= relative == Path("NeoMusic/Core/Netease/NeteaseAvatarSnapshot.swift") and module == "ImageIO"
+            allowed |= relative == Path("NeoMusic/Core/Netease/NeteaseMusicStore.swift") and module == "Network"
             if not allowed:
                 errors.append(f"import {module} is outside this source's dependency boundary")
     # Scan Swift and Objective-C together; moving code does not exempt it.

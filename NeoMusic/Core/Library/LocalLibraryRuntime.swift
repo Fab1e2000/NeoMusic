@@ -6,6 +6,34 @@ final class LocalLibraryRuntime {
     private(set) var isScanning = false
     private(set) var status: String?
     private var started = false
+    @ObservationIgnored private var onlineResolver: (@MainActor (String) async throws -> PlaybackResource)?
+    @ObservationIgnored var onLibraryRestored: (() -> Void)?
+
+    func configureOnlineResolver(_ resolver: @escaping @MainActor (String) async throws -> PlaybackResource) {
+        onlineResolver = resolver
+        if started { configurePlayer() }
+    }
+
+    private func configurePlayer() {
+        if onlineResolver == nil {
+            player.configurePlayback(resolveURL: { [weak self, root] id in
+                guard !id.hasPrefix("netease:"), self?.failedIDs.contains(id) != true else { return nil }
+                let url = root.appending(path: id)
+                return FileManager.default.fileExists(atPath: url.path) ? url : nil
+            }, persistenceURL: store.appending(path: "playback.json"))
+            return
+        }
+        player.configurePlayback(resolveResource: { [weak self, root] id in
+            if id.hasPrefix("netease:") {
+                guard let resolver = self?.onlineResolver else { throw URLError(.userAuthenticationRequired) }
+                return try await resolver(id)
+            }
+            guard self?.failedIDs.contains(id) != true else { throw CocoaError(.fileReadNoSuchFile) }
+            let url = root.appending(path: id)
+            guard FileManager.default.fileExists(atPath: url.path) else { throw CocoaError(.fileReadNoSuchFile) }
+            return PlaybackResource(url: url)
+        }, persistenceURL: store.appending(path: "playback.json"))
+    }
     /// Release the initial shelf after restoration or a reported failure; cancellation can retry.
     private(set) var isInitialLibraryReady = false
     private var refreshPending = false
@@ -93,7 +121,7 @@ final class LocalLibraryRuntime {
         if tracks != cachedTracks { apply(tracks) }
         if !started { try await restoreStores() }
         playlistLibrary.reconcileSongs(LocalLibrary.songs, failedIDs: failed, failedDirectories: result.failedDirectoryPaths)
-        player.reconcileAvailability(songs: LocalLibrary.songs.filter { !failed.contains($0.id) })
+        player.reconcileAvailability(songs: LocalLibrary.allSongs.filter { !failed.contains($0.id) })
         var messages = result.issues
         if result.unsupportedCount > 0 { messages.insert("跳过 \(result.unsupportedCount) 个不支持的音频文件。", at: 0) }
         status = messages.isEmpty ? cacheWarning : messages.joined(separator: "\n")
@@ -107,13 +135,10 @@ final class LocalLibraryRuntime {
         try Task.checkCancellation()
         let songs = LocalLibrary.songs
         playlistLibrary.configurePersistence(url: store.appending(path: "playlists.json"), songs: songs, restoredState: playlists)
-        player.configurePlayback(resolveURL: { [weak self, root] id in
-            guard self?.failedIDs.contains(id) != true else { return nil }
-            let url = root.appending(path: id)
-            return FileManager.default.fileExists(atPath: url.path) ? url : nil
-        }, persistenceURL: store.appending(path: "playback.json"))
+        configurePlayer()
         player.restoreQueue(songs: songs, restoredState: queue)
         started = true
+        onLibraryRestored?()
     }
 
     /// Repairs only the known /var versus /private/var truncation from the first local scanner.

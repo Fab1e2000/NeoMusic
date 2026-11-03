@@ -4,6 +4,8 @@ import Observation
 /// Owns the account credential, validation, and avatar work for the current session.
 @MainActor @Observable
 final class NeteaseAccount {
+    let music: NeteaseMusicStore?
+
     enum ValidationState: Equatable {
         case signedOut, validating, valid, unverified, requiresLogin
     }
@@ -46,7 +48,9 @@ final class NeteaseAccount {
          loadAvatar: @escaping @MainActor (URL) async throws -> Data,
          clearAvatarCache: @escaping @MainActor () -> Void,
          startupAvatar: NeteaseAvatarSnapshot? = nil,
+         music: NeteaseMusicStore? = nil,
          saveAvatarSnapshot: @escaping @MainActor (Data, NeteaseProfile) async -> Void = { _, _ in }) {
+        self.music = music
         self.readSession = readSession
         self.saveSession = saveSession
         self.deleteSession = deleteSession
@@ -74,7 +78,20 @@ final class NeteaseAccount {
                       avatarClient.clearCache()
                   },
                   startupAvatar: avatarSnapshotStore.load(),
+                  music: NeteaseMusicStore(),
                   saveAvatarSnapshot: { await avatarSnapshotStore.save($0, for: $1) })
+        music?.onAuthenticationRequired = { [weak self] in
+            guard let self else { return }
+            let revision = self.generation
+            Task { @MainActor [weak self] in
+                guard let self, self.generation == revision else { return }
+                do {
+                    try await self.logout()
+                    self.validationState = .requiresLogin
+                    self.error = NeteaseAccountError.authenticationRequired.localizedDescription
+                } catch { self.error = error.localizedDescription }
+            }
+        }
     }
 
     func restore() async {
@@ -108,6 +125,8 @@ final class NeteaseAccount {
                     guard validationID == id, generation == revision else { return }
                     session = restored
                     profile = session?.profile
+                    if let session { await music?.activate(session, refresh: false) }
+                    guard validationID == id, generation == revision, !Task.isCancelled else { return }
                     if let startupAvatar,
                        profile.map({ startupAvatar.belongs(to: $0) && $0.avatarURL != nil }) != true {
                         self.startupAvatar = nil
@@ -135,6 +154,7 @@ final class NeteaseAccount {
                 profile = refreshed
                 validationState = .valid
                 refreshAvatar()
+                await music?.activate(updated)
             } catch is CancellationError {
                 if validationID == id, generation == revision { validationState = previousState }
             } catch {
@@ -146,6 +166,7 @@ final class NeteaseAccount {
                 }
                 guard !Task.isCancelled else { return }
                 if error as? NeteaseAccountError == .authenticationRequired {
+                    await music?.invalidate()
                     session = nil
                     validationState = .requiresLogin
                     self.error = error.localizedDescription
@@ -169,6 +190,7 @@ final class NeteaseAccount {
                 } else {
                     validationState = .unverified
                     self.error = error.localizedDescription
+                    if let session { await music?.activate(session) }
                 }
             }
         }
@@ -209,6 +231,8 @@ final class NeteaseAccount {
                 validationTask = nil
                 avatarTask = nil
                 let saved = NeteaseSavedSession(profile: candidate, credential: credential)
+                await music?.invalidate()
+                try checkLogin(id)
                 try await persist(saved, replacing: session) { self.loginID == id && self.logoutID == nil }
                 if session?.profile.userID != candidate.userID { clearAvatarCache() }
                 session = saved
@@ -217,8 +241,10 @@ final class NeteaseAccount {
                 validationState = .valid
                 error = nil
                 refreshAvatar()
+                await music?.activate(saved)
             } catch {
                 if loginID == id {
+                    if let session { await music?.activate(session, refresh: false) }
                     if validationID == nil { validationTask = nil }
                     if avatarID == nil { avatarTask = nil }
                     if validationState == .validating { validationState = .unverified }
@@ -250,6 +276,7 @@ final class NeteaseAccount {
         if loginID == nil {
             loginTask = nil
             isAuthenticating = false
+            if let session { await music?.activate(session, refresh: false) }
             if validationID == nil { validationTask = nil }
             if avatarID == nil { avatarTask = nil }
             if validationState == .validating, validationID == nil { validationState = .unverified }
@@ -276,6 +303,7 @@ final class NeteaseAccount {
             defer {
                 if logoutID == id { logoutTask = nil; logoutID = nil; isLoggingOut = false }
             }
+            await music?.invalidate()
             _ = await oldLogin?.result
             await oldValidation?.value
             await oldAvatar?.value

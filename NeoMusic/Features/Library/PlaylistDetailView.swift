@@ -42,6 +42,7 @@ struct PlaylistDetailView: View {
                 ContentUnavailableView("播放列表已删除", systemImage: "music.note.list")
             }
         }
+        .task(id: playlistID) { if playlist?.isReadOnly == true { await library.loadOnlinePlaylist?(playlistID) } }
         .playlistDeletionConfirmation(library)
         .onChange(of: playlist == nil) { _, missing in
             if missing {
@@ -73,6 +74,13 @@ struct PlaylistDetailView: View {
                 .listRowSeparator(query.isEmpty || !visibleTracks.isEmpty ? .visible : .hidden, edges: .bottom)
                 .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
                 .alignmentGuide(.listRowSeparatorTrailing) { $0[.trailing] }
+            if library.loadingPlaylistIDs.contains(playlistID) { ProgressView("正在加载歌曲") }
+            if let error = library.onlineErrors[playlistID] {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(error).font(.subheadline).foregroundStyle(.secondary)
+                    Button("重试") { Task { await library.loadOnlinePlaylist?(playlistID) } }
+                }
+            }
             Section {
                 ForEach(visibleTracks) { song in
                     trackRow(song, title: playlist.title)
@@ -87,6 +95,7 @@ struct PlaylistDetailView: View {
                                 .tint(.indigo)
                         }
                         .swipeActions(edge: .trailing) {
+                            if !playlist.isReadOnly {
                             Button(role: .destructive) {
                                 withAnimation { library.removeSong(song.id, from: playlistID) }
                             } label: {
@@ -94,9 +103,10 @@ struct PlaylistDetailView: View {
                             }
                             .accessibilityLabel("移除")
                             .tint(.red)
+                            }
                         }
                 }
-                if query.isEmpty {
+                if query.isEmpty && !playlist.isReadOnly {
                     addMusicRow
                         .listRowInsets(EdgeInsets(top: 4, leading: 20, bottom: 4, trailing: 20))
                         .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
@@ -150,7 +160,7 @@ struct PlaylistDetailView: View {
                 .padding(.top, 14)
                 .padding(.bottom, 22)
             Text(playlist.title).font(.title2.bold()).multilineTextAlignment(.center)
-            Text("我").font(.title3).padding(.top, 4)
+            Text(playlist.subtitle ?? "我").font(.title3).padding(.top, 4)
             Text("刚刚更新").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary).padding(.top, 4 + 1.0 / 3)
             if !tracks.isEmpty {
                 HStack(spacing: 14) {
@@ -253,7 +263,7 @@ struct PlaylistDetailView: View {
             Button("添加到播放列表", systemImage: "text.badge.plus") { showsDestinations = true }.disabled(tracks.isEmpty)
         }
         Section {
-            Button("编辑", systemImage: "pencil") { showsEditor = true }
+            if !playlist.isReadOnly { Button("编辑", systemImage: "pencil") { showsEditor = true } }
             Button("开始协作", systemImage: "person.badge.plus") {}.disabled(true)
             Menu("排序方式", systemImage: "arrow.up.arrow.down") {
                 Picker("排序方式", selection: $sort) {
@@ -279,9 +289,9 @@ struct PlaylistDetailView: View {
                 playNext: { collectionActions.playNext(.playlist(playlistID)) },
                 playLater: { collectionActions.playLater(.playlist(playlistID)) })
         ], firstSectionIsRow: false)
-        Section {
+        if !playlist.isReadOnly { Section {
             Button("从资料库删除", systemImage: "trash", role: .destructive) { library.pendingDeletion = playlist }
-        }
+        } }
     }
 
     private enum DetailSort: String, CaseIterable, Identifiable {
@@ -296,8 +306,10 @@ private struct PlaylistDetailSongLabel: View {
         HStack(spacing: 12) {
             ArtworkView(artwork: song.artwork, cornerRadius: 5).frame(width: 48, height: 48)
             VStack(alignment: .leading, spacing: 2) {
-                Text(song.title).font(.callout).foregroundStyle(.primary)
-                Text(song.artist).font(.footnote).foregroundStyle(.secondary)
+                Text(song.title).font(.callout)
+                    .foregroundStyle(song.unavailabilityReason == nil ? .primary : .secondary)
+                Text(song.unavailabilityReason ?? song.artist)
+                    .font(.footnote).foregroundStyle(.secondary)
             }
             .lineLimit(1)
             .frame(maxWidth: .infinity, alignment: .leading)

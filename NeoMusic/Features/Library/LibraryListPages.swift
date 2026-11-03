@@ -20,11 +20,27 @@ struct LibrarySongItem: Identifiable, Equatable {
     var isPinned = false
     var addedOrder = 0
     var isFavorite = false
+    var favoriteAddedAt: Date? = nil
+    var unavailabilityReason: String? = nil
+
+    var onlineOwnerID: String? {
+        let parts = id.split(separator: ":")
+        return parts.count == 3 && parts[0] == "netease" ? String(parts[1]) : nil
+    }
+    var onlineSongID: Int64? {
+        guard onlineOwnerID != nil else { return nil }
+        return id.split(separator: ":").last.flatMap { Int64($0) }
+    }
+    var isOnline: Bool { onlineOwnerID != nil }
 }
 
 extension LibrarySongItem {
     static func unavailable(_ id: String) -> Self {
-        Self(id: id, title: URL(fileURLWithPath: id).deletingPathExtension().lastPathComponent,
+        if id.hasPrefix("netease:") {
+            return Self(id: id, title: "在线歌曲", artist: "登录原账号后可用", album: "", albumArtist: "", trackNumber: 0,
+                        artwork: .missing, unavailabilityReason: "请登录原网易云账号后重试")
+        }
+        return Self(id: id, title: URL(fileURLWithPath: id).deletingPathExtension().lastPathComponent,
              artist: "文件不可用", album: "", albumArtist: "", trackNumber: 0, artwork: .missing)
     }
 

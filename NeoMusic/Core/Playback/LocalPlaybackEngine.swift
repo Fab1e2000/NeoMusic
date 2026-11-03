@@ -187,7 +187,7 @@ import Observation
 
     func load(url: URL, nextURL: URL? = nil, position: Double = 0, autoplay: Bool = false) {
         stop()
-        guard url.isFileURL, FileManager.default.fileExists(atPath: url.path) else { error = "音乐文件不可用"; return }
+        guard !url.isFileURL || FileManager.default.fileExists(atPath: url.path) else { error = "音乐文件不可用"; return }
         error = nil; isLoading = true
         preparedURL = nextURL
         let token = generation
@@ -206,6 +206,40 @@ import Observation
         observeStatus(item)
         seek(to: position)
         if autoplay { play() }
+    }
+
+    func replaceResource(url: URL, shouldResume: @MainActor () -> Bool) async throws {
+        let candidate = PlaybackCandidate(url: url)
+        try await candidate.waitUntilReady()
+        try Task.checkCancellation()
+        let position = elapsed
+        // Keep the ready item attached to its original player. Detaching an item
+        // does not synchronously release AVFoundation's player association.
+        if let clock { player.removeTimeObserver(clock); self.clock = nil }
+        generation += 1
+        preparation?.cancel(); preparation = nil
+        preparedURL = nil; nextDuration = 0
+        status = nil
+        player.pause()
+        player.removeAllItems()
+        cancelFade()
+        player = candidate.readyPlayer
+        player.actionAtItemEnd = .pause
+        guard let item = player.currentItem else { throw URLError(.cannotDecodeContentData) }
+        pruneSpectrum()
+        bindClock()
+        error = nil; isLoading = false
+        observeStatus(item)
+        let revision = generation
+        elapsed = position
+        await withCheckedContinuation { continuation in
+            player.seek(to: CMTime(seconds: position, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { _ in
+                continuation.resume()
+            }
+        }
+        guard generation == revision, !Task.isCancelled else { return }
+        if isPlaying && shouldResume() { play() }
+        else { pause() }
     }
 
     func play() {
@@ -268,4 +302,46 @@ import Observation
         notifications.forEach(NotificationCenter.default.removeObserver)
         notifications.removeAll()
     }
+}
+
+/// A separate native player readies the replacement without disrupting current audio.
+@MainActor
+private final class PlaybackCandidate {
+    private let player = AVQueuePlayer()
+    var readyPlayer: AVQueuePlayer { player }
+    private let item: AVPlayerItem
+    private var observation: NSKeyValueObservation?
+    private var continuation: CheckedContinuation<Void, Error>?
+
+    init(url: URL) { item = AVPlayerItem(url: url) }
+
+    func waitUntilReady() async throws {
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                self.continuation = continuation
+                observation = item.observe(\.status, options: [.initial, .new]) { [weak self] _, _ in
+                    Task { @MainActor [weak self] in self?.checkStatus() }
+                }
+                player.replaceCurrentItem(with: item)
+                if Task.isCancelled { finish(.failure(CancellationError())) }
+            }
+        } onCancel: {
+            Task { @MainActor in self.finish(.failure(CancellationError())) }
+        }
+    }
+
+    private func checkStatus() {
+        switch item.status {
+        case .readyToPlay: finish(.success(()))
+        case .failed: finish(.failure(item.error ?? URLError(.cannotDecodeContentData)))
+        default: break
+        }
+    }
+
+    private func finish(_ result: Result<Void, Error>) {
+        guard let continuation else { return }
+        self.continuation = nil; observation = nil
+        continuation.resume(with: result)
+    }
+
 }

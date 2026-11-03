@@ -59,8 +59,7 @@ final class NeteaseAccountClient {
         return NeteaseProfile(userID: profile.userId, nickname: profile.nickname, avatarURL: avatarURL)
     }
 
-    func makeRequest(credential: NeteaseCredential) throws -> URLRequest {
-        let path = "/api/w/nuser/account/get"
+    func makeRequest(credential: NeteaseCredential, path: String = "/api/w/nuser/account/get", fields: [String: Any] = [:]) throws -> URLRequest {
         var header = [
             "os": "pc", "appver": "3.1.17.204416", "osver": "Microsoft-Windows-10-Professional-build-19045-64bit",
             "channel": "netease", "versioncode": "140", "mobilename": "", "resolution": "1920x1080",
@@ -68,14 +67,16 @@ final class NeteaseAccountClient {
             "buildver": String(Int(Date().timeIntervalSince1970))
         ]
         header["requestId"] = "\(Int64(Date().timeIntervalSince1970 * 1000))_\(Int.random(in: 1000...9999))"
-        let payload: [String: Any] = ["header": header, "e_r": false]
+        var payload = fields
+        payload["header"] = header
+        payload["e_r"] = false
         let json: String
         do { json = String(decoding: try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]), as: UTF8.self) }
         catch { throw NeteaseAccountError.requestEncoding }
         let digest = Insecure.MD5.hash(data: Data("nobody\(path)use\(json)md5forencrypt".utf8))
             .map { String(format: "%02x", $0) }.joined()
         let encrypted = try Self.encrypt(Data("\(path)-36cd479b6b5-\(json)-36cd479b6b5-\(digest)".utf8))
-        var request = URLRequest(url: URL(string: "https://interface.music.163.com/eapi/w/nuser/account/get")!)
+        var request = URLRequest(url: URL(string: "https://interface.music.163.com/eapi/" + path.dropFirst(5))!)
         request.httpMethod = "POST"
         request.timeoutInterval = 20
         request.cachePolicy = .reloadIgnoringLocalCacheData
@@ -89,6 +90,21 @@ final class NeteaseAccountClient {
         }.joined(separator: "; "), forHTTPHeaderField: "Cookie")
         request.httpBody = Data(("params=" + encrypted.map { String(format: "%02X", $0) }.joined()).utf8)
         return request
+    }
+
+    func request(path: String, fields: [String: Any] = [:], credential: NeteaseCredential) async throws -> Data {
+        try Task.checkCancellation()
+        let request = try makeRequest(credential: credential, path: path, fields: fields)
+        let (data, response) = try await session.data(for: request)
+        try Task.checkCancellation()
+        guard let http = response as? HTTPURLResponse else { throw NeteaseAccountError.invalidResponse }
+        if http.statusCode == 401 { throw NeteaseAccountError.authenticationRequired }
+        guard (200..<300).contains(http.statusCode) else { throw NeteaseAccountError.http(http.statusCode) }
+        struct Status: Decodable { let code: Int }
+        let status = try JSONDecoder().decode(Status.self, from: data)
+        if status.code == 301 || status.code == 401 { throw NeteaseAccountError.authenticationRequired }
+        guard status.code == 200 else { throw NeteaseAccountError.server(status.code) }
+        return data
     }
 
     private static func encrypt(_ data: Data) throws -> Data {

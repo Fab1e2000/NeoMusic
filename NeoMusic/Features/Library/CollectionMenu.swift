@@ -265,11 +265,13 @@ struct CollectionMenuActions {
         ]
         if case .playlist(let id) = route {
             // 对照 Apple Music：编辑、开始协作、移到文件夹同组。协作本阶段不可用。
-            sections.append([
+            if id.hasPrefix("netease-playlist:") {
+                sections.append([moveItem(playlistID: id)])
+            } else { sections.append([
                 LibraryMenuItem(title: "编辑", systemImage: "pencil", isDisabled: !canDelete(route)) { edit(route) },
                 LibraryMenuItem(title: "开始协作", systemImage: "person.badge.plus", isDisabled: true),
                 moveItem(playlistID: id),
-            ])
+            ]) }
         }
         sections.append(queueItems(route))
         sections.append(removalItems(route))
@@ -413,6 +415,7 @@ struct SongMenuActions {
                                        download: @escaping () -> Void, removeDownload: @escaping () -> Void,
                                        requestDelete: @escaping () -> Void,
                                        notify: @escaping (LibraryToast) -> Void) -> LibraryMenuSections {
+        if song.id.hasPrefix("netease:") { return sections(for: song, goToAlbum: {}) }
         let favorite = { toggleFavorite(song); notify(song.isFavorite ? .unfavorited : .favorited) }
         var sections: LibraryMenuSections = [
             isDownloaded
@@ -437,7 +440,14 @@ struct SongMenuActions {
 
     /// 歌曲的菜单分组，对照 Apple Music。歌词本阶段不可用。
     @MainActor func sections(for song: LibrarySongItem, goToAlbum: @escaping () -> Void) -> LibraryMenuSections {
-        [
+        if song.id.hasPrefix("netease:") {
+            return [
+                [favoriteItem(isFavorite: song.isFavorite) { toggleFavorite(song) }],
+                [LibraryMenuItem(title: "添加到播放列表", systemImage: "text.badge.plus") { addToPlaylist(song) }],
+                libraryQueueMenuItems(playbackSource: playbackSource(), playNext: { playNext(song) }, playLater: { playLater(song) })
+            ]
+        }
+        return [
             [unavailableDownload, favoriteItem(isFavorite: song.isFavorite) { toggleFavorite(song) }],
             [LibraryMenuItem(title: song.isPinned ? "取消置顶" : "置顶歌曲", systemImage: song.isPinned ? "pin.slash" : "pin") {
                 togglePin(song)

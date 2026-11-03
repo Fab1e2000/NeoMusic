@@ -46,6 +46,12 @@ class ModuleBoundaryTests(unittest.TestCase):
                                               'let host = "https://music.163.com"'))
         self.assertTrue(boundaries.check_source(Path("NeoMusic/Modules/Other/Client.swift"), "import Foundation"))
 
+    def test_network_monitor_belongs_to_the_music_service(self):
+        self.assertEqual(boundaries.check_source(Path("NeoMusic/Core/Netease/NeteaseMusicStore.swift"), "import Network"), [])
+        for path in ["NeoMusic/App/OnlineMusicIntegration.swift", "NeoMusic/Core/Playback/LocalPlaybackEngine.swift",
+                     "NeoMusic/Features/Library/PlaylistsPage.swift"]:
+            self.assertTrue(boundaries.check_source(Path(path), "import Network"))
+
 
 if __name__ == "__main__":
     unittest.main()

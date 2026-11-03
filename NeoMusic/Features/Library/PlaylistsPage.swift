@@ -16,9 +16,16 @@ struct LibraryPlaylistItem: Identifiable {
     var lastPlayedOrder = 0
     var updatedOrder = 0
 
+    var addedAt: Date? = nil
+    var lastPlayedAt: Date? = nil
+    var updatedAt: Date? = nil
+    var sourceOwnerID: String? = nil
+    var subtitle: String? = nil
+    var isReadOnly: Bool { sourceOwnerID != nil }
+
     /// 菜单与预览卡片共用的展示数据。
     var shelfItem: LibraryShelfItem {
-        LibraryShelfItem(id: id, title: title, artwork: artwork, route: .playlist(id), isFavorite: isFavorite,
+        LibraryShelfItem(id: id, title: title, subtitle: subtitle, artwork: artwork, route: .playlist(id), isFavorite: isFavorite,
                          isPinned: isPinned, addedOrder: addedOrder)
     }
 }
@@ -50,6 +57,98 @@ final class PlaylistLibrary {
     var pendingEdit: LibraryPlaylistItem?
     /// 等待选择目标播放列表的歌曲，由宿主弹出“添加到播放列表”。
     var pendingAddition: PendingAddition?
+
+    @ObservationIgnored var loadOnlinePlaylist: (@MainActor (String) async -> Void)?
+    private(set) var loadedOnlinePlaylistIDs: Set<String> = []
+    private(set) var loadingPlaylistIDs: Set<String> = []
+    private(set) var onlineErrors: [String: String] = [:]
+    private var onlineOwnerID: String?
+    private struct OnlinePreference: Codable, Equatable {
+        var favorite: Bool
+        var pinned: Bool
+        var folder: String?
+        var firstSeen: Date?
+        var lastPlayed: Date?
+    }
+    private var onlinePreferences: [String: OnlinePreference] = [:]
+
+    func replaceOnlinePlaylists(items: [LibraryPlaylistItem], songs: [String: [LibrarySongItem]], ownerID: String?) {
+        if onlineOwnerID != ownerID {
+            saveOnlinePreferences()
+            onlinePreferences = [:]
+            onlineOwnerID = ownerID
+            if let url = onlinePreferencesURL, let data = try? Data(contentsOf: url),
+               let saved = try? JSONDecoder().decode([String: OnlinePreference].self, from: data) { onlinePreferences = saved }
+            loadedOnlinePlaylistIDs = []
+            loadingPlaylistIDs = []
+            onlineErrors = [:]
+        }
+        let oldOnline = Set(playlists.filter(\.isReadOnly).map(\.id))
+        for id in oldOnline { contents[id] = nil; placement[id] = nil }
+        playlists.removeAll(where: \.isReadOnly)
+        let discoveredAt = Date()
+        for var item in items where item.sourceOwnerID == ownerID && ownerID != nil {
+            if let preference = onlinePreferences[item.id] {
+                item.addedAt = preference.firstSeen
+                item.lastPlayedAt = preference.lastPlayed
+                item.isFavorite = preference.favorite
+                item.isPinned = preference.pinned
+                if let folder = preference.folder, folders.contains(where: { $0.id == folder }) { placement[item.id] = folder }
+            }
+            if item.addedAt == nil { item.addedAt = discoveredAt }
+            playlists.append(item)
+            contents[item.id] = songs[item.id] ?? []
+        }
+        saveOnlinePreferences()
+        for id in contents.keys where !oldOnline.contains(id) {
+            contents[id] = contents[id]?.map { song in
+                guard song.id.hasPrefix("netease:") else { return song }
+                let owner = song.id.split(separator: ":").dropFirst().first.map(String.init)
+                return owner == ownerID ? song : LibrarySongItem.unavailable(song.id)
+            }
+        }
+    }
+
+    var onlineStatus: String?
+    var isRefreshingOnline = false
+    @ObservationIgnored var retryOnline: (@MainActor () async -> Void)?
+
+    /// Online refreshes update only online metadata; local scan owns local availability.
+    func reconcileOnlineSongs(_ songs: [LibrarySongItem]) {
+        let lookup = Dictionary(songs.filter { $0.id.hasPrefix("netease:") }.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        for id in contents.keys {
+            contents[id] = contents[id]?.map { song in
+                guard song.id.hasPrefix("netease:") else { return song }
+                return lookup[song.id] ?? song
+            }
+        }
+    }
+
+    func updateOnlineSongs(playlistID: String, songs: [LibrarySongItem], error: String?, loading: Bool) {
+        guard playlist(playlistID)?.sourceOwnerID == onlineOwnerID, playlist(playlistID)?.isReadOnly == true else { return }
+        contents[playlistID] = songs
+        onlineErrors[playlistID] = error
+        if loading { loadingPlaylistIDs.insert(playlistID) } else { loadingPlaylistIDs.remove(playlistID) }
+        if !loading && error == nil { loadedOnlinePlaylistIDs.insert(playlistID) }
+        else { loadedOnlinePlaylistIDs.remove(playlistID) }
+    }
+
+    private var onlinePreferencesURL: URL? {
+        guard let owner = onlineOwnerID, owner.allSatisfy(\.isNumber), let persistenceURL else { return nil }
+        return persistenceURL.deletingLastPathComponent().appendingPathComponent("online-playlist-preferences-\(owner).json")
+    }
+
+    private func saveOnlinePreferences() {
+        let previous = onlinePreferences
+        for item in playlists where item.isReadOnly {
+            onlinePreferences[item.id] = OnlinePreference(favorite: item.isFavorite, pinned: item.isPinned, folder: placement[item.id], firstSeen: item.addedAt, lastPlayed: item.lastPlayedAt)
+        }
+        guard previous != onlinePreferences, let url = onlinePreferencesURL else { return }
+        do {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONEncoder().encode(onlinePreferences).write(to: url, options: .atomic)
+        } catch { persistenceError = "无法保存播放列表整理：\(error.localizedDescription)" }
+    }
 
     struct PendingAddition: Identifiable {
         let songs: [LibrarySongItem]
@@ -84,6 +183,9 @@ final class PlaylistLibrary {
         let lastPlayedOrder: Int
         let updatedOrder: Int
         let artworkData: Data?
+        var addedAt: Date? = nil
+        var lastPlayedAt: Date? = nil
+        var updatedAt: Date? = nil
         let songs: [String]
     }
     struct Snapshot: Codable, Sendable {
@@ -116,7 +218,7 @@ final class PlaylistLibrary {
                     return LibraryPlaylistItem(id: item.id, title: item.title, artwork: artwork,
                         description: item.description, showsOnProfile: item.showsOnProfile,
                         isFavorite: item.isFavorite, isPinned: item.isPinned, isSystem: item.isSystem,
-                        addedOrder: item.addedOrder, lastPlayedOrder: item.lastPlayedOrder, updatedOrder: item.updatedOrder)
+                        addedOrder: item.addedOrder, lastPlayedOrder: item.lastPlayedOrder, updatedOrder: item.updatedOrder, addedAt: item.addedAt, lastPlayedAt: item.lastPlayedAt, updatedAt: item.updatedAt)
                 }
                 folders = saved.folders
                 placement = saved.placement
@@ -140,7 +242,7 @@ final class PlaylistLibrary {
         for id in contents.keys {
             let previous = contents[id, default: []]
             let updated = previous.compactMap { song in
-                lookup[song.id] ?? (failedIDs.contains(song.id) || failedDirectories.contains {
+                lookup[song.id] ?? (song.id.hasPrefix("netease:") || failedIDs.contains(song.id) || failedDirectories.contains {
                     $0.isEmpty || song.id.hasPrefix($0 + "/")
                 } ? song : nil)
             }
@@ -152,9 +254,10 @@ final class PlaylistLibrary {
 
     private func persist() {
         guard !loadingPersistence, let url = persistenceURL else { return }
+        saveOnlinePreferences()
         do {
             var nextArtwork: [String: (image: Image, data: Data)] = [:]
-            let items = playlists.map { item -> SavedPlaylist in
+            let items = playlists.filter { !$0.isReadOnly }.map { item -> SavedPlaylist in
                 let data: Data?
                 if case .image(let image) = item.artwork {
                     if let cached = savedArtwork[item.id], cached.image == image {
@@ -168,9 +271,9 @@ final class PlaylistLibrary {
                 return SavedPlaylist(id: item.id, title: item.title, description: item.description,
                     showsOnProfile: item.showsOnProfile, isFavorite: item.isFavorite, isPinned: item.isPinned,
                     isSystem: item.isSystem, addedOrder: item.addedOrder, lastPlayedOrder: item.lastPlayedOrder,
-                    updatedOrder: item.updatedOrder, artworkData: data, songs: contents[item.id, default: []].map(\.id))
+                    updatedOrder: item.updatedOrder, artworkData: data, addedAt: item.addedAt, lastPlayedAt: item.lastPlayedAt, updatedAt: item.updatedAt, songs: contents[item.id, default: []].map(\.id))
             }
-            let data = try JSONEncoder().encode(Snapshot(playlists: items, folders: folders, placement: placement, nextOrder: nextOrder))
+            let data = try JSONEncoder().encode(Snapshot(playlists: items, folders: folders, placement: placement.filter { key, _ in playlists.contains { $0.id == key && !$0.isReadOnly } }, nextOrder: nextOrder))
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try data.write(to: url, options: .atomic)
             savedArtwork = nextArtwork
@@ -206,7 +309,7 @@ final class PlaylistLibrary {
     /// 歌曲从资料库删除时，也从所有播放列表移除。
     func removeSongEverywhere(_ songID: String) {
         defer { persist() }
-        for id in contents.keys where contents[id]?.contains(where: { $0.id == songID }) == true {
+        for id in contents.keys where playlist(id)?.isReadOnly != true && contents[id]?.contains(where: { $0.id == songID }) == true {
             contents[id]?.removeAll { $0.id == songID }
             markUpdated(id)
         }
@@ -263,10 +366,19 @@ final class PlaylistLibrary {
         playlists[index].isPinned.toggle()
     }
 
+    func markPlayed(_ id: String) {
+        guard let index = playlists.firstIndex(where: { $0.id == id }) else { return }
+        playlists[index].lastPlayedAt = Date()
+        nextOrder += 1
+        playlists[index].lastPlayedOrder = nextOrder
+        persist()
+    }
+
     private func markUpdated(_ id: String) {
         guard let index = playlists.firstIndex(where: { $0.id == id }) else { return }
         nextOrder += 1
         playlists[index].updatedOrder = nextOrder
+        playlists[index].updatedAt = Date()
     }
 
     func folder(_ id: String) -> PlaylistFolder? { folders.first { $0.id == id } }
@@ -285,7 +397,7 @@ final class PlaylistLibrary {
         guard !title.isEmpty else { return nil }
         nextOrder += 1
         let playlist = LibraryPlaylistItem(id: UUID().uuidString, title: title, artwork: artwork,
-                                          addedOrder: nextOrder, updatedOrder: nextOrder)
+                                          addedOrder: nextOrder, updatedOrder: nextOrder, addedAt: Date(), updatedAt: Date())
         playlists.append(playlist)
         placement[playlist.id] = folderID
         return playlist
@@ -314,7 +426,7 @@ final class PlaylistLibrary {
 
     /// 用户自己的播放列表可以删除；“喜爱歌曲”等系统播放列表不能删除。
     func canDelete(_ playlistID: String) -> Bool {
-        playlists.contains { $0.id == playlistID && !$0.isSystem }
+        playlists.contains { $0.id == playlistID && !$0.isSystem && !$0.isReadOnly }
     }
 
     /// 从资料库删除播放列表，只删记录，不碰音乐文件。
@@ -332,7 +444,7 @@ final class PlaylistLibrary {
         defer { persist() }
         let removed = Set(folders.map(\.id).filter { isDescendant($0, of: id) })
         let contained = Set(placement.filter { removed.contains($0.value) }.map(\.key))
-        playlists.removeAll { contained.contains($0.id) && !$0.isSystem }
+        playlists.removeAll { contained.contains($0.id) && !$0.isSystem && !$0.isReadOnly }
         for playlistID in contained {
             placement[playlistID] = nil
             if !playlists.contains(where: { $0.id == playlistID }) { contents[playlistID] = nil }
@@ -386,7 +498,12 @@ extension Array where Element == PlaylistEntry {
         case .type:
             sorted { ($0.typeRank, $0.order(for: sort)) < ($1.typeRank, $1.order(for: sort)) }
         case .addedDate, .lastPlayed, .updated:
-            sorted { $0.order(for: sort) > $1.order(for: sort) }
+            enumerated().sorted { lhs, rhs in
+                let left = lhs.element.date(for: sort), right = rhs.element.date(for: sort)
+                if left != right { return (left ?? .distantPast) > (right ?? .distantPast) }
+                if left != nil { return lhs.offset < rhs.offset }
+                return lhs.element.order(for: sort) > rhs.element.order(for: sort)
+            }.map(\.element)
         }
     }
 }
@@ -425,6 +542,16 @@ enum PlaylistEntry: Identifiable {
         switch self {
         case .folder(let folder, _): .playlistFolder(folder.id)
         case .playlist(let playlist): .playlist(playlist.id)
+        }
+    }
+
+    func date(for sort: PlaylistSort) -> Date? {
+        guard case .playlist(let item) = self else { return nil }
+        switch sort {
+        case .addedDate: return item.addedAt
+        case .lastPlayed: return item.lastPlayedAt
+        case .updated: return item.updatedAt
+        default: return nil
         }
     }
 
@@ -486,6 +613,19 @@ struct PlaylistsListView: View {
     var body: some View {
         let entries = entries
         content(entries)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if let status = library.onlineStatus {
+                    HStack(spacing: 10) {
+                        Text(status).font(.caption).foregroundStyle(.secondary)
+                        Spacer(minLength: 0)
+                        if library.isRefreshingOnline { ProgressView() }
+                        else if library.retryOnline != nil {
+                            Button("重试") { Task { await library.retryOnline?() } }.font(.caption)
+                        }
+                    }.padding(.horizontal, 20).padding(.vertical, 8)
+                        .background(Color(.systemBackground))
+                }
+            }
             .overlay {
                 if entries.isEmpty, folderID != nil {
                     // 空文件夹：大图标与一行说明，对照 Apple Music。
@@ -570,7 +710,7 @@ struct PlaylistsListView: View {
                 }
                 Button("取消", role: .cancel) {}
             } message: { _ in
-                Text("确定要删除此文件夹吗？这会将文件夹中的所有播放列表从资料库删除。")
+                Text("确定要删除此文件夹吗？这会删除其中的本地播放列表，网易云播放列表将移回最外层。")
             }
             .alert("重新命名", isPresented: Binding(get: { renamingFolder != nil }, set: { if !$0 { renamingFolder = nil } })) {
                 TextField("文件夹名称", text: $renameText)

@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum AccountRoute: Hashable {
-    case settings, login
+    case settings, login, quality
 }
 
 struct AccountPage: View {
@@ -44,6 +44,12 @@ struct AccountPage: View {
                         if authenticationEnabled { path.append(.login) }
                     }
                 }
+                if account.music != nil {
+                    Section {
+                        NavigationLink("音质", value: AccountRoute.quality)
+                            .accessibilityIdentifier("account.quality")
+                    }
+                }
             }
             .listStyle(.insetGrouped)
             .navigationBarTitleDisplayMode(.inline)
@@ -64,6 +70,8 @@ struct AccountPage: View {
             }
             .navigationDestination(for: AccountRoute.self) { route in
                 switch route {
+                case .quality:
+                    if let music = account.music { MusicQualitySettingsPage(music: music) }
                 case .settings:
                     AccountSettingsPage(account: account, authenticationEnabled: authenticationEnabled)
                 case .login:

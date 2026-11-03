@@ -2,6 +2,7 @@ import SwiftUI
 
 /// 操作完成后在迷你播放条上方短暂显示的提示，对照 Apple Music。
 enum LibraryToast {
+    case error(String)
     case favorited, unfavorited, pinned, unpinned
     /// 插播、随后播放（添加到队列）。
     case playingNext, addedToQueue
@@ -12,6 +13,7 @@ enum LibraryToast {
 
     var title: String {
         switch self {
+        case .error(let message): message
         case .favorited: "已喜爱"
         case .unfavorited: "已取消喜爱"
         case .pinned: "已置顶"
@@ -25,6 +27,7 @@ enum LibraryToast {
 
     var systemImage: String {
         switch self {
+        case .error: "exclamationmark.circle"
         case .favorited: "star.fill"
         case .unfavorited: "star"
         case .pinned: "pin.fill"

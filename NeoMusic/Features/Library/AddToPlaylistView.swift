@@ -61,18 +61,18 @@ private struct AddToPlaylistList: View {
     @State private var folderName = ""
 
     private var recent: [LibraryPlaylistItem] {
-        Array(library.playlists.filter { !$0.isSystem }.sorted { $0.lastPlayedOrder > $1.lastPlayedOrder }.prefix(3))
+        Array(library.playlists.filter { !$0.isSystem && !$0.isReadOnly }.sorted { $0.lastPlayedOrder > $1.lastPlayedOrder }.prefix(3))
     }
 
     private var entries: [PlaylistEntry] {
         let trimmed = query.trimmingCharacters(in: .whitespaces)
         if !trimmed.isEmpty {
             // 查找时不分层级，列出名称匹配的全部播放列表。
-            return library.playlists.filter { !$0.isSystem && $0.title.localizedStandardContains(trimmed) }
+            return library.playlists.filter { !$0.isSystem && !$0.isReadOnly && $0.title.localizedStandardContains(trimmed) }
                 .map(PlaylistEntry.playlist).sorted(by: sort)
         }
-        let folders = library.folders(in: folderID).map { PlaylistEntry.folder($0, playlists: library.playlists(in: $0.id)) }
-        let playlists = library.playlists(in: folderID).filter { !$0.isSystem }.map(PlaylistEntry.playlist)
+        let folders = library.folders(in: folderID).map { PlaylistEntry.folder($0, playlists: library.playlists(in: $0.id).filter { !$0.isReadOnly && !$0.isSystem }) }
+        let playlists = library.playlists(in: folderID).filter { !$0.isSystem && !$0.isReadOnly }.map(PlaylistEntry.playlist)
         return (folders + playlists).sorted(by: sort)
     }
 
@@ -233,7 +233,7 @@ private struct AddToPlaylistList: View {
     }
 
     private func addToSelection(_ ids: Set<String>) {
-        let targets = library.playlists.filter { ids.contains($0.id) }
+        let targets = library.playlists.filter { ids.contains($0.id) && !$0.isSystem && !$0.isReadOnly }
         let count = targets.reduce(0) { $0 + library.addSongs(songs, to: $1.id) }
         added(.addedToPlaylists(count: count, playlistCount: targets.count))
         library.pendingAddition = nil

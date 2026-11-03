@@ -56,7 +56,7 @@ final class NowPlayingModel {
         if let duration = audio?.duration, duration > 0 { return duration }
         return Double(max(current.duration, 1))
     }
-    var isLoading: Bool { audio?.isLoading ?? false }
+    var isLoading: Bool { resolvingResource || (audio?.isLoading ?? false) }
     func spectrumLevels() -> [Float] { audio?.spectrumLevels() ?? Array(repeating: 0, count: 5) }
     private(set) var isCrossfadeEnabled = false
     func toggleCrossfade() { isCrossfadeEnabled.toggle(); audio?.crossfadeEnabled = isCrossfadeEnabled; saveQueue() }
@@ -256,6 +256,12 @@ final class NowPlayingModel {
     @ObservationIgnored private var preparedEntry: UUID?
     @ObservationIgnored private var configuringAudio = false
     @ObservationIgnored private var lastSavedPlaybackTime = Date.distantPast
+    @ObservationIgnored private var resolveResource: (@MainActor (String) async throws -> PlaybackResource)?
+    @ObservationIgnored private var resourceTask: Task<Void, Never>?
+    @ObservationIgnored private var nextResourceTask: Task<Void, Never>?
+    @ObservationIgnored private var resourceRevision = UUID()
+    private var resolvingResource = false
+    private(set) var actualQuality: String?
     @ObservationIgnored private var resolveURL: ((String) -> URL?)?
     @ObservationIgnored private var persistenceURL: URL?
     @ObservationIgnored private var updatingTime = false
@@ -283,6 +289,81 @@ final class NowPlayingModel {
             pause: { [weak self] in if let self, self.isPlaying { self.togglePlayback() } },
             next: { [weak self] in self?.skipForward() }, previous: { [weak self] in self?.skipBackward() },
             seek: { [weak self] in self?.elapsed = $0 })
+    }
+
+    func configurePlayback(resolveResource: @escaping @MainActor (String) async throws -> PlaybackResource, persistenceURL: URL) {
+        configurePlayback(resolveURL: { _ in nil }, persistenceURL: persistenceURL)
+        self.resolveResource = resolveResource
+    }
+
+    func waitForResourceResolution() async { await resourceTask?.value }
+
+    func reloadCurrentResource() {
+        guard hasCurrent, current.id.hasPrefix("netease:"), loadedEntry == entryIDs[currentIndex] else { return }
+        resolveCurrent(at: elapsed, replacing: true)
+    }
+
+    func invalidateOnlinePlayback(ownerID: String?) {
+        resourceRevision = UUID()
+        resourceTask?.cancel(); nextResourceTask?.cancel(); resourceTask = nil; resolvingResource = false
+        for index in queue.indices where queue[index].id.hasPrefix("netease:") {
+            let id = queue[index].id
+            guard ownerID == nil || !id.hasPrefix("netease:\(ownerID!):") else { continue }
+            queue[index] = LibrarySongItem(id: id, title: "在线歌曲不可用", artist: "登录原账号后可用", album: "", albumArtist: "", trackNumber: 0, artwork: .missing, unavailabilityReason: "请登录原账号后重试")
+            unavailableIDs.insert(id)
+        }
+        if hasCurrent, unavailableIDs.contains(current.id), current.id.hasPrefix("netease:") {
+            audio?.stop(); loadedEntry = nil; isPlaying = false; actualQuality = nil
+            errorMessage = "请登录原账号后重试"
+        }
+        updateNowPlaying(); saveQueue()
+    }
+
+    private func resolveCurrent(at position: Double, replacing: Bool = false) {
+        guard hasCurrent, let resolveResource else { return }
+        resourceTask?.cancel(); nextResourceTask?.cancel()
+        let revision = UUID(), entry = entryIDs[currentIndex], songID = current.id
+        resourceRevision = revision
+        let intent = isPlaying
+        if !replacing {
+            configuringAudio = true
+            audio?.stop(); loadedEntry = nil; preparedEntry = nil
+            configuringAudio = false
+            isPlaying = intent
+            actualQuality = nil
+            updateNowPlaying()
+        }
+        resolvingResource = true; errorMessage = nil
+        resourceTask = Task { [weak self] in
+            do {
+                let resource = try await resolveResource(songID)
+                try Task.checkCancellation()
+                guard let self, self.resourceRevision == revision, self.hasCurrent,
+                      self.entryIDs[self.currentIndex] == entry else { return }
+                if let expiry = resource.expiresAt, expiry <= Date() { throw URLError(.resourceUnavailable) }
+                let autoplay = self.isPlaying
+                let resume = replacing ? self.elapsed : position
+                if replacing {
+                    try await self.ensureAudioEngine().replaceResource(url: resource.url, shouldResume: { self.isPlaying })
+                    guard self.resourceRevision == revision, !Task.isCancelled else { return }
+                } else {
+                    self.configuringAudio = true
+                    self.loadedEntry = entry
+                    self.ensureAudioEngine().load(url: resource.url, position: resume, autoplay: autoplay)
+                    self.configuringAudio = false
+                }
+                self.resolvingResource = false
+                self.actualQuality = resource.quality
+                self.resourceTask = nil
+                self.syncTransport(); self.prepareNext(); self.saveQueue()
+            } catch {
+                guard let self, self.resourceRevision == revision, !Task.isCancelled else { return }
+                self.resolvingResource = false; self.resourceTask = nil
+                if !replacing { self.isPlaying = false; self.loadedEntry = nil }
+                self.errorMessage = error.localizedDescription
+                self.updateNowPlaying(); self.saveQueue()
+            }
+        }
     }
 
     private func ensureAudioEngine() -> LocalPlaybackEngine {
@@ -318,11 +399,25 @@ final class NowPlayingModel {
     private func prepareNext() {
         guard !applyingState, !configuringAudio, audio != nil else { return }
         let next = nextPlaybackIndex
+        nextResourceTask?.cancel()
+        if let resolveResource {
+            preparedEntry = nil
+            audio?.prepareNext(url: nil)
+            guard let next, !queue[next].id.hasPrefix("netease:") else { return }
+            let revision = resourceRevision, entry = entryIDs[next], id = queue[next].id
+            nextResourceTask = Task { [weak self] in
+                guard let resource = try? await resolveResource(id), !Task.isCancelled,
+                      let self, self.resourceRevision == revision else { return }
+                self.preparedEntry = entry
+                self.audio?.prepareNext(url: resource.url)
+            }
+            return
+        }
         preparedEntry = next.map { entryIDs[$0] }
         audio?.prepareNext(url: next.flatMap { resolveURL?(queue[$0].id) })
     }
     private func syncTransport(publishNowPlaying: Bool = true) {
-        guard !configuringAudio, let audio else { return }
+        guard !configuringAudio, !resolvingResource, let audio else { return }
         let stopped = isPlaying && !audio.isPlaying
         updatingTime = true
         elapsed = audio.elapsed
@@ -333,6 +428,7 @@ final class NowPlayingModel {
         if publishNowPlaying { updateNowPlaying() }
     }
     func startCurrent(at position: Double = 0) {
+        if resolveResource != nil { resolveCurrent(at: position); return }
         guard let resolveURL else { return }
         let autoplay = isPlaying
         configuringAudio = true
@@ -361,6 +457,7 @@ final class NowPlayingModel {
     @discardableResult
     func restoreQueue(songs: [LibrarySongItem], restoredState: Result<SavedQueue?, Error>? = nil) -> Bool {
         guard let persistenceURL else { return true }
+        resourceRevision = UUID(); resourceTask?.cancel(); nextResourceTask?.cancel(); resourceTask = nil; resolvingResource = false
         do {
             let saved: SavedQueue?
             if let restoredState { saved = try restoredState.get() }
@@ -403,16 +500,22 @@ final class NowPlayingModel {
         let refreshed = Dictionary(songs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let updated = queue.map { refreshed[$0.id] ?? $0 }
         let ids = Set(refreshed.keys)
-        let unavailable = Set(queue.map(\.id)).subtracting(ids)
+        let unavailable = Set(queue.map(\.id)).subtracting(ids).union(updated.filter { $0.unavailabilityReason != nil }.map(\.id))
         let changed = updated != queue || unavailable != unavailableIDs
         if updated != queue { queue = updated }
         if hasCurrent, unavailableIDs.contains(current.id), !unavailable.contains(current.id) { errorMessage = nil }
         if unavailable != unavailableIDs { unavailableIDs = unavailable }
-        if hasCurrent && unavailableIDs.contains(current.id) { audio?.stop(); loadedEntry = nil; isPlaying = false; errorMessage = "当前文件已移除" }
+        if hasCurrent && unavailableIDs.contains(current.id) {
+            resourceRevision = UUID(); resourceTask?.cancel(); nextResourceTask?.cancel()
+            resourceTask = nil; resolvingResource = false
+            audio?.stop(); loadedEntry = nil; isPlaying = false; actualQuality = nil
+            errorMessage = current.unavailabilityReason ?? (current.isOnline ? "在线歌曲当前不可用，请重试" : "当前文件已移除")
+        }
         if changed { updateNowPlaying() }
     }
 
     func shutdownPlayback() {
+        resourceRevision = UUID(); resourceTask?.cancel(); nextResourceTask?.cancel(); resourceTask = nil; resolvingResource = false
         audio?.onStateChange = nil; audio?.onTimeChange = nil; audio?.onAdvanced = nil; audio?.onFinished = nil
         audio?.shutdown(); audio = nil; mediaSession?.shutdown(); mediaSession = nil
         loadedEntry = nil; preparedEntry = nil; isPlaying = false

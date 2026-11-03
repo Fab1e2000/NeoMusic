@@ -434,8 +434,9 @@ private struct PlaylistTrackRow: View {
                         .frame(width: 48)
                         .overlay(alignment: .leading) { FavoriteMark(isFavorite: song.isFavorite) }
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(song.title).font(.callout).foregroundStyle(.primary)
-                        Text(song.artist).font(.footnote).foregroundStyle(.secondary)
+                        Text(song.title).font(.callout).foregroundStyle(song.unavailabilityReason == nil ? .primary : .secondary)
+                        Text(song.unavailabilityReason ?? song.artist)
+                            .font(.footnote).foregroundStyle(.secondary)
                     }
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)

@@ -115,12 +115,13 @@ struct SongMenuHost<Content: View>: View {
         }
         primary.append(.init(id: "favorite", title: liked ? "取消喜欢" : "喜欢", systemImage: "star.fill") { actions.toggleFavorite(track) })
         primary.append(.init(id: "playlist", title: "加入", systemImage: "text.badge.plus") { actions.addToPlaylist(track) })
-        let secondary: [SongRowAction] = [
+        var secondary: [SongRowAction] = [
             .init(id: "playNext", title: "下一首播放", systemImage: "text.line.first.and.arrowtriangle.forward") { player.enqueue(track, next: true) },
             .init(id: "playLast", title: "最后播放", systemImage: "text.line.last.and.arrowtriangle.forward") { player.enqueue(track, next: false) },
             .init(id: "album", title: "查看专辑", systemImage: "music.note.square.stack") { actions.openAlbum(track) }
         ]
-        let artists = actions.artistNames(for: track).enumerated().map { index, name in
+        if track.id.hasPrefix("netease:") { secondary.removeAll { $0.id == "album" } }
+        let artists = (track.id.hasPrefix("netease:") ? [] : actions.artistNames(for: track)).enumerated().map { index, name in
             SongRowAction(id: "artist/\(index)", title: name, systemImage: "music.microphone") { actions.openArtist(name, track: track) }
         }
         return .init(primary: primary, secondary: secondary, artistTitle: "查看艺人", artists: artists, extras: extras)
