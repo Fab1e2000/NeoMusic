@@ -111,7 +111,7 @@ final class LocalLibraryRuntimeTests: XCTestCase {
         try file.write(from: buffer)
     }
 
-    func testInitialRestorePublishesValidatedSongsAndCompletesBeforeReady() async throws {
+    func testIncompleteCacheWaitsForScanBeforeRestoringPlaylistAndQueue() async throws {
         let documents = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let previous = LocalLibrary.songLibrary.songs
         let player = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false)
@@ -139,13 +139,7 @@ final class LocalLibraryRuntimeTests: XCTestCase {
         let restored = PlaylistLibrary(playlists: [])
         let runtime = LocalLibraryRuntime(documents: documents, store: store, playlistLibrary: restored, player: player)
 
-        // Observe the first publication, not just the final state: the cache must
-        // already reflect the actual scan, so stale cache rows never reach the shelf.
-        let cacheAtFirstPublication = Mutex<[String]?>(nil)
-        _ = withObservationTracking { LocalLibrary.songLibrary.songs } onChange: {
-            let tracks = try? JSONDecoder().decode([LocalTrack].self, from: Data(contentsOf: cacheURL))
-            cacheAtFirstPublication.withLock { $0 = tracks?.map(\.id) }
-        }
+        // A cache missing saved references cannot release a partially restored shelf.
         let snapshotAtReady = Mutex<[[String]]?>(nil)
         _ = withObservationTracking { runtime.isInitialLibraryReady } onChange: {
             MainActor.assumeIsolated {
@@ -154,9 +148,136 @@ final class LocalLibraryRuntimeTests: XCTestCase {
             }
         }
         await runtime.refresh()
-        XCTAssertEqual(cacheAtFirstPublication.withLock { $0 }, [song.id])
         XCTAssertEqual(snapshotAtReady.withLock { $0 }, [[song.id], [song.id], [song.id]])
         XCTAssertTrue(runtime.isInitialLibraryReady)
+    }
+
+    func testCompleteCacheReleasesShelfBeforeScanAndRetainsStoresOnFailure() async throws {
+        let documents = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let previous = LocalLibrary.songLibrary.songs
+        let player = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false)
+        defer {
+            player.shutdownPlayback()
+            LocalLibrary.songLibrary.replace(previous)
+            try? FileManager.default.removeItem(at: documents)
+        }
+        let root = try LocalMusicScanner.prepareDirectory(documents: documents)
+        let store = documents.appendingPathComponent("state")
+        try FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
+        try writeWave(root.appendingPathComponent("song.wav"))
+        let cached = LocalTrack(id: "song.wav", title: "Cached title", artist: "A", album: "B", albumArtist: "A",
+                               trackNumber: 1, duration: 10, artworkData: nil, addedDate: .distantPast)
+        let cacheURL = store.appendingPathComponent("tracks.json")
+        let cacheData = try JSONEncoder().encode([cached])
+        try cacheData.write(to: cacheURL)
+        let song = LibrarySongItem(id: cached.id, title: cached.title, artist: "A", album: "B", albumArtist: "A",
+                                   trackNumber: 1, artwork: .missing)
+        let playlistURL = store.appendingPathComponent("playlists.json")
+        let playbackURL = store.appendingPathComponent("playback.json")
+        let original = PlaylistLibrary(playlists: [])
+        original.configurePersistence(url: playlistURL, songs: [song])
+        let id = try XCTUnwrap(original.createPlaylist(named: "Saved", artwork: .playlist, in: nil)).id
+        original.addSongs([song], to: id)
+        let playlistData = try Data(contentsOf: playlistURL)
+        let playbackData = try JSONEncoder().encode(NowPlayingModel.SavedQueue(
+            ids: [song.id], index: 0, elapsed: 0, repeatMode: .off, shuffled: false))
+        try playbackData.write(to: playbackURL)
+        let restored = PlaylistLibrary(playlists: [])
+        let runtime = LocalLibraryRuntime(documents: documents, store: store, playlistLibrary: restored, player: player)
+        let snapshot = Mutex<[[String]]?>(nil)
+        _ = withObservationTracking { runtime.isInitialLibraryReady } onChange: {
+            MainActor.assumeIsolated {
+                snapshot.withLock { $0 = [LocalLibrary.songs.map(\.title), restored.songs(in: id).map(\.id), player.queue.map(\.id)] }
+                // If the shelf really appears before scanning, this makes that later scan fail.
+                try? FileManager.default.removeItem(at: root)
+            }
+        }
+        await runtime.refresh()
+        XCTAssertEqual(snapshot.withLock { $0 }, [[cached.title], [song.id], [song.id]])
+        XCTAssertTrue(runtime.isInitialLibraryReady)
+        XCTAssertNotNil(runtime.status)
+        XCTAssertEqual(LocalLibrary.songs.map(\.title), [cached.title])
+        XCTAssertEqual(try Data(contentsOf: cacheURL), cacheData)
+        XCTAssertEqual(try Data(contentsOf: playlistURL), playlistData)
+        // The audio engine may persist generated occurrence IDs after restoration;
+        // a failed scan must preserve the restored queue and playback preferences.
+        let savedQueue = try JSONDecoder().decode(NowPlayingModel.SavedQueue.self, from: Data(contentsOf: playbackURL))
+        XCTAssertEqual(savedQueue.ids, [song.id])
+        XCTAssertEqual(savedQueue.index, 0)
+        XCTAssertEqual(savedQueue.elapsed, 0)
+        XCTAssertEqual(savedQueue.repeatMode, .off)
+        XCTAssertFalse(savedQueue.shuffled)
+        XCTAssertEqual(player.queue.map(\.id), [song.id])
+    }
+
+    func testCancellationAfterCacheRestoreKeepsReadyShelfAndRetriesScan() async throws {
+        let documents = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let previous = LocalLibrary.songLibrary.songs
+        let player = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false)
+        defer {
+            player.shutdownPlayback()
+            LocalLibrary.songLibrary.replace(previous)
+            try? FileManager.default.removeItem(at: documents)
+        }
+        let root = try LocalMusicScanner.prepareDirectory(documents: documents)
+        let store = documents.appendingPathComponent("state")
+        try FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
+        let cached = LocalTrack(id: "removed.wav", title: "Cached", artist: "A", album: "B", albumArtist: "A",
+                               trackNumber: 1, duration: 1, artworkData: nil, addedDate: .distantPast)
+        let cacheURL = store.appendingPathComponent("tracks.json")
+        let cacheData = try JSONEncoder().encode([cached])
+        try cacheData.write(to: cacheURL)
+        try writeWave(root.appendingPathComponent("new.wav"))
+        let runtime = LocalLibraryRuntime(documents: documents, store: store,
+                                          playlistLibrary: PlaylistLibrary(playlists: []), player: player)
+        _ = withObservationTracking { runtime.isInitialLibraryReady } onChange: {
+            withUnsafeCurrentTask { $0?.cancel() }
+        }
+        await Task { await runtime.refresh() }.value
+        XCTAssertTrue(runtime.isInitialLibraryReady)
+        XCTAssertEqual(LocalLibrary.songs.map(\.id), [cached.id])
+        XCTAssertEqual(try Data(contentsOf: cacheURL), cacheData)
+        await runtime.refresh()
+        XCTAssertTrue(runtime.isInitialLibraryReady)
+        XCTAssertEqual(LocalLibrary.songs.map(\.id), ["new.wav"])
+    }
+
+    func testIncompleteQueueCacheDoesNotApplyOrRewritePlaybackState() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let player = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false)
+        defer { player.shutdownPlayback(); try? FileManager.default.removeItem(at: url) }
+        let saved = try JSONEncoder().encode(NowPlayingModel.SavedQueue(
+            ids: ["new.wav"], index: 0, elapsed: 2, repeatMode: .all, shuffled: false))
+        try saved.write(to: url)
+        player.configurePlayback(resolveURL: { _ in nil }, persistenceURL: url)
+        XCTAssertFalse(player.restoreQueue(songs: [], requireCompleteLibrary: true))
+        XCTAssertTrue(player.queue.isEmpty)
+        XCTAssertEqual(try Data(contentsOf: url), saved)
+        let song = LibrarySongItem(id: "new.wav", title: "New", artist: "A", album: "B", albumArtist: "A",
+                                   trackNumber: 1, artwork: .missing)
+        XCTAssertTrue(player.restoreQueue(songs: [song], requireCompleteLibrary: true))
+        XCTAssertEqual(player.queue.map(\.id), [song.id])
+        XCTAssertEqual(player.repeatMode, .all)
+        XCTAssertEqual(try Data(contentsOf: url), saved)
+    }
+
+    func testUnchangedTrackCacheDoesNotRewriteAndChangedCachePersists() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            try? FileManager.default.removeItem(at: url.appendingPathExtension("startup"))
+        }
+        let track = LocalTrack(id: "song.wav", title: "Song", artist: "A", album: "B", albumArtist: "A",
+                              trackNumber: 1, duration: 1, artworkData: nil, addedDate: .distantPast)
+        try JSONEncoder().encode([track]).write(to: url)
+        let sentinel = Date(timeIntervalSince1970: 1_000)
+        try FileManager.default.setAttributes([.modificationDate: sentinel], ofItemAtPath: url.path)
+        let cache = LocalLibraryTrackCache()
+        _ = try await cache.read(from: url)
+        try await cache.write([track], to: url)
+        XCTAssertEqual(try url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate, sentinel)
+        try await cache.write([], to: url)
+        XCTAssertEqual(try JSONDecoder().decode([LocalTrack].self, from: Data(contentsOf: url)), [])
     }
 
     func testInitialRestoreFailurePublishesCachedAppearanceWithoutRestoringStores() async throws {

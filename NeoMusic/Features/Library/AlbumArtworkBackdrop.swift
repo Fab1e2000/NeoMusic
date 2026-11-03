@@ -1,7 +1,8 @@
 import SwiftUI
+import CryptoKit
 
 /// The album's opaque sRGB background and the matching system foreground style.
-struct AlbumArtworkBackdrop: Equatable, Sendable {
+struct AlbumArtworkBackdrop: Codable, Equatable, Sendable {
     let red: Double
     let green: Double
     let blue: Double
@@ -26,33 +27,59 @@ struct AlbumArtworkBackdrop: Equatable, Sendable {
 
 /// Prepares the exact artwork-derived colors before publishing a library snapshot.
 actor AlbumArtworkBackdropPreparer {
-    private var cached: [Data: AlbumArtworkBackdrop?] = [:]
+    private struct Snapshot: Codable {
+        let version: Int
+        let colors: [String: AlbumArtworkBackdrop?]
+    }
+    private var cached: [Data: (key: String, color: AlbumArtworkBackdrop?)] = [:]
+    private var persisted: [String: AlbumArtworkBackdrop?] = [:]
+    private var loaded = false
+    private let cacheURL: URL?
     private let extract: @Sendable (Data) -> AlbumArtworkBackdrop?
 
-    init(extract: @escaping @Sendable (Data) -> AlbumArtworkBackdrop? = { AlbumArtworkBackdrop.extract(from: $0) }) {
+    init(cacheURL: URL? = nil,
+         extract: @escaping @Sendable (Data) -> AlbumArtworkBackdrop? = { AlbumArtworkBackdrop.extract(from: $0) }) {
+        self.cacheURL = cacheURL
         self.extract = extract
     }
 
     func prepare(_ artworkByID: [String: Data]) throws -> [String: AlbumArtworkBackdrop] {
         try Task.checkCancellation()
-        var nextCache: [Data: AlbumArtworkBackdrop?] = [:]
+        if !loaded {
+            if let cacheURL, let data = try? Data(contentsOf: cacheURL),
+               let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data), snapshot.version == 1 {
+                persisted = snapshot.colors
+            }
+            loaded = true
+        }
+        var nextCache: [Data: (key: String, color: AlbumArtworkBackdrop?)] = [:]
+        var nextPersisted: [String: AlbumArtworkBackdrop?] = [:]
         var results: [String: AlbumArtworkBackdrop] = [:]
         for (id, data) in artworkByID {
             try Task.checkCancellation()
-            let backdrop: AlbumArtworkBackdrop?
-            if let prepared = nextCache[data] {
-                backdrop = prepared
-            } else if let prepared = cached[data] {
-                backdrop = prepared
+            let prepared: (key: String, color: AlbumArtworkBackdrop?)
+            if let existing = nextCache[data] ?? cached[data] {
+                prepared = existing
             } else {
-                backdrop = extract(data)
+                let key = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+                // A resolved nil is cached too, so invalid artwork is not analyzed on every launch.
+                let color = persisted[key] ?? extract(data)
+                prepared = (key, color)
             }
             try Task.checkCancellation()
-            // updateValue keeps a resolved nil entry; subscript assignment would remove it.
-            nextCache.updateValue(backdrop, forKey: data)
-            if let backdrop { results[id] = backdrop }
+            nextCache[data] = prepared
+            nextPersisted.updateValue(prepared.color, forKey: prepared.key)
+            if let color = prepared.color { results[id] = color }
         }
         try Task.checkCancellation()
+        if let cacheURL, nextPersisted != persisted {
+            // Derived colors are expendable. A missing, corrupt or unwritable cache
+            // must never prevent the library from opening.
+            if let data = try? JSONEncoder().encode(Snapshot(version: 1, colors: nextPersisted)),
+               (try? data.write(to: cacheURL, options: .atomic)) != nil {
+                persisted = nextPersisted
+            }
+        }
         cached = nextCache
         return results
     }

@@ -4,7 +4,7 @@ enum AppTab: String, Hashable {
     case home, discover, radio, library, search
 }
 
-/// 根标签栏与迷你播放条，外观对照 Apple Music。除资料库外暂为占位页。
+/// 根标签栏与迷你播放条，包含资料库和主页展示；其余标签暂为占位页。
 struct AppShell<Library: View>: View {
     @ViewBuilder var library: Library
     let detailDestination: (LibraryRoute) -> AnyView
@@ -21,7 +21,11 @@ struct AppShell<Library: View>: View {
     @State var isPlayerPresented = false
     @State private var detailNavigation = LibraryDetailNavigation()
     private var chromeColorScheme: ColorScheme? {
-        selection == .library ? detailNavigation.colorScheme : nil
+        switch selection {
+        case .home: .light
+        case .library: detailNavigation.colorScheme
+        default: nil
+        }
     }
 
     var body: some View {

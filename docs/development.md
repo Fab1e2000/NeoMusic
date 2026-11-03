@@ -24,13 +24,22 @@
 
 ## 正式运行路径
 
-- **应用启动**：`NeoMusicApp` → `LocalLibraryRuntime` 扫描、恢复 → `LocalLibrary` 装配 → `AppShell`。初始资料库准备完成后显示完整页面，回到前台刷新资料库。
+- **应用启动**：`NeoMusicApp` 立即显示 `LocalLibrary` 装配的 `AppShell`，资料库标题、顶部按钮、分类入口与系统标签栏先出现；`LocalLibraryRuntime` 异步恢复数据，完成前歌曲与封面留空，新建歌单和分类导航禁用。页面完成首次显示且数据就绪后，整块置顶区作为一行插入原生列表，推动分类与最近添加向下移动；页面显示状态来自 UIKit 的 `viewDidAppear`，返回首页保留置顶布局。缓存能完整解析歌单与队列时先填入内容，再后台核对目录；缓存缺失、损坏、引用不完整或需要旧标识修复时先扫描。内容填入不替换导航容器，回到前台继续刷新资料库。
+- **启动缓存**：原 `tracks.json` 格式保留；同目录的 `tracks.json.startup` 保存轻量索引和去重原始封面，按原文件大小与修改时间失效。`artwork-backdrops.json` 保存按封面内容匹配的背景色。这些都是可重建缓存，首次运行后生成，不改变音乐文件、歌单与队列的存储格式。
 - **播放**：`NowPlayingModel` 拥有队列与播放状态，`LocalPlaybackEngine` 承担音频播放。`ReferencePlayerState` 只适配这个真实模型，不维护第二份演示队列或模拟时钟。
 - **界面**：`Features/Library` 管理资料库；`Features/Player/Imported` 保留已接入的播放器与歌词展示代码，`Features/Player/Support` 连接真实状态、动作及歌词存储。保留 `Reference` 类型名与来源标记不代表这些组件仍是预览功能。
 - **导航**：资料库继续使用现有 UIKit 导航与原生 zoom，顶部滚动边缘效果、栏位配色和播放器呈现沿用现有接线。
 - **歌词与动作**：歌词适配连接 `LyricsReader`；收藏、加入歌单与页面跳转由资料库注入。测试输入只存在于测试 target。
 
 独立播放器预览 target、zoom 实验入口及已无调用的旧播放器展示分支已移除。历史设计差分保留在 `design/`，不属于应用资源。
+
+## 主页展示
+
+`Features/Home` 移植自 `NeoMusic_Experiment/OrangeCardDemo` 的 `HomeFeedView.swift`、`HomeFixtures.swift` 和 `HomeArtwork.swift`，保留 15 个栏目及固定展示数据。它不读写本地资料库，也不提供在线推荐、播放或详情服务。主页标签接入原有 `UITabBarController`，底部继续使用真实播放器；账户入口复用现有账户效果稿。
+
+横排使用 Apple 的 [`scrollTargetLayout` 与 `scrollTargetBehavior(.viewAligned)`](https://developer.apple.com/documentation/swiftui/view/scrolltargetbehavior(_:))，由系统处理手势、减速和卡片对齐。主页浅色外观及 248×330 pt 大卡、161 pt 专辑封面、20 pt 边距沿用实验页面。
+
+`Resources/HomeAssets.xcassets` 包含实验主页图标与 23 张封面样本。封面来自实验项目中用户提供截图的裁切，作品版权归原权利人；电台和心情图案由 SwiftUI 绘制。
 
 ## 图标与资源
 

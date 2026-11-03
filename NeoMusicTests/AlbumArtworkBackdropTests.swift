@@ -101,12 +101,14 @@ final class AlbumArtworkBackdropTests: XCTestCase {
     }
 
     func testCancelledPreparationDoesNotCommitPartialCache() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: url) }
         let original = Data("original artwork".utf8)
         let replacement = Data("replacement artwork".utf8)
         let color = AlbumArtworkBackdrop(red: 0.1, green: 0.2, blue: 0.3)
         let calls = Mutex<[Data: Int]>([:])
         let cancelReplacement = Mutex(false)
-        let preparer = AlbumArtworkBackdropPreparer { data in
+        let preparer = AlbumArtworkBackdropPreparer(cacheURL: url) { data in
             calls.withLock { $0[data, default: 0] += 1 }
             if data == replacement, cancelReplacement.withLock({ $0 }) {
                 withUnsafeCurrentTask { $0?.cancel() }
@@ -114,6 +116,7 @@ final class AlbumArtworkBackdropTests: XCTestCase {
             return color
         }
         _ = try await preparer.prepare(["song": original])
+        let saved = try Data(contentsOf: url)
 
         let alreadyCancelled = Task {
             withUnsafeCurrentTask { $0?.cancel() }
@@ -134,11 +137,64 @@ final class AlbumArtworkBackdropTests: XCTestCase {
         } catch is CancellationError {
         }
         cancelReplacement.withLock { $0 = false }
+        XCTAssertEqual(try Data(contentsOf: url), saved)
 
         let retried = try await preparer.prepare(["original": original, "replacement": replacement])
         XCTAssertEqual(retried, ["original": color, "replacement": color])
         XCTAssertEqual(calls.withLock { $0[original] }, 1)
         XCTAssertEqual(calls.withLock { $0[replacement] }, 2)
+    }
+
+    func testDiskCacheReusesColorsAndInvalidResultsAcrossInstances() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let artwork = Data("original".utf8)
+        let invalid = Data("invalid".utf8)
+        let replacement = Data("replacement".utf8)
+        let color = AlbumArtworkBackdrop(red: 0.2, green: 0.3, blue: 0.4)
+        let first = AlbumArtworkBackdropPreparer(cacheURL: url) { $0 == invalid ? nil : color }
+        _ = try await first.prepare(["a": artwork, "invalid": invalid])
+        let sentinel = Date(timeIntervalSince1970: 1_000)
+        try FileManager.default.setAttributes([.modificationDate: sentinel], ofItemAtPath: url.path)
+        let calls = Mutex<[Data]>([])
+        let second = AlbumArtworkBackdropPreparer(cacheURL: url) { data in
+            calls.withLock { $0.append(data) }
+            return color
+        }
+        let restored = try await second.prepare(["renamed": artwork, "duplicate": artwork, "invalid": invalid])
+        XCTAssertEqual(restored, ["renamed": color, "duplicate": color])
+        XCTAssertTrue(calls.withLock { $0.isEmpty })
+        XCTAssertEqual(try url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate, sentinel)
+        let updated = try await second.prepare(["renamed": replacement, "duplicate": replacement])
+        XCTAssertEqual(updated, ["renamed": color, "duplicate": color])
+        XCTAssertEqual(calls.withLock { $0 }, [replacement])
+        let third = AlbumArtworkBackdropPreparer(cacheURL: url) { data in
+            calls.withLock { $0.append(data) }
+            return color
+        }
+        _ = try await third.prepare(["restored": artwork])
+        XCTAssertEqual(calls.withLock { $0 }, [replacement, artwork], "Removed covers must leave the disk cache")
+    }
+
+    func testMissingCorruptOrUnwritableColorCacheStillPreparesAppearance() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let artwork = Data("artwork".utf8)
+        let color = AlbumArtworkBackdrop(red: 0.1, green: 0.2, blue: 0.3)
+        let corrupt = root.appendingPathComponent("corrupt.json")
+        try Data("invalid JSON".utf8).write(to: corrupt)
+        for url in [root.appendingPathComponent("missing.json"), corrupt, root] {
+            let preparer = AlbumArtworkBackdropPreparer(cacheURL: url) { _ in color }
+            let result = try await preparer.prepare(["song": artwork])
+            XCTAssertEqual(result, ["song": color])
+        }
+        let restored = AlbumArtworkBackdropPreparer(cacheURL: corrupt) { _ in
+            XCTFail("A corrupt cache should be replaced with reusable colors")
+            return nil
+        }
+        let result = try await restored.prepare(["song": artwork])
+        XCTAssertEqual(result, ["song": color])
     }
 }
 

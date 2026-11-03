@@ -29,18 +29,24 @@ struct LibraryHomeView: View {
     let pinned: [LibraryShelfItem]
     let recentlyAdded: [LibraryShelfItem]
     let playlistLibrary: PlaylistLibrary
+    var isContentReady = true
     var reorderPinned: ([LibraryRoute]) -> Bool = { _ in false }
     @State private var isCreatingPlaylist = false
     @Environment(\.collectionMenuActions) private var actions
+    @Environment(\.libraryNavigationChrome) private var chrome
     @State private var isEditingPinned = false
     /// 各置顶项的“轻点操作”，只保存在本次运行中。
     @State private var tapActions: [String: PinnedTapAction] = [:]
     @Namespace private var playlistCreationTransition
 
+    private var visiblePinned: [LibraryShelfItem] {
+        isContentReady && chrome?.hasAppeared != false ? pinned : []
+    }
+
     var body: some View {
         List {
-            if !pinned.isEmpty {
-                PinnedCollectionView(items: pinned, isEditing: isEditingPinned, tapActions: $tapActions,
+            if !visiblePinned.isEmpty {
+                PinnedCollectionView(items: visiblePinned, isEditing: isEditingPinned, tapActions: $tapActions,
                             reorder: reorderPinned) { item in
                     guard let route = item.route else { return }
                     withAnimation { actions.togglePin(route) }
@@ -50,12 +56,17 @@ struct LibraryHomeView: View {
             }
             Section {
                 LibraryCategoryRows()
+                    .disabled(!isContentReady)
             }
             .listSectionSeparator(.hidden, edges: .top)
             Section {
                 RecentlyAddedGrid(items: recentlyAdded)
                     .padding(.top, 17)
                     .padding(.bottom, 16)
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    // First fill stays below its heading while List moves the row
+                    // for the pinned insertion. Later collection edits still animate.
+                    .transaction(value: isContentReady) { $0.animation = nil }
                     .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
                     .listRowSeparator(.hidden)
             }
@@ -64,7 +75,7 @@ struct LibraryHomeView: View {
         .listStyle(.plain)
         // The List owns row heights as well as the grids. Animate here so losing
         // a pinned row (or the final pin) also moves the categories below it.
-        .libraryCollectionAnimation(value: [pinned.map(\.id), recentlyAdded.map(\.id)])
+        .libraryCollectionAnimation(value: [visiblePinned.map(\.id), recentlyAdded.map(\.id)])
         .navigationDiagnostics("library")
         .libraryHomeNavigation()
         .toolbar {
@@ -78,6 +89,7 @@ struct LibraryHomeView: View {
             } else {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("新建播放列表", systemImage: "text.badge.plus") { isCreatingPlaylist = true }
+                        .disabled(!isContentReady)
                 }
                 // ToolbarItem 的转场源包含系统共享玻璃背景。
                 .matchedTransitionSource(id: "newPlaylist", in: playlistCreationTransition)

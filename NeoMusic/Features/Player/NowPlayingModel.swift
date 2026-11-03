@@ -345,13 +345,15 @@ final class NowPlayingModel {
         } catch { errorMessage = "播放状态保存失败：" + error.localizedDescription }
     }
 
-    func restoreQueue(songs: [LibrarySongItem]) {
-        guard let persistenceURL, FileManager.default.fileExists(atPath: persistenceURL.path) else { return }
+    @discardableResult
+    func restoreQueue(songs: [LibrarySongItem], requireCompleteLibrary: Bool = false) -> Bool {
+        guard let persistenceURL, FileManager.default.fileExists(atPath: persistenceURL.path) else { return true }
         do {
             let state = try JSONDecoder().decode(SavedQueue.self, from: Data(contentsOf: persistenceURL))
+            let map = Dictionary(songs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            if requireCompleteLibrary, !state.ids.allSatisfy({ map[$0] != nil }) { return false }
             applyingState = true
             defer { applyingState = false }
-            let map = Dictionary(songs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             queue = state.ids.map { map[$0] ?? LibrarySongItem(id: $0, title: URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent, artist: "文件不可用", album: "", albumArtist: "", trackNumber: 0, artwork: .missing) }
             entryIDs = state.entryIDs?.count == queue.count && Set(state.entryIDs ?? []).count == queue.count ? state.entryIDs! : queue.map { _ in UUID() }
             originalOrder = state.originalOrder ?? entryIDs
@@ -368,7 +370,11 @@ final class NowPlayingModel {
             elapsed = state.elapsed.isFinite ? max(0, state.elapsed) : 0
             reconcileAvailability(songs: songs)
             if hasCurrent { startCurrent(at: elapsed) }
-        } catch { errorMessage = "播放状态恢复失败：" + error.localizedDescription }
+            return true
+        } catch {
+            errorMessage = "播放状态恢复失败：" + error.localizedDescription
+            return false
+        }
     }
 
     func reconcileAvailability(songs: [LibrarySongItem]) {

@@ -26,7 +26,9 @@ struct LibraryAppTabs<Library: View>: UIViewControllerRepresentable {
         let search = UISearchTab { _ in searchController }
         context.coordinator.searchIdentifier = search.identifier
         controller.tabs = [
-            tab(.home, "主页", "house.fill"),
+            UITab(title: "主页", image: UIImage(named: "HomeTabIcon"), identifier: AppTab.home.rawValue) { _ in
+                UIHostingController(rootView: HomeFeedView())
+            },
             tab(.discover, "新发现", "square.grid.2x2.fill"),
             tab(.radio, "广播", "dot.radiowaves.left.and.right"),
             UITab(title: "资料库", image: UIImage(systemName: "music.note.square.stack.fill"), identifier: AppTab.library.rawValue) { _ in libraryController },

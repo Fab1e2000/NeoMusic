@@ -1,4 +1,5 @@
 import SwiftUI
+import CryptoKit
 
 @MainActor @Observable
 final class LocalLibraryRuntime {
@@ -11,7 +12,7 @@ final class LocalLibraryRuntime {
     private var cacheWarning: String?
     private let scanner = LocalMusicScanner()
     private let cache = LocalLibraryTrackCache()
-    private let artworkBackdrops = AlbumArtworkBackdropPreparer()
+    private let artworkBackdrops: AlbumArtworkBackdropPreparer
     let root: URL
     private let store: URL
     private let documents: URL
@@ -29,6 +30,7 @@ final class LocalLibraryRuntime {
         self.documents = documents
         self.root = documents.appending(path: "音乐", directoryHint: .isDirectory)
         self.store = store
+        self.artworkBackdrops = AlbumArtworkBackdropPreparer(cacheURL: store.appending(path: "artwork-backdrops.json"))
     }
 
     static func setFlag(_ id: String, value: Bool, key: String) {
@@ -50,10 +52,16 @@ final class LocalLibraryRuntime {
                 do {
                     if let tracks = try await cache.read(from: store.appending(path: "tracks.json")) {
                         try Task.checkCancellation()
-                        // Keep restoration private until the scan and appearance preparation
-                        // can publish one complete initial library.
                         initialCache = tracks
                         cachedTracks = tracks
+                        // Existing legacy IDs still need the verified scan repair below.
+                        // Otherwise restore the complete shelf before awaiting directory I/O.
+                        if !tracks.contains(where: { $0.id.hasPrefix("ents/音乐/") }) {
+                            try await apply(tracks)
+                            if restoreStores(requireCompleteLibrary: true) {
+                                isInitialLibraryReady = true
+                            }
+                        }
                     }
                 } catch is CancellationError {
                     throw CancellationError()
@@ -74,17 +82,14 @@ final class LocalLibraryRuntime {
             migrateAlbumSelections(from: cachedTracks, to: tracks)
             try await cache.write(tracks, to: store.appending(path: "tracks.json"))
             try Task.checkCancellation()
-            try await apply(tracks, failedIDs: failed)
+            if !started || tracks != cachedTracks {
+                try await apply(tracks, failedIDs: failed)
+            } else {
+                failedIDs = failed
+            }
             // Resolve persisted identities only after a successful scan, including when the cache is missing.
             if !started {
-                playlistLibrary.configurePersistence(url: store.appending(path: "playlists.json"), songs: LocalLibrary.songs)
-                player.configurePlayback(resolveURL: { [weak self, root] id in
-                    guard self?.failedIDs.contains(id) != true else { return nil }
-                    let url = root.appending(path: id)
-                    return FileManager.default.fileExists(atPath: url.path) ? url : nil
-                }, persistenceURL: store.appending(path: "playback.json"))
-                player.restoreQueue(songs: LocalLibrary.songs)
-                started = true
+                restoreStores()
             }
             playlistLibrary.reconcileSongs(LocalLibrary.songs)
             player.reconcileAvailability(songs: LocalLibrary.songs.filter { !failed.contains($0.id) })
@@ -106,6 +111,23 @@ final class LocalLibraryRuntime {
             isInitialLibraryReady = true
         }
         } while refreshPending && !Task.isCancelled
+    }
+
+    @discardableResult
+    private func restoreStores(requireCompleteLibrary: Bool = false) -> Bool {
+        let songs = LocalLibrary.songs
+        let playlistsRestored = playlistLibrary.configurePersistence(
+            url: store.appending(path: "playlists.json"), songs: songs, requireCompleteLibrary: requireCompleteLibrary)
+        if requireCompleteLibrary, !playlistsRestored { return false }
+        player.configurePlayback(resolveURL: { [weak self, root] id in
+            guard self?.failedIDs.contains(id) != true else { return nil }
+            let url = root.appending(path: id)
+            return FileManager.default.fileExists(atPath: url.path) ? url : nil
+        }, persistenceURL: store.appending(path: "playback.json"))
+        let queueRestored = player.restoreQueue(songs: songs, requireCompleteLibrary: requireCompleteLibrary)
+        if requireCompleteLibrary, !queueRestored { return false }
+        started = true
+        return true
     }
 
     /// Repairs only the known /var versus /private/var truncation from the first local scanner.
@@ -193,9 +215,32 @@ final class LocalLibraryRuntime {
     }
 }
 
-/// The cache contains original artwork bytes. Keep its JSON work and file I/O
-/// off MainActor without changing the stored format or limiting library size.
+/// Keep the original track store intact. A disposable startup snapshot avoids
+/// decoding the same embedded cover once per song on every process launch.
 actor LocalLibraryTrackCache {
+    private struct Fingerprint: Codable, Equatable {
+        let size: Int?
+        let modified: Date?
+
+        init(_ url: URL) throws {
+            // URL resource values are cached on the URL instance. Read fresh
+            // attributes so an atomic replacement invalidates the startup index.
+            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+            size = attributes[.size] as? Int
+            modified = attributes[.modificationDate] as? Date
+        }
+    }
+    private struct StartupTrack: Codable {
+        var metadata: LocalTrack
+        let artworkKey: String?
+    }
+    private struct StartupSnapshot: Codable {
+        let version: Int
+        let source: Fingerprint
+        let tracks: [StartupTrack]
+    }
+    private var saved: (url: URL, tracks: [LocalTrack])?
+    private var startupSnapshotIsCurrent = false
     func prepare(documents: URL, store: URL) throws {
         try Task.checkCancellation()
         _ = try LocalMusicScanner.prepareDirectory(documents: documents)
@@ -204,16 +249,97 @@ actor LocalLibraryTrackCache {
 
     func read(from url: URL) throws -> [LocalTrack]? {
         try Task.checkCancellation()
+        saved = nil
+        startupSnapshotIsCurrent = false
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-        let tracks = try JSONDecoder().decode([LocalTrack].self, from: Data(contentsOf: url))
+        let tracks: [LocalTrack]
+        if let restored = try? readStartupSnapshot(for: url) {
+            tracks = restored
+            startupSnapshotIsCurrent = true
+        } else {
+            try Task.checkCancellation()
+            tracks = try JSONDecoder().decode([LocalTrack].self, from: Data(contentsOf: url))
+        }
         try Task.checkCancellation()
+        saved = (url, tracks)
         return tracks
     }
 
     func write(_ tracks: [LocalTrack], to url: URL) throws {
         try Task.checkCancellation()
-        let data = try JSONEncoder().encode(tracks)
+        if saved?.url != url || saved?.tracks != tracks {
+            let data = try JSONEncoder().encode(tracks)
+            try Task.checkCancellation()
+            try data.write(to: url, options: .atomic)
+            saved = (url, tracks)
+            startupSnapshotIsCurrent = false
+        }
+        guard !startupSnapshotIsCurrent else { return }
+        do {
+            try writeStartupSnapshot(tracks, for: url)
+            startupSnapshotIsCurrent = true
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            // An optional acceleration cache must not turn a successful library save into a failure.
+        }
+    }
+
+    private func readStartupSnapshot(for url: URL) throws -> [LocalTrack] {
+        let directory = url.appendingPathExtension("startup")
+        let snapshot = try JSONDecoder().decode(StartupSnapshot.self,
+            from: Data(contentsOf: directory.appending(path: "snapshot.json")))
+        guard snapshot.version == 1, snapshot.source == (try Fingerprint(url)) else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        var artwork: [String: Data] = [:]
+        return try snapshot.tracks.map { entry in
+            try Task.checkCancellation()
+            var track = entry.metadata
+            if let key = entry.artworkKey {
+                if let data = artwork[key] {
+                    track.artworkData = data
+                } else {
+                    let data = try Data(contentsOf: directory.appending(path: key + ".image"))
+                    artwork[key] = data
+                    track.artworkData = data
+                }
+            }
+            return track
+        }
+    }
+
+    private func writeStartupSnapshot(_ tracks: [LocalTrack], for url: URL) throws {
         try Task.checkCancellation()
-        try data.write(to: url, options: .atomic)
+        let directory = url.appendingPathExtension("startup")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        var keys: [Data: String] = [:]
+        let entries = try tracks.map { track -> StartupTrack in
+            try Task.checkCancellation()
+            var metadata = track
+            metadata.artworkData = nil
+            var key: String?
+            if let data = track.artworkData {
+                if let existing = keys[data] {
+                    key = existing
+                } else {
+                    let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+                    try data.write(to: directory.appending(path: digest + ".image"), options: .atomic)
+                    keys[data] = digest
+                    key = digest
+                }
+            }
+            return StartupTrack(metadata: metadata, artworkKey: key)
+        }
+        let snapshot = StartupSnapshot(version: 1, source: try Fingerprint(url), tracks: entries)
+        let data = try JSONEncoder().encode(snapshot)
+        try Task.checkCancellation()
+        try data.write(to: directory.appending(path: "snapshot.json"), options: .atomic)
+        // Prune only derived covers, after the complete replacement snapshot is committed.
+        let filenames = Set(keys.values.map { $0 + ".image" })
+        for file in (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? []
+            where file.pathExtension == "image" && !filenames.contains(file.lastPathComponent) {
+            try? FileManager.default.removeItem(at: file)
+        }
     }
 }

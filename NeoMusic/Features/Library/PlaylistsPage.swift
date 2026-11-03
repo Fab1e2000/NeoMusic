@@ -93,14 +93,20 @@ final class PlaylistLibrary {
         let nextOrder: Int
     }
 
-    func configurePersistence(url: URL, songs: [LibrarySongItem]) {
-        guard persistenceURL == nil else { return }
+    /// Cache-first startup may restore only when every saved reference can be resolved.
+    @discardableResult
+    func configurePersistence(url: URL, songs: [LibrarySongItem], requireCompleteLibrary: Bool = false) -> Bool {
+        guard persistenceURL == nil else { return true }
         loadingPersistence = true
         defer { loadingPersistence = false }
         do {
             if FileManager.default.fileExists(atPath: url.path) {
                 let saved = try JSONDecoder().decode(Snapshot.self, from: Data(contentsOf: url))
                 let lookup = Dictionary(songs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+                if requireCompleteLibrary,
+                   !saved.playlists.allSatisfy({ $0.songs.allSatisfy { lookup[$0] != nil } }) {
+                    return false
+                }
                 var restoredArtwork: [String: (image: Image, data: Data)] = [:]
                 playlists = saved.playlists.map { item in
                     let artwork: Artwork
@@ -122,9 +128,11 @@ final class PlaylistLibrary {
             }
             persistenceURL = url
             persistenceError = nil
+            return true
         } catch {
             // Leave an unreadable store untouched; do not overwrite it with an empty library.
             persistenceError = "无法读取播放列表：\(error.localizedDescription)"
+            return false
         }
     }
 

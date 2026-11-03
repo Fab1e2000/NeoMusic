@@ -1,7 +1,7 @@
 import SwiftUI
 
 #if DEBUG || ACCOUNT_REFERENCE_PREVIEW
-@MainActor private enum AccountReferenceFixture {
+@MainActor enum AccountReferenceFixture {
     #if ACCOUNT_REFERENCE_PREVIEW
     static let isEnabled = true
     static let directory = Bundle.main.bundleURL.appendingPathComponent("AccountReference", isDirectory: true)
@@ -65,7 +65,7 @@ private struct AccountReferenceMonogram: View {
 }
 
 /// Isolated visual reference. Its rows explain unavailable services instead of simulating account operations.
-private struct AccountReferencePage: View {
+struct AccountReferencePage: View {
     @Environment(\.dismiss) private var dismiss
     @State private var unavailable = false
 

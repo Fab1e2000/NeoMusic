@@ -176,6 +176,7 @@ final class LibraryDetailHostingController: UIHostingController<AnyView> {
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         chrome.isActive = true
+        chrome.hasAppeared = true
     }
 }
 
@@ -203,6 +204,8 @@ extension LibraryRoute {
 @MainActor @Observable
 final class LibraryNavigationChrome: NSObject, UISearchResultsUpdating {
     var isActive = false
+    /// Set by the native appearance callback; returning keeps the shelf in place.
+    var hasAppeared = false
     @ObservationIgnored weak var controller: UIViewController?
     @ObservationIgnored var title = ""
     @ObservationIgnored var mode: UINavigationItem.LargeTitleDisplayMode

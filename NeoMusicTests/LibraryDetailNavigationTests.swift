@@ -3,6 +3,28 @@ import SwiftUI
 import LNPopupController
 @testable import NeoMusic
 
+@MainActor @Observable
+private final class StartupLibraryProbe {
+    var isReady = false
+    let library = PlaylistLibrary(playlists: [])
+}
+
+private struct StartupLibraryProbeView: View {
+    let probe: StartupLibraryProbe
+    var body: some View {
+        LibraryHomeView(pinned: probe.isReady ? [
+            .init(id: "first", title: "专辑一", artwork: .missing, route: .album("first")),
+            .init(id: "second", title: "专辑二", artwork: .missing, route: .album("second")),
+            .init(id: "third", title: "专辑三", artwork: .missing, route: .album("third")),
+            .init(id: "favorites", title: "喜爱歌曲", artwork: .favorites, route: .playlist("favorites"))
+        ] : [], recentlyAdded: probe.isReady ? [
+            .init(id: "recent-first", title: "最近专辑一", artwork: .missing, route: .album("recent-first")),
+            .init(id: "recent-second", title: "最近专辑二", artwork: .missing, route: .album("recent-second"))
+        ] : [],
+                        playlistLibrary: probe.library, isContentReady: probe.isReady)
+    }
+}
+
 @MainActor
 final class LibraryDetailNavigationTests: XCTestCase {
     private func settle() async throws { try await Task.sleep(for: .milliseconds(1400)) }
@@ -332,6 +354,87 @@ final class LibraryDetailNavigationTests: XCTestCase {
         XCTAssertEqual(nativeBounds.maxY, originalBounds.maxY, accuracy: 1)
     }
 
+    func testStartupShowsNativeChromeBeforeContentWithoutReplacingNavigation() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let window = UIWindow(windowScene: scene)
+        defer { window.isHidden = true }
+        let bridge = LibraryDetailNavigation()
+        let probe = StartupLibraryProbe()
+        window.rootViewController = UIHostingController(rootView: LibraryAppTabs(
+            selection: .constant(.library), navigation: bridge,
+            library: StartupLibraryProbeView(probe: probe), destination: { _ in AnyView(EmptyView()) }))
+        window.makeKeyAndVisible()
+        try await settle()
+        let nav = try XCTUnwrap(bridge.navigationController)
+        let page = try XCTUnwrap(nav.topViewController)
+        let tabs = try XCTUnwrap(nav.tabBarController)
+        XCTAssertEqual(page.navigationItem.title, "资料库")
+        XCTAssertEqual(page.navigationItem.trailingItemGroups.flatMap(\.barButtonItems).count, 2)
+        XCTAssertEqual(tabs.tabs.count, 5)
+        XCTAssertFalse(tabs.tabBar.isHidden)
+        XCTAssertFalse(descendants(of: UICollectionView.self, in: page.view)
+            .contains { $0.delegate is PinnedCollectionView.Coordinator },
+                       "The shelf must occupy no row before its content is ready")
+        let list = try XCTUnwrap(descendants(of: UICollectionView.self, in: page.view).first)
+        func firstCategoryCell() -> UICollectionViewCell? {
+            list.visibleCells.filter { cell in
+                !descendants(of: UICollectionView.self, in: cell)
+                    .contains { $0.delegate is PinnedCollectionView.Coordinator }
+            }.min { $0.frame.minY < $1.frame.minY }
+        }
+        let initialCategoryY = try XCTUnwrap(firstCategoryCell()).frame.minY
+        func recentCoverFrame(presentation: Bool) -> CGRect? {
+            guard let cover = descendants(of: LibraryArtworkSurfaceView.self, in: page.view)
+                .first(where: { $0.bounds.width > 150 }),
+                  let row = list.visibleCells.first(where: { cover.isDescendant(of: $0) }) else { return nil }
+            if presentation, let coverLayer = cover.layer.presentation(), let rowLayer = row.layer.presentation() {
+                return coverLayer.convert(coverLayer.bounds, to: rowLayer)
+            }
+            return cover.convert(cover.bounds, to: row)
+        }
+        let frame = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+            XCTAssertTrue(window.drawHierarchy(in: window.bounds, afterScreenUpdates: true))
+        }
+        let emptyFrame = XCTAttachment(image: frame)
+        emptyFrame.name = "startup-native-chrome-before-library-content"
+        emptyFrame.lifetime = .keepAlways
+        add(emptyFrame)
+
+        probe.isReady = true
+        var categoryPositions: [CGFloat] = []
+        var recentCoverFrames: [CGRect] = []
+        for _ in 0..<35 {
+            try await Task.sleep(for: .milliseconds(16))
+            if let cell = firstCategoryCell() {
+                categoryPositions.append(cell.layer.presentation()?.frame.minY ?? cell.frame.minY)
+            }
+            if let frame = recentCoverFrame(presentation: true) { recentCoverFrames.append(frame) }
+        }
+        try await settle()
+        let restoredFrame = XCTAttachment(image: UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+            window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+        })
+        restoredFrame.name = "pinned-content-after-restoration"
+        restoredFrame.lifetime = .keepAlways
+        add(restoredFrame)
+        XCTAssertTrue(bridge.navigationController === nav)
+        XCTAssertTrue(nav.topViewController === page)
+        XCTAssertTrue(nav.tabBarController === tabs)
+        let pinned = try XCTUnwrap(descendants(of: UICollectionView.self, in: page.view)
+            .first { $0.delegate is PinnedCollectionView.Coordinator })
+        XCTAssertEqual(pinned.numberOfItems(inSection: 0), 4)
+        let finalCategoryY = try XCTUnwrap(firstCategoryCell()).frame.minY
+        XCTAssertGreaterThan(finalCategoryY - initialCategoryY, 250, "Two rows of pins must push the categories down")
+        XCTAssertTrue(categoryPositions.contains { $0 > initialCategoryY + 1 && $0 < finalCategoryY - 1 },
+                      "The categories must move through intermediate positions during insertion")
+        let finalCoverFrame = try XCTUnwrap(recentCoverFrame(presentation: false))
+        XCTAssertGreaterThan(recentCoverFrames.count, 5)
+        for frame in recentCoverFrames {
+            XCTAssertEqual(frame.minX, finalCoverFrame.minX, accuracy: 1, "Album fill must not slide inside the recently-added row")
+            XCTAssertEqual(frame.minY, finalCoverFrame.minY, accuracy: 1, "The shelf insertion moves the row, not its album content")
+        }
+    }
+
     func testActualLibraryHomePublishesItsToolbar() async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
         let window = UIWindow(windowScene: scene)
@@ -366,7 +469,7 @@ final class LibraryDetailNavigationTests: XCTestCase {
         inspect(window.rootViewController!)
     }
 
-    func testLibraryHomeIncludesPinsOnInitialPresentationAndKeepsTheirLayoutOnReturn() async throws {
+    func testLibraryHomeRevealsPinsOnceAndKeepsTheirLayoutOnReturn() async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
         let window = UIWindow(windowScene: scene)
         defer { window.isHidden = true }
@@ -375,7 +478,7 @@ final class LibraryDetailNavigationTests: XCTestCase {
             .init(id: "favorites", title: "喜爱歌曲", artwork: .favorites, route: .playlist("favorites")),
             .init(id: "album", title: "专辑", artwork: .missing, route: .album("album"))
         ]
-        var nextRootAppearance = expectation(description: "Root initially displays its pins")
+        var nextRootAppearance = expectation(description: "Root appears before revealing pins")
         let destinationReady = expectation(description: "Destination appears")
         var firstCollection: UICollectionView?
         var firstFrame: CGRect?
@@ -385,26 +488,25 @@ final class LibraryDetailNavigationTests: XCTestCase {
             root: LibraryHomeView(pinned: items, recentlyAdded: [], playlistLibrary: PlaylistLibrary(playlists: []))
                 .background {
                     AlbumAppearanceProbe(onAppearance: { _ in }, onDisplayed: { probe in
-                        do {
-                            let page = try XCTUnwrap(probe.navigationController?.topViewController)
-                            let collection = try XCTUnwrap(self.descendants(of: UICollectionView.self, in: page.view)
-                                .first { $0.visibleCells.contains { $0 is PinnedCollectionCell } })
-                            XCTAssertEqual(collection.numberOfItems(inSection: 0), items.count)
-                            XCTAssertEqual(collection.visibleCells.count, items.count)
-                            let frame = collection.convert(collection.bounds, to: page.view)
-                            XCTAssertGreaterThan(frame.width, 0)
-                            XCTAssertGreaterThan(frame.height, 0)
-                            if let firstCollection, let firstFrame {
-                                XCTAssertTrue(collection === firstCollection, "Returning must retain the existing pinned collection")
-                                XCTAssertEqual(frame.minX, firstFrame.minX, accuracy: 1)
-                                XCTAssertEqual(frame.minY, firstFrame.minY, accuracy: 1)
-                                XCTAssertEqual(frame.width, firstFrame.width, accuracy: 1)
-                                XCTAssertEqual(frame.height, firstFrame.height, accuracy: 1)
-                            } else {
-                                firstCollection = collection
-                                firstFrame = frame
-                            }
-                        } catch { XCTFail("Pins must be present during the root's completed appearance: \(error)") }
+                        if appearances > 0 {
+                            do {
+                                let page = try XCTUnwrap(probe.navigationController?.topViewController)
+                                let collection = try XCTUnwrap(self.descendants(of: UICollectionView.self, in: page.view)
+                                    .first { $0.visibleCells.contains { $0 is PinnedCollectionCell } })
+                                XCTAssertEqual(collection.numberOfItems(inSection: 0), items.count)
+                                XCTAssertEqual(collection.visibleCells.count, items.count)
+                                let frame = collection.convert(collection.bounds, to: page.view)
+                                XCTAssertGreaterThan(frame.width, 0)
+                                XCTAssertGreaterThan(frame.height, 0)
+                                if let firstCollection, let firstFrame {
+                                    XCTAssertTrue(collection === firstCollection, "Returning must retain the existing pinned collection")
+                                    XCTAssertEqual(frame.minX, firstFrame.minX, accuracy: 1)
+                                    XCTAssertEqual(frame.minY, firstFrame.minY, accuracy: 1)
+                                    XCTAssertEqual(frame.width, firstFrame.width, accuracy: 1)
+                                    XCTAssertEqual(frame.height, firstFrame.height, accuracy: 1)
+                                }
+                            } catch { XCTFail("Returning must keep the revealed shelf in place: \(error)") }
+                        }
                         appearances += 1
                         nextRootAppearance.fulfill()
                     }).frame(width: 0, height: 0)
@@ -417,7 +519,16 @@ final class LibraryDetailNavigationTests: XCTestCase {
             }))
         window.makeKeyAndVisible()
         await fulfillment(of: [nextRootAppearance], timeout: 3)
+        try await settle()
         let nav = try XCTUnwrap(bridge.navigationController)
+        let root = try XCTUnwrap(nav.topViewController)
+        let collection = try XCTUnwrap(descendants(of: UICollectionView.self, in: root.view)
+            .first { $0.delegate is PinnedCollectionView.Coordinator })
+        XCTAssertEqual(collection.numberOfItems(inSection: 0), items.count)
+        XCTAssertEqual(collection.visibleCells.count, items.count)
+        firstCollection = collection
+        firstFrame = collection.convert(collection.bounds, to: root.view)
+        XCTAssertGreaterThan(try XCTUnwrap(firstFrame).height, 0)
         bridge.open(.category(.albums), animated: false)
         await fulfillment(of: [destinationReady], timeout: 3)
         nextRootAppearance = expectation(description: "Root returns with the same pinned layout")

@@ -298,12 +298,14 @@ enum LocalLibrary {
 /// 在首页自己的 body 里读取置顶状态：置顶变化只刷新首页，不会让上层重建而重置首页的编辑状态。
 struct LocalLibraryHome: View {
     var body: some View {
-        LibraryHomeView(pinned: LocalLibrary.pinned, recentlyAdded: LocalLibrary.recentlyAdded,
+        let ready = LocalLibrary.runtime.isInitialLibraryReady
+        LibraryHomeView(pinned: ready ? LocalLibrary.pinned : [], recentlyAdded: ready ? LocalLibrary.recentlyAdded : [],
                         playlistLibrary: LocalLibrary.playlistLibrary,
+                        isContentReady: ready,
                         reorderPinned: LocalLibrary.reorderPinned)
             .refreshable { await LocalLibrary.runtime.refresh() }
             .safeAreaInset(edge: .bottom) {
-                if LocalLibrary.songs.isEmpty {
+                if ready, LocalLibrary.songs.isEmpty {
                     VStack(spacing: 8) {
                         Text("将音乐放入“文件 → 我的 iPhone → NeoMusic → 音乐”").font(.callout)
                         Text("支持 MP3、AAC/M4A、ALAC、FLAC、WAV、AIFF，可包含子文件夹。").font(.caption).foregroundStyle(.secondary)

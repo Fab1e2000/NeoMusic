@@ -10,7 +10,7 @@ struct LocalTrack: Codable, Sendable, Equatable, Identifiable {
     let albumArtist: String
     let trackNumber: Int
     let duration: Double
-    let artworkData: Data?
+    var artworkData: Data?
     let addedDate: Date
     var albumDirectory: String? = nil
     var discNumber: Int? = nil
