@@ -32,12 +32,44 @@ struct AlbumSongPosition: View {
     }
 }
 
+/// Playlist rows share the album's audio-driven indicator, over the current cover.
+struct PlaylistSongArtwork: View {
+    let song: LibrarySongItem
+    var cornerRadius: CGFloat = 6
+    @Environment(\.songRowPlayback) private var playback
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        ArtworkView(artwork: song.artwork, cornerRadius: cornerRadius)
+            .overlay {
+                if let playback, playback.hasCurrent, playback.current.id == song.id {
+                    RoundedRectangle(cornerRadius: cornerRadius)
+                        .fill(.black.opacity(0.4))
+                        .overlay {
+                            SongPlaybackIndicator(
+                                active: playback.isPlaying && !playback.isLoading && scenePhase == .active && !reduceMotion,
+                                samples: { [weak playback] in playback?.spectrumLevels() ?? [] },
+                                color: .white
+                            )
+                            .frame(width: 16, height: 20)
+                        }
+                        .accessibilityLabel(playback.isPlaying ? "正在播放" : "已暂停")
+                        .accessibilityIdentifier("playlist.playback.\(song.id)")
+                }
+            }
+            .allowsHitTesting(false)
+    }
+}
+
 struct SongPlaybackIndicator: UIViewRepresentable {
     var active: Bool
     var samples: () -> [Float]
+    var color: UIColor = .label
 
     func makeUIView(context: Context) -> SpectrumBarsView { SpectrumBarsView() }
     func updateUIView(_ view: SpectrumBarsView, context: Context) {
+        view.barColor = color
         view.samples = samples
         view.active = active
     }
@@ -45,6 +77,7 @@ struct SongPlaybackIndicator: UIViewRepresentable {
 }
 
 final class SpectrumBarsView: UIView {
+    var barColor: UIColor = .label { didSet { if oldValue != barColor { setNeedsDisplay() } } }
     var samples: () -> [Float] = { [] }
     var active = false { didSet { updateClock() } }
     private var levels = [CGFloat](repeating: 0, count: 5)
@@ -84,7 +117,7 @@ final class SpectrumBarsView: UIView {
         setNeedsDisplay()
     }
     override func draw(_ rect: CGRect) {
-        UIColor.label.setFill()
+        barColor.setFill()
         for i in levels.indices {
             let height = 2 + 16 * levels[i]
             UIBezierPath(roundedRect: CGRect(x: CGFloat(i) * 3.4, y: (bounds.height - height) / 2,

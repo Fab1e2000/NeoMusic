@@ -1,6 +1,42 @@
 import XCTest
 
 final class LibraryInteractionTests: XCTestCase {
+    @MainActor func testPlaylistRowPlaybackIndicatorAndIndependentMenu() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launch()
+        app.tabBars.buttons["资料库"].tap()
+        let playlists = app.buttons["播放列表"].firstMatch
+        XCTAssertTrue(playlists.waitForExistence(timeout: 10))
+        playlists.tap()
+        let playlist = app.staticTexts["歌曲行验证"].firstMatch
+        XCTAssertTrue(playlist.waitForExistence(timeout: 5), "Requires the local playlist fixture")
+        playlist.tap()
+        app.swipeUp()
+        let cell = app.cells.containing(.staticText, identifier: "湖畔、二人歌").firstMatch
+        XCTAssertTrue(cell.waitForExistence(timeout: 5))
+        cell.staticTexts["湖畔、二人歌"].tap()
+        let clearQueue = app.buttons["清除队列"]
+        if clearQueue.waitForExistence(timeout: 1) { clearQueue.tap() }
+        let transport = app.buttons["mini.playPause"]
+        XCTAssertTrue(transport.waitForExistence(timeout: 5))
+        XCTAssertEqual(transport.label, "暂停")
+        let indicator = app.descendants(matching: .any)
+            .matching(identifier: "playlist.playback.塌陷于38°C的蓝/湖畔、二人歌.flac").firstMatch
+        XCTAssertTrue(indicator.waitForExistence(timeout: 5))
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Playlist current cover and spectrum"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        transport.tap()
+        XCTAssertEqual(transport.label, "播放")
+        XCTAssertTrue(indicator.exists)
+        cell.buttons["更多"].tap()
+        XCTAssertTrue(app.buttons["添加到播放列表"].waitForExistence(timeout: 5))
+        XCTAssertEqual(transport.label, "播放", "Opening the menu must not start playback")
+        app.terminate()
+    }
+
     @MainActor func testAllLibraryCategoryRowsNavigateAndClearSelectionOnReturn() {
         continueAfterFailure = false
         let app = XCUIApplication()

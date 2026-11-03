@@ -229,7 +229,7 @@ struct PlaylistDetailView: View {
                 guard let index = list.firstIndex(where: { $0.id == song.id }) else { return }
                 songActions.play(list, index, title)
             } label: { PlaylistDetailSongLabel(song: song) }
-                .buttonStyle(.plain)
+                .buttonStyle(.automatic)
             Menu { SongMenuContents(song: song) } label: {
                 Image(systemName: "ellipsis").font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(.secondary).frame(width: 30, height: 44).offset(x: 1)
@@ -346,7 +346,7 @@ private struct PlaylistDetailSongLabel: View {
     let song: LibrarySongItem
     var body: some View {
         HStack(spacing: 12) {
-            ArtworkView(artwork: song.artwork, cornerRadius: 5).frame(width: 48, height: 48)
+            PlaylistSongArtwork(song: song, cornerRadius: 5).frame(width: 48, height: 48)
             VStack(alignment: .leading, spacing: 2) {
                 Text(song.title).font(.callout)
                     .foregroundStyle(song.unavailabilityReason == nil ? .primary : .secondary)

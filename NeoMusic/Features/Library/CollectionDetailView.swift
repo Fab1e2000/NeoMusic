@@ -430,8 +430,8 @@ private struct PlaylistTrackRow: View {
         HStack(spacing: 12) {
             Button(action: play) {
                 HStack(spacing: 12) {
-                    ArtworkView(artwork: song.artwork, cornerRadius: 6)
-                        .frame(width: 48)
+                    PlaylistSongArtwork(song: song, cornerRadius: 6)
+                        .frame(width: 48, height: 48)
                         .overlay(alignment: .leading) { FavoriteMark(isFavorite: song.isFavorite) }
                     VStack(alignment: .leading, spacing: 2) {
                         Text(song.title).font(.callout).foregroundStyle(song.unavailabilityReason == nil ? .primary : .secondary)
@@ -443,7 +443,7 @@ private struct PlaylistTrackRow: View {
                 }
                 .contentShape(.rect)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.automatic)
             TrackMoreButton(song: song)
         }
         .frame(minHeight: 56)
