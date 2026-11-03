@@ -14,22 +14,7 @@ struct LibraryRouteLink<Label: View>: View {
     @Environment(\.libraryDownloads) private var downloads
     @Environment(\.nativeArtworkSurfaceEnabled) private var nativeArtwork
     var body: some View {
-        if destination.makePage != nil, value == .category(.playlists) {
-            Button {
-                openRoute(value)
-            } label: {
-                HStack {
-                    label
-                    Spacer(minLength: 0)
-                    Image(systemName: "chevron.right")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.tertiary)
-                        .accessibilityHidden(true)
-                }
-                .contentShape(Rectangle())
-            }
-            .foregroundStyle(.primary)
-        } else if let makePage = destination.makePage {
+        if let makePage = destination.makePage {
             NavigationLink {
                 LibraryLinkedPage(content: makePage(value), route: value)
                     .environment(\.openLibraryRoute, openRoute)

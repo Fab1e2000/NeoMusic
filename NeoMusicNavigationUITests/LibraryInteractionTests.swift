@@ -1,6 +1,55 @@
 import XCTest
 
 final class LibraryInteractionTests: XCTestCase {
+    @MainActor func testAllLibraryCategoryRowsNavigateAndClearSelectionOnReturn() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launch()
+        for title in ["播放列表", "艺人", "专辑", "歌曲", "已下载"] {
+            let entry = app.buttons[title].firstMatch
+            XCTAssertTrue(entry.waitForExistence(timeout: 10))
+            entry.tap()
+            XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 5))
+            let back = app.navigationBars.buttons["BackButton"]
+            XCTAssertTrue(back.waitForExistence(timeout: 5))
+            back.tap()
+            XCTAssertTrue(app.navigationBars["资料库"].waitForExistence(timeout: 5))
+            XCTAssertTrue(entry.isHittable)
+            let row = app.cells.containing(.staticText, identifier: title).firstMatch
+            XCTAssertTrue(row.exists)
+            XCTAssertFalse(row.isSelected)
+        }
+    }
+
+    @MainActor func testLibraryZoomAndPlaylistSelectionReturn() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launch()
+        let playlists = app.buttons["播放列表"].firstMatch
+        XCTAssertTrue(playlists.waitForExistence(timeout: 10))
+        playlists.tap()
+        let favorite = app.cells.containing(.staticText, identifier: "喜爱歌曲").firstMatch
+        XCTAssertTrue(favorite.waitForExistence(timeout: 5))
+        favorite.tap()
+        let back = app.navigationBars.buttons["BackButton"]
+        XCTAssertTrue(back.waitForExistence(timeout: 5))
+        back.tap()
+        XCTAssertTrue(favorite.waitForExistence(timeout: 5))
+        XCTAssertFalse(favorite.isSelected)
+        back.tap()
+        XCTAssertTrue(playlists.waitForExistence(timeout: 5))
+        app.swipeUp()
+        let album = app.staticTexts["塌陷于38°C的蓝"].firstMatch
+        XCTAssertTrue(album.waitForExistence(timeout: 5))
+        let initial = album.frame
+        album.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .withOffset(CGVector(dx: 0, dy: -70)).tap()
+        XCTAssertTrue(back.waitForExistence(timeout: 5))
+        back.tap()
+        XCTAssertTrue(playlists.waitForExistence(timeout: 5))
+        XCTAssertEqual(album.frame.minY, initial.minY, accuracy: 2)
+    }
+
     /// Uses the real local-music simulator fixture; never confirms deletion.
     @MainActor func testNativeAlbumRowPlaybackMenusAndSwipes() {
         continueAfterFailure = false

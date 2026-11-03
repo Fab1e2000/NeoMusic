@@ -5,33 +5,33 @@ import UIKit
 /// 行上的放置目标收不到。这里由集合视图统一处理点按、长按菜单与“拖到文件夹上移入”，
 /// 行内容仍由 SwiftUI 渲染。交互对照 Apple Music：长按先出菜单，接着拖动即拿起封面缩略图，
 /// 拖到文件夹上整行高亮，松手移入。
-struct PlaylistCollectionList: UIViewRepresentable {
+struct PlaylistCollectionList: UIViewControllerRepresentable {
     let entries: [PlaylistEntry]
     let menu: (PlaylistEntry) -> UIMenu
-    let open: (LibraryRoute) -> Void
+    let open: (LibraryRoute, @escaping () -> UIView?) -> Void
     let movePlaylist: (_ playlistID: String, _ folderID: String) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    func makeUIView(context: Context) -> UICollectionView {
+    func makeUIViewController(context: Context) -> UICollectionViewController {
         let coordinator = context.coordinator
         var configuration = UICollectionLayoutListConfiguration(appearance: .plain)
         configuration.backgroundColor = .clear
         configuration.itemSeparatorHandler = { [weak coordinator] indexPath, separator in
             coordinator?.separator(at: indexPath, base: separator) ?? separator
         }
-        let collectionView = UICollectionView(frame: .zero,
-                                              collectionViewLayout: UICollectionViewCompositionalLayout.list(using: configuration))
+        let controller = PlaylistListController(collectionViewLayout: UICollectionViewCompositionalLayout.list(using: configuration))
+        let collectionView = controller.collectionView!
         collectionView.backgroundColor = .clear
         collectionView.delegate = coordinator
         collectionView.dragDelegate = coordinator
         collectionView.dropDelegate = coordinator
         collectionView.dragInteractionEnabled = true
         coordinator.attach(to: collectionView, initial: self)
-        return collectionView
+        return controller
     }
 
-    func updateUIView(_ collectionView: UICollectionView, context: Context) {
+    func updateUIViewController(_ controller: UICollectionViewController, context: Context) {
         context.coordinator.update(with: self)
     }
 
@@ -41,12 +41,14 @@ struct PlaylistCollectionList: UIViewRepresentable {
         private var entriesByID: [String: PlaylistEntry] = [:]
         private var dataSource: UICollectionViewDiffableDataSource<Int, String>?
         private var hasApplied = false
+        private weak var collectionView: UICollectionView?
 
         /// 分隔线从标题起点画到右边距，最后一行不画；与 SwiftUI 版本及 Apple Music 一致。
         private static let separatorLeading: CGFloat = 20 + 64 + 12
         private static let rowHeight: CGFloat = 80
 
         func attach(to collectionView: UICollectionView, initial: PlaylistCollectionList) {
+            self.collectionView = collectionView
             let registration = UICollectionView.CellRegistration<UICollectionViewListCell, String> { [weak self] cell, _, id in
                 self?.configure(cell, id: id)
             }
@@ -82,15 +84,14 @@ struct PlaylistCollectionList: UIViewRepresentable {
         private func configure(_ cell: UICollectionViewListCell, id: String) {
             guard let entry = entriesByID[id] else { return }
             cell.contentConfiguration = UIHostingConfiguration {
-                // Cell configurations cannot host child view controllers. These rows
-                // use default push navigation, so retain the original SwiftUI artwork.
-                PlaylistListRow(item: entry.shelfItem)
+                PlaylistListRow(item: entry.shelfItem, usesCellArtwork: true)
                     .environment(\.nativeArtworkSurfaceEnabled, false)
             }
                 .margins(.leading, 20)
                 .margins(.trailing, 8)
                 .margins(.vertical, 0)
                 .minSize(height: Self.rowHeight)
+            cell.backgroundConfiguration = cell.defaultBackgroundConfiguration()
             cell.accessories = [.disclosureIndicator()]
             cell.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20)
             cell.accessibilityTraits = .button
@@ -108,8 +109,16 @@ struct PlaylistCollectionList: UIViewRepresentable {
         // MARK: 点按
 
         func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
-            collectionView.deselectItem(at: indexPath, animated: true)
-            if let entry = entry(at: indexPath) { latest?.open(entry.route) }
+            if let entry = entry(at: indexPath) { open(entry) }
+        }
+
+        private func open(_ entry: PlaylistEntry) {
+            let id = entry.id
+            latest?.open(entry.route) { [weak self] in
+                guard let self, let path = self.dataSource?.indexPath(for: id),
+                      let cell = self.collectionView?.cellForItem(at: path) else { return nil }
+                return cell.libraryArtworkSource()
+            }
         }
 
         // MARK: 长按菜单
@@ -136,9 +145,9 @@ struct PlaylistCollectionList: UIViewRepresentable {
         func collectionView(_ collectionView: UICollectionView,
                             willPerformPreviewActionForMenuWith configuration: UIContextMenuConfiguration,
                             animator: any UIContextMenuInteractionCommitAnimating) {
-            guard let id = configuration.identifier as? String, let entry = entriesByID[id], let latest else { return }
+            guard let id = configuration.identifier as? String, let entry = entriesByID[id] else { return }
             animator.preferredCommitStyle = .dismiss
-            animator.addCompletion { latest.open(entry.route) }
+            animator.addCompletion { [weak self] in self?.open(entry) }
         }
 
         // MARK: 拖动
@@ -207,5 +216,53 @@ extension PlaylistEntry {
         if case .folder(_, let playlists) = self { contents = playlists.prefix(4).map(\.id) }
         else { contents = [] }
         return ([item.title, item.subtitle ?? "", item.isFavorite ? "1" : "0"] + contents).joined(separator: "\u{1}")
+    }
+}
+
+/// UIHostingConfiguration supports a view-backed cover without child controllers.
+struct PlaylistCellArtwork: UIViewRepresentable {
+    let artwork: Artwork
+    func makeUIView(context: Context) -> LibraryArtworkSurfaceView { LibraryArtworkSurfaceView() }
+    func updateUIView(_ view: LibraryArtworkSurfaceView, context: Context) {
+        let configuration = UIHostingConfiguration {
+            ArtworkView(artwork: artwork, cornerRadius: 6)
+                .environment(\.nativeArtworkSurfaceEnabled, false)
+        }.margins(.all, 0)
+        if let content = view.subviews.first as? (UIView & UIContentView) {
+            content.configuration = configuration
+        } else {
+            let content = configuration.makeContentView()
+            content.translatesAutoresizingMaskIntoConstraints = false
+            view.addSubview(content)
+            NSLayoutConstraint.activate([
+                content.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+                content.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+                content.topAnchor.constraint(equalTo: view.topAnchor),
+                content.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+            ])
+        }
+        view.layer.cornerRadius = 6
+        view.clipsToBounds = true
+    }
+}
+
+/// Coordinate selection fading with the containing navigation transition.
+private final class PlaylistListController: UICollectionViewController {
+    override func viewWillAppear(_ animated: Bool) {
+        clearsSelectionOnViewWillAppear = false
+        super.viewWillAppear(animated)
+        let selected = collectionView.indexPathsForSelectedItems ?? []
+        guard !selected.isEmpty else { return }
+        guard let transitionCoordinator else {
+            selected.forEach { collectionView.deselectItem(at: $0, animated: animated) }
+            return
+        }
+        transitionCoordinator.animate(alongsideTransition: { [weak self] _ in
+            guard let self else { return }
+            selected.forEach { self.collectionView.deselectItem(at: $0, animated: animated) }
+        }, completion: { [weak self] context in
+            guard let self, context.isCancelled else { return }
+            selected.forEach { self.collectionView.selectItem(at: $0, animated: false, scrollPosition: []) }
+        })
     }
 }

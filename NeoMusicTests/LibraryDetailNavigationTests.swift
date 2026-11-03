@@ -552,6 +552,30 @@ final class LibraryDetailNavigationTests: XCTestCase {
         XCTAssertEqual(appearances, 2)
     }
 
+    func testPlaylistScrollIncludesLargeTitleDuringPush() async throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let window = UIWindow(windowScene: scene)
+        defer { window.isHidden = true }
+        let bridge = LibraryDetailNavigation()
+        let library = PlaylistLibrary(playlists: [])
+        window.rootViewController = UIHostingController(rootView: LibraryNavigationContainer(
+            navigation: bridge, root: TestRoot(),
+            destination: { _ in AnyView(PlaylistsListView(library: library)) }).environment(account))
+        window.makeKeyAndVisible()
+        try await settle()
+        bridge.open(.category(.playlists))
+        try await Task.sleep(for: .milliseconds(180))
+        let navigation = try XCTUnwrap(bridge.navigationController)
+        XCTAssertNotNil(navigation.transitionCoordinator)
+        let page = try XCTUnwrap(navigation.topViewController)
+        let list = try XCTUnwrap(descendants(of: UICollectionView.self, in: page.view).first)
+        let viewport = list.convert(list.bounds, to: page.view)
+        XCTAssertEqual(viewport.minY, 0, accuracy: 1,
+                       "The scroll viewport must include the system large title during the push")
+        XCTAssertGreaterThan(list.adjustedContentInset.top, navigation.navigationBar.bounds.height)
+        XCTAssertEqual(page.navigationItem.title, "播放列表")
+    }
+
     func testCategoryTitlesArePreparedBeforeDestinationContentLoads() {
         let bridge = LibraryDetailNavigation()
         let expected: [(LibraryCategory, String)] = [

@@ -589,6 +589,7 @@ struct PlaylistsListView: View {
     @State private var isNamingFolder = false
     @State private var isCreatingPlaylist = false
     @Namespace private var playlistCreationTransition
+    @Environment(\.collectionMenuActions) private var collectionActions
     @State private var folderName = ""
     @State private var renamingFolder: PlaylistFolder?
     @State private var deletingFolder: PlaylistFolder?
@@ -751,20 +752,19 @@ struct PlaylistsListView: View {
     @ViewBuilder private func content(_ entries: [PlaylistEntry]) -> some View {
         switch layout {
         case .list:
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
-                        PlaylistSwiftUIRow(entry: entry,
-                            menuSections: entry.folder.map { folder in { _ in folderSections(folder) } },
-                            isLast: index == entries.count - 1,
-                            movePlaylist: { id, folderID in
-                                guard library.playlists.contains(where: { $0.id == id }),
-                                      library.folders.contains(where: { $0.id == folderID }) else { return }
-                                withAnimation { library.move(playlistID: id, to: folderID) }
-                            })
-                    }
-                }
-            }
+            PlaylistCollectionList(entries: entries, menu: { entry in
+                if let folder = entry.folder { return folderSections(folder).nativeMenu(firstSectionIsRow: false) }
+                return collectionActions.sections(for: entry.shelfItem, route: entry.route).nativeMenu(firstSectionIsRow: true)
+            }, open: { route, source in
+                openLibraryRoute(route, sourceProvider: source)
+            }, movePlaylist: { id, folderID in
+                guard library.playlists.contains(where: { $0.id == id }),
+                      library.folders.contains(where: { $0.id == folderID }) else { return }
+                withAnimation { library.move(playlistID: id, to: folderID) }
+            })
+            // UIKit hosts the large title in the scrolling content during a push.
+            // Let its adjustedContentInset position rows without clipping that title.
+            .ignoresSafeArea(.container, edges: .vertical)
         case .grid:
             ScrollView {
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 12, alignment: .top),
@@ -778,49 +778,6 @@ struct PlaylistsListView: View {
                 }
                 .padding(.horizontal, 20)
                 .padding(.bottom, 24)
-            }
-        }
-    }
-}
-
-/// SwiftUI 滚动列表复用资料库卡片菜单；仅接受本次页面产生的播放列表拖动。
-private struct PlaylistSwiftUIRow: View {
-    let entry: PlaylistEntry
-    var menuSections: ((CollectionMenuActions) -> LibraryMenuSections)?
-    let isLast: Bool
-    let movePlaylist: (String, String) -> Void
-    @Environment(\.openLibraryRoute) private var openLibraryRoute
-    @Environment(\.displayScale) private var displayScale
-
-    private var drag: NativeMenuDrag? {
-        guard case .playlist(let playlist) = entry else { return nil }
-        return NativeMenuDrag(identifier: playlist.id) {
-            let renderer = ImageRenderer(content: ArtworkView(artwork: playlist.artwork, cornerRadius: 8).frame(width: 64, height: 64))
-            renderer.scale = displayScale
-            return renderer.uiImage
-        }
-    }
-
-    private var drop: NativeMenuDrop? {
-        guard case .folder(let folder, _) = entry else { return nil }
-        return NativeMenuDrop { id in movePlaylist(id, folder.id) }
-    }
-
-    var body: some View {
-        CollectionCardLink(item: entry.shelfItem, menuSections: menuSections,
-                           firstSectionIsRow: entry.folder == nil,
-                           tap: { openLibraryRoute(entry.route) }, drag: drag, drop: drop) {
-            HStack(spacing: 12) {
-                PlaylistListRow(item: entry.shelfItem)
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.right")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.tertiary)
-                    .accessibilityHidden(true)
-            }
-            .padding(.horizontal, 20)
-            .overlay(alignment: .bottom) {
-                if !isLast { Divider().padding(.leading, 96).padding(.trailing, 20) }
             }
         }
     }
@@ -898,11 +855,15 @@ private struct PlaylistDeletionConfirmation: ViewModifier {
 /// 播放列表、文件夹的列表行：大封面、标题与可选副标题（文件夹显示播放列表数量）。
 struct PlaylistListRow: View {
     let item: LibraryShelfItem
+    var usesCellArtwork = false
 
     var body: some View {
         HStack(spacing: 12) {
-            ArtworkView(artwork: item.artwork, cornerRadius: 6)
-                .frame(width: 64)
+            Group {
+                if usesCellArtwork { PlaylistCellArtwork(artwork: item.artwork) }
+                else { ArtworkView(artwork: item.artwork, cornerRadius: 6) }
+            }
+                .frame(width: 64, height: 64)
                 .overlay(alignment: .leading) { FavoriteMark(isFavorite: item.isFavorite, color: .yellow) }
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.title).font(.callout)
