@@ -100,9 +100,7 @@ struct LibraryHomeView: View {
                             .disabled(pinned.isEmpty)
                     }
                 }
-                #if DEBUG || ACCOUNT_REFERENCE_PREVIEW
-                AccountReferenceToolbar()
-                #endif
+                AccountToolbar()
             }
         }
         .onChange(of: pinned.isEmpty) { _, isEmpty in if isEmpty { isEditingPinned = false } }

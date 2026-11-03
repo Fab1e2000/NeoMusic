@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/Fab1e2000/NeoMusic/actions/workflows/ci.yml/badge.svg)](https://github.com/Fab1e2000/NeoMusic/actions/workflows/ci.yml)
 
-**网易云音乐接入筹备中，现有构建支持本地音乐。** 项目正在开发，尚未发布正式版本。
+**网易云账户已接入；当前音乐播放支持本地文件。** 项目正在开发，尚未发布正式版本。
 
 ## 当前能力
 
@@ -16,9 +16,10 @@
 | 播放列表 | 创建、编辑、封面选择及文件夹管理 |
 | 播放与队列 | 迷你／全屏播放器、插播与排序、循环与随机、进度和队列恢复 |
 | 歌词 | 本地歌词读取、导入与同步显示 |
-| 网易云音乐 | 尚未接入；接入路线与首批能力将在下一阶段确定 |
+| 网易云账户 | 官网登录、真实头像与昵称、会话恢复、失效处理、切换账号与退出；启动时恢复已缓存头像 |
+| 网易云音乐 | 歌单、推荐、搜索、在线播放及下载尚未接入 |
 
-网易云音乐是唯一计划接入的在线来源，本地音乐作为补充能力保留。项目不承担旧项目的数据、账号或偏好迁移。当前阶段与验收状态见 [roadmap](docs/roadmap.md)。
+网易云音乐是唯一在线来源，本地音乐作为补充能力保留。主页与资料库右上角头像共用同一账户入口，本地音乐不依赖网易云登录。项目不承担旧项目的数据、账号或偏好迁移。当前阶段与验收状态见 [roadmap](docs/roadmap.md)。
 
 ## 添加本地音乐
 
@@ -39,7 +40,7 @@ open NeoMusic.xcodeproj
 
 选择 `NeoMusic` scheme 和 iPhone 模拟器即可运行。真机签名由开发者自行配置。
 
-参与开发前请阅读 [项目规范](AGENTS.md)。`project.yml` 是工程配置的唯一编辑来源；生成工程、测试资料和账户效果稿说明集中在开发指南中。
+参与开发前请阅读 [项目规范](AGENTS.md)。`project.yml` 是工程配置的唯一编辑来源；生成工程、测试资料和账户预览说明集中在开发指南中。
 
 [CI](https://github.com/Fab1e2000/NeoMusic/actions/workflows/ci.yml) 自动检查模块边界并运行正式测试 target。[Release 工作流](https://github.com/Fab1e2000/NeoMusic/actions/workflows/release.yml) 可手动生成未签名 IPA；版本标签生成 Release 草稿，检查后再发布。未签名 IPA 需要自行签名才能安装，流程说明见 [开发指南](docs/development.md#ci-与-release)。
 
@@ -48,6 +49,7 @@ open NeoMusic.xcodeproj
 播放器前端从 NeoDizzy 适配，包含源自 MeloX / MeloX_Modified 的 **GPL-3.0** 代码。项目同时使用 LNPopupUI、LNPopupController、Nuke 等依赖，保留各自的 MIT 许可与改动说明。
 
 - [播放器来源声明](NeoMusic/Features/Player/Resources/PlayerSourceNotices.txt)与[导入清单](NeoMusic/Features/Player/Resources/PlayerSourceManifest.json)
+- [网易云账户协议与认证来源声明](NeoMusic/Resources/NeteaseSourceNotices.txt)
 - [GPL-3.0 全文](NeoMusic/Features/Player/Resources/GPL-3.0.txt)、[第三方声明](NeoMusic/Features/Player/ThirdPartyLicenses.txt)与[Nuke 许可](NeoMusic/Features/Player/Resources/Nuke-LICENSE.txt)
 - [LNPopupUI 改动说明](Packages/LNPopupUI/NEOMUSIC-PATCHES.md)与[LNPopupController 改动说明](Packages/LNPopupController/NEOMUSIC-PATCHES.md)
 

@@ -13,6 +13,7 @@ struct LibraryAppTabs<Library: View>: UIViewControllerRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(selection: $selection) }
     func makeUIViewController(context: Context) -> UITabBarController {
+        let account = context.environment[NeteaseAccount.self]
         navigation.configure(environment: context.environment, destination: destination)
         let libraryController = navigation.makeNavigationController(root: AnyView(library), initialPath: initialPath)
         let controller = UITabBarController()
@@ -20,14 +21,16 @@ struct LibraryAppTabs<Library: View>: UIViewControllerRepresentable {
         controller.tabBarMinimizeBehavior = .onScrollDown
         func tab(_ id: AppTab, _ title: String, _ symbol: String) -> UITab {
             UITab(title: title, image: UIImage(systemName: symbol), identifier: id.rawValue) { _ in
-                UIHostingController(rootView: PlaceholderTab(title: LocalizedStringKey(title)))
+                UIHostingController(rootView: PlaceholderTab(title: LocalizedStringKey(title)).environment(account))
             }
         }
-        let search = UISearchTab { _ in UIHostingController(rootView: PlaceholderTab(title: "搜索")) }
+        let search = UISearchTab { _ in
+            UIHostingController(rootView: PlaceholderTab(title: "搜索").environment(account))
+        }
         context.coordinator.searchIdentifier = search.identifier
         controller.tabs = [
             UITab(title: "主页", image: UIImage(named: "HomeTabIcon"), identifier: AppTab.home.rawValue) { _ in
-                UIHostingController(rootView: HomeFeedView())
+                UIHostingController(rootView: HomeFeedView().environment(account))
             },
             tab(.discover, "新发现", "square.grid.2x2.fill"),
             tab(.radio, "广播", "dot.radiowaves.left.and.right"),

@@ -9,6 +9,11 @@ private final class StartupLibraryProbe {
     let library = PlaylistLibrary(playlists: [])
 }
 
+@MainActor
+private final class NavigationAccountStorage {
+    var session: NeteaseSavedSession?
+}
+
 private struct StartupLibraryProbeView: View {
     let probe: StartupLibraryProbe
     var body: some View {
@@ -27,6 +32,17 @@ private struct StartupLibraryProbeView: View {
 
 @MainActor
 final class LibraryDetailNavigationTests: XCTestCase {
+    private lazy var account: NeteaseAccount = {
+        let storage = NavigationAccountStorage()
+        return NeteaseAccount(readSession: { storage.session },
+                              saveSession: { storage.session = $0 },
+                              deleteSession: { storage.session = nil },
+                              validateCredential: { _ in throw NeteaseAccountError.authenticationRequired },
+                              cachedAvatar: { _ in nil },
+                              loadAvatar: { _ in throw URLError(.badURL) },
+                              clearAvatarCache: { })
+    }()
+
     private func settle() async throws { try await Task.sleep(for: .milliseconds(1400)) }
 
     private func mount(_ bridge: LibraryDetailNavigation) throws -> UIWindow {
@@ -112,7 +128,7 @@ final class LibraryDetailNavigationTests: XCTestCase {
             library: { TestRoot(showsArtwork: true) }, detailDestination: { AnyView(TestDetail(route: $0)) }, nowPlaying: nil,
             playlistLibrary: PlaylistLibrary(playlists: []), toasts: LibraryToastCenter(),
             referencePlayer: player, referenceLibrary: PlayerTestFixtures.library(),
-            makePlayerActions: { _ in PlayerTestFixtures.actions() }))
+            makePlayerActions: { _ in PlayerTestFixtures.actions() }).environment(account))
         window.makeKeyAndVisible()
         try await settle()
         func tabs(in controller: UIViewController) -> UITabBarController? {
@@ -251,7 +267,7 @@ final class LibraryDetailNavigationTests: XCTestCase {
                     albumBackdrop: light ? .init(red: 0.88, green: 0.92, blue: 0.98) : .init(red: 0.04, green: 0.07, blue: 0.12),
                     songs: songs, route: route)))
             }, nowPlaying: nil, playlistLibrary: PlaylistLibrary(playlists: []), toasts: LibraryToastCenter(),
-            referencePlayer: player, referenceLibrary: PlayerTestFixtures.library(), makePlayerActions: { _ in PlayerTestFixtures.actions() }))
+            referencePlayer: player, referenceLibrary: PlayerTestFixtures.library(), makePlayerActions: { _ in PlayerTestFixtures.actions() }).environment(account))
         window.makeKeyAndVisible()
         try await settle()
         func findNavigation(in controller: UIViewController) -> UINavigationController? {
@@ -342,7 +358,8 @@ final class LibraryDetailNavigationTests: XCTestCase {
         let bridge = LibraryDetailNavigation()
         window.rootViewController = UIHostingController(rootView:
             LibraryAppTabs(selection: .constant(.library), navigation: bridge,
-                library: TestRoot(), destination: { _ in AnyView(EmptyView()) }).ignoresSafeArea())
+                library: TestRoot(), destination: { _ in AnyView(EmptyView()) })
+                .environment(account).ignoresSafeArea())
         try await settle()
         let native = try XCTUnwrap(bridge.navigationController)
         let nativeBar = native.navigationBar.convert(native.navigationBar.bounds, to: window)
@@ -362,14 +379,14 @@ final class LibraryDetailNavigationTests: XCTestCase {
         let probe = StartupLibraryProbe()
         window.rootViewController = UIHostingController(rootView: LibraryAppTabs(
             selection: .constant(.library), navigation: bridge,
-            library: StartupLibraryProbeView(probe: probe), destination: { _ in AnyView(EmptyView()) }))
+            library: StartupLibraryProbeView(probe: probe), destination: { _ in AnyView(EmptyView()) }).environment(account))
         window.makeKeyAndVisible()
         try await settle()
         let nav = try XCTUnwrap(bridge.navigationController)
         let page = try XCTUnwrap(nav.topViewController)
         let tabs = try XCTUnwrap(nav.tabBarController)
         XCTAssertEqual(page.navigationItem.title, "资料库")
-        XCTAssertEqual(page.navigationItem.trailingItemGroups.flatMap(\.barButtonItems).count, 2)
+        try assertNativeToolbar(in: nav)
         XCTAssertEqual(tabs.tabs.count, 5)
         XCTAssertFalse(tabs.tabBar.isHidden)
         XCTAssertFalse(descendants(of: UICollectionView.self, in: page.view)
@@ -447,25 +464,24 @@ final class LibraryDetailNavigationTests: XCTestCase {
                 .safeAreaInset(edge: .bottom) { Text("status") }
                 .libraryToasts(LibraryToastCenter())
                 .playlistDeletionConfirmation(library),
-            destination: { _ in AnyView(EmptyView()) }))
+            destination: { _ in AnyView(EmptyView()) }).environment(account))
         window.makeKeyAndVisible()
         try await settle()
-        let page = try XCTUnwrap(bridge.navigationController?.topViewController)
-        XCTAssertEqual(page.navigationItem.trailingItemGroups.flatMap(\.barButtonItems).count, 2)
+        try assertNativeToolbar(in: bridge.navigationController)
         let directBridge = LibraryDetailNavigation()
         window.rootViewController = UIHostingController(rootView: LibraryNavigationContainer(
-            navigation: directBridge, root: LocalLibraryHome(), destination: { _ in AnyView(EmptyView()) }))
+            navigation: directBridge, root: LocalLibraryHome(), destination: { _ in AnyView(EmptyView()) }).environment(account))
         try await settle()
-        XCTAssertEqual(directBridge.navigationController?.topViewController?.navigationItem.trailingItemGroups.flatMap(\.barButtonItems).count, 2)
-        window.rootViewController = UIHostingController(rootView: LocalLibrary.app)
+        try assertNativeToolbar(in: directBridge.navigationController)
+        window.rootViewController = UIHostingController(rootView: LocalLibrary.app.environment(account))
         try await settle()
-        func inspect(_ vc: UIViewController) {
+        func inspect(_ vc: UIViewController) throws {
             if let nav = vc as? UINavigationController {
-                XCTAssertEqual(nav.topViewController?.navigationItem.trailingItemGroups.flatMap(\.barButtonItems).count, 2)
+                try assertNativeToolbar(in: nav)
             }
-            vc.children.forEach(inspect)
+            try vc.children.forEach(inspect)
         }
-        inspect(window.rootViewController!)
+        try inspect(window.rootViewController!)
     }
 
     func testLibraryHomeRevealsPinsOnceAndKeepsTheirLayoutOnReturn() async throws {
@@ -515,7 +531,7 @@ final class LibraryDetailNavigationTests: XCTestCase {
                     AlbumAppearanceProbe(onAppearance: { _ in }, onDisplayed: { _ in destinationReady.fulfill() })
                         .frame(width: 0, height: 0)
                 })
-            }))
+            }).environment(account))
         window.makeKeyAndVisible()
         await fulfillment(of: [nextRootAppearance], timeout: 3)
         try await settle()
@@ -824,6 +840,16 @@ final class LibraryDetailNavigationTests: XCTestCase {
         let returnQueries = Array(queriedSources.dropFirst(queriesBeforeReturn))
         XCTAssertFalse(returnQueries.isEmpty, "Zoom-out must query again instead of retaining the original source")
         XCTAssertTrue(returnQueries.allSatisfy { $0 == ObjectIdentifier(replacement) })
+    }
+
+    private func assertNativeToolbar(in navigation: UINavigationController?, file: StaticString = #filePath, line: UInt = #line) throws {
+        let navigation = try XCTUnwrap(navigation, file: file, line: line)
+        let page = try XCTUnwrap(navigation.topViewController, file: file, line: line)
+        // UIKit groups include system spacing items. HomeFeedTests checks each
+        // visible action through the SwiftUI accessibility tree and opens Account.
+        XCTAssertFalse(page.navigationItem.trailingItemGroups.isEmpty, file: file, line: line)
+        XCTAssertTrue(navigation.navigationBar.topItem === page.navigationItem, file: file, line: line)
+        XCTAssertFalse(navigation.isNavigationBarHidden, file: file, line: line)
     }
 
     private func descendants<T: UIView>(of type: T.Type, in view: UIView) -> [T] {

@@ -29,9 +29,17 @@ final class HomeFeedTests: XCTestCase {
         attachScreenshot("Home first screen", app: app)
 
         app.buttons["home.account"].tap()
-        let accountNotice = app.alerts["账户暂未开放"]
-        XCTAssertTrue(accountNotice.waitForExistence(timeout: 5))
-        accountNotice.buttons["好"].tap()
+        let identity = app.buttons["account.identity"]
+        XCTAssertTrue(identity.waitForExistence(timeout: 5))
+        XCTAssertTrue(identity.label.contains("登录网易云音乐"))
+        identity.tap()
+        let completeLogin = app.buttons["account.login.complete"]
+        XCTAssertTrue(completeLogin.waitForExistence(timeout: 5))
+        completeLogin.tap()
+        XCTAssertTrue(element("account.login.error", in: app).waitForExistence(timeout: 5))
+        app.navigationBars.buttons["BackButton"].tap()
+        XCTAssertTrue(identity.waitForExistence(timeout: 5))
+        app.buttons["account.close"].tap()
 
         let originalHero = hero.frame
         let originalRecent = recent.frame
@@ -43,6 +51,13 @@ final class HomeFeedTests: XCTestCase {
 
         app.tabBars.buttons["资料库"].tap()
         XCTAssertTrue(app.navigationBars["资料库"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["新建播放列表"].isHittable)
+        XCTAssertTrue(app.buttons["更多"].isHittable)
+        XCTAssertTrue(app.buttons["account.open"].isHittable)
+        app.buttons["account.open"].tap()
+        XCTAssertTrue(identity.waitForExistence(timeout: 5))
+        XCTAssertTrue(identity.label.contains("登录网易云音乐"))
+        app.buttons["account.close"].tap()
         homeTab.tap()
         XCTAssertEqual(hero.frame, scrolledHero)
         XCTAssertEqual(recent.frame, originalRecent)

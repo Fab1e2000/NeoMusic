@@ -38,7 +38,7 @@ assert info["CFBundleIcons"]["CFBundlePrimaryIcon"]["CFBundleIconName"] == "NeoM
 for name in ("AccountReference", "embedded.mobileprovision", "_CodeSignature"):
     assert not (app / name).exists(), f"公开未签名包不应包含 {name}"
 assert not list(app.rglob("*.xctest")), "发布包不应包含测试插件"
-for name in ("GPL-3.0.txt", "Nuke-LICENSE.txt", "ThirdPartyLicenses.txt", "PlayerSourceNotices.txt", "PlayerSourceManifest.json"):
+for name in ("GPL-3.0.txt", "Nuke-LICENSE.txt", "ThirdPartyLicenses.txt", "PlayerSourceNotices.txt", "PlayerSourceManifest.json", "NeteaseSourceNotices.txt"):
     assert (app / name).is_file(), f"缺少许可或来源资源：{name}"
 PY
 

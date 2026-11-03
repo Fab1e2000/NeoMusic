@@ -2,18 +2,46 @@ import SwiftUI
 
 @main
 struct NeoMusicApp: App {
+    @State private var account = NeteaseAccount(client: NeteaseAccountClient(),
+                                               credentialStore: NeteaseCredentialStore(),
+                                               avatarClient: NeteaseAvatarClient())
     init() { ArtworkImagePipeline.configureMemoryCache() }
     @Environment(\.scenePhase) private var scenePhase
     var body: some Scene {
         WindowGroup {
-            LocalLibrary.app
-                .task { await LocalLibrary.runtime.refresh() }
-                .onChange(of: scenePhase) { previous, phase in
-                    // Initial activation is already covered by the task above.
-                    if previous == .background, phase != .background {
-                        Task { await LocalLibrary.runtime.refresh() }
-                    }
-                }
+            #if DEBUG
+            if let state = accountPreviewState {
+                AccountPreviewRoot(state: state)
+            } else {
+                libraryApp
+            }
+            #else
+            libraryApp
+            #endif
         }
     }
+
+    private var libraryApp: some View {
+        LocalLibrary.app
+            .environment(account)
+            .task { await LocalLibrary.runtime.refresh() }
+            .task { await account.restore() }
+            .onChange(of: scenePhase) { previous, phase in
+                // Initial activation is already covered by the task above.
+                if previous == .background, phase != .background {
+                    Task { await LocalLibrary.runtime.refresh() }
+                    Task { await account.revalidate() }
+                }
+            }
+    }
+
+    #if DEBUG
+    private var accountPreviewState: String? {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let index = arguments.firstIndex(of: "-neteaseAccountPreview"),
+              arguments.indices.contains(index + 1) else { return nil }
+        let state = arguments[index + 1]
+        return ["signed-out", "signed-in", "settings"].contains(state) ? state : nil
+    }
+    #endif
 }

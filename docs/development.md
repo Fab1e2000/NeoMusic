@@ -25,6 +25,7 @@
 ## 正式运行路径
 
 - **应用启动**：`NeoMusicApp` 立即显示 `LocalLibrary` 装配的 `AppShell`，资料库标题、顶部按钮、分类入口与系统标签栏先出现。`LocalLibraryRuntime` 将恢复已存状态与核对音乐目录分开：在缓存 actor 读取曲目索引、歌单与队列，再发布到界面；恢复期间歌曲与封面留空，新建歌单和分类导航禁用。歌单和队列保留暂未解析的歌曲标识，缓存缺失或引用不完整时也能先结束恢复，随后扫描补齐；已知旧标识修复仍在解析持久化引用前完成。后台扫描失败或取消保留已显示内容，未变化的内容跳过发布与重写，回到前台继续刷新资料库。
+- **网易云账户**：`NeoMusicApp` 持有唯一 `NeteaseAccount`，初始化时读取已保存的最大 192 px 头像显示快照，供首帧使用；Keychain 恢复与网络校验继续异步执行，与本地资料库恢复并行。读取 Keychain 后发布账户资料，核对快照所属用户，并后台刷新头像；同一用户的头像 URL 变化时保留现有显示，直到新图加载成功。从后台返回时重新校验账户。`LibraryAppTabs` 与资料库导航创建 SwiftUI hosting root 时显式传递同一账户实例；主页和资料库头像共用账户状态。恢复和校验独立于账户页面是否打开。
 - **启动呈现**：页面完成首次显示且状态恢复后，整块置顶区作为一行插入原生列表，推动分类与最近添加向下移动；页面显示状态来自 UIKit 的 `viewDidAppear`，返回资料库保留置顶布局。内容填入不替换导航容器。各标签页面通过原生 `UITab` 内容提供闭包按需创建。
 - **启动缓存与封面**：`tracks.json` 是唯一曲目索引，只保存元数据、封面键与背景色；`tracks.json.startup` 保存按内容去重的原始封面文件。既有启动索引首次导入后移除，原来内嵌的封面在缓存 actor 中分离；背景色继续复用 `artwork-backdrops.json`，新封面才计算。界面通过文件 URL 引用封面，按实际显示尺寸用 ImageIO 在后台生成缩略图，并共享内存缓存；播放器适配直接使用同一文件。后台扫描修复缺失的派生封面。这些缓存均可重建，音乐文件、歌单与队列的格式保持不变。
 - **播放**：`NowPlayingModel` 拥有队列与播放状态，恢复时仅还原队列、进度和暂停状态并注册系统媒体动作；首次播放才创建 `LocalPlaybackEngine` 和加载音频。系统媒体封面异步读取，取消旧请求后更新；相邻封面预取在播放或展开播放器时启动。`ReferencePlayerState` 只适配这个真实模型，不维护第二份演示队列或模拟时钟。
@@ -36,7 +37,7 @@
 
 ## 主页展示
 
-`Features/Home` 移植自 `NeoMusic_Experiment/OrangeCardDemo` 的 `HomeFeedView.swift`、`HomeFixtures.swift` 和 `HomeArtwork.swift`，保留 15 个栏目及固定展示数据。它不读写本地资料库，也不提供在线推荐、播放或详情服务。主页标签接入原有 `UITabBarController`，底部继续使用真实播放器；账户入口复用现有账户效果稿。
+`Features/Home` 移植自 `NeoMusic_Experiment/OrangeCardDemo` 的 `HomeFeedView.swift`、`HomeFixtures.swift` 和 `HomeArtwork.swift`，保留 15 个栏目及固定展示数据。它不读写本地资料库，也不提供在线推荐、播放或详情服务。主页标签接入原有 `UITabBarController`，底部继续使用真实播放器；右上角头像打开正式网易云账户页。
 
 横排使用 Apple 的 [`scrollTargetLayout` 与 `scrollTargetBehavior(.viewAligned)`](https://developer.apple.com/documentation/swiftui/view/scrolltargetbehavior(_:))，由系统处理手势、减速和卡片对齐。主页浅色外观及 248×330 pt 大卡、161 pt 专辑封面、20 pt 边距沿用实验页面。
 
@@ -78,6 +79,8 @@ xcodebuild -project NeoMusic.xcodeproj -scheme NeoMusic -configuration Release \
 
 按修改范围缩小到具体测试类即可。重包装的重点是播放器适配、队列、歌词、资料库恢复、持久化及导航；原预览 target 的有效测试已迁入 `NeoMusicTests`，直接使用正式组件。单元测试的歌曲和图片在测试中生成，部分 Metal 与系统 zoom 用例有运行环境要求。
 
+上述关闭签名的命令适用于注入凭据存储的账户单元测试。验证正式账户入口及真实 Keychain 读写时，模拟器构建须启用代码签名，移除 `CODE_SIGNING_ALLOWED=NO`；本轮已通过签名模拟器构建确认 Keychain 读取正常。
+
 导航 UI 测试需要既有的模拟器资料库。例如 `testNativeAlbumRowPlaybackMenusAndSwipes` 使用“塌陷于38°C的蓝”专辑及“湖畔、二人歌”；部分置顶测试需要 Sunrise 专辑。音乐文件不随仓库提供，全新模拟器不能直接视为具备这些测试条件。功能对照 scheme 还需要另外安装基线应用。测试时不要删除或替换用户的真机资料库。
 
 不运行测试、只需要模拟器构建时：
@@ -88,7 +91,7 @@ xcodebuild -project NeoMusic.xcodeproj -scheme NeoMusic -configuration Release \
   -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO build
 ```
 
-边界检查覆盖当前正式源码的导入归属，允许既有播放器依赖；网易云接入开始时再补相应来源边界。它不是对尚不存在的网易云服务或账号隔离的验收。
+边界检查覆盖全部 Swift 与 Objective-C 源文件，限制网易云网络和凭据代码归属 `Core/Netease`、WebKit 认证界面归属 `Features/Account`；App 只负责装配。通用播放器与本地资料库不得引用网易云类型或承担账户请求，网易云业务不得访问本地资料库和播放状态。既有播放器依赖继续按目录限制。
 
 ## CI 与 Release
 
@@ -120,7 +123,7 @@ git tag vX.Y.Z
 git push origin vX.Y.Z
 ```
 
-公开构建不启用账户效果稿、不带个人素材或签名凭据；IPA 需自行签名后安装。流程不提供 App Store / TestFlight 发布，也不改变当前私有取色实现。源码及依赖版本与对应标签一起保留，第三方许可和来源清单随应用打包。
+公开构建包含正式账户入口，不带个人素材、已登录会话或签名凭据；IPA 需自行签名后安装。流程不提供 App Store / TestFlight 发布，也不改变当前私有取色实现。源码及依赖版本与对应标签一起保留，第三方许可和来源清单随应用打包。
 
 ## 本地数据与签名
 
@@ -128,19 +131,35 @@ git push origin vX.Y.Z
 
 真机构建时在 Xcode 的 `NeoMusic` target → Signing & Capabilities 中选择本机开发团队，使用该团队可用的签名配置；也可在命令行传入本机签名设置。现有手机体验包使用的安装身份由本机打包步骤处理，不固化到共享工程。签名包、设备标识和个人音乐不能入库。
 
-## 账户效果稿例外
-
-用户要求暂时保留已确认的头像和账户页面，直至真实网易云账户接入。这是界面效果稿，不具备在线账户能力。
-
-- Debug 使用 `-accountReferencePreview` 启动参数，读取应用临时目录下的 `AccountReference`。
-- 私人 Release 体验包保留 `ACCOUNT_REFERENCE_PREVIEW` 编译条件，并在签名前放入外置 `AccountReference` 文件夹。
-- 文件夹中的 `profile.json`、`photo.png` 和 `account-symbol.png` 来自本机外部素材，不进入公开仓库。默认 Release 构建没有该编译条件或个人素材。
-
 本地歌单作者显示“我”，不把开发者的个人姓名作为所有用户的默认作者。
+
+## 网易云账户与隔离预览
+
+首轮账户业务位于 `Core/Netease`，以原生 EAPI 查询真实资料；Keychain actor 在后台读写 NeoMusic 专用记录，构造账户实例不触发网络或凭据读取。账户所有者管理恢复、重验、候选登录、退出和头像任务，取消后等待任务收尾再替换会话。协议来源见 [账户来源声明](../NeoMusic/Resources/NeteaseSourceNotices.txt)。
+
+头像使用专用原生 `URLCache` 按头像 URL 保存磁盘缓存，并按系统 HTTP 缓存策略刷新。`NeteaseAvatarSnapshotStore` 另将当前头像用 ImageIO 缩为最大 192 px PNG，保存到 Caches 的单条二进制显示快照；文件仅含用户 ID、头像 URL 和图片，不含昵称或凭据。账户初始化同步读取这一大小受限的文件，读取上限为 256 KiB；缩略图生成与原子写入由 `@concurrent` 在后台执行。Keychain 读出相同用户且仍有头像时保留初图，凭据缺失、用户变化或头像变为空时清除旧快照。
+
+头像恢复与账户网络校验并行，显示快照的保存归属已有头像任务。网易云会为同一用户、同一张图片轮换 CDN 地址；同一用户的 URL 更新保留当前头像，取消并等待旧请求收尾后按新 URL 刷新，新图成功返回后替换显示。请求与结果发布仍严格核对会话、用户 ID 和完整 URL，旧 URL 的迟到结果丢弃。成功切换至其他用户、退出、明确鉴权失效或头像变为空时清理缓存与快照；切换或退出失败保留原缓存。
+
+账户页面位于 `Features/Account`，正式构建中从主页或资料库右上角头像进入。未登录先显示账户页，点身份卡后在临时 WebKit 页面完成网易云官网认证；已登录显示真实昵称和头像，账户设置提供切换及退出。会话保存在 NeoMusic 专用 Keychain 项，切换成功后替换原账户，取消或失败保留原账户。退出只清理本机 NeoMusic 会话，本地音乐和歌单保持独立。
+
+未登录、已登录、账户设置三态原生效果已获用户确认。Debug 仍可通过启动参数查看隔离的内存状态：
+
+```sh
+xcrun simctl launch <模拟器 UUID> com.elsterlee.NeoMusic -neteaseAccountPreview signed-out
+xcrun simctl launch <模拟器 UUID> com.elsterlee.NeoMusic -neteaseAccountPreview signed-in
+xcrun simctl launch <模拟器 UUID> com.elsterlee.NeoMusic -neteaseAccountPreview settings
+```
+
+每次切换状态先结束上一次应用进程。隔离预览使用合成账户资料，登录和切换入口不发起认证，不访问真实 Keychain 或网络。正常启动进入正式应用，并执行账户恢复和前台重验。
+
+定向回归按影响选择 `NeteaseAccountTests`、`NeteaseAvatarSnapshotTests`、`NeteaseAvatarClientTests`、`NeteaseAccountClientTests` 与 `NeteaseCredentialStoreTests`；边界规则回归运行 `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/tests`。
+
+账户相关累计 63 项回归已有通过结果：最新 32 项账户回归通过，复用显示快照 7 项结果，本轮共 39 项；另复用头像客户端 9 项、账户客户端 8 项及凭据存储 7 项的通过结果。21 项入口／导航回归复用既有通过结果，覆盖 109 个源文件的模块边界扫描及 6 项边界规则回归通过，0 失败、0 跳过。回归覆盖 Keychain 等待期间的原生头像渲染、快照身份核对、192 px 缩略图持久化、退出／切换等待快照写入，以及同用户 CDN 地址轮换时保留头像、加载失败后的重试和旧 URL 迟到结果丢弃。显示快照版已通过真机 Release 构建、验签、覆盖安装和启动；App Launch 记录显示 75,227 字节快照在首帧前读取，读取耗时约 0.22 ms。前后各一次采样的系统初始化至首帧区间为 203.51 ms 和 196.14 ms，证据位于忽略目录 `build/netease-avatar-startup-20261103/`。
 
 ## 当前限制与后续准备
 
-- 网易云尚未接入。登录、浏览、搜索、播放和下载的具体范围需通过下一阶段调研确定，本轮不预建服务或注册框架。
+- 网易云账户首轮已按用户确认收尾并本地提交，包含真实账户闭环、启动头像恢复及同用户 CDN 地址轮换时的连续显示。歌单、推荐、搜索、在线播放及下载属于后续范围。
 - 专辑封面取色仍包含私有 `MPArtworkColorAnalyzer` 实验；本次整理不修改其实现，也不代表完成 App Store 发布验收。
 - 播放器连续交互、不同封面可读性及完整系统媒体能力仍按 [roadmap](roadmap.md) 的状态验收。
 - 首次公开从清理后的当前快照开始，旧开发历史仅保留在本地归档分支，不推送到公开仓库；根许可证为 [GPL-3.0](../LICENSE)。

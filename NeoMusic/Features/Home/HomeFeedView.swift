@@ -12,9 +12,6 @@ enum HomeMetrics {
 }
 
 struct HomeFeedView: View {
-    @State private var isAccountPresented = false
-    @State private var isAccountUnavailable = false
-
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 25) {
@@ -31,14 +28,6 @@ struct HomeFeedView: View {
         .background(.white)
         .scrollEdgeEffectStyle(.soft, for: .top)
         .preferredColorScheme(.light)
-        #if DEBUG || ACCOUNT_REFERENCE_PREVIEW
-        .sheet(isPresented: $isAccountPresented) { AccountReferencePage() }
-        #endif
-        .alert("账户暂未开放", isPresented: $isAccountUnavailable) {
-            Button("好", role: .cancel) {}
-        } message: {
-            Text("网易云账户功能正在筹备中。")
-        }
     }
 
     private var header: some View {
@@ -48,28 +37,10 @@ struct HomeFeedView: View {
                 .accessibilityAddTraits(.isHeader)
                 .accessibilityIdentifier("home.title")
             Spacer()
-            Button {
-                #if DEBUG || ACCOUNT_REFERENCE_PREVIEW
-                if AccountReferenceFixture.isEnabled {
-                    isAccountPresented = true
-                } else {
-                    isAccountUnavailable = true
-                }
-                #else
-                isAccountUnavailable = true
-                #endif
-            } label: {
-                Text("EL")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 38, height: 38)
-                    .background(LinearGradient(colors: [Color(red: 0.64, green: 0.78, blue: 0.87), Color(red: 0.40, green: 0.43, blue: 0.68)], startPoint: .top, endPoint: .bottom), in: Circle())
-                    .padding(3)
-                    .glassEffect(.regular.interactive(), in: .circle)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("账户")
-            .accessibilityIdentifier("home.account")
+            AccountButton(size: 38)
+                .padding(3)
+                .glassEffect(.regular.interactive(), in: .circle)
+                .accessibilityIdentifier("home.account")
         }
         .frame(height: 44)
         .padding(.horizontal, HomeMetrics.margin)

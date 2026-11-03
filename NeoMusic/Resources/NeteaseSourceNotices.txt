@@ -1,0 +1,14 @@
+NeoMusic NetEase account source notices
+
+The account transport's EAPI framing and AES-ECB encryption are adapted from
+NeoDizzy NeteaseClient.swift, which identifies MeloX NeteaseDirectClient.swift
+at commit 1fe5fbab3f554e8529c4847fc54281a472b7b61a as its source.
+https://github.com/youshen2/MeloX
+
+The official-site WebKit authentication flow is adapted from the same
+NeoDizzy / MeloX family. These portions remain under GNU GPL version 3.0.
+The full license accompanies the application as GPL-3.0.txt.
+
+NeoMusic limits transport to account validation, isolates website and API
+sessions, and supplies its own account lifecycle, credential storage,
+cancellation handling and native account presentation.

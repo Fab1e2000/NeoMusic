@@ -37,6 +37,7 @@ final class LibraryDetailNavigation: NSObject, UINavigationControllerDelegate {
             page.rootView = AnyView(content
             // Transfer app dependencies, not the parent hosting tree's transient
             // navigation/toolbar/interaction environment into a new page root.
+            .environment(environment[NeteaseAccount.self])
             .environment(\.collectionMenuActions, environment.collectionMenuActions)
             .environment(\.songMenuActions, environment.songMenuActions)
             .environment(\.songRowPlayback, environment.songRowPlayback)
