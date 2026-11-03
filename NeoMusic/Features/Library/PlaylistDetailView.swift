@@ -74,7 +74,6 @@ struct PlaylistDetailView: View {
                 .listRowSeparator(query.isEmpty || !visibleTracks.isEmpty ? .visible : .hidden, edges: .bottom)
                 .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
                 .alignmentGuide(.listRowSeparatorTrailing) { $0[.trailing] }
-            if library.loadingPlaylistIDs.contains(playlistID) { ProgressView("正在加载歌曲") }
             if let error = library.onlineErrors[playlistID] {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(error).font(.subheadline).foregroundStyle(.secondary)

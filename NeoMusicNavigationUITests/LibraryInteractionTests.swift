@@ -27,6 +27,12 @@ final class LibraryInteractionTests: XCTestCase {
         app.launch()
         let playlists = app.buttons["播放列表"].firstMatch
         XCTAssertTrue(playlists.waitForExistence(timeout: 10))
+        let pinned = app.staticTexts["喜爱歌曲"].firstMatch
+        XCTAssertTrue(pinned.waitForExistence(timeout: 5))
+        pinned.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).withOffset(CGVector(dx: 0, dy: -50)).tap()
+        let pinnedBack = app.navigationBars.buttons["BackButton"]
+        XCTAssertTrue(pinnedBack.waitForExistence(timeout: 5))
+        pinnedBack.tap()
         playlists.tap()
         let favorite = app.cells.containing(.staticText, identifier: "喜爱歌曲").firstMatch
         XCTAssertTrue(favorite.waitForExistence(timeout: 5))
@@ -42,6 +48,11 @@ final class LibraryInteractionTests: XCTestCase {
         let album = app.staticTexts["塌陷于38°C的蓝"].firstMatch
         XCTAssertTrue(album.waitForExistence(timeout: 5))
         let initial = album.frame
+        album.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .withOffset(CGVector(dx: 0, dy: -70)).press(forDuration: 0.8)
+        XCTAssertTrue(app.buttons["播放"].firstMatch.waitForExistence(timeout: 5))
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.80)).tap()
+        XCTAssertTrue(app.navigationBars["资料库"].waitForExistence(timeout: 5))
         album.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             .withOffset(CGVector(dx: 0, dy: -70)).tap()
         XCTAssertTrue(back.waitForExistence(timeout: 5))

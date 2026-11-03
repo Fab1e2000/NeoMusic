@@ -106,6 +106,7 @@ final class LibraryDetailNavigation: NSObject, UINavigationControllerDelegate {
     }
 
     fileprivate func updateColorScheme(_ scheme: ColorScheme?) {
+        navigationController?.navigationBar.overrideUserInterfaceStyle = scheme.map { UIUserInterfaceStyle($0) } ?? .unspecified
         if colorScheme != scheme { colorScheme = scheme }
     }
 }
@@ -119,7 +120,6 @@ struct LibraryNavigationContainer<Root: View>: View {
         LibraryNavigationControllerHost(navigation: navigation, root: root,
             destination: destination, initialPath: initialPath)
             .ignoresSafeArea()
-            .preferredColorScheme(navigation.colorScheme)
     }
 }
 
@@ -236,6 +236,7 @@ final class LibraryNavigationChrome: NSObject, UISearchResultsUpdating {
     }
     func setColorScheme(_ scheme: ColorScheme?) {
         colorScheme = scheme
+        controller?.overrideUserInterfaceStyle = scheme.map { UIUserInterfaceStyle($0) } ?? .unspecified
         guard let controller, let navigation = controller.navigationController,
               navigation.topViewController === controller else { return }
         (navigation.delegate as? LibraryDetailNavigation)?.updateColorScheme(scheme)

@@ -147,6 +147,15 @@ final class NavigationDiagnosticFile: Sendable {
             fields["barItemOrder"] = (bar.items ?? []).map(objectID).joined(separator: ",")
             fields["sourceController"] = identity(transitionSource)
             fields["targetController"] = identity(transitionTarget)
+            for (name, controller) in [("source", transitionSource), ("target", transitionTarget)] {
+                var ancestors: [[String: String]] = []
+                var view = controller?.viewIfLoaded
+                while let current = view {
+                    ancestors.append(viewState(current))
+                    view = current.superview
+                }
+                fields["\(name)ViewAncestors"] = json(ancestors)
+            }
             fields["reduceMotion"] = String(UIAccessibility.isReduceMotionEnabled)
             fields["applicationState"] = String(UIApplication.shared.applicationState.rawValue)
             fields["interactivePopState"] = navigation.interactivePopGestureRecognizer.map { String($0.state.rawValue) } ?? "none"
@@ -237,6 +246,7 @@ final class NavigationDiagnosticFile: Sendable {
         let layer = view.layer
         let presentation = layer.presentation()
         var result = ["id": objectID(view), "parent": objectID(view.superview), "window": objectID(view.window),
+            "sublayerTransform": String(describing: layer.sublayerTransform),
             "hidden": String(view.isHidden), "alpha": String(describing: view.alpha),
             "frame": NSCoder.string(for: view.frame), "bounds": NSCoder.string(for: view.bounds),
             "windowFrame": NSCoder.string(for: view.convert(view.bounds, to: view.window)),

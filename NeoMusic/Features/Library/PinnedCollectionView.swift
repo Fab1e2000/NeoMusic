@@ -3,7 +3,7 @@ import UIKit
 
 /// 首页置顶区使用单个原生集合视图；每个置顶项都是独立 cell。
 /// UIKit 负责菜单与交互式重排，资料库仍是置顶状态和顺序的唯一来源。
-struct PinnedCollectionView: UIViewControllerRepresentable {
+struct PinnedCollectionView: UIViewRepresentable {
     let items: [LibraryShelfItem]
     let isEditing: Bool
     @Binding var tapActions: [String: PinnedTapAction]
@@ -12,14 +12,11 @@ struct PinnedCollectionView: UIViewControllerRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    func makeUIViewController(context: Context) -> UICollectionViewController {
+    func makeUIView(context: Context) -> UICollectionView {
         let layout = UICollectionViewFlowLayout()
         layout.minimumInteritemSpacing = Metrics.spacing
         layout.minimumLineSpacing = Metrics.rowSpacing
-        let controller = UICollectionViewController(collectionViewLayout: layout)
-        controller.installsStandardGestureForInteractiveMovement = false
-        controller.loadViewIfNeeded()
-        let view = controller.collectionView!
+        let view = UICollectionView(frame: .zero, collectionViewLayout: layout)
         view.backgroundColor = .clear
         view.isScrollEnabled = false
         view.allowsMultipleSelection = false
@@ -30,18 +27,18 @@ struct PinnedCollectionView: UIViewControllerRepresentable {
         view.dropDelegate = context.coordinator
         view.dragInteractionEnabled = true
         context.coordinator.attach(to: view, initial: self, environment: context.environment)
-        return controller
+        return view
     }
 
-    func updateUIViewController(_ controller: UICollectionViewController, context: Context) {
+    func updateUIView(_ view: UICollectionView, context: Context) {
         context.coordinator.update(with: self, environment: context.environment)
     }
 
-    func sizeThatFits(_ proposal: ProposedViewSize, uiViewController: UICollectionViewController, context: Context) -> CGSize? {
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UICollectionView, context: Context) -> CGSize? {
         guard let width = proposal.width, width.isFinite, width > 0 else { return nil }
         let rows = (items.count + Metrics.columns - 1) / Metrics.columns
         guard rows > 0 else { return CGSize(width: width, height: 0) }
-        let height = Metrics.itemHeight(width: width, traits: uiViewController.traitCollection)
+        let height = Metrics.itemHeight(width: width, traits: uiView.traitCollection)
         return CGSize(width: width, height: CGFloat(rows) * height + CGFloat(rows - 1) * Metrics.rowSpacing)
     }
 

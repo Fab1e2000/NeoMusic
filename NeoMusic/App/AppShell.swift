@@ -39,10 +39,7 @@ struct AppShell<Library: View>: View {
         .moveToFolderSheet(playlistLibrary)
         .modifier(ClearQueueConfirmation(player: nowPlaying))
         .modifier(PlayerPopup(isPresented: $isPlayerPresented, isSuppressed: false,
-                              onClose: finishPlayerNavigation))
-        // Page-local environment values cannot style the enclosing UIKit bars.
-        // Share this preference with the native tab bar even during a zoom transition.
-        .preferredColorScheme(chromeColorScheme)
+                              onClose: finishPlayerNavigation, barColorScheme: chromeColorScheme))
         .environment(referencePlayer)
         .environment(referenceLibrary)
         .environment(makePlayerActions { route in

@@ -33,7 +33,7 @@ struct HomeFeedView: View {
             .toolbarMinimizationRestoration(.atScrollEdge, for: .navigationBar)
             .toolbarMinimizationSafeAreaAdjustment(.disabled, for: .navigationBar)
         }
-        .preferredColorScheme(.light)
+        .environment(\.colorScheme, .light)
     }
 }
 

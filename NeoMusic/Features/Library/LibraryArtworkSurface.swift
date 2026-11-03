@@ -7,40 +7,40 @@ extension EnvironmentValues {
 
 /// A real, cover-only UIKit surface for zoom. The existing SwiftUI artwork drawing
 /// is retained verbatim, including placeholder symbols, stroke and corner radius.
-struct LibraryArtworkSurface<Content: View>: UIViewControllerRepresentable {
+struct LibraryArtworkSurface<Content: View>: UIViewRepresentable {
     let content: Content
     let cornerRadius: CGFloat
     var isZoomAlignmentTarget = false
-    func makeUIViewController(context: Context) -> Controller { Controller() }
-    func updateUIViewController(_ controller: Controller, context: Context) {
-        controller.loadViewIfNeeded()
-        controller.view.layer.cornerRadius = cornerRadius
-        controller.view.clipsToBounds = true
-        (controller.view as? LibraryArtworkSurfaceView)?.isZoomAlignmentTarget = isZoomAlignmentTarget
-        controller.host.rootView = AnyView(content.libraryHostedAppearance(context.environment)
-            .environment(\.nativeArtworkSurfaceEnabled, false))
+
+    func makeUIView(context: Context) -> LibraryArtworkSurfaceView { LibraryArtworkSurfaceView() }
+
+    func updateUIView(_ view: LibraryArtworkSurfaceView, context: Context) {
+        view.layer.cornerRadius = cornerRadius
+        view.clipsToBounds = true
+        view.isZoomAlignmentTarget = isZoomAlignmentTarget
+        let configuration = UIHostingConfiguration {
+            content.libraryHostedAppearance(context.environment)
+                .environment(\.nativeArtworkSurfaceEnabled, false)
+        }.margins(.all, 0)
+        if let hosted = view.subviews.first as? any UIContentView {
+            hosted.configuration = configuration
+        } else {
+            let hosted = configuration.makeContentView()
+            hosted.backgroundColor = .clear
+            hosted.translatesAutoresizingMaskIntoConstraints = false
+            view.addSubview(hosted)
+            NSLayoutConstraint.activate([
+                hosted.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+                hosted.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+                hosted.topAnchor.constraint(equalTo: view.topAnchor),
+                hosted.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+            ])
+        }
     }
-    func sizeThatFits(_ proposal: ProposedViewSize, uiViewController: Controller, context: Context) -> CGSize? {
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: LibraryArtworkSurfaceView, context: Context) -> CGSize? {
         let side = proposal.width ?? proposal.height ?? 100
         return CGSize(width: side, height: proposal.height ?? side)
-    }
-    final class Controller: UIViewController {
-        let host = UIHostingController(rootView: AnyView(EmptyView()))
-        override func loadView() {
-            view = LibraryArtworkSurfaceView()
-            host.safeAreaRegions = []
-            addChild(host)
-            host.view.backgroundColor = .clear
-            host.view.translatesAutoresizingMaskIntoConstraints = false
-            view.addSubview(host.view)
-            NSLayoutConstraint.activate([
-                host.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-                host.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-                host.view.topAnchor.constraint(equalTo: view.topAnchor),
-                host.view.bottomAnchor.constraint(equalTo: view.bottomAnchor)
-            ])
-            host.didMove(toParent: self)
-        }
     }
 }
 final class LibraryArtworkSurfaceView: UIView {

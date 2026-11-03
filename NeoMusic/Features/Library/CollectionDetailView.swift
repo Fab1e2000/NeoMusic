@@ -587,8 +587,7 @@ private final class AlbumSongsController: UICollectionViewController {
     private var environment = EnvironmentValues()
     private var songsByID: [String: LibrarySongItem] = [:]
     private var source: UICollectionViewDiffableDataSource<Int, Item>!
-    // The cover contains UIViewControllerRepresentable, so it needs a real hosting
-    // controller rather than UIHostingConfiguration's view-only hosting.
+    // The album header shares its hosting environment with its controls.
     private let headerHost = UIHostingController(rootView: AnyView(EmptyView()))
 
     init() {

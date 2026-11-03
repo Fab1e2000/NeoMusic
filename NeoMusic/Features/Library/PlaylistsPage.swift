@@ -619,8 +619,7 @@ struct PlaylistsListView: View {
                     HStack(spacing: 10) {
                         Text(status).font(.caption).foregroundStyle(.secondary)
                         Spacer(minLength: 0)
-                        if library.isRefreshingOnline { ProgressView() }
-                        else if library.retryOnline != nil {
+                        if !library.isRefreshingOnline, library.retryOnline != nil {
                             Button("重试") { Task { await library.retryOnline?() } }.font(.caption)
                         }
                     }.padding(.horizontal, 20).padding(.vertical, 8)

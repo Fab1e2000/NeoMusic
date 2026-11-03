@@ -9,6 +9,7 @@ struct PlayerPopup: ViewModifier {
     @Binding var isPresented: Bool
     let isSuppressed: Bool
     let onClose: () -> Void
+    var barColorScheme: ColorScheme? = nil
 
     @Environment(\.accessibilityReduceMotion) private var reducesMotion
     @Environment(ReferencePlayerState.self) private var player
@@ -28,8 +29,9 @@ struct PlayerPopup: ViewModifier {
                     .statusBarHidden(isImmersive)
             }
             .popupBarStyle(.floatingCompact)
-            // Keep the bar's inherited appearance and dynamic colors so its glass
-            // and content can adapt together to the page underneath.
+            .popupBarCustomizer { bar in
+                bar.overrideUserInterfaceStyle = barColorScheme.map { UIUserInterfaceStyle($0) } ?? .unspecified
+            }
             .popupContentViewCustomizer { view in
                 view.overrideUserInterfaceStyle = .dark
                 view.popupInteractionGestureRecognizer.delegate = interactionDelegate

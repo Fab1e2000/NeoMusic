@@ -37,8 +37,8 @@ extension View {
 
 /// 用本地的承载容器给 UIKit 一个真实的交互表面，既不用遮挡 SwiftUI 按钮的覆盖层，
 /// 也不把交互挂到无关的祖先视图上。
-private struct NativeContextMenu<Content: View>: UIViewControllerRepresentable {
-    typealias Controller = NativeContextMenuController
+private struct NativeContextMenu<Content: View>: UIViewRepresentable {
+    typealias Surface = NativeContextMenuView
     let content: Content
     let identity: String
     let menu: () -> UIMenu
@@ -50,10 +50,10 @@ private struct NativeContextMenu<Content: View>: UIViewControllerRepresentable {
     let drag: NativeMenuDrag?
     let drop: NativeMenuDrop?
 
-    func makeUIViewController(context: Context) -> Controller { Controller() }
+    func makeUIView(context: Context) -> Surface { Surface() }
 
-    func updateUIViewController(_ controller: Controller, context: Context) {
-        controller.update(
+    func updateUIView(_ view: Surface, context: Context) {
+        view.update(
             content: AnyView(content.libraryHostedAppearance(context.environment)
                 .environment(\.nativeArtworkSurfaceEnabled, context.environment.nativeArtworkSurfaceEnabled)),
             identity: identity, menu: menu, preview: preview,
@@ -62,18 +62,18 @@ private struct NativeContextMenu<Content: View>: UIViewControllerRepresentable {
         )
     }
 
-    func sizeThatFits(_ proposal: ProposedViewSize, uiViewController: Controller, context: Context) -> CGSize? {
-        uiViewController.contentSize(fitting: proposal.replacingUnspecifiedDimensions(by: UIView.layoutFittingExpandedSize))
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: Surface, context: Context) -> CGSize? {
+        uiView.contentSize(fitting: proposal.replacingUnspecifiedDimensions(by: UIView.layoutFittingExpandedSize))
     }
 
-    static func dismantleUIViewController(_ controller: Controller, coordinator: ()) {
-        controller.invalidate()
+    static func dismantleUIView(_ view: Surface, coordinator: ()) {
+        view.invalidate()
     }
 
 }
 
-private final class NativeContextMenuController: UIViewController, UIContextMenuInteractionDelegate, UIDragInteractionDelegate, UIDropInteractionDelegate {
-    private let hosting = UIHostingController(rootView: AnyView(EmptyView()))
+private final class NativeContextMenuView: UIView, UIContextMenuInteractionDelegate, UIDragInteractionDelegate, UIDropInteractionDelegate {
+    private let hosted = UIHostingConfiguration { AnyView(EmptyView()) }.margins(.all, 0).makeContentView()
     private lazy var interaction = UIContextMenuInteraction(delegate: self)
     private lazy var dragInteraction = UIDragInteraction(delegate: self)
     private lazy var dropInteraction = UIDropInteraction(delegate: self)
@@ -90,38 +90,36 @@ private final class NativeContextMenuController: UIViewController, UIContextMenu
     private var tapAction: (() -> Void)?
     private var menuIsPresented = false
 
-    override func loadView() {
-        view = UIView()
-        view.backgroundColor = .clear
-        hosting.safeAreaRegions = []
-        addChild(hosting)
-        hosting.view.backgroundColor = .clear
-        hosting.view.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(hosting.view)
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+        hosted.backgroundColor = .clear
+        hosted.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(hosted)
         NSLayoutConstraint.activate([
-            hosting.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            hosting.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            hosting.view.topAnchor.constraint(equalTo: view.topAnchor),
-            hosting.view.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+            hosted.leadingAnchor.constraint(equalTo: leadingAnchor),
+            hosted.trailingAnchor.constraint(equalTo: trailingAnchor),
+            hosted.topAnchor.constraint(equalTo: topAnchor),
+            hosted.bottomAnchor.constraint(equalTo: bottomAnchor)
         ])
-        hosting.didMove(toParent: self)
         tap.cancelsTouchesInView = false
-        view.addGestureRecognizer(tap)
-        view.addInteraction(interaction)
+        addGestureRecognizer(tap)
+        addInteraction(interaction)
     }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     func update(content: AnyView, identity: String, menu: @escaping () -> UIMenu,
                 preview: @escaping () -> AnyView, previewSize: CGSize,
                 environment: EnvironmentValues, commit: @escaping (@escaping () -> UIView?) -> Void, tap: (() -> Void)?,
                 drag: NativeMenuDrag?, drop: NativeMenuDrop?) {
-        loadViewIfNeeded()
         self.drag = drag
         self.drop = drop
         dragInteraction.isEnabled = drag != nil
-        if drag != nil, !view.interactions.contains(where: { $0 === dragInteraction }) { view.addInteraction(dragInteraction) }
-        if drag == nil, view.interactions.contains(where: { $0 === dragInteraction }) { view.removeInteraction(dragInteraction) }
-        if drop != nil, !view.interactions.contains(where: { $0 === dropInteraction }) { view.addInteraction(dropInteraction) }
-        if drop == nil, view.interactions.contains(where: { $0 === dropInteraction }) { view.removeInteraction(dropInteraction) }
+        if drag != nil, !interactions.contains(where: { $0 === dragInteraction }) { addInteraction(dragInteraction) }
+        if drag == nil, interactions.contains(where: { $0 === dragInteraction }) { removeInteraction(dragInteraction) }
+        if drop != nil, !interactions.contains(where: { $0 === dropInteraction }) { addInteraction(dropInteraction) }
+        if drop == nil, interactions.contains(where: { $0 === dropInteraction }) { removeInteraction(dropInteraction) }
         if self.identity != identity {
             revision = UUID()
             interaction.dismissMenu()
@@ -134,12 +132,13 @@ private final class NativeContextMenuController: UIViewController, UIContextMenu
         self.environment = environment
         self.commit = commit
         self.tapAction = tap
-        hosting.rootView = content
-        hosting.view.invalidateIntrinsicContentSize()
+        hosted.configuration = UIHostingConfiguration { content }.margins(.all, 0)
+        hosted.invalidateIntrinsicContentSize()
     }
 
     func contentSize(fitting size: CGSize) -> CGSize {
-        hosting.sizeThatFits(in: size)
+        hosted.systemLayoutSizeFitting(CGSize(width: size.width, height: UIView.layoutFittingCompressedSize.height),
+                                      withHorizontalFittingPriority: .required, verticalFittingPriority: .fittingSizeLevel)
     }
 
     func invalidate() {
@@ -147,12 +146,12 @@ private final class NativeContextMenuController: UIViewController, UIContextMenu
         revision = UUID()
         menuIsPresented = false
         interaction.dismissMenu()
-        view.removeInteraction(interaction)
-        view.removeInteraction(dragInteraction)
-        view.removeInteraction(dropInteraction)
+        removeInteraction(interaction)
+        removeInteraction(dragInteraction)
+        removeInteraction(dropInteraction)
         drag = nil
         drop = nil
-        view.removeGestureRecognizer(tap)
+        removeGestureRecognizer(tap)
         commit = { _ in }
         tapAction = nil
         menu = { UIMenu(children: []) }
@@ -188,19 +187,19 @@ private final class NativeContextMenuController: UIViewController, UIContextMenu
     }
 
     func dropInteraction(_ interaction: UIDropInteraction, sessionDidEnter session: any UIDropSession) {
-        if dropInteraction(interaction, canHandle: session) { view.backgroundColor = .tertiarySystemFill }
+        if dropInteraction(interaction, canHandle: session) { backgroundColor = .tertiarySystemFill }
     }
 
     func dropInteraction(_ interaction: UIDropInteraction, sessionDidExit session: any UIDropSession) {
-        view.backgroundColor = .clear
+        backgroundColor = .clear
     }
 
     func dropInteraction(_ interaction: UIDropInteraction, sessionDidEnd session: any UIDropSession) {
-        view.backgroundColor = .clear
+        backgroundColor = .clear
     }
 
     func dropInteraction(_ interaction: UIDropInteraction, performDrop session: any UIDropSession) {
-        view.backgroundColor = .clear
+        backgroundColor = .clear
         guard dropInteraction(interaction, canHandle: session), let drop else { return }
         for item in session.items {
             guard let payload = item.localObject as? LocalPlaylistDrag else { continue }
@@ -212,7 +211,7 @@ private final class NativeContextMenuController: UIViewController, UIContextMenu
         let identity = identity
         return { [weak self] in
             guard let self, let identity, self.identity == identity else { return nil }
-            return self.viewIfLoaded?.libraryArtworkSource()
+            return self.libraryArtworkSource()
         }
     }
 
@@ -245,11 +244,11 @@ private final class NativeContextMenuController: UIViewController, UIContextMenu
 
     private func sourcePreview(for configuration: UIContextMenuConfiguration) -> UITargetedPreview? {
         guard identity != nil, configuration.identifier as? String == revision.uuidString,
-              hosting.view.window != nil else { return nil }
+              hosted.window != nil else { return nil }
         let parameters = UIPreviewParameters()
         parameters.backgroundColor = .systemBackground
-        parameters.visiblePath = UIBezierPath(roundedRect: hosting.view.bounds, cornerRadius: 12)
-        return UITargetedPreview(view: hosting.view, parameters: parameters)
+        parameters.visiblePath = UIBezierPath(roundedRect: hosted.bounds, cornerRadius: 12)
+        return UITargetedPreview(view: hosted, parameters: parameters)
     }
 
     func contextMenuInteraction(_ interaction: UIContextMenuInteraction,

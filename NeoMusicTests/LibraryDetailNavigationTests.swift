@@ -182,6 +182,9 @@ final class LibraryDetailNavigationTests: XCTestCase {
         mini.unregisterForTraitChanges(miniRegistration)
         try await settle()
         assertAppearance(.dark)
+        XCTAssertEqual(root.traitCollection.userInterfaceStyle, .light, "Detail appearance must not recolor the library behind zoom")
+        XCTAssertEqual(tabs.traitCollection.userInterfaceStyle, .light)
+        XCTAssertEqual(page.traitCollection.userInterfaceStyle, .dark)
         // UIKit reports the original page again when an interactive return is cancelled.
         bridge.navigationController(nav, willShow: root, animated: true)
         try await settle()
@@ -237,9 +240,15 @@ final class LibraryDetailNavigationTests: XCTestCase {
         window.overrideUserInterfaceStyle = .dark
         try await settle()
         assertAppearance(.light)
+        XCTAssertEqual(root.overrideUserInterfaceStyle, .unspecified, "The source library must not acquire a detail appearance override")
+        XCTAssertEqual(tabs.traitCollection.userInterfaceStyle, .dark)
+        XCTAssertEqual(page.traitCollection.userInterfaceStyle, .light)
         nav.popViewController(animated: false)
         try await settle()
         assertAppearance(.dark)
+        // Offscreen controllers inherit updated traits when UIKit restores their view hierarchy.
+        XCTAssertTrue(root.view.window === window)
+        XCTAssertEqual(root.traitCollection.userInterfaceStyle, .dark, "The restored library follows the current system appearance")
         page.chrome.setColorScheme(.light)
         try await settle()
         assertAppearance(.dark)

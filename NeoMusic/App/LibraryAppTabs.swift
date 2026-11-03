@@ -18,6 +18,7 @@ struct LibraryAppTabs<Library: View>: UIViewControllerRepresentable {
         let libraryController = navigation.makeNavigationController(root: AnyView(library), initialPath: initialPath)
         let controller = UITabBarController()
         controller.delegate = context.coordinator
+        context.coordinator.preferredStyle = colorScheme.map { UIUserInterfaceStyle($0) }
         controller.tabBarMinimizeBehavior = .onScrollDown
         func tab(_ id: AppTab, _ title: String, _ symbol: String) -> UITab {
             UITab(title: title, image: UIImage(systemName: symbol), identifier: id.rawValue) { _ in
@@ -30,7 +31,9 @@ struct LibraryAppTabs<Library: View>: UIViewControllerRepresentable {
         context.coordinator.searchIdentifier = search.identifier
         controller.tabs = [
             UITab(title: "主页", image: UIImage(named: "HomeTabIcon"), identifier: AppTab.home.rawValue) { _ in
-                UIHostingController(rootView: HomeFeedView().environment(account))
+                let home = UIHostingController(rootView: HomeFeedView().environment(account))
+                home.overrideUserInterfaceStyle = .light
+                return home
             },
             tab(.discover, "新发现", "square.grid.2x2.fill"),
             tab(.radio, "广播", "dot.radiowaves.left.and.right"),
@@ -39,8 +42,9 @@ struct LibraryAppTabs<Library: View>: UIViewControllerRepresentable {
         ]
         controller.selectedTab = controller.tabs.first { $0.identifier == selection.rawValue }
         // Resolve system appearance from the container when a page has no preference.
-        controller.registerForTraitChanges([UITraitUserInterfaceStyle.self]) { [weak navigationBar = libraryController.navigationBar] (controller: UITabBarController, _) in
-            Self.applyAppearance(controller.traitCollection.userInterfaceStyle, to: controller.tabBar,
+        controller.registerForTraitChanges([UITraitUserInterfaceStyle.self]) { [weak coordinator = context.coordinator, weak navigationBar = libraryController.navigationBar] (controller: UITabBarController, _) in
+            let style = coordinator?.preferredStyle ?? controller.traitCollection.userInterfaceStyle
+            Self.applyAppearance(style, to: controller.tabBar,
                                  navigationBar: navigationBar)
         }
         updateAppearance(of: controller)
@@ -48,6 +52,7 @@ struct LibraryAppTabs<Library: View>: UIViewControllerRepresentable {
     }
     func updateUIViewController(_ controller: UITabBarController, context: Context) {
         context.coordinator.selection = $selection
+        context.coordinator.preferredStyle = colorScheme.map { UIUserInterfaceStyle($0) }
         navigation.configure(environment: context.environment, destination: destination)
         let id = selection == .search ? context.coordinator.searchIdentifier : selection.rawValue
         if controller.selectedTab?.identifier != id {
@@ -64,7 +69,7 @@ struct LibraryAppTabs<Library: View>: UIViewControllerRepresentable {
     private static func applyAppearance(_ style: UIUserInterfaceStyle, to tabBar: UITabBar,
                                         navigationBar: UINavigationBar?) {
         // Navigation-item preferences can reach the bar only when zoom finishes.
-        // Give the actual bar the same resolved style as the enclosing shell.
+        // Resolve the bars independently so the source page keeps its own appearance.
         navigationBar?.overrideUserInterfaceStyle = style
         // Keep the bar view and UIKit-owned glass/items on the same resolved style.
         // A UIView override alone leaves the visible tab content unchanged until zoom ends.
@@ -86,6 +91,7 @@ struct LibraryAppTabs<Library: View>: UIViewControllerRepresentable {
     final class Coordinator: NSObject, UITabBarControllerDelegate {
         var selection: Binding<AppTab>
         var searchIdentifier = ""
+        var preferredStyle: UIUserInterfaceStyle?
         init(selection: Binding<AppTab>) { self.selection = selection }
         func tabBarController(_ tabBarController: UITabBarController, didSelectTab selectedTab: UITab, previousTab: UITab?) {
             let value = selectedTab.identifier == searchIdentifier ? AppTab.search : AppTab(rawValue: selectedTab.identifier)
