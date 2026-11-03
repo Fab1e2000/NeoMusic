@@ -159,8 +159,7 @@ struct CollectionMenuActions {
     var delete: (LibraryRoute) -> Void = { _ in }
     /// 显示操作完成的提示，例如“已喜爱”“已置顶”。
     var notify: (LibraryToast) -> Void = { _ in }
-    /// 减少推荐、移除下载：本地音乐暂无对应功能，先与 Apple Music 保持一致地列出。
-    var suggestLess: (LibraryRoute) -> Void = { _ in }
+    /// 移除下载：本地音乐暂无对应功能，先与 Apple Music 保持一致地列出。
     var removeDownload: (LibraryRoute) -> Void = { _ in }
     var download: (LibraryRoute) -> Void = { _ in }
 
@@ -273,10 +272,6 @@ struct CollectionMenuActions {
             ])
         }
         sections.append(queueItems(route))
-        // 对照 Apple Music：队列操作后单独一组“减少推荐”（已喜爱时没有），最后是移除下载与从资料库删除。
-        if !item.isFavorite {
-            sections.append([LibraryMenuItem(title: "减少推荐", systemImage: "hand.thumbsdown") { suggestLess(route) }])
-        }
         sections.append(removalItems(route))
         return sections
     }
@@ -432,7 +427,6 @@ struct SongMenuActions {
             libraryQueueMenuItems(playbackSource: playbackSource(),
                                   playNext: { playNext(song) }, playLater: { playLater(song) },
                                   notify: notify),
-            [LibraryMenuItem(title: "减少推荐", systemImage: "hand.thumbsdown")],
         ]
         var removal: [LibraryMenuItem] = []
         if isDownloaded { removal.append(LibraryMenuItem(title: "移除下载", systemImage: "xmark.circle", isDisabled: true, perform: removeDownload)) }

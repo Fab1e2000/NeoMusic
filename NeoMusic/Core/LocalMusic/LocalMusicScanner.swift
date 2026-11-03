@@ -15,6 +15,8 @@ struct LocalTrack: Codable, Sendable, Equatable, Identifiable {
     var albumDirectory: String? = nil
     var discNumber: Int? = nil
     var fingerprint: LocalFileFingerprint? = nil
+    var artworkKey: String? = nil
+    var artworkBackdrop: AlbumArtworkBackdrop? = nil
 }
 
 struct LocalFileFingerprint: Codable, Sendable, Equatable {
@@ -50,8 +52,10 @@ actor LocalMusicScanner {
             应用启动、回到前台或资料库下拉刷新时扫描。隐藏文件不会读取。
             文件移动或改名视为删除后新增；移除文件后，资料库会移除相应记录。
             """
-        let updatedInstructions = oldInstructions.replacingOccurrences(of: "优先使用内嵌标签和封面，也可在同目录放置 cover.jpg 或 folder.jpg。", with: "每个直接包含歌曲的文件夹为一张专辑，以文件夹名显示。歌曲信息优先读取内嵌标签；封面优先内嵌图片，也支持同目录 cover/folder 的 JPG、PNG 等图片（不区分大小写）。")
-        if !FileManager.default.fileExists(atPath: instructions.path) || (try? String(contentsOf: instructions, encoding: .utf8)) == oldInstructions {
+        let albumInstructions = oldInstructions.replacingOccurrences(of: "优先使用内嵌标签和封面，也可在同目录放置 cover.jpg 或 folder.jpg。", with: "每个直接包含歌曲的文件夹为一张专辑，以文件夹名显示。歌曲信息优先读取内嵌标签；封面优先内嵌图片，也支持同目录 cover/folder 的 JPG、PNG 等图片（不区分大小写）。")
+        let updatedInstructions = albumInstructions.replacingOccurrences(of: "应用启动、回到前台或资料库下拉刷新时扫描。", with: "应用启动或回到前台时自动扫描。")
+        let existingInstructions = try? String(contentsOf: instructions, encoding: .utf8)
+        if !FileManager.default.fileExists(atPath: instructions.path) || existingInstructions == oldInstructions || existingInstructions == albumInstructions {
             try updatedInstructions.write(to: instructions, atomically: true, encoding: .utf8)
         }
         return root

@@ -1,6 +1,5 @@
 import Foundation
 import Observation
-import UIKit
 
 struct ReferenceTrack: Identifiable, Hashable, Sendable {
     let id: String
@@ -84,16 +83,8 @@ struct ReferenceUpcomingTrack: Identifiable {
     func removeFromQueue(at index: Int) {
         model.removeQueueEntry(at: index)
     }
-    private static var coverCache: [String: (Data, URL)] = [:]
     private static func convert(_ song: LibrarySongItem) -> ReferenceTrack {
-        var url: URL?
-        if let data = song.artworkData {
-            if let cached = coverCache[song.id], cached.0 == data { url = cached.1 }
-            else {
-                let file = FileManager.default.temporaryDirectory.appendingPathComponent("neomusic-cover-" + UUID().uuidString)
-                if (try? data.write(to: file, options: .atomic)) != nil { coverCache[song.id] = (data, file); url = file }
-            }
-        }
-        return .init(id: song.id, title: song.title, artists: song.artist, albumTitle: song.album, coverURL: url, duration: Double(song.duration))
+        .init(id: song.id, title: song.title, artists: song.artist, albumTitle: song.album,
+              coverURL: song.artworkURL, duration: Double(song.duration))
     }
 }

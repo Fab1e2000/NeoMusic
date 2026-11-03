@@ -5,7 +5,7 @@ import MediaPlayer
 /// 本地播放、队列及恢复状态；URL 由资料库注入，不持有平台实现。
 @MainActor @Observable
 final class NowPlayingModel {
-    enum RepeatMode: String, Codable { case off, all, one }
+    enum RepeatMode: String, Codable, Sendable { case off, all, one }
 
     private(set) var queue: [LibrarySongItem]
     private(set) var currentIndex: Int
@@ -13,7 +13,7 @@ final class NowPlayingModel {
     private var originalOrder: [UUID] = []
     private var applyingState = false
     var isPlaying: Bool
-    var elapsed: Double { didSet { if !updatingTime && !applyingState { audio.seek(to: elapsed); saveQueue(); updateNowPlaying() } } }
+    var elapsed: Double { didSet { if !updatingTime && !applyingState { audio?.seek(to: elapsed); saveQueue(); updateNowPlaying() } } }
     var volume = 1.0 // Compatibility only; the native volume control adjusts system volume.
     var repeatMode = RepeatMode.all { didSet { if !applyingState { prepareNext() }; saveQueue() } }
     var isShuffled = false { didSet {
@@ -52,11 +52,14 @@ final class NowPlayingModel {
 
     var hasCurrent: Bool { queue.indices.contains(currentIndex) }
     var current: LibrarySongItem { hasCurrent ? queue[currentIndex] : LibrarySongItem(id: "", title: "未在播放", artist: "", album: "", albumArtist: "", trackNumber: 0, artwork: .missing) }
-    var duration: Double { audio.duration > 0 ? audio.duration : Double(max(current.duration, 1)) }
-    var isLoading: Bool { audio.isLoading }
-    func spectrumLevels() -> [Float] { audio.spectrumLevels() }
-    var isCrossfadeEnabled: Bool { audio.crossfadeEnabled }
-    func toggleCrossfade() { audio.crossfadeEnabled.toggle(); saveQueue() }
+    var duration: Double {
+        if let duration = audio?.duration, duration > 0 { return duration }
+        return Double(max(current.duration, 1))
+    }
+    var isLoading: Bool { audio?.isLoading ?? false }
+    func spectrumLevels() -> [Float] { audio?.spectrumLevels() ?? Array(repeating: 0, count: 5) }
+    private(set) var isCrossfadeEnabled = false
+    func toggleCrossfade() { isCrossfadeEnabled.toggle(); audio?.crossfadeEnabled = isCrossfadeEnabled; saveQueue() }
 
     var previous: LibrarySongItem? { queue.indices.contains(currentIndex - 1) ? queue[currentIndex - 1] : nil }
     var next: LibrarySongItem? { queue.indices.contains(currentIndex + 1) ? queue[currentIndex + 1] : nil }
@@ -64,7 +67,7 @@ final class NowPlayingModel {
     /// 待播部分里还有手动加入的歌曲。
     var hasUserQueuedUpcoming: Bool { entryIDs.dropFirst(min(currentIndex + 1, entryIDs.count)).contains { userQueuedIDs.contains($0) } }
 
-    func togglePlayback() { guard hasCurrent else { return }; isPlaying.toggle(); if isPlaying { if loadedEntry == entryIDs[currentIndex], audio.error == nil { audio.play() } else { startCurrent(at: elapsed) } } else { audio.pause(); saveQueue(); updateNowPlaying() } }
+    func togglePlayback() { guard hasCurrent else { return }; isPlaying.toggle(); if isPlaying { if loadedEntry == entryIDs[currentIndex], audio?.error == nil { audio?.play() } else { startCurrent(at: elapsed) } } else { audio?.pause(); saveQueue(); updateNowPlaying() } }
 
     func skipForward() {
         guard next != nil else { if repeatMode == .all && hasCurrent { select(0) }; return }
@@ -86,7 +89,7 @@ final class NowPlayingModel {
         // occurrence and the player still owns the current occurrence.
         if index != currentIndex, hasCurrent,
            loadedEntry == entryIDs[currentIndex], preparedEntry == entryIDs[index],
-           audio.advancePrepared() {
+           audio?.advancePrepared() == true {
             return
         }
         currentIndex = index
@@ -246,7 +249,8 @@ final class NowPlayingModel {
         case .one: .off
         }
     }
-    private let audio = LocalPlaybackEngine()
+    private var audio: LocalPlaybackEngine?
+    var hasAudioEngine: Bool { audio != nil }
     @ObservationIgnored private var mediaSession: PlaybackMediaSession?
     @ObservationIgnored private var loadedEntry: UUID?
     @ObservationIgnored private var preparedEntry: UUID?
@@ -258,7 +262,7 @@ final class NowPlayingModel {
     var errorMessage: String?
     private(set) var unavailableIDs: Set<String> = []
 
-    struct SavedQueue: Codable {
+    struct SavedQueue: Codable, Sendable {
         var ids: [String]
         var index: Int
         var elapsed: Double
@@ -279,9 +283,16 @@ final class NowPlayingModel {
             pause: { [weak self] in if let self, self.isPlaying { self.togglePlayback() } },
             next: { [weak self] in self?.skipForward() }, previous: { [weak self] in self?.skipBackward() },
             seek: { [weak self] in self?.elapsed = $0 })
-        audio.onStateChange = { [weak self] in self?.syncTransport() }
-        audio.onTimeChange = { [weak self] in self?.syncTransport(publishNowPlaying: false) }
-        audio.onAdvanced = { [weak self] in
+    }
+
+    private func ensureAudioEngine() -> LocalPlaybackEngine {
+        if let audio { return audio }
+        let engine = LocalPlaybackEngine()
+        engine.crossfadeEnabled = isCrossfadeEnabled
+        audio = engine
+        engine.onStateChange = { [weak self] in self?.syncTransport() }
+        engine.onTimeChange = { [weak self] in self?.syncTransport(publishNowPlaying: false) }
+        engine.onAdvanced = { [weak self] in
             guard let self, let entry = self.preparedEntry, let index = self.entryIDs.firstIndex(of: entry) else { return }
             self.currentIndex = index
             self.loadedEntry = entry
@@ -289,12 +300,13 @@ final class NowPlayingModel {
             self.prepareNext()
             self.saveQueue()
         }
-        audio.onFinished = { [weak self] in
+        engine.onFinished = { [weak self] in
             guard let self else { return }
             if self.repeatMode == .one { self.isPlaying = true; self.startCurrent() }
             else if let index = self.nextPlaybackIndex { self.isPlaying = true; self.select(index) }
             else { self.syncTransport() }
         }
+        return engine
     }
 
     private var nextPlaybackIndex: Int? {
@@ -304,13 +316,13 @@ final class NowPlayingModel {
         return repeatMode == .all ? 0 : nil
     }
     private func prepareNext() {
-        guard !applyingState, !configuringAudio else { return }
+        guard !applyingState, !configuringAudio, audio != nil else { return }
         let next = nextPlaybackIndex
         preparedEntry = next.map { entryIDs[$0] }
-        audio.prepareNext(url: next.flatMap { resolveURL?(queue[$0].id) })
+        audio?.prepareNext(url: next.flatMap { resolveURL?(queue[$0].id) })
     }
     private func syncTransport(publishNowPlaying: Bool = true) {
-        guard !configuringAudio else { return }
+        guard !configuringAudio, let audio else { return }
         let stopped = isPlaying && !audio.isPlaying
         updatingTime = true
         elapsed = audio.elapsed
@@ -326,13 +338,14 @@ final class NowPlayingModel {
         configuringAudio = true
         defer { configuringAudio = false; syncTransport(); saveQueue() }
         guard hasCurrent, let url = resolveURL(current.id) else {
-            audio.stop(); loadedEntry = nil; errorMessage = "文件已移除或不可用"; return
+            audio?.stop(); loadedEntry = nil; isPlaying = false
+            errorMessage = "文件已移除或不可用"; updateNowPlaying(); return
         }
         errorMessage = nil
         loadedEntry = entryIDs[currentIndex]
         let next = nextPlaybackIndex
         preparedEntry = next.map { entryIDs[$0] }
-        audio.load(url: url, nextURL: next.flatMap { resolveURL(queue[$0].id) }, position: position, autoplay: autoplay)
+        ensureAudioEngine().load(url: url, nextURL: next.flatMap { resolveURL(queue[$0].id) }, position: position, autoplay: autoplay)
     }
 
     func saveQueue() {
@@ -346,20 +359,26 @@ final class NowPlayingModel {
     }
 
     @discardableResult
-    func restoreQueue(songs: [LibrarySongItem], requireCompleteLibrary: Bool = false) -> Bool {
-        guard let persistenceURL, FileManager.default.fileExists(atPath: persistenceURL.path) else { return true }
+    func restoreQueue(songs: [LibrarySongItem], restoredState: Result<SavedQueue?, Error>? = nil) -> Bool {
+        guard let persistenceURL else { return true }
         do {
-            let state = try JSONDecoder().decode(SavedQueue.self, from: Data(contentsOf: persistenceURL))
+            let saved: SavedQueue?
+            if let restoredState { saved = try restoredState.get() }
+            else { saved = FileManager.default.fileExists(atPath: persistenceURL.path) ? try JSONDecoder().decode(SavedQueue.self, from: Data(contentsOf: persistenceURL)) : nil }
+            guard let state = saved else { return true }
             let map = Dictionary(songs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-            if requireCompleteLibrary, !state.ids.allSatisfy({ map[$0] != nil }) { return false }
             applyingState = true
             defer { applyingState = false }
-            queue = state.ids.map { map[$0] ?? LibrarySongItem(id: $0, title: URL(fileURLWithPath: $0).deletingPathExtension().lastPathComponent, artist: "文件不可用", album: "", albumArtist: "", trackNumber: 0, artwork: .missing) }
+            configuringAudio = true
+            audio?.stop()
+            configuringAudio = false
+            queue = state.ids.map { map[$0] ?? .unavailable($0) }
             entryIDs = state.entryIDs?.count == queue.count && Set(state.entryIDs ?? []).count == queue.count ? state.entryIDs! : queue.map { _ in UUID() }
             originalOrder = state.originalOrder ?? entryIDs
             userQueuedIDs = state.userQueuedIDs ?? []
             currentIndex = min(max(0, state.index), max(0, queue.count - 1))
-            audio.crossfadeEnabled = state.crossfadeEnabled ?? false
+            isCrossfadeEnabled = state.crossfadeEnabled ?? false
+            audio?.crossfadeEnabled = isCrossfadeEnabled
             repeatMode = state.repeatMode
             // Restore the saved order without shuffling a second time.
             let savedOrder = queue
@@ -368,8 +387,11 @@ final class NowPlayingModel {
             sourceTitle = state.source
             isPlaying = false
             elapsed = state.elapsed.isFinite ? max(0, state.elapsed) : 0
-            reconcileAvailability(songs: songs)
-            if hasCurrent { startCurrent(at: elapsed) }
+            unavailableIDs = Set(state.ids).subtracting(map.keys)
+            errorMessage = nil
+            updateNowPlaying()
+            loadedEntry = nil
+            preparedEntry = nil
             return true
         } catch {
             errorMessage = "播放状态恢复失败：" + error.localizedDescription
@@ -379,21 +401,25 @@ final class NowPlayingModel {
 
     func reconcileAvailability(songs: [LibrarySongItem]) {
         let refreshed = Dictionary(songs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        queue = queue.map { refreshed[$0.id] ?? $0 }
+        let updated = queue.map { refreshed[$0.id] ?? $0 }
         let ids = Set(refreshed.keys)
-        unavailableIDs = Set(queue.map(\.id)).subtracting(ids)
-        if hasCurrent && unavailableIDs.contains(current.id) { audio.stop(); loadedEntry = nil; isPlaying = false; errorMessage = "当前文件已移除" }
-        updateNowPlaying()
+        let unavailable = Set(queue.map(\.id)).subtracting(ids)
+        let changed = updated != queue || unavailable != unavailableIDs
+        if updated != queue { queue = updated }
+        if hasCurrent, unavailableIDs.contains(current.id), !unavailable.contains(current.id) { errorMessage = nil }
+        if unavailable != unavailableIDs { unavailableIDs = unavailable }
+        if hasCurrent && unavailableIDs.contains(current.id) { audio?.stop(); loadedEntry = nil; isPlaying = false; errorMessage = "当前文件已移除" }
+        if changed { updateNowPlaying() }
     }
 
     func shutdownPlayback() {
-        audio.onStateChange = nil; audio.onTimeChange = nil; audio.onAdvanced = nil; audio.onFinished = nil
-        audio.shutdown(); mediaSession?.shutdown(); mediaSession = nil
+        audio?.onStateChange = nil; audio?.onTimeChange = nil; audio?.onAdvanced = nil; audio?.onFinished = nil
+        audio?.shutdown(); audio = nil; mediaSession?.shutdown(); mediaSession = nil
         loadedEntry = nil; preparedEntry = nil; isPlaying = false
     }
 
     private func updateNowPlaying() {
         guard hasCurrent else { return }
-        mediaSession?.update(.init(title: current.title, artist: current.artist, album: current.album, artwork: current.artworkData), elapsed: elapsed, duration: duration, playing: isPlaying)
+        mediaSession?.update(.init(title: current.title, artist: current.artist, album: current.album, artwork: current.artworkData, artworkURL: current.artworkURL), elapsed: elapsed, duration: duration, playing: isPlaying)
     }
 }

@@ -444,7 +444,6 @@ final class LibraryDetailNavigationTests: XCTestCase {
         window.rootViewController = UIHostingController(rootView: LibraryNavigationContainer(
             navigation: bridge,
             root: LibraryHomeView(pinned: [.init(id: "favorites", title: "喜爱歌曲", artwork: .favorites, route: .playlist("favorites"))], recentlyAdded: [], playlistLibrary: library)
-                .refreshable {}
                 .safeAreaInset(edge: .bottom) { Text("status") }
                 .libraryToasts(LibraryToastCenter())
                 .playlistDeletionConfirmation(library),

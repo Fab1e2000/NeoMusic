@@ -8,10 +8,13 @@ import UIKit
         var artist: String
         var album: String
         var artwork: Data?
+        var artworkURL: URL? = nil
     }
     private var targets: [(MPRemoteCommand, Any)] = []
     private var artworkData: Data?
     private var artwork: MPMediaItemArtwork?
+    private var artworkURL: URL?
+    private var artworkTask: Task<Void, Never>?
 
     init(play: @escaping @MainActor () -> Void, pause: @escaping @MainActor () -> Void,
          next: @escaping @MainActor () -> Void, previous: @escaping @MainActor () -> Void,
@@ -32,10 +35,21 @@ import UIKit
     }
 
     func update(_ metadata: Metadata, elapsed: Double, duration: Double, playing: Bool) {
-        if artworkData != metadata.artwork {
+        if artworkData != metadata.artwork || artworkURL != metadata.artworkURL {
+            artworkTask?.cancel()
+            artworkURL = metadata.artworkURL
             artworkData = metadata.artwork
             artwork = metadata.artwork.flatMap(UIImage.init(data:)).map { image in
                 MPMediaItemArtwork(boundsSize: image.size) { @Sendable _ in image }
+            }
+            if let url = metadata.artworkURL {
+                artworkTask = Task { [weak self] in
+                    guard let image = await LocalArtworkImages.load(url, pixels: 512), !Task.isCancelled,
+                          let self, self.artworkURL == url else { return }
+                    let artwork = MPMediaItemArtwork(boundsSize: image.size) { @Sendable _ in image }
+                    self.artwork = artwork
+                    MPNowPlayingInfoCenter.default().nowPlayingInfo?[MPMediaItemPropertyArtwork] = artwork
+                }
             }
         }
         var info: [String: Any] = [MPMediaItemPropertyTitle: metadata.title,
@@ -47,6 +61,7 @@ import UIKit
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
     }
     func shutdown() {
+        artworkTask?.cancel(); artworkTask = nil; artworkURL = nil
         targets.forEach { $0.0.removeTarget($0.1) }; targets.removeAll()
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
         artwork = nil; artworkData = nil

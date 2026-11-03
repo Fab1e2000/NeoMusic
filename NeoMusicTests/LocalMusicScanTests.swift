@@ -149,94 +149,115 @@ final class LocalLibraryTrackCacheTests: XCTestCase, @unchecked Sendable {
         }
     }
 
-    func testStartupSnapshotSharesArtworkAndRestoresEveryTrackField() async throws {
+    func testMetadataIndexSharesArtworkWithoutEmbeddingImageBytes() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appendingPathComponent("tracks.json")
         let original = tracks()
         let cache = LocalLibraryTrackCache()
         try await cache.prepare(documents: directory, store: directory)
-        try await cache.write(original, to: url)
-        let snapshotDirectory = url.appendingPathExtension("startup")
-        let files = try FileManager.default.contentsOfDirectory(at: snapshotDirectory, includingPropertiesForKeys: nil)
+        let saved = try await cache.write(original, to: url)
+        let artworkDirectory = url.appendingPathExtension("startup")
+        let files = try FileManager.default.contentsOfDirectory(at: artworkDirectory, includingPropertiesForKeys: nil)
         XCTAssertEqual(files.filter { $0.pathExtension == "image" }.count, 1)
-        let snapshotData = try Data(contentsOf: snapshotDirectory.appendingPathComponent("snapshot.json"))
-        XCTAssertLessThan(snapshotData.count, 4_000, "The launch index must not embed the original artwork")
-        let restarted = LocalLibraryTrackCache()
-        let restored = try await restarted.read(from: url)
-        XCTAssertEqual(restored, original)
-        XCTAssertEqual(try JSONDecoder().decode([LocalTrack].self, from: Data(contentsOf: url)), original)
-
-        // Changes to the original store invalidate the derived snapshot, including removed artwork.
-        let changed = [original[2]]
-        try JSONEncoder().encode(changed).write(to: url, options: .atomic)
-        let refreshed = try await restarted.read(from: url)
-        XCTAssertEqual(refreshed, changed)
-        try await restarted.write(changed, to: url)
-        let remaining = try FileManager.default.contentsOfDirectory(at: snapshotDirectory, includingPropertiesForKeys: nil)
-        XCTAssertTrue(remaining.filter { $0.pathExtension == "image" }.isEmpty)
-        let nextLaunch = try await LocalLibraryTrackCache().read(from: url)
-        XCTAssertEqual(nextLaunch, changed)
-
+        XCTAssertFalse(FileManager.default.fileExists(atPath: artworkDirectory.appendingPathComponent("snapshot.json").path))
+        let index = try Data(contentsOf: url)
+        XCTAssertLessThan(index.count, 4_000)
+        XCTAssertTrue(saved.allSatisfy { $0.artworkData == nil })
+        XCTAssertEqual(saved[0].artworkKey, saved[1].artworkKey)
+        for (input, output) in zip(original, saved) {
+            var expected = input
+            expected.artworkData = nil
+            expected.artworkKey = output.artworkKey
+            XCTAssertEqual(output, expected)
+            if let key = output.artworkKey {
+                XCTAssertEqual(try Data(contentsOf: artworkDirectory.appendingPathComponent(key + ".image")), input.artworkData)
+            }
+        }
+        let restored = try await LocalLibraryTrackCache().read(from: url)
+        XCTAssertEqual(restored, saved)
+        XCTAssertEqual(try JSONDecoder().decode([LocalTrack].self, from: index), saved)
         try FileManager.default.removeItem(at: url)
-        let missing = try await LocalLibraryTrackCache().read(from: url)
-        XCTAssertNil(missing, "A derived snapshot cannot revive a missing source store")
-    }
-
-    func testDamagedOrUnwritableStartupSnapshotFallsBackToOriginalStore() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let url = directory.appendingPathComponent("tracks.json")
-        let snapshotDirectory = url.appendingPathExtension("startup")
-        let original = tracks()
-        let cache = LocalLibraryTrackCache()
-        try await cache.prepare(documents: directory, store: directory)
-        try await cache.write(original, to: url)
-        let files = try FileManager.default.contentsOfDirectory(at: snapshotDirectory, includingPropertiesForKeys: nil)
-        let artwork = try XCTUnwrap(files.first { $0.pathExtension == "image" })
-        try FileManager.default.removeItem(at: artwork)
-        let afterMissingArtwork = try await LocalLibraryTrackCache().read(from: url)
-        XCTAssertEqual(afterMissingArtwork, original)
-        try Data("corrupt index".utf8).write(to: snapshotDirectory.appendingPathComponent("snapshot.json"))
-        let afterCorruptIndex = try await LocalLibraryTrackCache().read(from: url)
-        XCTAssertEqual(afterCorruptIndex, original)
-
-        try FileManager.default.removeItem(at: snapshotDirectory)
-        try Data().write(to: snapshotDirectory)
-        let restarted = LocalLibraryTrackCache()
-        let restored = try await restarted.read(from: url)
-        XCTAssertEqual(restored, original)
-        try await restarted.write(original, to: url)
-        XCTAssertEqual(try JSONDecoder().decode([LocalTrack].self, from: Data(contentsOf: url)), original)
-    }
-
-    func testRoundTripPreservesOriginalArtworkAndReportsInvalidFiles() async throws {
-        let documents = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: documents) }
-        let store = documents.appendingPathComponent("state")
-        let url = store.appendingPathComponent("tracks.json")
-        let cache = LocalLibraryTrackCache()
-        try await cache.prepare(documents: documents, store: store)
         let missing = try await cache.read(from: url)
         XCTAssertNil(missing)
-        let track = LocalTrack(id: "album/song.flac", title: "Song", artist: "Artist", album: "Album",
-            albumArtist: "Artist", trackNumber: 1, duration: 123, artworkData: Data(repeating: 137, count: 2_000_000),
-            addedDate: .distantPast, albumDirectory: "album", discNumber: 2)
-        try await cache.write([track], to: url)
-        let restored = try await cache.read(from: url)
-        XCTAssertEqual(restored, [track])
-        // Existing readers continue to consume the exact same stored schema.
-        XCTAssertEqual(try JSONDecoder().decode([LocalTrack].self, from: Data(contentsOf: url)), [track])
-        try Data("broken".utf8).write(to: url)
-        do { _ = try await cache.read(from: url); XCTFail("Corrupt cache must report failure") }
+    }
+
+    func testMissingImageDoesNotBlockMetadataRestoreAndIsRepairedByScan() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("tracks.json")
+        let cache = LocalLibraryTrackCache()
+        try await cache.prepare(documents: directory, store: directory)
+        let saved = try await cache.write(tracks(), to: url)
+        let key = try XCTUnwrap(saved[0].artworkKey)
+        try FileManager.default.removeItem(at: url.appendingPathExtension("startup").appendingPathComponent(key + ".image"))
+        let restored = try await LocalLibraryTrackCache().read(from: url)
+        XCTAssertEqual(restored, saved, "Startup must read metadata independently of image availability")
+        let reusable = await cache.reusableTracks(saved, at: url)
+        XCTAssertNil(reusable[0].fingerprint)
+        XCTAssertNil(reusable[1].fingerprint)
+        XCTAssertEqual(reusable[2].fingerprint, saved[2].fingerprint)
+        let repaired = try await cache.write(tracks(), to: url)
+        XCTAssertEqual(repaired, saved)
+        XCTAssertEqual(try Data(contentsOf: url.appendingPathExtension("startup").appendingPathComponent(key + ".image")), tracks()[0].artworkData)
+    }
+
+    func testLegacySnapshotImportsColorsAndImageReferencesWithoutReadingImages() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent("tracks.json")
+        let original = tracks()
+        let source = try JSONEncoder().encode(original)
+        try source.write(to: url)
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        let modified = try XCTUnwrap(attributes[.modificationDate] as? Date)
+        let artworkDirectory = url.appendingPathExtension("startup")
+        try FileManager.default.createDirectory(at: artworkDirectory, withIntermediateDirectories: true)
+        var entries: [[String: Any]] = []
+        for track in original {
+            var metadata = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(track)) as? [String: Any])
+            metadata.removeValue(forKey: "artworkData")
+            var entry: [String: Any] = ["metadata": metadata]
+            if track.artworkData != nil { entry["artworkKey"] = "shared-cover" }
+            entries.append(entry)
+        }
+        let snapshot: [String: Any] = ["version": 1, "source": ["size": source.count, "modified": modified.timeIntervalSinceReferenceDate], "tracks": entries]
+        try JSONSerialization.data(withJSONObject: snapshot).write(to: artworkDirectory.appendingPathComponent("snapshot.json"))
+        let color = AlbumArtworkBackdrop(red: 0.1, green: 0.2, blue: 0.3)
+        let colors: [String: Any] = ["version": 1, "colors": ["shared-cover": ["red": color.red, "green": color.green, "blue": color.blue]]]
+        try JSONSerialization.data(withJSONObject: colors).write(to: directory.appendingPathComponent("artwork-backdrops.json"))
+        let cache = LocalLibraryTrackCache()
+        let read = try await cache.read(from: url)
+        let restored = try XCTUnwrap(read)
+        XCTAssertEqual(restored.map(\.id), original.map(\.id))
+        XCTAssertEqual(restored[0].artworkBackdrop, color)
+        XCTAssertEqual(restored[0].artworkKey, "shared-cover")
+        XCTAssertTrue(restored.allSatisfy { $0.artworkData == nil })
+        XCTAssertEqual(try Data(contentsOf: url), source, "Reading must leave the previous store intact")
+        try await cache.write(restored, to: url)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: artworkDirectory.appendingPathComponent("snapshot.json").path))
+        XCTAssertLessThan(try Data(contentsOf: url).count, 4_000)
+    }
+
+    func testCorruptIndexAndUnwritableArtworkReportFailureWithoutReplacingMetadata() async throws {
+        let documents = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: documents) }
+        let url = documents.appendingPathComponent("tracks.json")
+        let cache = LocalLibraryTrackCache()
+        try await cache.prepare(documents: documents, store: documents)
+        let original = Data("broken index".utf8)
+        try original.write(to: url)
+        do { _ = try await cache.read(from: url); XCTFail("Corrupt index must report failure") }
         catch is DecodingError {} catch { XCTFail("Unexpected error: \(error)") }
-        let invalidDestination = store.appendingPathComponent("missing/tracks.json")
-        do { try await cache.write([track], to: invalidDestination); XCTFail("Write failure must propagate") }
+        try Data().write(to: url.appendingPathExtension("startup"))
+        do { try await cache.write(tracks(), to: url); XCTFail("Artwork failure must propagate") }
         catch {}
-        // A failed write does not prevent a subsequent successful refresh.
-        try await cache.write([track], to: url)
-        let retried = try await cache.read(from: url)
-        XCTAssertEqual(retried, [track])
+        XCTAssertEqual(try Data(contentsOf: url), original)
+        try FileManager.default.removeItem(at: url.appendingPathExtension("startup"))
+        let written = try await cache.write(tracks(), to: url)
+        let restored = try await cache.read(from: url)
+        XCTAssertEqual(restored, written)
     }
 
     func testCancelledCacheWorkLeavesExistingFileUntouched() async throws {

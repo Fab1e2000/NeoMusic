@@ -111,7 +111,7 @@ final class LocalLibraryRuntimeTests: XCTestCase {
         try file.write(from: buffer)
     }
 
-    func testIncompleteCacheWaitsForScanBeforeRestoringPlaylistAndQueue() async throws {
+    func testIncompleteCacheRestoresSavedReferencesBeforeScan() async throws {
         let documents = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let previous = LocalLibrary.songLibrary.songs
         let player = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false)
@@ -139,7 +139,7 @@ final class LocalLibraryRuntimeTests: XCTestCase {
         let restored = PlaylistLibrary(playlists: [])
         let runtime = LocalLibraryRuntime(documents: documents, store: store, playlistLibrary: restored, player: player)
 
-        // A cache missing saved references cannot release a partially restored shelf.
+        // Missing metadata retains saved identities while the background scan resolves them.
         let snapshotAtReady = Mutex<[[String]]?>(nil)
         _ = withObservationTracking { runtime.isInitialLibraryReady } onChange: {
             MainActor.assumeIsolated {
@@ -148,7 +148,9 @@ final class LocalLibraryRuntimeTests: XCTestCase {
             }
         }
         await runtime.refresh()
-        XCTAssertEqual(snapshotAtReady.withLock { $0 }, [[song.id], [song.id], [song.id]])
+        XCTAssertEqual(snapshotAtReady.withLock { $0 }, [[stale.id], [song.id], [song.id]])
+        XCTAssertEqual(LocalLibrary.songs.map(\.id), [song.id])
+        XCTAssertEqual(restored.songs(in: playlistID).map(\.id), [song.id])
         XCTAssertTrue(runtime.isInitialLibraryReady)
     }
 
@@ -242,7 +244,7 @@ final class LocalLibraryRuntimeTests: XCTestCase {
         XCTAssertEqual(LocalLibrary.songs.map(\.id), ["new.wav"])
     }
 
-    func testIncompleteQueueCacheDoesNotApplyOrRewritePlaybackState() throws {
+    func testIncompleteQueueRestoresReferencesWithoutPreparingAudioOrRewritingState() throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let player = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false)
         defer { player.shutdownPlayback(); try? FileManager.default.removeItem(at: url) }
@@ -250,12 +252,18 @@ final class LocalLibraryRuntimeTests: XCTestCase {
             ids: ["new.wav"], index: 0, elapsed: 2, repeatMode: .all, shuffled: false))
         try saved.write(to: url)
         player.configurePlayback(resolveURL: { _ in nil }, persistenceURL: url)
-        XCTAssertFalse(player.restoreQueue(songs: [], requireCompleteLibrary: true))
-        XCTAssertTrue(player.queue.isEmpty)
+        XCTAssertTrue(player.restoreQueue(songs: []))
+        XCTAssertEqual(player.queue.map(\.id), ["new.wav"])
+        XCTAssertEqual(player.unavailableIDs, ["new.wav"])
+        XCTAssertNil(player.errorMessage, "Missing cached metadata is resolved by the scan before reporting a missing file")
+        XCTAssertFalse(player.hasAudioEngine)
         XCTAssertEqual(try Data(contentsOf: url), saved)
         let song = LibrarySongItem(id: "new.wav", title: "New", artist: "A", album: "B", albumArtist: "A",
                                    trackNumber: 1, artwork: .missing)
-        XCTAssertTrue(player.restoreQueue(songs: [song], requireCompleteLibrary: true))
+        player.reconcileAvailability(songs: [song])
+        XCTAssertEqual(player.current.title, "New")
+        XCTAssertTrue(player.unavailableIDs.isEmpty)
+        XCTAssertFalse(player.hasAudioEngine)
         XCTAssertEqual(player.queue.map(\.id), [song.id])
         XCTAssertEqual(player.repeatMode, .all)
         XCTAssertEqual(try Data(contentsOf: url), saved)
@@ -420,10 +428,16 @@ final class LocalLibraryRuntimeTests: XCTestCase {
         await runtime.refresh()
         XCTAssertEqual(LocalLibrary.songs.map(\.id), [track.id])
         let song = try XCTUnwrap(LocalLibrary.songs.first)
-        XCTAssertEqual(song.artworkData, artworkData)
+        XCTAssertNil(song.artworkData)
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(song.artworkURL)), artworkData)
         XCTAssertEqual(song.artworkBackdrop, expectedBackdrop, "Published covers must already have their matching page color")
         XCTAssertEqual(LocalLibrary.albumDetail(song.albumID)?.albumBackdrop, expectedBackdrop)
-        XCTAssertEqual(try JSONDecoder().decode([LocalTrack].self, from: Data(contentsOf: cache)), [track])
+        var expected = track
+        expected.artworkData = nil
+        expected.artworkKey = song.artworkURL?.deletingPathExtension().lastPathComponent
+        expected.artworkBackdrop = expectedBackdrop
+        let saved = try Data(contentsOf: cache)
+        XCTAssertEqual(try JSONDecoder().decode([LocalTrack].self, from: saved), [expected])
         XCTAssertTrue(runtime.status?.contains("broken.mp3") == true)
         try FileManager.default.removeItem(at: root.appendingPathComponent(track.id))
         let cancelled = Task { @MainActor in
@@ -432,7 +446,7 @@ final class LocalLibraryRuntimeTests: XCTestCase {
         }
         await cancelled.value
         XCTAssertEqual(LocalLibrary.songs.first?.artworkBackdrop, expectedBackdrop)
-        XCTAssertEqual(try JSONDecoder().decode([LocalTrack].self, from: Data(contentsOf: cache)), [track])
+        XCTAssertEqual(try Data(contentsOf: cache), saved)
         await runtime.refresh()
         XCTAssertTrue(LocalLibrary.songs.isEmpty)
         XCTAssertEqual(try JSONDecoder().decode([LocalTrack].self, from: Data(contentsOf: cache)), [])

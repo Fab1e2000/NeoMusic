@@ -19,6 +19,7 @@ struct PlayerPopup: ViewModifier {
     @State private var interactionDelegate = PlayerPopupInteractionDelegate()
 
     private var shouldShowBar: Bool { player.currentTrack != nil && !isSuppressed }
+    private var prefetchURLs: [URL] { isPresented || player.isPlaying ? player.adjacentArtworkURLs : [] }
 
     func body(content: Content) -> some View {
         content
@@ -56,8 +57,8 @@ struct PlayerPopup: ViewModifier {
                 guard !Task.isCancelled else { return }
                 artwork = image
             }
-            .task(id: player.adjacentArtworkURLs) {
-                let requests = player.adjacentArtworkURLs.flatMap { url in
+            .task(id: prefetchURLs) {
+                let requests = prefetchURLs.flatMap { url in
                     [160, 240].map { size in
                         var request = ImageRequest(url: url)
                         request.thumbnail = .init(size: CGSize(width: size, height: size), unit: .pixels,

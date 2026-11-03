@@ -1,12 +1,13 @@
 import SwiftUI
 
 /// 专辑、播放列表或歌曲的封面。
-enum Artwork {
+enum Artwork: Equatable {
     /// Apple Music“喜爱歌曲”星标的实测颜色。
     static let favoritesRed = Color(red: 251 / 255, green: 35 / 255, blue: 60 / 255)
     static let favoritesBackground = Color(red: 233 / 255, green: 237 / 255, blue: 238 / 255)
 
     case image(Image)
+    case file(URL)
     /// “喜爱歌曲”固定使用浅灰底上的红色星标。
     case favorites
     /// 没有封面的播放列表。
@@ -51,6 +52,8 @@ struct ArtworkView: View {
         switch artwork {
         case .image(let image):
             image.resizable().scaledToFill()
+        case .file(let url):
+            LocalArtworkView(url: url)
         case .favorites:
             GeometryReader { proxy in
                 Artwork.favoritesBackground
@@ -108,5 +111,28 @@ struct ArtworkView: View {
             }
         }
         .frame(width: width * 0.36)
+    }
+}
+
+private struct LocalArtworkView: View {
+    let url: URL
+    @Environment(\.displayScale) private var displayScale
+    @State private var image: UIImage?
+
+    var body: some View {
+        GeometryReader { geometry in
+            let pixels = LocalArtworkImages.pixelSize(geometry.size.width * displayScale)
+            Group {
+                if let image = image ?? LocalArtworkImages.cached(url, pixels: pixels) {
+                    Image(uiImage: image).resizable().scaledToFill()
+                } else { Color.clear }
+            }
+            .task(id: url.absoluteString + ":" + String(pixels)) {
+                let loaded = await LocalArtworkImages.load(url, pixels: pixels)
+                guard !Task.isCancelled else { return }
+                image = loaded
+            }
+        }
+        .id(url)
     }
 }

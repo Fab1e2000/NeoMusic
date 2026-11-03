@@ -303,9 +303,8 @@ struct LocalLibraryHome: View {
                         playlistLibrary: LocalLibrary.playlistLibrary,
                         isContentReady: ready,
                         reorderPinned: LocalLibrary.reorderPinned)
-            .refreshable { await LocalLibrary.runtime.refresh() }
             .safeAreaInset(edge: .bottom) {
-                if ready, LocalLibrary.songs.isEmpty {
+                if ready, !LocalLibrary.runtime.isScanning, LocalLibrary.songs.isEmpty {
                     VStack(spacing: 8) {
                         Text("将音乐放入“文件 → 我的 iPhone → NeoMusic → 音乐”").font(.callout)
                         Text("支持 MP3、AAC/M4A、ALAC、FLAC、WAV、AIFF，可包含子文件夹。").font(.caption).foregroundStyle(.secondary)

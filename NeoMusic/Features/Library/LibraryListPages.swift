@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// 资料库里的一首歌。
-struct LibrarySongItem: Identifiable {
+struct LibrarySongItem: Identifiable, Equatable {
     let id: String
     var albumID: String { albumDirectory.map { "folder:" + $0 } ?? (albumArtist + "\u{001F}" + album) }
     let title: String
@@ -13,6 +13,7 @@ struct LibrarySongItem: Identifiable {
     var albumDirectory: String? = nil
     var discNumber: Int = 1
     var artworkData: Data? = nil
+    var artworkURL: URL? = nil
     /// Prepared with the original artwork before the song becomes visible.
     var artworkBackdrop: AlbumArtworkBackdrop? = nil
     var duration: Int = 0
@@ -22,6 +23,11 @@ struct LibrarySongItem: Identifiable {
 }
 
 extension LibrarySongItem {
+    static func unavailable(_ id: String) -> Self {
+        Self(id: id, title: URL(fileURLWithPath: id).deletingPathExtension().lastPathComponent,
+             artist: "文件不可用", album: "", albumArtist: "", trackNumber: 0, artwork: .missing)
+    }
+
     static func albumOrder(_ lhs: Self, _ rhs: Self) -> Bool {
         if lhs.discNumber != rhs.discNumber { return lhs.discNumber < rhs.discNumber }
         let left = lhs.trackNumber > 0 ? lhs.trackNumber : Int.max

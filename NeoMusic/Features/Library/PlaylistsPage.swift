@@ -24,7 +24,7 @@ struct LibraryPlaylistItem: Identifiable {
 }
 
 /// 播放列表文件夹；文件夹里可以再放文件夹。
-struct PlaylistFolder: Identifiable, Codable {
+struct PlaylistFolder: Identifiable, Codable, Sendable {
     let id: String
     var name: String
     var parentID: String?
@@ -72,7 +72,7 @@ final class PlaylistLibrary {
     /// Metadata edits reuse the exact stored PNG instead of rasterizing every cover again.
     @ObservationIgnored private var savedArtwork: [String: (image: Image, data: Data)] = [:]
 
-    private struct SavedPlaylist: Codable {
+    struct SavedPlaylist: Codable, Sendable {
         let id: String
         let title: String
         let description: String
@@ -86,27 +86,25 @@ final class PlaylistLibrary {
         let artworkData: Data?
         let songs: [String]
     }
-    private struct Snapshot: Codable {
+    struct Snapshot: Codable, Sendable {
         let playlists: [SavedPlaylist]
         let folders: [PlaylistFolder]
         let placement: [String: String]
         let nextOrder: Int
     }
 
-    /// Cache-first startup may restore only when every saved reference can be resolved.
+    /// Restore stable identities immediately; the verified scan resolves missing metadata.
     @discardableResult
-    func configurePersistence(url: URL, songs: [LibrarySongItem], requireCompleteLibrary: Bool = false) -> Bool {
+    func configurePersistence(url: URL, songs: [LibrarySongItem], restoredState: Result<Snapshot?, Error>? = nil) -> Bool {
         guard persistenceURL == nil else { return true }
         loadingPersistence = true
         defer { loadingPersistence = false }
         do {
-            if FileManager.default.fileExists(atPath: url.path) {
-                let saved = try JSONDecoder().decode(Snapshot.self, from: Data(contentsOf: url))
+            let snapshot: Snapshot?
+            if let restoredState { snapshot = try restoredState.get() }
+            else { snapshot = FileManager.default.fileExists(atPath: url.path) ? try JSONDecoder().decode(Snapshot.self, from: Data(contentsOf: url)) : nil }
+            if let saved = snapshot {
                 let lookup = Dictionary(songs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-                if requireCompleteLibrary,
-                   !saved.playlists.allSatisfy({ $0.songs.allSatisfy { lookup[$0] != nil } }) {
-                    return false
-                }
                 var restoredArtwork: [String: (image: Image, data: Data)] = [:]
                 playlists = saved.playlists.map { item in
                     let artwork: Artwork
@@ -123,7 +121,7 @@ final class PlaylistLibrary {
                 folders = saved.folders
                 placement = saved.placement
                 nextOrder = saved.nextOrder
-                contents = Dictionary(saved.playlists.map { ($0.id, $0.songs.compactMap { lookup[$0] }) }, uniquingKeysWith: { first, _ in first })
+                contents = Dictionary(saved.playlists.map { ($0.id, $0.songs.map { lookup[$0] ?? LibrarySongItem.unavailable($0) }) }, uniquingKeysWith: { first, _ in first })
                 savedArtwork = restoredArtwork
             }
             persistenceURL = url
@@ -136,10 +134,20 @@ final class PlaylistLibrary {
         }
     }
 
-    func reconcileSongs(_ songs: [LibrarySongItem]) {
+    func reconcileSongs(_ songs: [LibrarySongItem], failedIDs: Set<String> = [], failedDirectories: [String] = []) {
         let lookup = Dictionary(songs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        for id in contents.keys { contents[id] = contents[id]?.compactMap { lookup[$0.id] } }
-        persist()
+        var removedReferences = false
+        for id in contents.keys {
+            let previous = contents[id, default: []]
+            let updated = previous.compactMap { song in
+                lookup[song.id] ?? (failedIDs.contains(song.id) || failedDirectories.contains {
+                    $0.isEmpty || song.id.hasPrefix($0 + "/")
+                } ? song : nil)
+            }
+            if previous.map(\.id) != updated.map(\.id) { removedReferences = true }
+            if updated != previous { contents[id] = updated }
+        }
+        if removedReferences { persist() }
     }
 
     private func persist() {

@@ -179,7 +179,7 @@ final class PlaybackTests: XCTestCase {
     }
 
     private func queuePlayer(in model: NowPlayingModel) throws -> AVQueuePlayer {
-        let engine = try XCTUnwrap(Mirror(reflecting: model).children.first { $0.label == "audio" }?.value as? LocalPlaybackEngine)
+        let engine = try XCTUnwrap(Mirror(reflecting: model).children.first { $0.label == "_audio" }?.value as? LocalPlaybackEngine)
         return try XCTUnwrap(Mirror(reflecting: engine).children.first { $0.label == "player" }?.value as? AVQueuePlayer)
     }
 

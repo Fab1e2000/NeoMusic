@@ -59,6 +59,7 @@
 		6A226F35571222EBAFFAFCDD /* LocalLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93D0F1FA60D02AC5C67F45EA /* LocalLibrary.swift */; };
 		6A6513EA225C78CE42E48206 /* LibraryListControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33E7874D5F1CF3E66D9A88AD /* LibraryListControls.swift */; };
 		6ADA971BE2B04551398A0374 /* ArtworkImagePipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92CB434ED4B029EE694281A4 /* ArtworkImagePipeline.swift */; };
+		6ED38A61EE15242FE96A6348 /* ColdStartTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 392E9E2463F7E19FD4495895 /* ColdStartTests.swift */; };
 		6F60E59ED5B6D8AA3FF82352 /* NowPlayingModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F077DBB5EA2C541872FC6A58 /* NowPlayingModel.swift */; };
 		7216A6ADCC6ACE0FBD162BFD /* ThirdPartyLicenses.txt in Resources */ = {isa = PBXBuildFile; fileRef = 7C3B50303AEE57C8F768CD23 /* ThirdPartyLicenses.txt */; };
 		723907F854FDC1160C0246C0 /* HomeArtwork.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96B01BBD09E2583BD707E4EE /* HomeArtwork.swift */; };
@@ -127,6 +128,7 @@
 		E998BA72893F9D60200F30A6 /* NowPlayingArtistButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC723FB75DF6751087A33467 /* NowPlayingArtistButton.swift */; };
 		EC4BA3CB8DF1A7F0FB15FFD6 /* AppleMusicLocalLyricsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C6EA5F02F1B458A230F2A09 /* AppleMusicLocalLyricsView.swift */; };
 		ED3F634DCC612F6F820B31ED /* PlaylistLibraryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF60CED54C29B7599A7D65CE /* PlaylistLibraryTests.swift */; };
+		F2FC93B413F4294A21C1E211 /* LocalArtworkImages.swift in Sources */ = {isa = PBXBuildFile; fileRef = B48BD3C18CF5A28D2C4FAF42 /* LocalArtworkImages.swift */; };
 		F6B870F61DAFE30CF58223DD /* CollectionMenu.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6D58EB8E891461ED3934EA1 /* CollectionMenu.swift */; };
 		F730472746E5BC9C99A707AA /* AppleMusicLyricsMotionProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C5E48160AF6128DC74A82F8 /* AppleMusicLyricsMotionProfile.swift */; };
 		F822F107CE7F7091780AF45C /* PlayerEDRControlLayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = E24B4DDB42C1CE7DDDC25D53 /* PlayerEDRControlLayer.swift */; };
@@ -195,6 +197,7 @@
 		35F84E4BF0DD2959528447AD /* PlayerTestFixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerTestFixtures.swift; sourceTree = "<group>"; };
 		37525F1CE4A91231706F9B42 /* LibraryArtworkSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryArtworkSurface.swift; sourceTree = "<group>"; };
 		3864BA031E2DD801325DCC87 /* NowPlayingBottomControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlayingBottomControls.swift; sourceTree = "<group>"; };
+		392E9E2463F7E19FD4495895 /* ColdStartTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColdStartTests.swift; sourceTree = "<group>"; };
 		3B57E5BA837539DA2A843C0D /* SheetDismissAttempt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SheetDismissAttempt.swift; sourceTree = "<group>"; };
 		3B9AE53C4EB35DF7A9CC5674 /* AddPlaylistMusicView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddPlaylistMusicView.swift; sourceTree = "<group>"; };
 		3D7F285CD698536915E8F39C /* LyricPhysicalSpringParameters.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LyricPhysicalSpringParameters.swift; sourceTree = "<group>"; };
@@ -260,6 +263,7 @@
 		AFE814DF062BCE6616BFB333 /* NeoMusic.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = NeoMusic.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B15D303F31DFC234719D6158 /* SystemArtworkColor.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = SystemArtworkColor.m; sourceTree = "<group>"; };
 		B42C22F7D0E15BD226E18C22 /* GPL-3.0.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "GPL-3.0.txt"; sourceTree = "<group>"; };
+		B48BD3C18CF5A28D2C4FAF42 /* LocalArtworkImages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalArtworkImages.swift; sourceTree = "<group>"; };
 		B57AAA77F8F80F26E688BA36 /* HomeFixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeFixtures.swift; sourceTree = "<group>"; };
 		B9A051DF3090D692F3D8DC71 /* AddToPlaylistView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddToPlaylistView.swift; sourceTree = "<group>"; };
 		BA80A6C2E26836683241A6F6 /* ArtworkView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtworkView.swift; sourceTree = "<group>"; };
@@ -429,6 +433,7 @@
 		64CDADC4365D16425CF7F2B4 /* Library */ = {
 			isa = PBXGroup;
 			children = (
+				B48BD3C18CF5A28D2C4FAF42 /* LocalArtworkImages.swift */,
 				93D0F1FA60D02AC5C67F45EA /* LocalLibrary.swift */,
 				97CE48CD90FD8D0292760FE3 /* LocalLibraryRuntime.swift */,
 			);
@@ -485,6 +490,7 @@
 			children = (
 				891260FD64E3389158119451 /* AlbumArtworkBackdropTests.swift */,
 				DF7799ACBF8A0D93DBD3DCC2 /* AudioSpectrumTests.swift */,
+				392E9E2463F7E19FD4495895 /* ColdStartTests.swift */,
 				66201021F7E661B20B07D421 /* LibraryDetailNavigationTests.swift */,
 				57B8C2CB22E620B9DABF96DB /* LocalAudioMetadataReaderTests.swift */,
 				FB3EB767844F48C5333B9965 /* LocalLibraryRuntimeTests.swift */,
@@ -803,6 +809,7 @@
 			files = (
 				2C7754D4DCB3A9C27628C6E6 /* AlbumArtworkBackdropTests.swift in Sources */,
 				77424610533C01EA7DD02D52 /* AudioSpectrumTests.swift in Sources */,
+				6ED38A61EE15242FE96A6348 /* ColdStartTests.swift in Sources */,
 				7901C40A5BC3B9187A0B59CA /* LibraryDetailNavigationTests.swift in Sources */,
 				9D2AE82ED70B1FF9C10DD744 /* LocalAudioMetadataReaderTests.swift in Sources */,
 				5E55C92A80D9E59452CC4492 /* LocalLibraryRuntimeTests.swift in Sources */,
@@ -854,6 +861,7 @@
 				2B34556EFDA89A987EBCA460 /* LibraryListPages.swift in Sources */,
 				DFC77DAEAA94A3DA963B2891 /* LibraryRouteLink.swift in Sources */,
 				B8AFA800BDC51BE49B39994D /* LibraryToast.swift in Sources */,
+				F2FC93B413F4294A21C1E211 /* LocalArtworkImages.swift in Sources */,
 				7C51B9B36141B24CA82D20C2 /* LocalAudioMetadataReader.swift in Sources */,
 				6A226F35571222EBAFFAFCDD /* LocalLibrary.swift in Sources */,
 				BFA1CED007C796FC13C57B69 /* LocalLibraryRuntime.swift in Sources */,

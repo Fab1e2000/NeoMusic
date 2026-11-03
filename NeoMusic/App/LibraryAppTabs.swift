@@ -19,11 +19,11 @@ struct LibraryAppTabs<Library: View>: UIViewControllerRepresentable {
         controller.delegate = context.coordinator
         controller.tabBarMinimizeBehavior = .onScrollDown
         func tab(_ id: AppTab, _ title: String, _ symbol: String) -> UITab {
-            let page = UIHostingController(rootView: PlaceholderTab(title: LocalizedStringKey(title)))
-            return UITab(title: title, image: UIImage(systemName: symbol), identifier: id.rawValue) { _ in page }
+            UITab(title: title, image: UIImage(systemName: symbol), identifier: id.rawValue) { _ in
+                UIHostingController(rootView: PlaceholderTab(title: LocalizedStringKey(title)))
+            }
         }
-        let searchController = UIHostingController(rootView: PlaceholderTab(title: "搜索"))
-        let search = UISearchTab { _ in searchController }
+        let search = UISearchTab { _ in UIHostingController(rootView: PlaceholderTab(title: "搜索")) }
         context.coordinator.searchIdentifier = search.identifier
         controller.tabs = [
             UITab(title: "主页", image: UIImage(named: "HomeTabIcon"), identifier: AppTab.home.rawValue) { _ in
