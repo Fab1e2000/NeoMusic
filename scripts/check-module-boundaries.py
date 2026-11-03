@@ -23,7 +23,11 @@ def check_source(relative: Path, text: str) -> list[str]:
         for module in re.findall(r"^\s*(?:@\w+\s+)?import\s+([A-Za-z_][A-Za-z_0-9]*)", text, re.MULTILINE):
             allowed = module in (NETEASE_IMPORTS if netease else COMMON_IMPORTS)
             allowed |= player and module in PLAYER_IMPORTS
-            allowed |= relative == Path("NeoMusic/Features/Home/HomePlaylistArtwork.swift") and module == "CoreImage"
+            # Native image processing is owned by these concrete artwork renderers.
+            allowed |= relative in {
+                Path("NeoMusic/Features/Home/HomePlaylistArtwork.swift"),
+                Path("NeoMusic/Features/Library/ArtistDetailBackdrop.swift"),
+            } and module == "CoreImage"
             allowed |= account_ui and module == "WebKit"
             allowed |= relative == Path("NeoMusic/Core/Netease/NeteaseAvatarSnapshot.swift") and module == "ImageIO"
             allowed |= relative == Path("NeoMusic/Core/Netease/NeteaseMusicStore.swift") and module == "Network"

@@ -39,6 +39,13 @@ class ModuleBoundaryTests(unittest.TestCase):
                                                 "import Foundation\nimport ImageIO"), [])
         self.assertTrue(boundaries.check_source(Path("NeoMusic/Core/Netease/Account.swift"), "import ImageIO"))
 
+    def test_artist_image_filter_keeps_transport_in_netease(self):
+        path = Path("NeoMusic/Features/Library/ArtistDetailBackdrop.swift")
+        self.assertEqual(boundaries.check_source(path, "import CoreImage.CIFilterBuiltins"), [])
+        self.assertTrue(boundaries.check_source(path, "URLSession.shared"))
+        self.assertTrue(boundaries.check_source(path, "let account: NeteaseAccount"))
+        self.assertTrue(boundaries.check_source(Path("NeoMusic/Core/Netease/Client.swift"), "import CoreImage"))
+
     def test_objective_c_and_renamed_sources_are_checked(self):
         self.assertTrue(boundaries.check_source(Path("NeoMusic/Core/Playback/Bridge.m"),
                                               "[NSURLSession sharedSession]; SecItemDelete(query);"))

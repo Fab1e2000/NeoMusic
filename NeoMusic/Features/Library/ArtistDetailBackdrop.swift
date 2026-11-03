@@ -1,11 +1,11 @@
 import SwiftUI
 import UIKit
+import CoreImage.CIFilterBuiltins
 
 struct ArtistDetailBackdrop: View {
     let artwork: Artwork?
-    @State private var sourceImage: UIImage?
-    @State private var diffuseImage: UIImage?
-    @State private var sharpImage: UIImage?
+    @State private var preparedImage: UIImage?
+    private static let preparer = ArtistBackdropPreparer()
     @Environment(\.displayScale) private var displayScale
 
     var body: some View {
@@ -14,35 +14,15 @@ struct ArtistDetailBackdrop: View {
             let upward = max(0, -y)
             // Blur and color loss are one image transition, independent of the page shade.
             let imageProgress = min(1, max(0, (upward - 150) / 330))
-            let imageHeight: CGFloat = 400
             let extent: CGFloat = 520
             let pull = max(0, y)
             let magnification = 1 + pull / 500
 
             ZStack(alignment: .top) {
-                // The diffuse image extends behind the title, buttons and release card.
-                if let diffuseImage {
-                    Image(uiImage: diffuseImage).resizable()
+                if let preparedImage {
+                    Image(uiImage: preparedImage).resizable()
                         .frame(width: geometry.size.width, height: extent)
-                        .blur(radius: 22, opaque: true)
-                    Image(uiImage: diffuseImage).resizable()
-                        .frame(width: geometry.size.width, height: extent)
-                        .blur(radius: 7, opaque: true)
-                        .mask(LinearGradient(stops: [
-                            .init(color: .black, location: 0.59),
-                            .init(color: .clear, location: 0.76)
-                        ], startPoint: .top, endPoint: .bottom))
                 }
-                Image(uiImage: sharpImage ?? UIImage()).resizable()
-                    .frame(width: geometry.size.width, height: imageHeight)
-                    .clipped()
-                    .mask {
-                        LinearGradient(stops: [
-                            .init(color: .black, location: 0),
-                            .init(color: .black, location: 0.72),
-                            .init(color: .clear, location: 0.86)
-                        ], startPoint: .top, endPoint: .bottom)
-                    }
             }
             .frame(width: geometry.size.width, height: extent, alignment: .top)
             .compositingGroup()
@@ -58,20 +38,24 @@ struct ArtistDetailBackdrop: View {
             .offset(y: upward * 0.6 - pull)
             .opacity(1 - imageProgress)
             .task(id: String(describing: artwork) + String(describing: geometry.size.width)) {
-                if case .file(let url) = artwork {
-                    sourceImage = await LocalArtworkImages.load(url, pixels: LocalArtworkImages.pixelSize(max(geometry.size.width, 520) * displayScale))
-                }
+                guard case .file(let url) = artwork else { preparedImage = nil; return }
+                let image = await LocalArtworkImages.load(url, pixels: LocalArtworkImages.pixelSize(max(geometry.size.width, 520) * displayScale))
+                guard !Task.isCancelled, let image else { return }
+                let prepared = await Self.preparer.prepare(image, width: geometry.size.width, displayScale: displayScale)
                 guard !Task.isCancelled else { return }
-                let images = makeImages(width: geometry.size.width)
-                sharpImage = images?.sharp
-                diffuseImage = images?.diffuse
+                preparedImage = prepared
             }
         }
         .allowsHitTesting(false)
     }
 
-    private func makeImages(width: CGFloat) -> (sharp: UIImage, diffuse: UIImage)? {
-        guard width > 0, let image = sourceImage else { return nil }
+}
+
+private actor ArtistBackdropPreparer {
+    private let context = CIContext()
+
+    func prepare(_ image: UIImage, width: CGFloat, displayScale: CGFloat) -> UIImage? {
+        guard width > 0 else { return nil }
         let format = UIGraphicsImageRendererFormat()
         format.scale = displayScale
         format.opaque = true
@@ -98,7 +82,22 @@ struct ArtistDetailBackdrop: View {
             source.draw(at: .zero)
             context.cgContext.restoreGState()
         }
-        return (source, extended)
+        guard let cgImage = extended.cgImage else { return nil }
+        let input = CIImage(cgImage: cgImage)
+        // Core Image coordinates start at the bottom. Keep the upper artwork sharp,
+        // then smoothly increase the radius through the image's lower edge.
+        let gradient = CIFilter.smoothLinearGradient()
+        gradient.point0 = CGPoint(x: 0, y: (520 - 400) * displayScale)
+        gradient.point1 = CGPoint(x: 0, y: (520 - 288) * displayScale)
+        gradient.color0 = .white
+        gradient.color1 = .black
+        let blur = CIFilter.maskedVariableBlur()
+        blur.inputImage = input.clampedToExtent()
+        blur.mask = gradient.outputImage
+        blur.radius = Float(22 * displayScale)
+        guard let output = blur.outputImage,
+              let rendered = context.createCGImage(output, from: input.extent) else { return nil }
+        return UIImage(cgImage: rendered, scale: displayScale, orientation: .up)
     }
 }
 
