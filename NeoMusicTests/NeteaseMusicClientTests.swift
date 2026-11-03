@@ -5,6 +5,71 @@ import XCTest
 @testable import NeoMusic
 
 final class NeteaseMusicClientTests: XCTestCase, @unchecked Sendable {
+    @MainActor func testWebRequestUsesScopedNeoDizzyClientProfile() throws {
+        let transport = NeteaseAccountClient(deviceID: "test-device")
+        let request = try transport.makeWebRequest(path: "/api/album/sub", fields: ["id": 7], credential: .init(musicU: "token+value", csrf: "csrf"))
+        let cookie = try XCTUnwrap(request.value(forHTTPHeaderField: "Cookie"))
+        for field in ["MUSIC_U=token%2Bvalue", "__csrf=csrf", "os=ios", "appver=9.0.90", "deviceId=test-device", "WEVNSM=1.0.0", "__remember_me=true"] {
+            XCTAssertTrue(cookie.contains(field), field)
+        }
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Referer"), "https://music.163.com")
+        XCTAssertTrue(request.value(forHTTPHeaderField: "User-Agent")?.contains("Chrome/124.0.0.0") == true)
+    }
+    @MainActor func testWebBusinessRejectionPreservesServerMessage() async throws {
+        let client = makeClient([#"{"code":301,"msg":"专辑暂不支持收藏"}"#])
+        do {
+            try await client.setAlbumSubscribed(id: 12, subscribed: true, credential: credential())
+            XCTFail("Expected rejection")
+        } catch {
+            XCTAssertEqual(error as? NeteaseWebResponseError, .init(code: 301, message: "专辑暂不支持收藏"))
+        }
+    }
+    @MainActor func testWebSubscriptionUsesWebAPIAndRSAEnvelope() async throws {
+        let client = makeClient([#"{"code":200}"#])
+        try await client.setAlbumSubscribed(id: 12, subscribed: true, credential: credential())
+        XCTAssertEqual(MusicFixtureProtocol.paths.withLock { $0.last }, "/weapi/album/sub")
+        let body = try XCTUnwrap(MusicFixtureProtocol.bodies.withLock { $0.last })
+        let fields = String(decoding: body, as: UTF8.self).split(separator: "&")
+        let rsa = try XCTUnwrap(fields.first { $0.hasPrefix("encSecKey=") })
+        XCTAssertEqual(rsa.dropFirst("encSecKey=".count).count, 256)
+        XCTAssertTrue(fields.contains { $0.hasPrefix("params=") })
+    }
+    @MainActor func testIncompleteAlbumFails() async throws {
+        let client = makeClient([#"{"code":200,"album":{"id":1,"name":"Album","size":2},"songs":[]}"#])
+        do {
+            _ = try await client.albumDetail(id: 1, credential: nil)
+            XCTFail("Incomplete album accepted")
+        } catch { XCTAssertEqual(error as? NeteaseAccountError, .invalidResponse) }
+    }
+    @MainActor func testPlayerForwardsSelectedArtist() {
+        var selection: (String, String)?
+        let actions = ReferencePlayerActions(isFavorite: { _ in false }, toggleFavorite: { _ in }, addToPlaylist: { _ in }, openAlbum: { _ in }, openArtist: { _ in XCTFail("Wrong callback") }, artistNames: { _ in ["First", "Second"] }, openNamedArtist: { selection = ($0, $1) })
+        let track = ReferenceTrack(id: "netease:1:12", title: "Song", artists: "First / Second", albumTitle: "Album", coverURL: nil, duration: 90)
+        XCTAssertEqual(actions.artistNames(for: track), ["First", "Second"])
+        actions.openArtist("Second", track: track)
+        XCTAssertEqual(selection?.0, track.id)
+        XCTAssertEqual(selection?.1, "Second")
+    }
+    @MainActor func testArtistAlbumsPreservePagesAndRemoveDuplicateIDs() async throws {
+        let client = makeClient([
+            #"{"code":200,"hotAlbums":[{"id":2,"name":"Second"},{"id":1,"name":"First"}],"more":true}"#,
+            #"{"code":200,"hotAlbums":[{"id":1,"name":"First"},{"id":3,"name":"Third"}],"more":false}"#
+        ])
+        let albums = try await client.artistAlbums(id: 4, credential: nil)
+        XCTAssertEqual(albums.map(\.id), [2, 1, 3])
+    }
+    @MainActor func testSongDetailsRetainMultipleArtistIdentities() async throws {
+        let client = makeClient([#"{"code":200,"songs":[{"id":12,"name":"Song","ar":[{"id":1,"name":"Same"},{"id":2,"name":"Same"}],"al":{"id":3,"name":"Album"},"dt":90000}]}"#])
+        let song = try await client.songDetail(id: 12, credential: nil)
+        XCTAssertEqual(song.artists?.map(\.id), [1, 2])
+        XCTAssertEqual(song.albumID, 3)
+    }
+    func testLegacySongCacheDecodesWithoutArtistIdentity() throws {
+        let data = Data(#"{"id":12,"title":"Song","artist":"Artist","album":"Album","duration":90,"unavailable":false}"#.utf8)
+        let song = try JSONDecoder().decode(NeteaseMusicSong.self, from: data)
+        XCTAssertNil(song.artists)
+        XCTAssertNil(song.albumID)
+    }
     @MainActor func testTrialIsSkippedForCompleteLowerQuality() async throws {
         let client = makeClient([
             #"{"code":200,"data":[{"id":1,"url":"https://example.com/trial","freeTrialInfo":{}}]}"#,

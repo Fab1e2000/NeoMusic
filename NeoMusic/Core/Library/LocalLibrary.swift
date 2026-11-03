@@ -4,6 +4,7 @@ import SwiftUI
 @MainActor
 enum LocalLibrary {
     static let runtime = LocalLibraryRuntime()
+    static let catalog = LibraryCatalog()
     static let songLibrary = SongLibrary(songs: [])
     static var songs: [LibrarySongItem] { songLibrary.songs.filter { !deletedAlbums.ids.contains($0.albumID) } }
     static var allSongs: [LibrarySongItem] { songLibrary.allSongs.filter { $0.isOnline || !deletedAlbums.ids.contains($0.albumID) } }
@@ -19,7 +20,7 @@ enum LocalLibrary {
     static func isAlbumDownloaded(_ id: String) -> Bool { !albumSongs(id).isEmpty }
     static var albums: [LibraryShelfItem] {
         let grouped = Dictionary(grouping: songs, by: \.albumID)
-        return grouped.keys.sorted().compactMap { id in
+        return catalog.albums + grouped.keys.sorted().compactMap { id in
             albumItem(id, orderedSongs: grouped[id, default: []].sorted(by: LibrarySongItem.albumOrder))
         }
     }
@@ -31,7 +32,7 @@ enum LocalLibrary {
             route: .album(id), isFavorite: favoriteAlbums.ids.contains(id), isPinned: pinnedAlbums.ids.contains(id),
             addedOrder: orderedSongs.map(\.addedOrder).max() ?? 0)
     }
-    static var downloadedAlbumItems: [LibraryShelfItem] { albums }
+    static var downloadedAlbumItems: [LibraryShelfItem] { albums.filter { !$0.id.hasPrefix("catalog:") } }
 
     /// 专辑的置顶、喜爱状态以 `pinnedAlbums`、`favoriteAlbums` 为准。
     private static func withPinState(_ album: LibraryShelfItem) -> LibraryShelfItem {
@@ -76,7 +77,7 @@ enum LocalLibrary {
     static var downloadedPlaylists: PlaylistLibrary { playlistLibrary }
     static var playlists: [LibraryPlaylistItem] { playlistLibrary.playlists }
     static var artists: [LibraryArtistItem] {
-        Set(songs.map(\.albumArtist)).sorted().map { LibraryArtistItem(id: $0, name: $0, isFavorite: favoriteArtists.ids.contains($0)) }
+        catalog.artists + Set(songs.map(\.albumArtist)).sorted().map { LibraryArtistItem(id: $0, name: $0, isFavorite: favoriteArtists.ids.contains($0)) }
     }
     static func albumDetail(_ id: String) -> CollectionDetail? {
         let orderedSongs = albumSongs(id).sorted(by: LibrarySongItem.albumOrder)
@@ -98,7 +99,7 @@ enum LocalLibrary {
         let albums = grouped.keys.sorted().compactMap { albumID in
             albumItem(albumID, orderedSongs: grouped[albumID, default: []].sorted(by: LibrarySongItem.albumOrder))
         }
-        return ArtistDetail(name: id, artwork: nil, isFavorite: favoriteArtists.ids.contains(id), albums: albums)
+        return ArtistDetail(name: id, artwork: albums.first?.artwork, isFavorite: favoriteArtists.ids.contains(id), albums: albums, id: id, songs: songs.filter { $0.albumArtist == id })
     }
     static let player = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false, elapsed: 0)
 
@@ -120,12 +121,21 @@ enum LocalLibrary {
                 playlistLibrary.pendingAddition = .init(songs: [song])
             },
             openAlbum: { id in
-                guard let song = songs.first(where: { $0.id == id }) else { return }
-                openRoute(.album(song.albumID))
+                guard let song = allSongs.first(where: { $0.id == id }) else { return }
+                if song.isOnline { catalog.openSongAlbum?(id, openRoute) }
+                else { openRoute(.album(song.albumID)) }
             },
             openArtist: { id in
-                guard let song = songs.first(where: { $0.id == id }) else { return }
-                openRoute(.artist(song.albumArtist))
+                guard let song = allSongs.first(where: { $0.id == id }) else { return }
+                if song.isOnline { catalog.openSongArtist?(id, nil, openRoute) }
+                else { openRoute(.artist(song.albumArtist)) }
+            }, artistNames: { id in
+                let refs = allSongs.first { $0.id == id }?.artistReferences ?? []
+                return refs.map(\.name)
+            }, openNamedArtist: { id, name in
+                guard let song = allSongs.first(where: { $0.id == id }) else { return }
+                if song.isOnline { catalog.openSongArtist?(id, name, openRoute) }
+                else { openRoute(.artist(song.albumArtist)) }
             })
     }
 
@@ -186,14 +196,16 @@ enum LocalLibrary {
     private static var menuActions: CollectionMenuActions {
         CollectionMenuActions(
             play: { route, shuffled in
+                if catalog.handles(route) { catalog.actions.play(route, shuffled); return }
                 withCollection(route) { collection in
                     guard !collection.songs.isEmpty else { return }
                     player.requestPlay(collection.songs, from: collection.title, shuffled: shuffled, collection: playbackCollection(route))
                 }
             },
-            playNext: { route in withCollection(route) { player.insertNext($0.songs) } },
-            playLater: { route in withCollection(route) { player.appendLater($0.songs) } },
+            playNext: { route in if catalog.handles(route) { catalog.actions.playNext(route); return }; withCollection(route) { player.insertNext($0.songs) } },
+            playLater: { route in if catalog.handles(route) { catalog.actions.playLater(route); return }; withCollection(route) { player.appendLater($0.songs) } },
             toggleFavorite: { route in
+                if catalog.handles(route) { catalog.actions.toggleFavorite(route); return }
                 switch route {
                 case .playlist(let id): playlistLibrary.toggleFavorite(id)
                 case .album(let id): favoriteAlbums.toggle(id)
@@ -209,6 +221,7 @@ enum LocalLibrary {
                 }
             },
             addToPlaylist: { route in
+                if catalog.handles(route) { catalog.actions.addToPlaylist(route); return }
                 withCollection(route) { collection in
                     playlistLibrary.pendingAddition = .init(songs: collection.songs)
                 }
@@ -217,7 +230,8 @@ enum LocalLibrary {
             requestMove: { playlistLibrary.pendingMove = playlistLibrary.playlist($0) },
             // 资料库里的所有专辑与用户播放列表都可以删除；系统播放列表不能。
             canDelete: { route in
-                switch route {
+                if catalog.handles(route) { return false }
+                return switch route {
                 case .playlist(let id): playlistLibrary.canDelete(id)
                 case .album: true
                 default: false
@@ -300,6 +314,19 @@ enum LocalLibrary {
     }
 
     static func playAlbums(_ ids: [String], shuffled: Bool) {
+        if ids.contains(where: { $0.hasPrefix("catalog:") }) {
+            Task {
+                do {
+                    var songs: [LibrarySongItem] = []
+                    for id in ids {
+                        if id.hasPrefix("catalog:"), let load = catalog.loadAlbumSongs { songs += try await load(id) }
+                        else { songs += albumDetail(id)?.songs ?? [] }
+                    }
+                    player.requestPlay(songs, from: "专辑", shuffled: shuffled)
+                } catch is CancellationError { } catch { toasts.show(.error(error.localizedDescription)) }
+            }
+            return
+        }
         let tracks = ids.flatMap { albumDetail($0)?.songs ?? [] }
         player.requestPlay(tracks, from: "专辑", shuffled: shuffled)
     }
@@ -309,7 +336,7 @@ enum LocalLibrary {
         case .category(.downloaded): DownloadedMockView(albums: downloadedAlbumItems.map(withPinState))
         case .downloadedCategory(.songs): SongsListView(songs: songs.filter { downloads.state(of: $0.id) == .downloaded }, playAll: playSongs)
         case .downloadedCategory(.albums): AlbumsGridView(albums: downloadedAlbumItems.map(withPinState), playAll: playAlbums)
-        case .downloadedCategory(.artists): ArtistsListView(artists: artists)
+        case .downloadedCategory(.artists): ArtistsListView(artists: artists.filter { !$0.id.hasPrefix("catalog:") })
         case .downloadedCategory(.playlists): PlaylistsListView(library: downloadedPlaylists)
         case .downloadedCategory(.downloaded): EmptyView()
         case .category(.songs): SongsListView(songs: songs, playAll: playSongs)
@@ -321,7 +348,8 @@ enum LocalLibrary {
         case .playlist(let id):
             if id == "favorites" { LocalFavoritesDetail() }
             else { PlaylistDetailView(playlistID: id, library: playlistLibrary, songs: allSongs, recentlyPlayedSongs: recentPlaybackFixture) }
-        case .artist(let id): artistDetail(id).map(ArtistDetailView.init)
+        case .artist(let id): artistDetail(id).map { ArtistDetailView(detail: $0) }
+        case .artistSection(let id, let section): artistDetail(id).map { ArtistSectionView(detail: $0, section: section) }
         }
     }
 
@@ -333,6 +361,10 @@ enum LocalLibrary {
     }
 
     private static var launchPath: [LibraryRoute] {
+        #if DEBUG
+        let args = ProcessInfo.processInfo.arguments
+        if let index = args.firstIndex(of: "-catalogArtist"), args.indices.contains(index + 1), Int64(args[index + 1]) != nil { return [.artist("catalog:artist:" + args[index + 1])] }
+        #endif
         guard let page = launchPage else { return [] }
         let pages: [String: [LibraryRoute]] = [
             "downloaded": [.category(.downloaded)],
@@ -493,13 +525,15 @@ final class SongLibrary {
     private(set) var songs: [LibrarySongItem]
     private(set) var onlineSongs: [LibrarySongItem] = []
     private(set) var externalSongs: [LibrarySongItem] = []
+    private var externalSources: [String: [LibrarySongItem]] = [:]
     var allSongs: [LibrarySongItem] {
         let existing = Set((songs + onlineSongs).map(\.id))
         return songs + onlineSongs + externalSongs.filter { !existing.contains($0.id) }
     }
-    func replaceExternalSongs(_ values: [LibrarySongItem]) {
+    func replaceExternalSongs(_ values: [LibrarySongItem], source: String = "home") {
+        externalSources[source] = values
         var seen = Set<String>()
-        externalSongs = values.filter { $0.isOnline && seen.insert($0.id).inserted }
+        externalSongs = externalSources.keys.sorted().flatMap { externalSources[$0] ?? [] }.filter { $0.isOnline && seen.insert($0.id).inserted }
     }
     @ObservationIgnored var onlineFavoriteAction: (@MainActor (String, Bool) -> Void)?
     private let defaults: UserDefaults

@@ -4,6 +4,34 @@ import AVFoundation
 
 @MainActor
 final class OnlinePlaybackTests: XCTestCase {
+    func testRestoredPausedOnlineQueueRemainsQuietWhileAccountRestores() {
+        let model = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false)
+        let file = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { model.shutdownPlayback(); try? FileManager.default.removeItem(at: file) }
+        model.configurePlayback(resolveURL: { _ in nil }, persistenceURL: file)
+        let saved = NowPlayingModel.SavedQueue(ids: ["netease:12:34"], index: 0, elapsed: 42,
+                                               repeatMode: .off, shuffled: false)
+        XCTAssertTrue(model.restoreQueue(songs: [], restoredState: .success(saved)))
+        model.invalidateOnlinePlayback(ownerID: nil)
+        model.reconcileAvailability(songs: [])
+        XCTAssertNil(model.errorMessage)
+        XCTAssertFalse(model.isPlaying)
+        XCTAssertEqual(model.elapsed, 42)
+        XCTAssertEqual(model.unavailableIDs, ["netease:12:34"])
+        model.reconcileAvailability(songs: [song("netease:12:34")])
+        XCTAssertNil(model.errorMessage)
+        XCTAssertFalse(model.isPlaying)
+        XCTAssertTrue(model.unavailableIDs.isEmpty)
+    }
+
+    func testLogoutInterruptingOnlinePlaybackReportsReason() {
+        let model = NowPlayingModel(queue: [song("netease:12:34")], currentIndex: 0, isPlaying: true)
+        model.invalidateOnlinePlayback(ownerID: nil)
+        XCTAssertFalse(model.isPlaying)
+        XCTAssertEqual(model.errorMessage, "请登录原账号后重试")
+        XCTAssertEqual(model.unavailableIDs, ["netease:12:34"])
+    }
+
     func testSuccessfulQualityReloadPreservesProgressAndPlaybackIntent() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

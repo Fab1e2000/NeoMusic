@@ -6,7 +6,7 @@ import UIKit
 /// All entry points use the same actions; platforms supply capabilities, never menu layouts.
 @MainActor struct SongMenuConfiguration {
     var primary: [SongRowAction]
-    var secondary: [SongRowAction]
+    let secondary: [SongRowAction]
     var artistTitle: String
     var artists: [SongRowAction]
     var extras: [SongRowAction]
@@ -72,17 +72,26 @@ extension SongMenuConfiguration {
     private let playlistAction: (String) -> Void
     private let albumAction: (String) -> Void
     private let artistAction: (String) -> Void
+    private let artistLookup: ((String) -> [String])?
+    private let namedArtistAction: ((String, String) -> Void)?
     init(isFavorite: @escaping (String) -> Bool, toggleFavorite: @escaping (String) -> Void,
          addToPlaylist: @escaping (String) -> Void, openAlbum: @escaping (String) -> Void,
-         openArtist: @escaping (String) -> Void) {
+         openArtist: @escaping (String) -> Void, artistNames: ((String) -> [String])? = nil,
+         openNamedArtist: ((String, String) -> Void)? = nil) {
+        artistLookup = artistNames; namedArtistAction = openNamedArtist
         favoriteLookup = isFavorite; favoriteAction = toggleFavorite; playlistAction = addToPlaylist; albumAction = openAlbum; artistAction = openArtist
     }
     func isFavorite(_ track: ReferenceTrack) -> Bool { favoriteLookup(track.id) }
     func addToPlaylist(_ track: ReferenceTrack) { playlistAction(track.id) }
     func openAlbum(_ track: ReferenceTrack) { albumAction(track.id) }
 
-    func artistNames(for track: ReferenceTrack) -> [String] { track.artists.isEmpty ? [] : [track.artists] }
-    func openArtist(_ name: String, track: ReferenceTrack) { artistAction(track.id) }
+    func artistNames(for track: ReferenceTrack) -> [String] {
+        if let names = artistLookup?(track.id), !names.isEmpty { return names }
+        return track.artists.isEmpty ? [] : [track.artists]
+    }
+    func openArtist(_ name: String, track: ReferenceTrack) {
+        if let namedArtistAction { namedArtistAction(track.id, name) } else { artistAction(track.id) }
+    }
     func toggleFavorite(_ track: ReferenceTrack) { favoriteAction(track.id) }
 }
 
@@ -115,13 +124,12 @@ struct SongMenuHost<Content: View>: View {
         }
         primary.append(.init(id: "favorite", title: liked ? "取消喜欢" : "喜欢", systemImage: "star.fill") { actions.toggleFavorite(track) })
         primary.append(.init(id: "playlist", title: "加入", systemImage: "text.badge.plus") { actions.addToPlaylist(track) })
-        var secondary: [SongRowAction] = [
+        let secondary: [SongRowAction] = [
             .init(id: "playNext", title: "下一首播放", systemImage: "text.line.first.and.arrowtriangle.forward") { player.enqueue(track, next: true) },
             .init(id: "playLast", title: "最后播放", systemImage: "text.line.last.and.arrowtriangle.forward") { player.enqueue(track, next: false) },
             .init(id: "album", title: "查看专辑", systemImage: "music.note.square.stack") { actions.openAlbum(track) }
         ]
-        if track.id.hasPrefix("netease:") { secondary.removeAll { $0.id == "album" } }
-        let artists = (track.id.hasPrefix("netease:") ? [] : actions.artistNames(for: track)).enumerated().map { index, name in
+        let artists = actions.artistNames(for: track).enumerated().map { index, name in
             SongRowAction(id: "artist/\(index)", title: name, systemImage: "music.microphone") { actions.openArtist(name, track: track) }
         }
         return .init(primary: primary, secondary: secondary, artistTitle: "查看艺人", artists: artists, extras: extras)

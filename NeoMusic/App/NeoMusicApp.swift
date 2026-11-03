@@ -4,6 +4,7 @@ import SwiftUI
 struct NeoMusicApp: App {
     @State private var account: NeteaseAccount
     @State private var integration: OnlineMusicIntegration
+    @State private var artists: ArtistMusicIntegration
     @State private var home: HomeMusicIntegration
     init() {
         ArtworkImagePipeline.configureMemoryCache()
@@ -12,6 +13,7 @@ struct NeoMusicApp: App {
         _account = State(initialValue: account)
         _integration = State(initialValue: OnlineMusicIntegration(account: account))
         _home = State(initialValue: HomeMusicIntegration(account: account))
+        _artists = State(initialValue: ArtistMusicIntegration(account: account))
     }
     @Environment(\.scenePhase) private var scenePhase
     var body: some Scene {
@@ -48,10 +50,15 @@ struct NeoMusicApp: App {
         LocalLibrary.app
             .environment(account)
             .environment(\.homeMusicIntegration, home)
+            .environment(\.artistMusicIntegration, artists)
             .task {
                 home.connect()
+                artists.connect()
                 integration.connect()
                 await integration.connectLyrics()
+                #if DEBUG
+                if ProcessInfo.processInfo.arguments.contains("-artistReadProbe") { await NeteaseArtistReadProbe.run() }
+                #endif
                 async let local: Void = LocalLibrary.runtime.refresh()
                 async let online: Void = account.restore()
                 _ = await (local, online)

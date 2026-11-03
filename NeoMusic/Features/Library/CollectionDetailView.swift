@@ -736,10 +736,17 @@ private final class AlbumSongsController: UICollectionViewController {
         guard let song = songsByID[id] else { return UIMenu(children: []) }
         let downloads = environment.libraryDownloads
         let downloaded = downloads?.state(of: id) == .downloaded
-        return environment.songMenuActions.albumTrackSections(for: song, isDownloaded: downloaded,
+        var sections = environment.songMenuActions.albumTrackSections(for: song, isDownloaded: downloaded,
             download: { downloads?.download([song]) }, removeDownload: { downloads?.remove([song]) },
             requestDelete: { [weak self] in self?.confirmDeletion(song, fromSwipe: false) },
-            notify: environment.collectionMenuActions.notify).nativeMenu(firstSectionIsRow: !downloaded)
+            notify: environment.collectionMenuActions.notify)
+        if !song.artistReferences.isEmpty {
+            let open = environment.openLibraryRoute
+            sections.append(song.artistReferences.map { artist in
+                LibraryMenuItem(title: artist.name, systemImage: "music.microphone") { open(.artist(artist.id)) }
+            })
+        }
+        return sections.nativeMenu(firstSectionIsRow: !downloaded)
     }
 
     override func collectionView(_ collectionView: UICollectionView, contextMenuConfigurationForItemsAt indexPaths: [IndexPath], point: CGPoint) -> UIContextMenuConfiguration? {

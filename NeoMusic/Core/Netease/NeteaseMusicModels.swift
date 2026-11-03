@@ -8,6 +8,8 @@ struct NeteaseMusicSong: Codable, Sendable, Identifiable {
     let artworkURL: URL?
     let duration: Double
     var unavailable = false
+    var artists: [NeteaseArtistReference]? = nil
+    var albumID: Int64? = nil
 }
 struct NeteaseMusicPlaylist: Codable, Sendable, Identifiable {
     let id: Int64

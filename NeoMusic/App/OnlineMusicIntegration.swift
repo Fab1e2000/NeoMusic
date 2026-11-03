@@ -90,7 +90,8 @@ final class OnlineMusicIntegration {
                 album: value.album, albumArtist: value.artist, trackNumber: 0,
                 artwork: artworkURL.map(Artwork.file) ?? .missing, artworkURL: artworkURL,
                 duration: Int(value.duration), isFavorite: music.likedIDs.contains(value.id),
-                favoriteAddedAt: music.likedAt[value.id], unavailabilityReason: value.unavailable ? "暂无完整音源" : nil)
+                favoriteAddedAt: music.likedAt[value.id], unavailabilityReason: value.unavailable ? "暂无完整音源" : nil, onlineAlbumID: value.albumID,
+                artistReferences: (value.artists ?? []).map { .init(id: "catalog:artist:\($0.id)", name: $0.name) })
         }
         let favoritesID = music.playlists.first(where: \.isFavorites)?.id
         let favoritesOrder = favoritesID.flatMap { music.playlistTracks[$0] } ?? []

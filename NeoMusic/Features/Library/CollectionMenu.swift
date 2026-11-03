@@ -165,7 +165,7 @@ struct CollectionMenuActions {
 
     private func toggleFavoriteAndNotify(_ item: LibraryShelfItem, _ route: LibraryRoute) {
         toggleFavorite(route)
-        notify(item.isFavorite ? .unfavorited : .favorited)
+        if !item.id.hasPrefix("catalog:") { notify(item.isFavorite ? .unfavorited : .favorited) }
     }
 
     /// “移到文件夹”：与 Apple Music 一样弹出选择页，而不是子菜单。
@@ -481,7 +481,7 @@ private struct SongContextMenu: ViewModifier {
     func body(content: Content) -> some View {
         let lines = [song.title, song.artist, song.album]
         content.contextMenu {
-            LibraryMenuContents(sections: actions.sections(for: song) { openLibraryRoute(.album(song.albumID)) })
+            SongNavigationMenu(song: song)
         } preview: {
             MenuPreviewCard(artwork: song.artwork, lines: lines)
                 .frame(width: MenuPreviewCard.size(for: lines).width, height: MenuPreviewCard.size(for: lines).height)
@@ -496,7 +496,7 @@ struct SongMenuContents: View {
     @Environment(\.openLibraryRoute) private var openLibraryRoute
 
     var body: some View {
-        LibraryMenuContents(sections: actions.sections(for: song) { openLibraryRoute(.album(song.albumID)) })
+        SongNavigationMenu(song: song)
     }
 }
 
@@ -575,5 +575,22 @@ struct MenuPreviewCard: View {
         .background(Color(.systemBackground))
         .clipShape(.rect(cornerRadius: 32))
         .ignoresSafeArea()
+    }
+}
+
+private struct SongNavigationMenu: View {
+    let song: LibrarySongItem
+    @Environment(\.songMenuActions) private var actions
+    @Environment(\.openLibraryRoute) private var open
+    var body: some View {
+        LibraryMenuContents(sections: actions.sections(for: song) { open(.album(song.albumID)) })
+        if song.isOnline {
+            Section {
+                if song.onlineAlbumID != nil { Button("前往专辑", systemImage: "music.note.square.stack") { open(.album(song.albumID)) } }
+                ForEach(song.artistReferences, id: \.id) { artist in
+                    Button(artist.name, systemImage: "music.microphone") { open(.artist(artist.id)) }
+                }
+            }
+        }
     }
 }

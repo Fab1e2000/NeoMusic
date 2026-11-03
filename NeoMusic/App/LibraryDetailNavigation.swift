@@ -35,6 +35,7 @@ final class LibraryDetailNavigation: NSObject, UINavigationControllerDelegate {
     func makePage(_ content: AnyView, route: LibraryRoute?) -> LibraryDetailHostingController {
         let chrome = LibraryNavigationChrome(isRoot: route == nil, route: route)
         let page = LibraryDetailHostingController(chrome: chrome)
+        if case .artist = route { chrome.setColorScheme(.dark) }
         page.updateEnvironment = { [weak self, weak page] environment in
             guard let page else { return }
             page.rootView = AnyView(content
@@ -193,7 +194,7 @@ extension LibraryRoute {
         case .category(let value): category = value
         case .downloadedCategory(.downloaded): return nil // No destination for this route.
         case .downloadedCategory(let value): category = value
-        case .album, .artist, .playlist, .playlistFolder: return nil
+        case .album, .artist, .artistSection, .playlist, .playlistFolder: return nil
         }
         switch category {
         case .playlists: return ("播放列表", .large)

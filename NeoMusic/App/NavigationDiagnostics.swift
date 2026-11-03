@@ -335,6 +335,7 @@ extension LibraryRoute {
         case .album: "album"
         case .playlist: "playlist"
         case .artist: "artist"
+        case .artistSection(_, let section): "artist.\(section.rawValue)"
         case .category(let category): "category.\(category)"
         case .downloadedCategory(let category): "downloaded.\(category)"
         case .playlistFolder: "playlistFolder"

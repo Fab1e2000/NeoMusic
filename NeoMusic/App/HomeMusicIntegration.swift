@@ -129,7 +129,8 @@ import Observation
         return LibrarySongItem(id: id, title: song.title, artist: song.artist, album: song.album, albumArtist: song.artist, trackNumber: 0,
                                artwork: url.map(Artwork.file) ?? .missing, artworkURL: url, duration: Int(song.duration),
                                isFavorite: account.music?.likedIDs.contains(song.id) == true,
-                               favoriteAddedAt: account.music?.likedAt[song.id], unavailabilityReason: song.unavailable ? "暂无完整音源" : nil)
+                               favoriteAddedAt: account.music?.likedAt[song.id], unavailabilityReason: song.unavailable ? "暂无完整音源" : nil, onlineAlbumID: song.albumID,
+                artistReferences: (song.artists ?? []).map { .init(id: "catalog:artist:\($0.id)", name: $0.name) })
     }
     private func updateDetail(_ id: String, item: LibraryPlaylistItem, songs: [NeteaseMusicSong], clearError: Bool = false) {
         var item = item

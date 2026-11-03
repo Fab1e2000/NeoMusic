@@ -27,6 +27,34 @@ final class NeteaseAccountTests: XCTestCase {
                        saveAvatarSnapshot: { await storage.saveAvatar($0, profile: $1) })
     }
 
+    func testServiceAuthenticationErrorPreservesValidCredential() async throws {
+        let storage = AccountTestStorage()
+        var requests = 0
+        let account = makeAccount(storage) { _ in requests += 1; return self.first }
+        try await account.completeLogin(credential: credential("valid"))
+        await account.recheckAuthentication()
+        XCTAssertEqual(requests, 2)
+        XCTAssertEqual(account.profile?.userID, first.userID)
+        XCTAssertEqual(storage.saved?.profile.userID, first.userID)
+        XCTAssertEqual(account.validationState, .valid)
+        XCTAssertNil(account.error)
+    }
+
+    func testServiceAuthenticationRecheckClearsExpiredCredential() async throws {
+        let storage = AccountTestStorage()
+        var expired = false
+        let account = makeAccount(storage) { _ in
+            if expired { throw NeteaseAccountError.authenticationRequired }
+            return self.first
+        }
+        try await account.completeLogin(credential: credential("expired"))
+        expired = true
+        await account.recheckAuthentication()
+        XCTAssertNil(storage.saved)
+        XCTAssertEqual(account.validationState, .requiresLogin)
+        XCTAssertNotNil(account.error)
+    }
+
     func testInitializationHasNoSideEffectsAndEmptyRestoreDoesNotRequestAccount() async {
         let storage = AccountTestStorage()
         var requests = 0

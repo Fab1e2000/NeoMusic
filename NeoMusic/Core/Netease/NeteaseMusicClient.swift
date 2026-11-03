@@ -2,9 +2,9 @@
 import Foundation
 
 @MainActor final class NeteaseMusicClient {
-    private let transport: NeteaseAccountClient
+    let transport: NeteaseAccountClient
     init(transport: NeteaseAccountClient = NeteaseAccountClient()) { self.transport = transport }
-    private func read<T: Decodable>(_ path: String, _ fields: [String: Any], _ credential: NeteaseCredential?) async throws -> T {
+    func read<T: Decodable>(_ path: String, _ fields: [String: Any], _ credential: NeteaseCredential?) async throws -> T {
         try await JSONDecoder().decode(T.self, from: transport.request(path: path, fields: fields, credential: credential))
     }
     func playlists(userID: Int64, credential: NeteaseCredential) async throws -> [NeteaseMusicPlaylist] {
@@ -84,7 +84,7 @@ import Foundation
         let response: Response = try await read("/api/song/lyric", ["id": id, "lv": -1, "tv": -1], credential)
         return .init(original: response.lrc?.lyric ?? "", translation: response.tlyric?.lyric ?? "")
     }
-    nonisolated private static func url(_ value: String?) -> URL? {
+    nonisolated static func url(_ value: String?) -> URL? {
         guard let value, var parts = URLComponents(string: value), ["https", "http"].contains(parts.scheme) else { return nil }
         parts.scheme = "https"
         return parts.url
@@ -95,10 +95,10 @@ import Foundation
         let id: Int64; let name: String; let creator: Creator; let coverImgUrl: String?; let trackCount: Int; let specialType: Int?; let trackIds: [Track]?; let createTime: Double?; let updateTime: Double?
         var model: NeteaseMusicPlaylist { .init(id: id, title: name, creator: creator.nickname, creatorID: creator.userId, artworkURL: NeteaseMusicClient.url(coverImgUrl), trackCount: trackCount, isFavorites: specialType == 5, createTime: createTime.map { Date(timeIntervalSince1970: $0 / 1000) }, updateTime: updateTime.map { Date(timeIntervalSince1970: $0 / 1000) }) }
     }
-    private struct Song: Decodable {
-        struct Artist: Decodable { let name: String }
-        struct Album: Decodable { let name: String; let picUrl: String? }
+    struct Song: Decodable {
+        struct Artist: Decodable { let id: Int64?; let name: String }
+        struct Album: Decodable { let id: Int64?; let name: String; let picUrl: String? }
         let id: Int64; let name: String; let ar: [Artist]; let al: Album; let dt: Double
-        var model: NeteaseMusicSong { .init(id: id, title: name, artist: ar.map(\.name).joined(separator: " / "), album: al.name, artworkURL: NeteaseMusicClient.url(al.picUrl), duration: dt / 1000) }
+        var model: NeteaseMusicSong { .init(id: id, title: name, artist: ar.map(\.name).joined(separator: " / "), album: al.name, artworkURL: NeteaseMusicClient.url(al.picUrl), duration: dt / 1000, artists: ar.compactMap { artist in artist.id.map { NeteaseArtistReference(id: $0, name: artist.name, artworkURL: nil) } }, albumID: al.id) }
     }
 }

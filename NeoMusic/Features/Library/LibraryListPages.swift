@@ -3,7 +3,7 @@ import SwiftUI
 /// 资料库里的一首歌。
 struct LibrarySongItem: Identifiable, Equatable {
     let id: String
-    var albumID: String { albumDirectory.map { "folder:" + $0 } ?? (albumArtist + "\u{001F}" + album) }
+    var albumID: String { onlineAlbumID.map { "catalog:album:" + String($0) } ?? albumDirectory.map { "folder:" + $0 } ?? (albumArtist + "\u{001F}" + album) }
     let title: String
     let artist: String
     let album: String
@@ -22,6 +22,8 @@ struct LibrarySongItem: Identifiable, Equatable {
     var isFavorite = false
     var favoriteAddedAt: Date? = nil
     var unavailabilityReason: String? = nil
+    var onlineAlbumID: Int64? = nil
+    var artistReferences: [LibraryArtistReference] = []
 
     var onlineOwnerID: String? {
         let parts = id.split(separator: ":")
@@ -51,6 +53,11 @@ extension LibrarySongItem {
         if left != right { return left < right }
         return lhs.id.localizedStandardCompare(rhs.id) == .orderedAscending
     }
+}
+
+struct LibraryArtistReference: Equatable {
+    let id: String
+    let name: String
 }
 
 /// 资料库里的一位艺人；本地音乐没有艺人照片时使用占位图。

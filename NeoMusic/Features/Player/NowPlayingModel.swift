@@ -311,6 +311,7 @@ final class NowPlayingModel {
     }
 
     func invalidateOnlinePlayback(ownerID: String?) {
+        let interruptedPlayback = isPlaying || resolvingResource
         if let owner = pendingCollection?.ownerID, owner != ownerID { pendingCollection = nil }
         if let owner = pendingPlay?.collection?.ownerID, owner != ownerID { pendingPlay = nil }
         resourceRevision = UUID()
@@ -323,7 +324,7 @@ final class NowPlayingModel {
         }
         if hasCurrent, unavailableIDs.contains(current.id), current.id.hasPrefix("netease:") {
             audio?.stop(); loadedEntry = nil; isPlaying = false; actualQuality = nil
-            errorMessage = "请登录原账号后重试"
+            if interruptedPlayback { errorMessage = "请登录原账号后重试" }
         }
         updateNowPlaying(); saveQueue()
     }
@@ -519,10 +520,13 @@ final class NowPlayingModel {
         if hasCurrent, unavailableIDs.contains(current.id), !unavailable.contains(current.id) { errorMessage = nil }
         if unavailable != unavailableIDs { unavailableIDs = unavailable }
         if hasCurrent && unavailableIDs.contains(current.id) {
+            let interruptedPlayback = isPlaying || resolvingResource
             resourceRevision = UUID(); resourceTask?.cancel(); nextResourceTask?.cancel()
             resourceTask = nil; resolvingResource = false
             audio?.stop(); loadedEntry = nil; isPlaying = false; actualQuality = nil
-            errorMessage = current.unavailabilityReason ?? (current.isOnline ? "在线歌曲当前不可用，请重试" : "当前文件已移除")
+            if interruptedPlayback {
+                errorMessage = current.unavailabilityReason ?? (current.isOnline ? "在线歌曲当前不可用，请重试" : "当前文件已移除")
+            }
         }
         if changed { updateNowPlaying() }
     }

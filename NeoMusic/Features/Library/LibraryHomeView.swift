@@ -20,6 +20,7 @@ enum LibraryRoute: Hashable {
     case downloadedCategory(LibraryCategory)
     case album(String)
     case artist(String)
+    case artistSection(String, ArtistSection)
     case playlist(String)
     case playlistFolder(String)
 }

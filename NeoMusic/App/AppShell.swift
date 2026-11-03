@@ -1,6 +1,7 @@
 import SwiftUI
 
 extension EnvironmentValues {
+    @Entry var artistMusicIntegration: ArtistMusicIntegration? = nil
     @Entry var homeMusicIntegration: HomeMusicIntegration? = nil
 }
 
@@ -27,6 +28,7 @@ struct AppShell<Library: View>: View {
     @State private var homeNavigation = LibraryDetailNavigation()
     @State private var emptyHome = HomeContentModel()
     @Environment(\.homeMusicIntegration) private var home
+    @Environment(\.artistMusicIntegration) private var artists
     @Environment(NeteaseAccount.self) private var account
     private var chromeColorScheme: ColorScheme? {
         switch selection {
@@ -39,14 +41,17 @@ struct AppShell<Library: View>: View {
     var body: some View {
         LibraryAppTabs(selection: $selection, navigation: detailNavigation,
             library: library.libraryToasts(toasts).playlistDeletionConfirmation(playlistLibrary),
-            destination: { AnyView(detailDestination($0).libraryToasts(toasts)) },
+            destination: { AnyView((artists?.destination($0) ?? detailDestination($0)).libraryToasts(toasts)) },
             initialPath: libraryPath, colorScheme: chromeColorScheme,
             homeNavigation: homeNavigation,
             homeContent: AnyView(HomeFeedView(model: home?.model ?? emptyHome)),
-            homeDestination: { home?.destination(for: $0) ?? detailDestination($0) })
+            homeDestination: { artists?.destination($0) ?? home?.destination(for: $0) ?? detailDestination($0) })
         .ignoresSafeArea()
         .sheet(isPresented: Binding(get: { home?.showsLogin == true }, set: { home?.showsLogin = $0 }),
                onDismiss: { home?.loginDismissed() }) {
+            AccountPage(account: account, initialRoute: .login)
+        }
+        .sheet(isPresented: Binding(get: { artists?.showsLogin == true }, set: { artists?.showsLogin = $0 })) {
             AccountPage(account: account, initialRoute: .login)
         }
         .onChange(of: account.profile?.userID) { _, id in
@@ -68,8 +73,7 @@ struct AppShell<Library: View>: View {
                 pendingRoute = route
                 isPlayerPresented = false
             } else {
-                selection = .library
-                detailNavigation.open(route)
+                openInCurrentTab(route)
             }
         })
         .onChange(of: playlistLibrary.pendingAddition != nil) { _, pending in
@@ -82,12 +86,15 @@ struct AppShell<Library: View>: View {
         } message: { Text(nowPlaying?.errorMessage ?? "") }
 
     }
+    private func openInCurrentTab(_ route: LibraryRoute) {
+        if selection == .home { homeNavigation.open(route) }
+        else { selection = .library; detailNavigation.open(route) }
+    }
     private func finishPlayerNavigation() {
         isPlayerPresented = false
         guard let route = pendingRoute else { return }
         pendingRoute = nil
-        selection = .library
-        detailNavigation.open(route)
+        openInCurrentTab(route)
     }
 
 }
