@@ -6,6 +6,43 @@ final class HomeFeedTests: XCTestCase {
         app.descendants(matching: .any).matching(identifier: identifier).firstMatch
     }
 
+    func testRootAccountToolbarMatchesLibraryAcrossAllTabs() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launch()
+        let libraryTab = app.tabBars.buttons["资料库"]
+        XCTAssertTrue(libraryTab.waitForExistence(timeout: 10))
+        libraryTab.tap()
+        XCTAssertTrue(app.navigationBars["资料库"].waitForExistence(timeout: 5))
+        let account = app.buttons["account.open"]
+        XCTAssertTrue(account.waitForExistence(timeout: 5))
+        XCTAssertTrue(account.isHittable)
+        let libraryFrame = account.frame
+
+        for title in ["主页", "新发现", "广播", "资料库", "搜索"] {
+            app.tabBars.buttons[title].tap()
+            let navigationBar = app.navigationBars[title]
+            XCTAssertTrue(navigationBar.waitForExistence(timeout: 5))
+            XCTAssertTrue(account.isHittable, "Missing account entry in \(title)")
+            let frame = account.frame
+            XCTAssertEqual(frame.minX, libraryFrame.minX, accuracy: 1, "\(title) account x")
+            XCTAssertEqual(frame.minY, libraryFrame.minY, accuracy: 1, "\(title) account y")
+            XCTAssertEqual(frame.width, libraryFrame.width, accuracy: 1, "\(title) account width")
+            XCTAssertEqual(frame.height, libraryFrame.height, accuracy: 1, "\(title) account height")
+            attachScreenshot("\(title) account toolbar", app: app)
+
+            account.tap()
+            let identity = app.buttons["account.identity"]
+            XCTAssertTrue(identity.waitForExistence(timeout: 5))
+            let close = app.buttons["account.close"]
+            XCTAssertTrue(close.isHittable)
+            close.tap()
+            XCTAssertTrue(identity.waitForNonExistence(timeout: 5))
+            XCTAssertTrue(navigationBar.isHittable)
+            XCTAssertTrue(account.isHittable)
+        }
+    }
+
     func testHomeLayoutCarouselsAndTabState() {
         continueAfterFailure = false
         let app = XCUIApplication()
@@ -28,7 +65,7 @@ final class HomeFeedTests: XCTestCase {
         }
         attachScreenshot("Home first screen", app: app)
 
-        app.buttons["home.account"].tap()
+        app.buttons["account.open"].tap()
         let identity = app.buttons["account.identity"]
         XCTAssertTrue(identity.waitForExistence(timeout: 5))
         XCTAssertTrue(identity.label.contains("登录网易云音乐"))
@@ -86,9 +123,9 @@ final class HomeFeedTests: XCTestCase {
         }
         attachScreenshot("Home final section", app: app)
 
-        let title = app.staticTexts["home.title"]
+        let title = app.navigationBars["主页"]
         for _ in 0..<18 {
-            if title.isHittable { break }
+            if recent.exists, abs(recent.frame.minY - originalRecent.minY) <= 1 { break }
             feed.swipeDown(velocity: .fast)
         }
         XCTAssertTrue(title.isHittable)

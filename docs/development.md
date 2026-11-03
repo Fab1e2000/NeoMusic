@@ -25,7 +25,7 @@
 ## 正式运行路径
 
 - **应用启动**：`NeoMusicApp` 立即显示 `LocalLibrary` 装配的 `AppShell`，资料库标题、顶部按钮、分类入口与系统标签栏先出现。`LocalLibraryRuntime` 将恢复已存状态与核对音乐目录分开：在缓存 actor 读取曲目索引、歌单与队列，再发布到界面；恢复期间歌曲与封面留空，新建歌单和分类导航禁用。歌单和队列保留暂未解析的歌曲标识，缓存缺失或引用不完整时也能先结束恢复，随后扫描补齐；已知旧标识修复仍在解析持久化引用前完成。后台扫描失败或取消保留已显示内容，未变化的内容跳过发布与重写，回到前台继续刷新资料库。
-- **网易云账户**：`NeoMusicApp` 持有唯一 `NeteaseAccount`，初始化时读取已保存的最大 192 px 头像显示快照，供首帧使用；Keychain 恢复与网络校验继续异步执行，与本地资料库恢复并行。读取 Keychain 后发布账户资料，核对快照所属用户，并后台刷新头像；同一用户的头像 URL 变化时保留现有显示，直到新图加载成功。从后台返回时重新校验账户。`LibraryAppTabs` 与资料库导航创建 SwiftUI hosting root 时显式传递同一账户实例；主页和资料库头像共用账户状态。恢复和校验独立于账户页面是否打开。
+- **网易云账户**：`NeoMusicApp` 持有唯一 `NeteaseAccount`，初始化时读取已保存的最大 192 px 头像显示快照，供首帧使用；Keychain 恢复与网络校验继续异步执行，与本地资料库恢复并行。读取 Keychain 后发布账户资料，核对快照所属用户，并后台刷新头像；同一用户的头像 URL 变化时保留现有显示，直到新图加载成功。从后台返回时重新校验账户。`LibraryAppTabs` 与资料库导航创建 SwiftUI hosting root 时显式传递同一账户实例；五个主标签的头像共用账户状态。恢复和校验独立于账户页面是否打开。
 - **启动呈现**：页面完成首次显示且状态恢复后，整块置顶区作为一行插入原生列表，推动分类与最近添加向下移动；页面显示状态来自 UIKit 的 `viewDidAppear`，返回资料库保留置顶布局。内容填入不替换导航容器。各标签页面通过原生 `UITab` 内容提供闭包按需创建。
 - **启动缓存与封面**：`tracks.json` 是唯一曲目索引，只保存元数据、封面键与背景色；`tracks.json.startup` 保存按内容去重的原始封面文件。既有启动索引首次导入后移除，原来内嵌的封面在缓存 actor 中分离；背景色继续复用 `artwork-backdrops.json`，新封面才计算。界面通过文件 URL 引用封面，按实际显示尺寸用 ImageIO 在后台生成缩略图，并共享内存缓存；播放器适配直接使用同一文件。后台扫描修复缺失的派生封面。这些缓存均可重建，音乐文件、歌单与队列的格式保持不变。
 - **播放**：`NowPlayingModel` 拥有队列与播放状态，恢复时仅还原队列、进度和暂停状态并注册系统媒体动作；首次播放才创建 `LocalPlaybackEngine` 和加载音频。系统媒体封面异步读取，取消旧请求后更新；相邻封面预取在播放或展开播放器时启动。`ReferencePlayerState` 只适配这个真实模型，不维护第二份演示队列或模拟时钟。
@@ -37,7 +37,7 @@
 
 ## 主页展示
 
-`Features/Home` 移植自 `NeoMusic_Experiment/OrangeCardDemo` 的 `HomeFeedView.swift`、`HomeFixtures.swift` 和 `HomeArtwork.swift`，保留 15 个栏目及固定展示数据。它不读写本地资料库，也不提供在线推荐、播放或详情服务。主页标签接入原有 `UITabBarController`，底部继续使用真实播放器；右上角头像打开正式网易云账户页。
+`Features/Home` 移植自 `NeoMusic_Experiment/OrangeCardDemo` 的 `HomeFeedView.swift`、`HomeFixtures.swift` 和 `HomeArtwork.swift`，保留 15 个栏目及固定展示数据。它不读写本地资料库，也不提供在线推荐、播放或详情服务。主页标签接入原有 `UITabBarController`，底部继续使用真实播放器；标题和头像使用 `NavigationStack`、`inlineLarge` 与统一的 `AccountToolbar`，导航滚动采用资料库的原生策略。
 
 横排使用 Apple 的 [`scrollTargetLayout` 与 `scrollTargetBehavior(.viewAligned)`](https://developer.apple.com/documentation/swiftui/view/scrolltargetbehavior(_:))，由系统处理手势、减速和卡片对齐。主页浅色外观及 248×330 pt 大卡、161 pt 专辑封面、20 pt 边距沿用实验页面。
 
@@ -141,7 +141,7 @@ git push origin vX.Y.Z
 
 头像恢复与账户网络校验并行，显示快照的保存归属已有头像任务。网易云会为同一用户、同一张图片轮换 CDN 地址；同一用户的 URL 更新保留当前头像，取消并等待旧请求收尾后按新 URL 刷新，新图成功返回后替换显示。请求与结果发布仍严格核对会话、用户 ID 和完整 URL，旧 URL 的迟到结果丢弃。成功切换至其他用户、退出、明确鉴权失效或头像变为空时清理缓存与快照；切换或退出失败保留原缓存。
 
-账户页面位于 `Features/Account`，正式构建中从主页或资料库右上角头像进入。未登录先显示账户页，点身份卡后在临时 WebKit 页面完成网易云官网认证；已登录显示真实昵称和头像，账户设置提供切换及退出。会话保存在 NeoMusic 专用 Keychain 项，切换成功后替换原账户，取消或失败保留原账户。退出只清理本机 NeoMusic 会话，本地音乐和歌单保持独立。
+账户页面位于 `Features/Account`，正式构建中从主页、新发现、广播、资料库、搜索五个主标签的右上角头像进入。各入口使用同一 `AccountToolbar`，以资料库现有位置和 36 pt 头像样式为准。未登录先显示账户页，点身份卡后在临时 WebKit 页面完成网易云官网认证；已登录显示真实昵称和头像，账户设置提供切换及退出。会话保存在 NeoMusic 专用 Keychain 项，切换成功后替换原账户，取消或失败保留原账户。退出只清理本机 NeoMusic 会话，本地音乐和歌单保持独立。
 
 未登录、已登录、账户设置三态原生效果已获用户确认。Debug 仍可通过启动参数查看隔离的内存状态：
 
@@ -160,6 +160,7 @@ xcrun simctl launch <模拟器 UUID> com.elsterlee.NeoMusic -neteaseAccountPrevi
 ## 当前限制与后续准备
 
 - 网易云账户首轮已按用户确认收尾并本地提交，包含真实账户闭环、启动头像恢复及同用户 CDN 地址轮换时的连续显示。歌单、推荐、搜索、在线播放及下载属于后续范围。
+- 五个主标签头像统一已接入，主页栏目与内容保持原样，新发现、广播及搜索的主体内容仍为占位。2 项定向 UI 回归与模块边界检查通过，原生截图已核对，真机 Release 包已覆盖安装；本轮待用户体验验收。
 - 专辑封面取色仍包含私有 `MPArtworkColorAnalyzer` 实验；本次整理不修改其实现，也不代表完成 App Store 发布验收。
 - 播放器连续交互、不同封面可读性及完整系统媒体能力仍按 [roadmap](roadmap.md) 的状态验收。
 - 首次公开从清理后的当前快照开始，旧开发历史仅保留在本地归档分支，不推送到公开仓库；根许可证为 [GPL-3.0](../LICENSE)。

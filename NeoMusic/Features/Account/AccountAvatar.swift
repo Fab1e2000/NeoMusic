@@ -28,12 +28,11 @@ struct AccountAvatar: View {
 
 struct AccountButton: View {
     @Environment(NeteaseAccount.self) private var account
-    var size: CGFloat = 36
     @State private var isPresented = false
 
     var body: some View {
         Button { isPresented = true } label: {
-            AccountAvatar(account: account, size: size)
+            AccountAvatar(account: account, size: 36)
         }
         .buttonStyle(.plain)
         .accessibilityLabel("账户")

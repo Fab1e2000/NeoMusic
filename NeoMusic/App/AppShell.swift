@@ -82,6 +82,7 @@ struct PlaceholderTab: View {
             ContentUnavailableView(title, systemImage: "hammer", description: Text("本阶段暂未开放。"))
                 .navigationTitle(title)
                 .toolbarTitleDisplayMode(.inlineLarge)
+                .toolbar { AccountToolbar() }
         }
     }
 }

@@ -13,37 +13,27 @@ enum HomeMetrics {
 
 struct HomeFeedView: View {
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 25) {
-                header
+        NavigationStack {
+            ScrollView {
                 LazyVStack(alignment: .leading, spacing: HomeMetrics.sectionSpacing) {
                     ForEach(HomeFixtures.sections) { section in
                         HomeShelfView(section: section)
                     }
                 }
+                .padding(.top, 15)
+                .padding(.bottom, 24)
             }
-            .padding(.bottom, 24)
+            .accessibilityIdentifier("home.feed")
+            .background(.white)
+            .scrollEdgeEffectStyle(.soft, for: .top)
+            .navigationTitle("主页")
+            .toolbarTitleDisplayMode(.inlineLarge)
+            .toolbar { AccountToolbar() }
+            .toolbarMinimizationBehavior(.onScrollDown, for: .navigationBar)
+            .toolbarMinimizationRestoration(.atScrollEdge, for: .navigationBar)
+            .toolbarMinimizationSafeAreaAdjustment(.disabled, for: .navigationBar)
         }
-        .accessibilityIdentifier("home.feed")
-        .background(.white)
-        .scrollEdgeEffectStyle(.soft, for: .top)
         .preferredColorScheme(.light)
-    }
-
-    private var header: some View {
-        HStack {
-            Text("主页")
-                .font(.system(size: 34, weight: .bold))
-                .accessibilityAddTraits(.isHeader)
-                .accessibilityIdentifier("home.title")
-            Spacer()
-            AccountButton(size: 38)
-                .padding(3)
-                .glassEffect(.regular.interactive(), in: .circle)
-                .accessibilityIdentifier("home.account")
-        }
-        .frame(height: 44)
-        .padding(.horizontal, HomeMetrics.margin)
     }
 }
 
