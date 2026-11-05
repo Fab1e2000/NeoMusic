@@ -22,6 +22,7 @@ struct ReferenceNowPlayingLayout {
     var contentSize = CGSize(width: 402, height: 778)
     var horizontalScale: CGFloat { contentSize.width / 402 }
     var verticalScale: CGFloat { contentSize.height / 778 }
+    var artworkSide: CGFloat { min(width(354), max(170, contentY(490) - contentY(112) - 22)) }
 
     func width(_ value: CGFloat) -> CGFloat { value * horizontalScale }
     func contentY(_ screenY: CGFloat) -> CGFloat { (screenY - 62) * verticalScale }
@@ -38,6 +39,8 @@ private struct NowPlayingLayoutKey: EnvironmentKey {
 }
 
 extension EnvironmentValues {
+    @Entry var playerVisualsActive = true
+
     var nowPlayingLayout: ReferenceNowPlayingLayout {
         get { self[NowPlayingLayoutKey.self] }
         set { self[NowPlayingLayoutKey.self] = newValue }

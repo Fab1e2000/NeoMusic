@@ -1,0 +1,15 @@
+网易云下载音频处理
+
+NeteaseDownloadedAudio.swift 局部改编自 NeoDizzy，遵循 GPL-3.0。
+NCM 容器布局与算法参照 taurusxin/ncmdump：
+https://github.com/taurusxin/ncmdump/blob/4ede4cee1bad35bbf28a7b5524feeca0422a4feb/src/ncmcrypt.cpp
+采用 Swift / CommonCrypto 实现，没有嵌入上游可执行文件。
+
+音频标签使用 TagLib 官方 2.3.2，提交 deadc2990767dfbda0701e0ab35fdeea653db08f。
+https://github.com/taglib/taglib
+上游源码未修改，按其 LGPL-2.1 / MPL 双许可证分发。
+utfcpp 固定于提交 2d8e20b22dcb3e9b3c4f52103182ebda949c6089，MIT 许可。
+完整许可随应用附带 AudioTagsLicenses.txt；仓库副本见 Packages/AudioTags。
+标签桥接参考 NeoDizzy（GPL-3.0），只包含下载所需 MP3／FLAC 标签和封面操作。
+
+回归测试中的短音频和 NCM 文件为 NeoDizzy 生成的合成静音样本，不包含商业音乐或账号数据。

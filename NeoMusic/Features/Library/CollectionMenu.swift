@@ -159,9 +159,25 @@ struct CollectionMenuActions {
     var delete: (LibraryRoute) -> Void = { _ in }
     /// 显示操作完成的提示，例如“已喜爱”“已置顶”。
     var notify: (LibraryToast) -> Void = { _ in }
-    /// 移除下载：本地音乐暂无对应功能，先与 Apple Music 保持一致地列出。
+    /// 请求移除完整集合的下载；宿主先显示共享文件确认。
     var removeDownload: (LibraryRoute) -> Void = { _ in }
     var download: (LibraryRoute) -> Void = { _ in }
+    var canDownload: (LibraryRoute) -> Bool = { _ in false }
+    var canRemoveDownload: (LibraryRoute) -> Bool = { _ in false }
+    var stopDownload: (LibraryRoute) -> Void = { _ in }
+    var downloads: LibraryDownloads? = nil
+
+    @MainActor private func downloadItem(_ route: LibraryRoute) -> LibraryMenuItem {
+        let summary = downloads?.collectionState(of: route)
+        if summary?.isActive == true {
+            return LibraryMenuItem(title: "停止下载", systemImage: "stop.circle.fill") { stopDownload(route) }
+        }
+        if summary?.isComplete == true {
+            return LibraryMenuItem(title: "已下载", systemImage: "checkmark.circle.fill", isDisabled: true)
+        }
+        let failed = (summary?.failedCount ?? 0) > 0
+        return LibraryMenuItem(title: failed ? "重试下载" : "下载", systemImage: failed ? "arrow.clockwise" : "arrow.down.circle.fill", isDisabled: !canDownload(route)) { download(route) }
+    }
 
     private func toggleFavoriteAndNotify(_ item: LibraryShelfItem, _ route: LibraryRoute) {
         toggleFavorite(route)
@@ -174,7 +190,7 @@ struct CollectionMenuActions {
     }
 
     /// 专辑详情复用卡片分组，省略已在页面显示的播放按钮；播放列表保留自己的菜单。
-    func toolbarSections(for item: LibraryShelfItem, route: LibraryRoute) -> LibraryMenuSections {
+    @MainActor func toolbarSections(for item: LibraryShelfItem, route: LibraryRoute) -> LibraryMenuSections {
         if case .album = route {
             var groups = sections(for: item, route: route)
             groups.remove(at: 1)
@@ -232,8 +248,8 @@ struct CollectionMenuActions {
     /// 菜单最后一组：已下载时“移除下载”（只删本地文件），以及资料库里的条目都有的“从资料库删除”。
     private func removalItems(_ route: LibraryRoute) -> [LibraryMenuItem] {
         var items: [LibraryMenuItem] = []
-        if isDownloaded(route) {
-            items.append(LibraryMenuItem(title: "移除下载", systemImage: "xmark.circle", isDisabled: true) { removeDownload(route) })
+        if canRemoveDownload(route) {
+            items.append(LibraryMenuItem(title: "移除下载", systemImage: "xmark.circle") { removeDownload(route) })
         }
         if canDelete(route) {
             items.append(LibraryMenuItem(title: "从资料库删除", systemImage: "trash", isDestructive: true) {
@@ -245,16 +261,16 @@ struct CollectionMenuActions {
 
     /// 专辑与播放列表的长按菜单分组，对照 Apple Music。共享本阶段不可用。
     /// 专辑未下载时首组为“下载、喜爱”横排；已下载时没有“下载”，“喜爱”单独成行，末尾多出“移除下载”。
-    func sections(for item: LibraryShelfItem, route: LibraryRoute) -> LibraryMenuSections {
+    @MainActor func sections(for item: LibraryShelfItem, route: LibraryRoute) -> LibraryMenuSections {
         let isPlaylist = if case .playlist = route { true } else { false }
         var quick: [LibraryMenuItem]
         if isPlaylist {
-            quick = [unavailableDownload, favoriteItem(isFavorite: item.isFavorite) { toggleFavoriteAndNotify(item, route) },
+            quick = [downloadItem(route), favoriteItem(isFavorite: item.isFavorite) { toggleFavoriteAndNotify(item, route) },
                      LibraryMenuItem(title: "共享", systemImage: "square.and.arrow.up.fill", isDisabled: true)]
         } else if isDownloaded(route) {
             quick = [favoriteItem(isFavorite: item.isFavorite, filled: false) { toggleFavoriteAndNotify(item, route) }]
         } else {
-            quick = [LibraryMenuItem(title: "下载", systemImage: "arrow.down.circle.fill") { download(route) },
+            quick = [downloadItem(route),
                      favoriteItem(isFavorite: item.isFavorite) { toggleFavoriteAndNotify(item, route) }]
         }
         var sections: LibraryMenuSections = [
@@ -329,7 +345,7 @@ struct CollectionCardLink<Label: View>: View {
                                    },
                                    preview: { AnyView(MenuPreviewCard(artwork: item.artwork, lines: item.previewLines)) },
                                    previewSize: MenuPreviewCard.size(for: item.previewLines),
-                                   commit: { NavigationDiagnostics.event("Card.commit", page: route.diagnosticPage); openLibraryRoute(route, sourceProvider: $0) }, tap: tap,
+                                   commit: { NavigationDiagnostics.event("Card.commit", page: route.diagnosticPage); openLibraryRoute(item, sourceProvider: $0) }, tap: tap,
                                    drag: drag, drop: drop)
                 .padding(-8)
                 .confirmationDialog(route.deletionMessage, isPresented: $isConfirmingDeletion, titleVisibility: .visible) {
@@ -396,6 +412,7 @@ extension LibraryShelfItem {
 
 /// 歌曲长按菜单与点按播放用到的操作。
 struct SongMenuActions {
+    var downloads: LibraryDownloads? = nil
     /// 从一组歌曲中的某一首开始播放。
     var play: (_ songs: [LibrarySongItem], _ startAt: Int, _ source: String) -> Void = { _, _, _ in }
     var playNext: (LibrarySongItem) -> Void = { _ in }
@@ -415,51 +432,46 @@ struct SongMenuActions {
                                        download: @escaping () -> Void, removeDownload: @escaping () -> Void,
                                        requestDelete: @escaping () -> Void,
                                        notify: @escaping (LibraryToast) -> Void) -> LibraryMenuSections {
-        if song.id.hasPrefix("netease:") { return sections(for: song, goToAlbum: {}) }
-        let favorite = { toggleFavorite(song); notify(song.isFavorite ? .unfavorited : .favorited) }
-        var sections: LibraryMenuSections = [
-            isDownloaded
-                ? [favoriteItem(isFavorite: song.isFavorite, filled: false, perform: favorite)]
-                : [LibraryMenuItem(title: "下载", systemImage: "arrow.down.circle.fill", perform: download),
-                   favoriteItem(isFavorite: song.isFavorite, perform: favorite)],
-            [LibraryMenuItem(title: song.isPinned ? "取消置顶歌曲" : "置顶歌曲", systemImage: song.isPinned ? "pin.slash" : "pin") {
-                togglePin(song)
-                notify(song.isPinned ? .unpinned : .pinned)
-             },
-             LibraryMenuItem(title: "添加到播放列表", systemImage: "text.badge.plus") { addToPlaylist(song) }],
-            libraryQueueMenuItems(playbackSource: playbackSource(),
-                                  playNext: { playNext(song) }, playLater: { playLater(song) },
-                                  notify: notify),
-        ]
-        var removal: [LibraryMenuItem] = []
-        if isDownloaded { removal.append(LibraryMenuItem(title: "移除下载", systemImage: "xmark.circle", isDisabled: true, perform: removeDownload)) }
-        removal.append(LibraryMenuItem(title: "从资料库删除", systemImage: "trash", isDestructive: true, perform: requestDelete))
-        sections.append(removal)
-        return sections
+        var groups = sections(for: song, goToAlbum: {})
+        if !song.isOnline {
+            groups.removeAll { group in group.contains { $0.title == "前往专辑" } }
+            groups.append([LibraryMenuItem(title: "从资料库删除", systemImage: "trash", isDestructive: true, perform: requestDelete)])
+        }
+        return groups
     }
 
-    /// 歌曲的菜单分组，对照 Apple Music。歌词本阶段不可用。
-    @MainActor func sections(for song: LibrarySongItem, goToAlbum: @escaping () -> Void) -> LibraryMenuSections {
-        if song.id.hasPrefix("netease:") {
-            return [
-                [favoriteItem(isFavorite: song.isFavorite) { toggleFavorite(song) }],
-                [LibraryMenuItem(title: "添加到播放列表", systemImage: "text.badge.plus") { addToPlaylist(song) }],
-                libraryQueueMenuItems(playbackSource: playbackSource(), playNext: { playNext(song) }, playLater: { playLater(song) })
-            ]
+    @MainActor private func downloadItem(for song: LibrarySongItem) -> LibraryMenuItem? {
+        guard let downloads else { return unavailableDownload }
+        let state = downloads.state(of: song.id)
+        if state == .downloaded { return nil }
+        if state?.isActive == true {
+            return LibraryMenuItem(title: "停止下载", systemImage: "stop.circle.fill") { downloads.stop([song]) }
         }
-        return [
-            [unavailableDownload, favoriteItem(isFavorite: song.isFavorite) { toggleFavorite(song) }],
-            [LibraryMenuItem(title: song.isPinned ? "取消置顶" : "置顶歌曲", systemImage: song.isPinned ? "pin.slash" : "pin") {
-                togglePin(song)
-             },
-             LibraryMenuItem(title: "添加到播放列表", systemImage: "text.badge.plus") { addToPlaylist(song) }],
-            libraryQueueMenuItems(playbackSource: playbackSource(),
-                                  playNext: { playNext(song) }, playLater: { playLater(song) }),
-            [LibraryMenuItem(title: "前往专辑", subtitle: song.album, systemImage: "square",
-                             customImage: MenuIcons.album, perform: goToAlbum),
-             LibraryMenuItem(title: "查看完整歌词", systemImage: "quote.bubble", isDisabled: true)],
-        ]
+        if case .failed(let message) = state {
+            return LibraryMenuItem(title: "重试下载", subtitle: message, systemImage: "arrow.clockwise", isDisabled: !downloads.isDownloadable(song)) { downloads.download([song]) }
+        }
+        return LibraryMenuItem(title: "下载", systemImage: "arrow.down.circle.fill", isDisabled: !downloads.isDownloadable(song)) { downloads.download([song]) }
     }
+
+    @MainActor func sections(for song: LibrarySongItem, goToAlbum: @escaping () -> Void) -> LibraryMenuSections {
+        var quick = [favoriteItem(isFavorite: song.isFavorite) { toggleFavorite(song) }]
+        if let item = downloadItem(for: song) { quick.insert(item, at: 0) }
+        var additions = [LibraryMenuItem(title: "添加到播放列表", systemImage: "text.badge.plus") { addToPlaylist(song) }]
+        if !song.isOnline {
+            additions.insert(LibraryMenuItem(title: song.isPinned ? "取消置顶" : "置顶歌曲", systemImage: song.isPinned ? "pin.slash" : "pin") { togglePin(song) }, at: 0)
+        }
+        var groups: LibraryMenuSections = [quick, additions,
+            libraryQueueMenuItems(playbackSource: playbackSource(), playNext: { playNext(song) }, playLater: { playLater(song) })]
+        if !song.isOnline {
+            groups.append([LibraryMenuItem(title: "前往专辑", subtitle: song.album, systemImage: "square", customImage: MenuIcons.album, perform: goToAlbum),
+                           LibraryMenuItem(title: "查看完整歌词", systemImage: "quote.bubble", isDisabled: true)])
+        }
+        if let downloads, downloads.canRemove(song) {
+            groups.append([LibraryMenuItem(title: "移除下载", systemImage: "xmark.circle") { downloads.requestRemoval([song]) }])
+        }
+        return groups
+    }
+
 }
 
 extension EnvironmentValues {

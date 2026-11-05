@@ -77,7 +77,7 @@ struct AppleMusicLocalLyricsView: View {
                     }
                 }
                 .task(id: resumeGeneration) {
-                    guard browsing, !interacting else { return }
+                    guard isActive, browsing, !interacting else { return }
                     do {
                         try await Task.sleep(for: .seconds(3))
                         try Task.checkCancellation()

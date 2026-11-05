@@ -71,7 +71,7 @@ struct AccountPage: View {
             .navigationDestination(for: AccountRoute.self) { route in
                 switch route {
                 case .quality:
-                    if let music = account.music { MusicQualitySettingsPage(music: music) }
+                    if let music = account.music { MusicQualitySettingsPage(music: music, downloads: account.downloads) }
                 case .settings:
                     AccountSettingsPage(account: account, authenticationEnabled: authenticationEnabled)
                 case .login:

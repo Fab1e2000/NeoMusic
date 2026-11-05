@@ -1,13 +1,13 @@
 // Endpoint parameters follow MeloX (GPL-3.0), 1fe5fbab3f554e8529c4847fc54281a472b7b61a.
 import Foundation
 
-@MainActor final class NeteaseMusicClient {
+final class NeteaseMusicClient: Sendable {
     let transport: NeteaseAccountClient
     init(transport: NeteaseAccountClient = NeteaseAccountClient()) { self.transport = transport }
-    func read<T: Decodable>(_ path: String, _ fields: [String: Any], _ credential: NeteaseCredential?) async throws -> T {
-        try await JSONDecoder().decode(T.self, from: transport.request(path: path, fields: fields, credential: credential))
+    @concurrent func read<T: Decodable & Sendable>(_ path: String, _ fields: [String: any Sendable], _ credential: NeteaseCredential?) async throws -> T {
+        try await transport.decoded(path: path, fields: fields, credential: credential)
     }
-    func playlists(userID: Int64, credential: NeteaseCredential) async throws -> [NeteaseMusicPlaylist] {
+    @concurrent func playlists(userID: Int64, credential: NeteaseCredential) async throws -> [NeteaseMusicPlaylist] {
         struct Response: Decodable { let playlist: [Playlist]; let more: Bool }
         var offset = 0, seen = Set<Int64>(), result: [NeteaseMusicPlaylist] = []
         while true {
@@ -20,23 +20,71 @@ import Foundation
             offset += 200
         }
     }
-    func detail(id: Int64, credential: NeteaseCredential?) async throws -> NeteasePlaylistDetail {
+    @concurrent func detail(id: Int64, credential: NeteaseCredential?, trackLimit: Int? = nil,
+                            prefetched: [NeteaseMusicSong] = []) async throws -> NeteasePlaylistDetail {
         struct Response: Decodable { let playlist: Playlist }
-        struct Songs: Decodable { let songs: [Song] }
-        let response: Response = try await read("/api/v6/playlist/detail", ["id": id, "n": 0, "s": 0], credential)
+        let response: Response = try await read("/api/v6/playlist/detail", ["id": id, "n": min(max(trackLimit ?? 100, 0), 100), "s": 0], credential)
         guard let ids = response.playlist.trackIds else { throw NeteaseAccountError.invalidResponse }
-        var lookup: [Int64: NeteaseMusicSong] = [:]
-        for start in stride(from: 0, to: ids.count, by: 400) {
-            let batch = ids[start..<min(start + 400, ids.count)].map { ["id": $0.id] }
-            let data = try JSONSerialization.data(withJSONObject: batch)
-            let songs: Songs = try await read("/api/v3/song/detail", ["c": String(decoding: data, as: UTF8.self)], credential)
-            for song in songs.songs { lookup[song.id] = song.model }
-        }
         var dates: [Int64: Date] = [:]
         for item in ids { if let at = item.at, at > 0 { dates[item.id] = Date(timeIntervalSince1970: at / 1000) } }
-        return .init(playlist: response.playlist.model, songs: ids.map { lookup[$0.id] ?? .init(id: $0.id, title: "歌曲不可用", artist: "网易云音乐", album: "", artworkURL: nil, duration: 0, unavailable: true) }, addedTimes: dates)
+        let detail = NeteasePlaylistDetail(playlist: response.playlist.model, songs: [], addedTimes: dates,
+                                           trackIDs: ids.map(\.id), loadedTrackCount: 0)
+        return try await load(detail, through: min(max(trackLimit ?? ids.count, 0), ids.count),
+                              prefetched: prefetched.filter { !$0.unavailable } + (response.playlist.tracks ?? []).map(\.model),
+                              credential: credential)
     }
-    func homeRecommendations(credential: NeteaseCredential?) async throws -> [NeteaseMusicPlaylist] {
+    @concurrent func loadMore(_ detail: NeteasePlaylistDetail, credential: NeteaseCredential?, limit: Int = 100) async throws -> NeteasePlaylistDetail {
+        try Task.checkCancellation()
+        guard !detail.isComplete else { return detail }
+        return try await load(detail, through: min(detail.nextOffset + max(1, limit), detail.orderedTrackIDs.count),
+                              credential: credential)
+    }
+
+    @concurrent func complete(_ detail: NeteasePlaylistDetail, credential: NeteaseCredential?) async throws -> NeteasePlaylistDetail {
+        try Task.checkCancellation()
+        guard !detail.isComplete else { return detail }
+        return try await load(detail, through: detail.orderedTrackIDs.count, credential: credential)
+    }
+
+    private func load(_ detail: NeteasePlaylistDetail, through end: Int, prefetched: [NeteaseMusicSong] = [],
+                      credential: NeteaseCredential?) async throws -> NeteasePlaylistDetail {
+        try Task.checkCancellation()
+        let ids = Array(detail.orderedTrackIDs.prefix(end))
+        var lookup = Dictionary((detail.songs + prefetched).map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
+        var seen = Set<Int64>()
+        let missing = ids.filter { lookup[$0] == nil && seen.insert($0).inserted }
+        let batches = stride(from: 0, to: missing.count, by: 100).map { Array(missing[$0..<min($0 + 100, missing.count)]) }
+        try await withThrowingTaskGroup(of: [NeteaseMusicSong].self) { group in
+            var next = 0
+            for _ in 0..<min(3, batches.count) {
+                let batch = batches[next]
+                next += 1
+                group.addTask { try await self.songs(ids: batch, credential: credential) }
+            }
+            while let songs = try await group.next() {
+                for song in songs { lookup[song.id] = song }
+                if next < batches.count {
+                    let batch = batches[next]
+                    next += 1
+                    group.addTask { try await self.songs(ids: batch, credential: credential) }
+                }
+            }
+        }
+        try Task.checkCancellation()
+        return .init(playlist: detail.playlist, songs: ids.map {
+            lookup[$0] ?? .init(id: $0, title: "歌曲不可用", artist: "网易云音乐", album: "", artworkURL: nil, duration: 0, unavailable: true)
+        }, addedTimes: detail.addedTimes, trackIDs: detail.orderedTrackIDs, loadedTrackCount: end)
+    }
+
+    @concurrent func songs(ids: [Int64], credential: NeteaseCredential?) async throws -> [NeteaseMusicSong] {
+        struct Response: Decodable { let songs: [Song] }
+        try Task.checkCancellation()
+        let data = try JSONSerialization.data(withJSONObject: ids.map { ["id": $0] })
+        let response: Response = try await read("/api/v3/song/detail", ["c": String(decoding: data, as: UTF8.self)], credential)
+        return response.songs.map(\.model)
+    }
+
+    @concurrent func homeRecommendations(credential: NeteaseCredential?) async throws -> [NeteaseMusicPlaylist] {
         struct Item: Decodable {
             let id: Int64; let name: String; let picUrl: String?; let trackCount: Int?
             struct Creator: Decodable { let userId: Int64; let nickname: String }
@@ -51,34 +99,36 @@ import Foundation
                   artworkURL: Self.url($0.picUrl), trackCount: $0.trackCount ?? 0, isFavorites: false)
         }
     }
-    func dailyRecommendations(credential: NeteaseCredential) async throws -> [NeteaseMusicSong] {
+    @concurrent func dailyRecommendations(credential: NeteaseCredential) async throws -> [NeteaseMusicSong] {
         struct Payload: Decodable { let dailySongs: [Song] }
         struct Response: Decodable { let data: Payload }
         let response: Response = try await read("/api/v3/discovery/recommend/songs", [:], credential)
         var seen = Set<Int64>()
         return response.data.dailySongs.filter { seen.insert($0.id).inserted }.map(\.model)
     }
-    func likedIDs(userID: Int64, credential: NeteaseCredential) async throws -> Set<Int64> {
+    @concurrent func likedIDs(userID: Int64, credential: NeteaseCredential) async throws -> Set<Int64> {
         struct Response: Decodable { let ids: [Int64] }
         let response: Response = try await read("/api/song/like/get", ["uid": userID], credential)
         return Set(response.ids)
     }
-    func setLiked(id: Int64, liked: Bool, credential: NeteaseCredential) async throws {
+    @concurrent func setLiked(id: Int64, liked: Bool, credential: NeteaseCredential) async throws {
         _ = try await transport.request(path: "/api/radio/like", fields: ["alg": "itembased", "trackId": id, "like": liked, "time": "3"], credential: credential)
     }
-    func stream(id: Int64, quality: NeteaseMusicQuality, credential: NeteaseCredential) async throws -> NeteaseMusicStream {
+    @concurrent func stream(id: Int64, quality: NeteaseMusicQuality, credential: NeteaseCredential) async throws -> NeteaseMusicStream {
         struct Trial: Decodable {}
         struct Item: Decodable { let id: Int64; let url: String?; let expi: Double?; let freeTrialInfo: Trial?; let level: String? }
         struct Response: Decodable { let data: [Item] }
         for candidate in quality.fallbacks {
-            let response: Response = try await read("/api/song/enhance/player/url/v1", ["ids": "[\(id)]", "level": candidate.rawValue, "encodeType": "flac"], credential)
+            let response: Response = try await transport.decoded(path: "/api/song/enhance/player/url/v1",
+                fields: ["ids": "[\(id)]", "level": candidate.rawValue, "encodeType": "flac"],
+                credential: credential, profile: .playback)
             guard let item = response.data.first(where: { $0.id == id }), item.freeTrialInfo == nil,
                   let value = item.url, let url = Self.url(value) else { continue }
             return .init(url: url, expiresAt: Date().addingTimeInterval(max(0, (item.expi ?? 300) - 30)), quality: NeteaseMusicQuality(rawValue: item.level ?? "") ?? candidate)
         }
         throw NeteaseMusicError.unavailable
     }
-    func lyrics(id: Int64, credential: NeteaseCredential) async throws -> NeteaseMusicLyrics {
+    @concurrent func lyrics(id: Int64, credential: NeteaseCredential) async throws -> NeteaseMusicLyrics {
         struct Text: Decodable { let lyric: String? }
         struct Response: Decodable { let lrc: Text?; let tlyric: Text? }
         let response: Response = try await read("/api/song/lyric", ["id": id, "lv": -1, "tv": -1], credential)
@@ -92,7 +142,7 @@ import Foundation
     private struct Playlist: Decodable {
         struct Creator: Decodable { let userId: Int64; let nickname: String }
         struct Track: Decodable { let id: Int64; let at: Double? }
-        let id: Int64; let name: String; let creator: Creator; let coverImgUrl: String?; let trackCount: Int; let specialType: Int?; let trackIds: [Track]?; let createTime: Double?; let updateTime: Double?
+        let id: Int64; let name: String; let creator: Creator; let coverImgUrl: String?; let trackCount: Int; let specialType: Int?; let trackIds: [Track]?; let tracks: [Song]?; let createTime: Double?; let updateTime: Double?
         var model: NeteaseMusicPlaylist { .init(id: id, title: name, creator: creator.nickname, creatorID: creator.userId, artworkURL: NeteaseMusicClient.url(coverImgUrl), trackCount: trackCount, isFavorites: specialType == 5, createTime: createTime.map { Date(timeIntervalSince1970: $0 / 1000) }, updateTime: updateTime.map { Date(timeIntervalSince1970: $0 / 1000) }) }
     }
     struct Song: Decodable {

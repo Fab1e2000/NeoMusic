@@ -5,17 +5,24 @@ import CryptoKit
 final class LocalLibraryRuntime {
     private(set) var isScanning = false
     private(set) var status: String?
-    private var started = false
+    private(set) var hasRestoredPlayback = false
     @ObservationIgnored private var onlineResolver: (@MainActor (String) async throws -> PlaybackResource)?
+    @ObservationIgnored private var offlineResolver: (@MainActor (String) -> PlaybackResource?)?
     @ObservationIgnored var onLibraryRestored: (() -> Void)?
+    @ObservationIgnored var onLibraryPublished: (() -> Void)?
+
+    func configureOfflineResolver(_ resolver: @escaping @MainActor (String) -> PlaybackResource?) {
+        offlineResolver = resolver
+        if hasRestoredPlayback { configurePlayer() }
+    }
 
     func configureOnlineResolver(_ resolver: @escaping @MainActor (String) async throws -> PlaybackResource) {
         onlineResolver = resolver
-        if started { configurePlayer() }
+        if hasRestoredPlayback { configurePlayer() }
     }
 
     private func configurePlayer() {
-        if onlineResolver == nil {
+        if onlineResolver == nil, offlineResolver == nil {
             player.configurePlayback(resolveURL: { [weak self, root] id in
                 guard !id.hasPrefix("netease:"), self?.failedIDs.contains(id) != true else { return nil }
                 let url = root.appending(path: id)
@@ -24,6 +31,7 @@ final class LocalLibraryRuntime {
             return
         }
         player.configurePlayback(resolveResource: { [weak self, root] id in
+            if let offline = self?.offlineResolver?(id) { return offline }
             if id.hasPrefix("netease:") {
                 guard let resolver = self?.onlineResolver else { throw URLError(.userAuthenticationRequired) }
                 return try await resolver(id)
@@ -36,6 +44,8 @@ final class LocalLibraryRuntime {
     }
     /// Release the initial shelf after restoration or a reported failure; cancellation can retry.
     private(set) var isInitialLibraryReady = false
+    private(set) var isInitialPresentationReady = false
+    private(set) var isInitialPlaybackReady = false
     private var refreshPending = false
     private var cacheWarning: String?
     private let scanner = LocalMusicScanner()
@@ -65,6 +75,51 @@ final class LocalLibraryRuntime {
         UserDefaults.standard.set(Array(ids), forKey: key)
     }
 
+    /// Restore persisted local metadata without waiting for the directory scan.
+    func restoreCachedState() async {
+        guard !hasRestoredPlayback, !isScanning else { return }
+        isScanning = true
+        defer { isScanning = false }
+        do {
+            try await cache.prepare(documents: documents, store: store)
+            try await restoreSavedState()
+        } catch is CancellationError {
+            // A later foreground refresh can resume the interrupted restoration.
+        } catch {
+            status = "读取资料库失败：\(error.localizedDescription)"
+            isInitialLibraryReady = true
+        }
+    }
+
+    /// The local shelf can be presented independently of account-owned content.
+    func completeInitialPresentation(songs: [LibrarySongItem]) {
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            playlistLibrary.reconcileOnlineSongs(songs)
+            player.reconcileAvailability(songs: songs)
+            isInitialPresentationReady = true
+        }
+        PerformanceDiagnostics.event("LibraryContentPresented")
+    }
+
+    /// Online queue and mixed-playlist metadata are exposed only after the saved
+    /// account identity has been read; page and home caches are not required.
+    func completeInitialPlaybackRestoration(ownerID: String?, songs: [LibrarySongItem]) {
+        guard hasRestoredPlayback || player.hasCurrent, !isInitialPlaybackReady else { return }
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            playlistLibrary.restoreOnlineIdentity(ownerID: ownerID)
+            player.restoreOnlineIdentity(ownerID: ownerID)
+            playlistLibrary.reconcileOnlineSongs(songs)
+            player.reconcileAvailability(songs: songs)
+            isInitialPlaybackReady = true
+        }
+        PerformanceDiagnostics.event("InitialPlaybackReady")
+        PerformanceDiagnostics.restoration("player.ready current=\(player.hasCurrent) count=\(player.queue.count) signedIn=\(ownerID != nil)")
+    }
+
     func refresh() async {
         guard !isScanning else { refreshPending = true; return }
         isScanning = true
@@ -73,7 +128,7 @@ final class LocalLibraryRuntime {
             refreshPending = false
             do {
                 try await cache.prepare(documents: documents, store: store)
-                if !started { try await restoreSavedState() }
+                if !hasRestoredPlayback { try await restoreSavedState() }
                 try await refreshFromDisk()
             } catch is CancellationError {
                 // Keep the displayed snapshot and retry at the next refresh.
@@ -86,11 +141,17 @@ final class LocalLibraryRuntime {
     }
 
     private func restoreSavedState() async throws {
+        let interval = PerformanceDiagnostics.begin("LocalCacheRestore")
+        defer { PerformanceDiagnostics.end("LocalCacheRestore", interval) }
         do {
             if let tracks = try await cache.read(from: store.appending(path: "tracks.json")) {
                 try Task.checkCancellation()
+                PerformanceDiagnostics.event("LocalCacheHit")
                 apply(tracks)
-            } else { apply([]) }
+            } else {
+                PerformanceDiagnostics.event("LocalCacheMiss")
+                apply([])
+            }
         } catch is CancellationError {
             throw CancellationError()
         } catch {
@@ -102,13 +163,14 @@ final class LocalLibraryRuntime {
         guard !cachedTracks.contains(where: { $0.id.hasPrefix("ents/音乐/") }) else { return }
         try await restoreStores()
         isInitialLibraryReady = true
+        PerformanceDiagnostics.event("LocalContentReady")
     }
 
     private func refreshFromDisk() async throws {
         let reusable = await cache.reusableTracks(cachedTracks, at: store.appending(path: "tracks.json"))
         let result = try await scanner.scan(root: root, previousTracks: reusable)
         try Task.checkCancellation()
-        if !started {
+        if !hasRestoredPlayback {
             try Self.repairLegacyIdentities(cached: cachedTracks, scanned: result.tracks, store: store)
         }
         let failed = Set(result.failures).union(result.tracks.filter { track in
@@ -119,7 +181,7 @@ final class LocalLibraryRuntime {
         try Task.checkCancellation()
         failedIDs = failed
         if tracks != cachedTracks { apply(tracks) }
-        if !started { try await restoreStores() }
+        if !hasRestoredPlayback { try await restoreStores() }
         playlistLibrary.reconcileSongs(LocalLibrary.songs, failedIDs: failed, failedDirectories: result.failedDirectoryPaths)
         player.reconcileAvailability(songs: LocalLibrary.allSongs.filter { !failed.contains($0.id) })
         var messages = result.issues
@@ -136,8 +198,19 @@ final class LocalLibraryRuntime {
         let songs = LocalLibrary.songs
         playlistLibrary.configurePersistence(url: store.appending(path: "playlists.json"), songs: songs, restoredState: playlists)
         configurePlayer()
-        player.restoreQueue(songs: songs, restoredState: queue)
-        started = true
+        // A chosen queue takes precedence over a delayed restoration. Transport
+        // remains available after a read failure; the player suspends automatic
+        // persistence until restoration or an explicit replacement succeeds.
+        let keepsChosenQueue = player.hasCurrent
+        if !keepsChosenQueue {
+            guard player.restoreQueue(songs: songs, restoredState: queue) else {
+                PerformanceDiagnostics.restoration("queue.read.failed")
+                _ = try queue.get()
+                throw CocoaError(.fileReadCorruptFile)
+            }
+        }
+        hasRestoredPlayback = true
+        PerformanceDiagnostics.restoration("queue.ready current=\(player.hasCurrent) count=\(player.queue.count) keptChosenQueue=\(keepsChosenQueue)")
         onLibraryRestored?()
     }
 
@@ -190,15 +263,19 @@ final class LocalLibraryRuntime {
     }
 
     func migrateAlbumSelections(from old: [LocalTrack], to new: [LocalTrack]) {
-        let oldByID = Dictionary(old.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        for track in new {
-            guard let directory = track.albumDirectory, let previous = oldByID[track.id], previous.albumDirectory == nil else { continue }
-            let oldID = previous.albumArtist + "\u{001F}" + previous.album
-            let newID = "folder:" + directory
-            if LocalLibrary.favoriteAlbums.ids.contains(oldID) { LocalLibrary.favoriteAlbums.insert(newID) }
-            if LocalLibrary.pinnedAlbums.ids.contains(oldID) { LocalLibrary.pinnedAlbums.insert(newID) }
-            // Preserve deletion of these exact songs; do not hide unrelated tracks now sharing their folder.
-            if LocalLibrary.deletedAlbums.ids.contains(oldID) { Self.setFlag(track.id, value: true, key: "hiddenSongs") }
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            let oldByID = Dictionary(old.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            for track in new {
+                guard let directory = track.albumDirectory, let previous = oldByID[track.id], previous.albumDirectory == nil else { continue }
+                let oldID = previous.albumArtist + "\u{001F}" + previous.album
+                let newID = "folder:" + directory
+                if LocalLibrary.favoriteAlbums.ids.contains(oldID) { LocalLibrary.favoriteAlbums.insert(newID) }
+                if LocalLibrary.pinnedAlbums.ids.contains(oldID) { LocalLibrary.pinnedAlbums.insert(newID) }
+                // Preserve deletion of these exact songs; do not hide unrelated tracks now sharing their folder.
+                if LocalLibrary.deletedAlbums.ids.contains(oldID) { Self.setFlag(track.id, value: true, key: "hiddenSongs") }
+            }
         }
     }
 
@@ -217,6 +294,7 @@ final class LocalLibraryRuntime {
                 addedOrder: Int(track.addedDate.timeIntervalSince1970), isFavorite: favorites.contains(track.id))
         })
         LocalLibrary.downloads.setLocalSongs(LocalLibrary.songs)
+        onLibraryPublished?()
     }
 }
 

@@ -8,7 +8,13 @@ Only `Sources`, `Package.swift`, and `LICENSE` are vendored from the upstream re
 Local modification: remove the second identical declarations of
 `popupOpensOverSplitView` and `popupBarAvoidsSplitViewPrimaryColumn` in
 `Sources/LNPopupUI/LNPopupUI.swift`. The original declarations remain unchanged.
-Swift rejects the unmodified revision with “invalid redeclaration”. Runtime patches subsequently extracted from NeoDizzy: `PopupItemViewImage` and its image-host adapter retain custom mini artwork; `pendingNativeOpenState` synchronizes interactive native open/close with SwiftUI binding updates. These are the only runtime differences from this upstream baseline.
+Swift rejects the unmodified revision with “invalid redeclaration”. Runtime patches extracted from NeoDizzy: `PopupItemViewImage` and its image-host adapter retain custom mini artwork; `pendingNativeOpenState` synchronizes interactive native open/close with SwiftUI binding updates.
+
+The container forwards SwiftUI's `Transaction.disablesAnimations` to native popup
+presentation and dismissal. Restoring a paused queue can present the bar without
+an entrance animation while user-driven popup transitions retain native animation.
+The local LNPopupController owns the synchronous presentation layout and floating
+bar ordering for this immediate path.
 
 The local LNPopupController package uses upstream 4.6.1, LNSwiftUIUtils 1.1.5, and
 LNSystemMarqueeLabel 0.1.2; the checked-in Package.resolved records their revisions.

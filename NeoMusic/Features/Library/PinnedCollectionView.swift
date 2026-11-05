@@ -31,7 +31,17 @@ struct PinnedCollectionView: UIViewRepresentable {
     }
 
     func updateUIView(_ view: UICollectionView, context: Context) {
-        context.coordinator.update(with: self, environment: context.environment)
+        let animated = context.transaction.animation != nil && !context.transaction.disablesAnimations
+            && !context.environment.accessibilityReduceMotion
+        // Diffable updates consult UIKit's animation switch even inside context.animate.
+        // Match this update's transaction, then restore the enclosing SwiftUI update scope.
+        let animationsWereEnabled = UIView.areAnimationsEnabled
+        UIView.setAnimationsEnabled(animated)
+        defer { UIView.setAnimationsEnabled(animationsWereEnabled) }
+        context.animate {
+            context.coordinator.update(with: self, environment: context.environment,
+                                       animated: animated)
+        }
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UICollectionView, context: Context) -> CGSize? {
@@ -76,7 +86,10 @@ struct PinnedCollectionView: UIViewRepresentable {
         private var itemsByID: [String: LibraryShelfItem] = [:]
         private var pendingCommittedOrder: [String]?
         private var hasApplied = false
-        private var hasScheduledUpdate = false
+        private var configuredEditing: Bool?
+        private var configuredColorScheme: ColorScheme?
+        private var configuredDynamicTypeSize: DynamicTypeSize?
+        private var configuredLocale: Locale?
 
         func attach(to view: UICollectionView, initial: PinnedCollectionView, environment: EnvironmentValues) {
             collectionView = view
@@ -90,7 +103,7 @@ struct PinnedCollectionView: UIViewRepresentable {
             update(with: initial, environment: environment)
         }
 
-        func update(with view: PinnedCollectionView, environment: EnvironmentValues) {
+        func update(with view: PinnedCollectionView, environment: EnvironmentValues, animated: Bool = false) {
             latest = view
             self.environment = environment
             // Edit state must reach visible cells even while a drag or snapshot is settling.
@@ -98,25 +111,17 @@ struct PinnedCollectionView: UIViewRepresentable {
                 cell.setEditing(view.isEditing, phase: collectionView?.indexPath(for: cell)?.item ?? 0,
                                 reduceMotion: environment.accessibilityReduceMotion)
             }
-            guard hasApplied else { applyLatestSnapshot(); return }
-            guard !hasScheduledUpdate else { return }
-            hasScheduledUpdate = true
-            // SwiftUI may suppress UIView animations during representable updates.
-            // Apply the latest snapshot on the next turn so UIKit owns its animation.
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                self.hasScheduledUpdate = false
-                self.applyLatestSnapshot()
-            }
+            applyLatestSnapshot(animated: animated)
         }
 
-        private func applyLatestSnapshot() {
+        private func applyLatestSnapshot(animated: Bool) {
             guard let view = latest else { return }
             let identifiers = view.items.map(PinnedCollectionView.identity)
             // Diffable snapshots require unique item identities. Never silently
             // delete or merge data when presented with an invalid input.
             guard Set(identifiers).count == identifiers.count else { return }
-            itemsByID = Dictionary(uniqueKeysWithValues: zip(identifiers, view.items))
+            let previousItems = itemsByID
+            let updatedItems = Dictionary(uniqueKeysWithValues: zip(identifiers, view.items))
             guard let source = dataSource else { return }
             collectionView?.dragInteractionEnabled = !view.isEditing
             if collectionView?.hasActiveDrag == true { return }
@@ -128,13 +133,28 @@ struct PinnedCollectionView: UIViewRepresentable {
                     return
                 }
             }
+            let previousIdentifiers = source.snapshot().itemIdentifiers
+            let appearanceChanged = configuredColorScheme != environment.colorScheme
+                || configuredDynamicTypeSize != environment.dynamicTypeSize || configuredLocale != environment.locale
+            let editingChanged = configuredEditing != view.isEditing
+            let existing = Set(previousIdentifiers)
+            let changed = identifiers.filter {
+                existing.contains($0) && (previousItems[$0] != updatedItems[$0] || appearanceChanged || editingChanged)
+            }
+            guard !hasApplied || previousIdentifiers != identifiers || !changed.isEmpty else { return }
+            let needsLayout = previousIdentifiers.count != identifiers.count
+                || configuredDynamicTypeSize != environment.dynamicTypeSize
+            configuredEditing = view.isEditing
+            itemsByID = updatedItems
+            configuredColorScheme = environment.colorScheme
+            configuredDynamicTypeSize = environment.dynamicTypeSize
+            configuredLocale = environment.locale
             var snapshot = NSDiffableDataSourceSnapshot<Int, String>()
             snapshot.appendSections([0])
             snapshot.appendItems(identifiers)
-            let existing = Set(source.snapshot().itemIdentifiers)
-            snapshot.reconfigureItems(identifiers.filter { existing.contains($0) })
-            source.apply(snapshot, animatingDifferences: hasApplied && !environment.accessibilityReduceMotion) { [weak self] in
-                self?.collectionView?.collectionViewLayout.invalidateLayout()
+            snapshot.reconfigureItems(changed)
+            source.apply(snapshot, animatingDifferences: hasApplied && animated && !environment.accessibilityReduceMotion) { [weak self] in
+                if needsLayout { self?.collectionView?.collectionViewLayout.invalidateLayout() }
             }
             hasApplied = true
         }
@@ -158,10 +178,8 @@ struct PinnedCollectionView: UIViewRepresentable {
         }
 
         private func restoreLatestSnapshot() {
-            DispatchQueue.main.async { [weak self] in
-                guard let self, let latest = self.latest else { return }
-                self.update(with: latest, environment: self.environment)
-            }
+            guard let latest else { return }
+            update(with: latest, environment: environment)
         }
 
         private func canReorder(_ id: String) -> Bool {
@@ -333,7 +351,7 @@ struct PinnedCollectionView: UIViewRepresentable {
 
         private func open(_ item: LibraryShelfItem, id: String) {
             guard let route = item.route else { return }
-            environment.openLibraryRoute(route, sourceProvider: { [weak self] in
+            environment.openLibraryRoute(item, sourceProvider: { [weak self] in
                 guard let self, self.itemsByID[id]?.route == route,
                       let indexPath = self.dataSource?.indexPath(for: id) else { return nil }
                 return self.collectionView?.cellForItem(at: indexPath)?.contentView.libraryArtworkSource()
@@ -440,6 +458,7 @@ final class PinnedCollectionCell: UICollectionViewCell {
 /// Keep the original artwork drawing inside one real UIView, used by zoom and by the card.
 private struct PinnedArtworkSurface: UIViewRepresentable {
     let artwork: Artwork
+    let contentID: String
 
     func makeUIView(context: Context) -> LibraryArtworkSurfaceView {
         let view = LibraryArtworkSurfaceView()
@@ -451,7 +470,7 @@ private struct PinnedArtworkSurface: UIViewRepresentable {
 
     func updateUIView(_ view: LibraryArtworkSurfaceView, context: Context) {
         let configuration = UIHostingConfiguration {
-            ArtworkView(artwork: artwork, cornerRadius: 8)
+            ArtworkView(artwork: artwork, contentID: contentID, cornerRadius: 8)
                 .libraryHostedAppearance(context.environment)
                 .environment(\.nativeArtworkSurfaceEnabled, false)
         }.margins(.all, 0)
@@ -479,7 +498,7 @@ private struct PinnedCellContent: View {
 
     var body: some View {
         VStack(spacing: 6) {
-            PinnedArtworkSurface(artwork: item.artwork)
+            PinnedArtworkSurface(artwork: item.artwork, contentID: item.id)
                 .aspectRatio(1, contentMode: .fit)
                 .shadow(color: .black.opacity(0.12), radius: 6, y: 3)
             Text(item.title)

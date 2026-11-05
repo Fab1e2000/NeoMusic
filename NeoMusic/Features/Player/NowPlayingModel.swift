@@ -1,13 +1,15 @@
 import SwiftUI
 import AVFoundation
 import MediaPlayer
+import UIKit
 
 /// 本地播放、队列及恢复状态；URL 由资料库注入，不持有平台实现。
 @MainActor @Observable
 final class NowPlayingModel {
     enum RepeatMode: String, Codable, Sendable { case off, all, one }
 
-    private(set) var queue: [LibrarySongItem]
+    private(set) var queue: [LibrarySongItem] { didSet { queueRevision &+= 1 } }
+    private(set) var queueRevision: UInt64 = 0
     private(set) var currentIndex: Int
     private(set) var entryIDs: [UUID]
     private var originalOrder: [UUID] = []
@@ -37,11 +39,12 @@ final class NowPlayingModel {
     private var pendingCollection: PlaybackCollectionReference?
 
     struct PendingPlay: Identifiable {
-        let songs: [LibrarySongItem]
+        var songs: [LibrarySongItem]
         let source: String
         let shuffled: Bool
         var startingIndex: Int? = nil
         var collection: PlaybackCollectionReference? = nil
+        var onStarted: (() -> Void)? = nil
         let id = UUID()
     }
 
@@ -132,7 +135,15 @@ final class NowPlayingModel {
         var entries = indices.map { entryIDs[$0] }
         entries.move(fromOffsets: fromOffsets, toOffset: toOffset)
         let songs = Dictionary(uniqueKeysWithValues: zip(entryIDs, queue))
-        for (slot, entry) in zip(indices, entries) { entryIDs[slot] = entry; queue[slot] = songs[entry]! }
+        var reorderedIDs = entryIDs
+        var reorderedQueue = queue
+        for (slot, entry) in zip(indices, entries) {
+            reorderedIDs[slot] = entry
+            reorderedQueue[slot] = songs[entry]!
+        }
+        // Publish the completed native reorder once, independent of queue length.
+        entryIDs = reorderedIDs
+        queue = reorderedQueue
         prepareNext(); saveQueue()
     }
     func removeQueueEntry(at index: Int) {
@@ -156,22 +167,24 @@ final class NowPlayingModel {
     }
 
     /// 请求从头播放一组歌曲：会清除手动加入的歌曲时先挂起，由宿主弹出确认。
-    func requestPlay(_ songs: [LibrarySongItem], from source: String, shuffled: Bool, collection: PlaybackCollectionReference? = nil) {
+    func requestPlay(_ songs: [LibrarySongItem], from source: String, shuffled: Bool, collection: PlaybackCollectionReference? = nil, onStarted: (() -> Void)? = nil) {
         guard !songs.isEmpty else { return }
         if hasUserQueuedUpcoming {
-            pendingPlay = PendingPlay(songs: songs, source: source, shuffled: shuffled, collection: collection)
+            pendingPlay = PendingPlay(songs: songs, source: source, shuffled: shuffled, collection: collection, onStarted: onStarted)
         } else {
             play(songs, from: source, shuffled: shuffled, collection: collection)
+            onStarted?()
         }
     }
 
     /// 点击具体歌曲也遵循手动队列清除确认，并保留用户选择的位置。
-    func requestPlay(_ songs: [LibrarySongItem], startingAt index: Int, from source: String, collection: PlaybackCollectionReference? = nil) {
+    func requestPlay(_ songs: [LibrarySongItem], startingAt index: Int, from source: String, collection: PlaybackCollectionReference? = nil, onStarted: (() -> Void)? = nil) {
         guard songs.indices.contains(index) else { return }
         if hasUserQueuedUpcoming {
-            pendingPlay = PendingPlay(songs: songs, source: source, shuffled: false, startingIndex: index, collection: collection)
+            pendingPlay = PendingPlay(songs: songs, source: source, shuffled: false, startingIndex: index, collection: collection, onStarted: onStarted)
         } else {
             play(songs, startingAt: index, from: source, collection: collection)
+            onStarted?()
         }
     }
 
@@ -184,6 +197,7 @@ final class NowPlayingModel {
         } else {
             play(pending.songs, from: pending.source, shuffled: pending.shuffled, collection: pending.collection)
         }
+        pending.onStarted?()
     }
 
     /// 从头播放一组歌曲，替换当前队列。
@@ -191,6 +205,8 @@ final class NowPlayingModel {
         guard !songs.isEmpty else { return }
         pendingPlay = nil
         pendingCollection = collection
+        queueRestorationFailed = false
+        pendingRestoredSongs = [:]
         userQueuedIDs = []
         applyingState = true
         let original = songs.map { (UUID(), $0) }
@@ -212,6 +228,8 @@ final class NowPlayingModel {
         guard songs.indices.contains(index) else { return }
         pendingPlay = nil
         pendingCollection = collection
+        queueRestorationFailed = false
+        pendingRestoredSongs = [:]
         userQueuedIDs = []
         applyingState = true
         queue = songs
@@ -228,6 +246,8 @@ final class NowPlayingModel {
 
     /// 插播：放在当前歌曲之后。
     func insertNext(_ songs: [LibrarySongItem]) {
+        guard !songs.isEmpty else { return }
+        queueRestorationFailed = false
         let ids = songs.map { _ in UUID() }
         let position = min(currentIndex + 1, queue.count)
         queue.insert(contentsOf: songs, at: position)
@@ -240,6 +260,8 @@ final class NowPlayingModel {
 
     /// 随后播放：放在队列末尾。
     func appendLater(_ songs: [LibrarySongItem]) {
+        guard !songs.isEmpty else { return }
+        queueRestorationFailed = false
         let ids = songs.map { _ in UUID() }
         queue.append(contentsOf: songs)
         entryIDs.append(contentsOf: ids)
@@ -264,6 +286,8 @@ final class NowPlayingModel {
     @ObservationIgnored private var configuringAudio = false
     @ObservationIgnored private var lastSavedPlaybackTime = Date.distantPast
     @ObservationIgnored private var resolveResource: (@MainActor (String) async throws -> PlaybackResource)?
+    @ObservationIgnored private var offlineSong: (@MainActor (String) -> LibrarySongItem?)?
+    private var offlineSongIDs: Set<String> = []
     @ObservationIgnored private var resourceTask: Task<Void, Never>?
     @ObservationIgnored private var nextResourceTask: Task<Void, Never>?
     @ObservationIgnored private var resourceRevision = UUID()
@@ -271,9 +295,17 @@ final class NowPlayingModel {
     private(set) var actualQuality: String?
     @ObservationIgnored private var resolveURL: ((String) -> URL?)?
     @ObservationIgnored private var persistenceURL: URL?
+    @ObservationIgnored private let queuePersistence = PlaybackQueuePersistence()
+    @ObservationIgnored private var queuePersistenceTask: Task<Void, Never>?
+    @ObservationIgnored private var queuePersistenceRevision = 0
+    @ObservationIgnored private var persistenceBackgroundTask = UIBackgroundTaskIdentifier.invalid
     @ObservationIgnored private var updatingTime = false
     var errorMessage: String?
     private(set) var unavailableIDs: Set<String> = []
+    @ObservationIgnored private var hasResolvedOnlineIdentity = false
+    @ObservationIgnored private var resolvedOnlineOwnerID: String?
+    @ObservationIgnored private var queueRestorationFailed = false
+    @ObservationIgnored private var pendingRestoredSongs: [String: PlaybackSongSnapshot] = [:]
 
     struct SavedQueue: Codable, Sendable {
         var ids: [String]
@@ -286,6 +318,7 @@ final class NowPlayingModel {
         var originalOrder: [UUID]? = nil
         var userQueuedIDs: Set<UUID>? = nil
         var crossfadeEnabled: Bool? = nil
+        var songs: [PlaybackSongSnapshot]? = nil
     }
 
     func configurePlayback(resolveURL: @escaping (String) -> URL?, persistenceURL: URL) {
@@ -305,32 +338,143 @@ final class NowPlayingModel {
 
     func waitForResourceResolution() async { await resourceTask?.value }
 
+    /// The owner of local files supplies metadata only while the file is available.
+    /// Queue identities remain unchanged when an online item gains an offline copy.
+    func configureOfflineSongs(_ resolver: @escaping @MainActor (String) -> LibrarySongItem?) {
+        offlineSong = resolver
+        reconcileOfflineAvailability()
+    }
+
+    func reconcileOfflineAvailability() {
+        let previous = queue, previousUnavailable = unavailableIDs
+        let currentSongs = queue.filter {
+            !offlineSongIDs.contains($0.id) || $0.isOnline || offlineSong?($0.id) != nil
+        }
+        reconcileAvailability(songs: currentSongs)
+        if previous != queue || previousUnavailable != unavailableIDs { saveQueue() }
+    }
+
+    var hasOfflineCurrentSong: Bool { hasCurrent && offlineSongIDs.contains(current.id) }
+
+    /// Relink a removed local copy without replacing its queue occurrences or transport.
+    func remapSongReferences(_ replacements: [String: LibrarySongItem]) {
+        let replacements = replacements.filter { $0.key != $0.value.id }
+        guard !replacements.isEmpty else { return }
+        let updated = queue.map { replacements[$0.id] ?? $0 }
+        if var pending = pendingPlay {
+            let songs = pending.songs.map { replacements[$0.id] ?? $0 }
+            if songs != pending.songs {
+                pending.songs = songs
+                pendingPlay = pending
+            }
+        }
+        for (id, replacement) in replacements where pendingRestoredSongs[id] != nil {
+            pendingRestoredSongs.removeValue(forKey: id)
+            pendingRestoredSongs[replacement.id] = PlaybackSongSnapshot(replacement)
+        }
+        guard updated != queue else { return }
+        for song in queue {
+            guard let replacement = replacements[song.id] else { continue }
+            unavailableIDs.remove(song.id)
+            if replacement.unavailabilityReason == nil { unavailableIDs.remove(replacement.id) }
+            else { unavailableIDs.insert(replacement.id) }
+            offlineSongIDs.remove(song.id)
+            if offlineSong?(replacement.id) != nil { offlineSongIDs.insert(replacement.id) }
+        }
+        queue = updated
+        updateNowPlaying()
+        saveQueue()
+    }
+
     func reloadCurrentResource() {
         guard hasCurrent, current.id.hasPrefix("netease:"), loadedEntry == entryIDs[currentIndex] else { return }
         resolveCurrent(at: elapsed, replacing: true)
     }
 
-    func invalidateOnlinePlayback(ownerID: String?) {
+    /// Resolve saved display metadata after the account owner is known, without loading its catalog.
+    func restoreOnlineIdentity(ownerID: String?) {
+        guard !hasResolvedOnlineIdentity || resolvedOnlineOwnerID != ownerID else { return }
+        PerformanceDiagnostics.restoration("player.identity.resolved signedIn=\(ownerID != nil) pendingMetadata=\(pendingRestoredSongs.count)")
+        hasResolvedOnlineIdentity = true
+        resolvedOnlineOwnerID = ownerID
+        invalidateOnlinePlayback(ownerID: ownerID, persist: false)
+        var updated = queue
+        for index in updated.indices {
+            let item = updated[index]
+            if let offline = offlineSong?(item.id) {
+                updated[index] = offline
+                unavailableIDs.remove(item.id)
+                continue
+            }
+            guard let owner = item.onlineOwnerID, owner == ownerID,
+                  let snapshot = pendingRestoredSongs[item.id] else { continue }
+            updated[index] = snapshot.song
+            if updated[index].unavailabilityReason == nil { unavailableIDs.remove(item.id) }
+        }
+        pendingRestoredSongs = [:]
+        if updated != queue { queue = updated }
+        updateNowPlaying()
+        saveQueue()
+    }
+
+    func invalidateOnlinePlayback(ownerID: String?, persist: Bool = true) {
+        if hasResolvedOnlineIdentity {
+            resolvedOnlineOwnerID = ownerID
+            pendingRestoredSongs = pendingRestoredSongs.filter { $0.value.onlineOwnerID == ownerID }
+        }
         let interruptedPlayback = isPlaying || resolvingResource
         if let owner = pendingCollection?.ownerID, owner != ownerID { pendingCollection = nil }
         if let owner = pendingPlay?.collection?.ownerID, owner != ownerID { pendingPlay = nil }
-        resourceRevision = UUID()
-        resourceTask?.cancel(); nextResourceTask?.cancel(); resourceTask = nil; resolvingResource = false
+        let retryOffline = hasCurrent && resolvingResource && offlineSong?(current.id) != nil
+            && (ownerID == nil || current.onlineOwnerID != ownerID)
+        if hasCurrent, current.isOnline, offlineSong?(current.id) == nil,
+           ownerID == nil || current.onlineOwnerID != ownerID {
+            resourceRevision = UUID()
+            resourceTask?.cancel(); resourceTask = nil; resolvingResource = false
+        }
+        nextResourceTask?.cancel()
         for index in queue.indices where queue[index].id.hasPrefix("netease:") {
             let id = queue[index].id
+            if let offline = offlineSong?(id) {
+                queue[index] = offline
+                unavailableIDs.remove(id)
+                offlineSongIDs.insert(id)
+                continue
+            }
             guard ownerID == nil || !id.hasPrefix("netease:\(ownerID!):") else { continue }
-            queue[index] = LibrarySongItem(id: id, title: "在线歌曲不可用", artist: "登录原账号后可用", album: "", albumArtist: "", trackNumber: 0, artwork: .missing, unavailabilityReason: "请登录原账号后重试")
+            queue[index] = Self.unavailableOnlineSong(id)
             unavailableIDs.insert(id)
         }
         if hasCurrent, unavailableIDs.contains(current.id), current.id.hasPrefix("netease:") {
             audio?.stop(); loadedEntry = nil; isPlaying = false; actualQuality = nil
             if interruptedPlayback { errorMessage = "请登录原账号后重试" }
         }
-        updateNowPlaying(); saveQueue()
+        updateNowPlaying()
+        if retryOffline { resolveCurrent(at: elapsed) }
+        else { prepareNext() }
+        if persist { saveQueue() }
+    }
+
+    private static func unavailableOnlineSong(_ id: String) -> LibrarySongItem {
+        LibrarySongItem(id: id, title: "在线歌曲不可用", artist: "登录原账号后可用", album: "", albumArtist: "", trackNumber: 0,
+                        artwork: .missing, unavailabilityReason: "请登录原账号后重试")
     }
 
     private func resolveCurrent(at position: Double, replacing: Bool = false) {
         guard hasCurrent, let resolveResource else { return }
+        PerformanceDiagnostics.restoration("player.resource.request online=\(current.onlineOwnerID != nil) resume=\(position > 0)")
+        if offlineSong?(current.id) == nil, let owner = current.onlineOwnerID,
+           (hasResolvedOnlineIdentity ? owner != resolvedOnlineOwnerID : unavailableIDs.contains(current.id)) {
+            resourceRevision = UUID()
+            resourceTask?.cancel(); nextResourceTask?.cancel(); resourceTask = nil; resolvingResource = false
+            configuringAudio = true
+            audio?.stop(); loadedEntry = nil; preparedEntry = nil
+            configuringAudio = false
+            isPlaying = false; actualQuality = nil
+            errorMessage = "请登录原账号后重试"
+            updateNowPlaying(); saveQueue()
+            return
+        }
         resourceTask?.cancel(); nextResourceTask?.cancel()
         let revision = UUID(), entry = entryIDs[currentIndex], songID = current.id
         resourceRevision = revision
@@ -362,12 +506,14 @@ final class NowPlayingModel {
                     self.ensureAudioEngine().load(url: resource.url, position: resume, autoplay: autoplay)
                     self.configuringAudio = false
                 }
+                PerformanceDiagnostics.restoration("player.resource.ready resume=\(resume > 0)")
                 self.resolvingResource = false
                 self.actualQuality = resource.quality
                 self.resourceTask = nil
                 self.syncTransport(); self.prepareNext(); self.saveQueue()
             } catch {
                 guard let self, self.resourceRevision == revision, !Task.isCancelled else { return }
+                PerformanceDiagnostics.restoration("player.resource.failed")
                 self.resolvingResource = false; self.resourceTask = nil
                 if !replacing { self.isPlaying = false; self.loadedEntry = nil }
                 self.errorMessage = error.localizedDescription
@@ -413,7 +559,7 @@ final class NowPlayingModel {
         if let resolveResource {
             preparedEntry = nil
             audio?.prepareNext(url: nil)
-            guard let next, !queue[next].id.hasPrefix("netease:") else { return }
+            guard let next, !queue[next].id.hasPrefix("netease:") || offlineSong?(queue[next].id) != nil else { return }
             let revision = resourceRevision, entry = entryIDs[next], id = queue[next].id
             nextResourceTask = Task { [weak self] in
                 guard let resource = try? await resolveResource(id), !Task.isCancelled,
@@ -459,13 +605,61 @@ final class NowPlayingModel {
     }
 
     func saveQueue() {
-        guard !applyingState, let persistenceURL else { return }
+        guard !applyingState, !queueRestorationFailed, let persistenceURL else { return }
         lastSavedPlaybackTime = Date()
-        do {
-            let state = SavedQueue(ids: queue.map(\.id), index: currentIndex, elapsed: elapsed, repeatMode: repeatMode, shuffled: isShuffled, source: sourceTitle, entryIDs: entryIDs, originalOrder: originalOrder, userQueuedIDs: userQueuedIDs, crossfadeEnabled: isCrossfadeEnabled)
-            try FileManager.default.createDirectory(at: persistenceURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try JSONEncoder().encode(state).write(to: persistenceURL, options: .atomic)
-        } catch { errorMessage = "播放状态保存失败：" + error.localizedDescription }
+        var seen = Set<String>()
+        let metadata = queue.filter { seen.insert($0.id).inserted }.map { song in
+            !hasResolvedOnlineIdentity ? pendingRestoredSongs[song.id] ?? PlaybackSongSnapshot(song) : PlaybackSongSnapshot(song)
+        }
+        let state = SavedQueue(ids: queue.map(\.id), index: currentIndex, elapsed: elapsed, repeatMode: repeatMode, shuffled: isShuffled, source: sourceTitle, entryIDs: entryIDs, originalOrder: originalOrder, userQueuedIDs: userQueuedIDs, crossfadeEnabled: isCrossfadeEnabled, songs: metadata)
+        let previous = queuePersistenceTask
+        let persistence = queuePersistence
+        queuePersistenceRevision += 1
+        let revision = queuePersistenceRevision
+        // Each write waits for its predecessor; actor scheduling alone does not
+        // guarantee that snapshots arrive in the order the UI submitted them.
+        queuePersistenceTask = Task { [weak self] in
+            await previous?.value
+            do {
+                try await persistence.save(state, to: persistenceURL)
+                if self?.errorMessage?.hasPrefix("播放状态保存失败：") == true {
+                    self?.errorMessage = nil
+                }
+            } catch {
+                self?.errorMessage = "播放状态保存失败：" + error.localizedDescription
+            }
+            if self?.queuePersistenceRevision == revision {
+                self?.queuePersistenceTask = nil
+            }
+        }
+    }
+
+    /// Wait for submitted snapshots, including changes made while a write finishes.
+    func flushQueuePersistence() async {
+        while let pending = queuePersistenceTask {
+            await pending.value
+        }
+    }
+
+    func saveQueueForBackground() {
+        guard persistenceURL != nil else { return }
+        if persistenceBackgroundTask == .invalid {
+            persistenceBackgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Save playback queue") { [weak self] in
+                self?.endPersistenceBackgroundTask()
+            }
+        }
+        saveQueue()
+        Task { [weak self] in
+            guard let self else { return }
+            await flushQueuePersistence()
+            endPersistenceBackgroundTask()
+        }
+    }
+
+    private func endPersistenceBackgroundTask() {
+        guard persistenceBackgroundTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(persistenceBackgroundTask)
+        persistenceBackgroundTask = .invalid
     }
 
     @discardableResult
@@ -476,14 +670,37 @@ final class NowPlayingModel {
             let saved: SavedQueue?
             if let restoredState { saved = try restoredState.get() }
             else { saved = FileManager.default.fileExists(atPath: persistenceURL.path) ? try JSONDecoder().decode(SavedQueue.self, from: Data(contentsOf: persistenceURL)) : nil }
-            guard let state = saved else { return true }
+            queueRestorationFailed = false
+            guard let state = saved else {
+                PerformanceDiagnostics.restoration("queue.restore.empty")
+                return true
+            }
             let map = Dictionary(songs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            let snapshots = Dictionary((state.songs ?? []).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            pendingRestoredSongs = [:]
+            offlineSongIDs = []
+            let restoredSongs = state.ids.map { id -> LibrarySongItem in
+                if let offline = offlineSong?(id) {
+                    offlineSongIDs.insert(id)
+                    return offline
+                }
+                let metadata = map[id] ?? snapshots[id]?.song
+                guard let owner = metadata?.onlineOwnerID ?? snapshots[id]?.onlineOwnerID else {
+                    return metadata ?? .unavailable(id)
+                }
+                if !hasResolvedOnlineIdentity {
+                    if let metadata { pendingRestoredSongs[id] = PlaybackSongSnapshot(metadata) }
+                    return Self.unavailableOnlineSong(id)
+                }
+                guard owner == resolvedOnlineOwnerID else { return Self.unavailableOnlineSong(id) }
+                return metadata ?? .unavailable(id)
+            }
             applyingState = true
             defer { applyingState = false }
             configuringAudio = true
             audio?.stop()
             configuringAudio = false
-            queue = state.ids.map { map[$0] ?? .unavailable($0) }
+            queue = restoredSongs
             entryIDs = state.entryIDs?.count == queue.count && Set(state.entryIDs ?? []).count == queue.count ? state.entryIDs! : queue.map { _ in UUID() }
             originalOrder = state.originalOrder ?? entryIDs
             userQueuedIDs = state.userQueuedIDs ?? []
@@ -498,22 +715,72 @@ final class NowPlayingModel {
             sourceTitle = state.source
             isPlaying = false
             elapsed = state.elapsed.isFinite ? max(0, state.elapsed) : 0
-            unavailableIDs = Set(state.ids).subtracting(map.keys)
+            unavailableIDs = Set(state.ids).subtracting(Set(map.keys).union(snapshots.keys).union(offlineSongIDs))
+                .union(restoredSongs.filter { $0.unavailabilityReason != nil }.map(\.id))
             errorMessage = nil
             updateNowPlaying()
             loadedEntry = nil
             preparedEntry = nil
+            PerformanceDiagnostics.restoration("queue.restore.success count=\(queue.count) snapshots=\(snapshots.count) current=\(hasCurrent) resume=\(elapsed > 0)")
             return true
         } catch {
+            queueRestorationFailed = true
+            PerformanceDiagnostics.restoration("queue.restore.failed")
             errorMessage = "播放状态恢复失败：" + error.localizedDescription
             return false
         }
     }
 
+    /// Artwork arrival leaves playback resources, queue order and availability alone.
+    func updateArtwork(_ replacements: [String: LibrarySongItem]) {
+        guard !replacements.isEmpty else { return }
+        var updated = queue
+        var changed = false
+        var currentChanged = false
+        for index in queue.indices {
+            let existing = queue[index]
+            if offlineSong?(existing.id) == nil, let owner = existing.onlineOwnerID,
+               !hasResolvedOnlineIdentity || owner != resolvedOnlineOwnerID { continue }
+            guard let replacement = replacements[existing.id],
+                  replacement.artwork != existing.artwork
+                    || replacement.artworkData != existing.artworkData
+                    || replacement.artworkURL != existing.artworkURL
+                    || replacement.artworkBackdrop != existing.artworkBackdrop else { continue }
+            updated[index].artwork = replacement.artwork
+            updated[index].artworkData = replacement.artworkData
+            updated[index].artworkURL = replacement.artworkURL
+            updated[index].artworkBackdrop = replacement.artworkBackdrop
+            changed = true
+            if index == currentIndex { currentChanged = true }
+        }
+        if changed { queue = updated }
+        if currentChanged { updateNowPlaying() }
+    }
+
     func reconcileAvailability(songs: [LibrarySongItem]) {
-        let refreshed = Dictionary(songs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let updated = queue.map { refreshed[$0.id] ?? $0 }
-        let ids = Set(refreshed.keys)
+        let offline = Dictionary(queue.compactMap { song in
+            offlineSong?(song.id).map { (song.id, $0) }
+        }, uniquingKeysWith: { first, _ in first })
+        offlineSongIDs = Set(offline.keys)
+        for id in offline.keys { pendingRestoredSongs.removeValue(forKey: id) }
+        let refreshed = Dictionary(songs.filter { song in
+            guard let owner = song.onlineOwnerID else { return true }
+            return hasResolvedOnlineIdentity && owner == resolvedOnlineOwnerID
+        }.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let updated = queue.map { song in
+            if let downloaded = offline[song.id] { return downloaded }
+            if let owner = song.onlineOwnerID, !hasResolvedOnlineIdentity || owner != resolvedOnlineOwnerID {
+                return Self.unavailableOnlineSong(song.id)
+            }
+            return refreshed[song.id] ?? song
+        }
+        var ids = Set(refreshed.keys)
+        ids.formUnion(offline.keys)
+        // An authenticated stable online identity is playable without a loaded detail page.
+        ids.formUnion(updated.filter { song in
+            song.onlineOwnerID != nil && hasResolvedOnlineIdentity && song.onlineOwnerID == resolvedOnlineOwnerID
+                && song.unavailabilityReason == nil
+        }.map(\.id))
         let unavailable = Set(queue.map(\.id)).subtracting(ids).union(updated.filter { $0.unavailabilityReason != nil }.map(\.id))
         let changed = updated != queue || unavailable != unavailableIDs
         if updated != queue { queue = updated }

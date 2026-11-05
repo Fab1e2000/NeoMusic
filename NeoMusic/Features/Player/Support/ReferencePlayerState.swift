@@ -8,6 +8,7 @@ struct ReferenceTrack: Identifiable, Hashable, Sendable {
     let albumTitle: String
     let coverURL: URL?
     let duration: TimeInterval
+    var artworkLoadID: String? = nil
 }
 
 struct ReferenceUpcomingTrack: Identifiable {
@@ -16,13 +17,20 @@ struct ReferenceUpcomingTrack: Identifiable {
     var id: Int { index }
 }
 
+struct UpcomingQueueVersion: Equatable, Sendable {
+    let revision: UInt64
+    let index: Int
+    let repeatMode: ReferencePlayerState.RepeatMode
+}
+
 /// Presentation adapter for the live player. Queue and transport state have one owner.
 @MainActor @Observable final class ReferencePlayerState {
-    enum RepeatMode { case off, all, one
+    enum RepeatMode: Sendable { case off, all, one
         var systemImage: String { self == .one ? "repeat.1" : "repeat" }
         var accessibilityTitle: String { switch self { case .off: "循环关闭"; case .all: "列表循环"; case .one: "单曲循环" } }
     }
     private let model: NowPlayingModel
+    @ObservationIgnored private var queuePresentation: (version: UpcomingQueueVersion, entries: [UpcomingQueueEntry])?
     var tracks: [ReferenceTrack] { model.queue.map(Self.convert) }
     var isPlaying: Bool {
         get { model.isPlaying }
@@ -58,6 +66,26 @@ struct ReferenceUpcomingTrack: Identifiable {
         return indices.compactMap(item(at:))
     }
 
+    /// Header motion and transport progress reuse the same queue projection.
+    var upcomingQueueVersion: UpcomingQueueVersion {
+        UpcomingQueueVersion(revision: model.queueRevision, index: currentQueueIndex, repeatMode: repeatMode)
+    }
+
+    var upcomingQueueEntries: [UpcomingQueueEntry] {
+        let version = upcomingQueueVersion
+        if let queuePresentation, queuePresentation.version == version {
+            return queuePresentation.entries
+        }
+        let interval = PerformanceDiagnostics.begin("QueueProjection")
+        defer { PerformanceDiagnostics.end("QueueProjection", interval) }
+        let entries = upcoming.map { entry in
+            return UpcomingQueueEntry(id: model.entryIDs[entry.index],
+                                      queueIndex: entry.index, song: entry.track)
+        }
+        queuePresentation = (version, entries)
+        return entries
+    }
+
     init(model: NowPlayingModel) { self.model = model }
     private func item(at index: Int) -> ReferenceUpcomingTrack? {
         guard model.queue.indices.contains(index) else { return nil }
@@ -85,6 +113,6 @@ struct ReferenceUpcomingTrack: Identifiable {
     }
     private static func convert(_ song: LibrarySongItem) -> ReferenceTrack {
         .init(id: song.id, title: song.title, artists: song.artist, albumTitle: song.album,
-              coverURL: song.artworkURL, duration: Double(song.duration))
+              coverURL: song.artworkURL, duration: Double(song.duration), artworkLoadID: song.artwork.loadID)
     }
 }

@@ -418,7 +418,7 @@ internal class LNPopupProxyViewController<Content, PopupContent> : UIHostingCont
 				}
 			} else {
 				target.popupBar.setValue(nil, forKey: "_barLayoutDelegate")
-				target.dismissPopupBar(animated: true) {
+				target.dismissPopupBar(animated: animated) {
 					endImplicitAnims()
 				}
 			}

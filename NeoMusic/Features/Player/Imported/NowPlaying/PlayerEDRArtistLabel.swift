@@ -35,9 +35,11 @@ struct PlayerEDRArtistLabel: UIViewRepresentable {
     let brightness: Double
     var isWhite = false
     var fontWeight: UIFont.Weight = .regular
+    @Environment(\.playerVisualsActive) private var visualsActive
 
     func makeUIView(context: Context) -> PlayerEDRGlyphView { PlayerEDRGlyphView() }
     func updateUIView(_ view: PlayerEDRGlyphView, context: Context) {
+        view.setRenderingActive(visualsActive)
         view.update(text: text, fontSize: fontSize, image: image, anchor: anchor, brightness: brightness, isWhite: isWhite, fontWeight: fontWeight)
     }
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: PlayerEDRGlyphView, context: Context) -> CGSize? {
@@ -54,62 +56,51 @@ enum PlayerEDRMask: Equatable {
     case time(String, Bool)
 }
 
-@MainActor
-private final class PlayerEDRMetalResources {
-    private static var cached: PlayerEDRMetalResources?
-
-    static func shared() -> PlayerEDRMetalResources? {
-        if let cached { return cached }
-        guard let resources = PlayerEDRMetalResources() else { return nil }
-        cached = resources
-        return resources
-    }
-
+/// Metal objects are immutable after preparation and Metal supports their use across threads.
+final class PlayerEDRMetalResources: @unchecked Sendable {
     let device: MTLDevice
     let queue: MTLCommandQueue
     let pipeline: MTLRenderPipelineState
     let loader: MTKTextureLoader
 
-    private init?() {
-        guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else { return nil }
+    init?() {
+        guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue(),
+              let library = device.makeDefaultLibrary() else { return nil }
         self.device = device
         self.queue = queue
         loader = MTKTextureLoader(device: device)
-        let source = """
-        #include <metal_stdlib>
-        using namespace metal;
-        struct Varying { float4 position [[position]]; float2 uv; };
-        vertex Varying vertexMain(uint id [[vertex_id]]) {
-            float2 p[] = { float2(-1,-1), float2(1,-1), float2(-1,1), float2(1,1) };
-            float2 uv[] = { float2(0,1), float2(1,1), float2(0,0), float2(1,0) };
-            return { float4(p[id], 0, 1), uv[id] };
+        let descriptor = MTLRenderPipelineDescriptor()
+        descriptor.vertexFunction = library.makeFunction(name: "playerEDRVertex")
+        descriptor.fragmentFunction = library.makeFunction(name: "playerEDRFragment")
+        descriptor.colorAttachments[0].pixelFormat = .rgba16Float
+        guard let pipeline = try? device.makeRenderPipelineState(descriptor: descriptor) else { return nil }
+        self.pipeline = pipeline
+    }
+}
+
+@MainActor @Observable
+final class PlayerEDRResources {
+    static let shared = PlayerEDRResources()
+    private(set) var resources: PlayerEDRMetalResources?
+    @ObservationIgnored private var preparation: Task<PlayerEDRMetalResources?, Never>?
+    var isReady: Bool { resources != nil }
+
+    func prepare() async {
+        guard resources == nil else { return }
+        let task: Task<PlayerEDRMetalResources?, Never>
+        if let preparation { task = preparation }
+        else {
+            task = Task.detached(priority: .userInitiated) { PlayerEDRMetalResources() }
+            preparation = task
         }
-        fragment float4 fragmentMain(Varying in [[stage_in]], texture2d<float> mask [[texture(0)]], texture2d<float> backdrop [[texture(1)]], constant float4 &rect [[buffer(0)]], constant float2 &options [[buffer(1)]]) {
-            constexpr sampler s(filter::linear, address::clamp_to_edge);
-            float a = mask.sample(s, in.uv).a;
-            float3 background = backdrop.sample(s, rect.xy + in.uv * rect.zw).rgb;
-            float3 color = options.y > 0.5 ? float3(1.0) : float3(1.0) + background * 0.65;
-            return float4(color * (2.0 * options.x) * a, a);
-        }
-        """
-        do {
-            let lib = try device.makeLibrary(source: source, options: nil)
-            let descriptor = MTLRenderPipelineDescriptor()
-            descriptor.vertexFunction = lib.makeFunction(name: "vertexMain")
-            descriptor.fragmentFunction = lib.makeFunction(name: "fragmentMain")
-            descriptor.colorAttachments[0].pixelFormat = .rgba16Float
-            pipeline = try device.makeRenderPipelineState(descriptor: descriptor)
-        } catch {
-            print("Player EDR pipeline unavailable: \(error)")
-            return nil
-        }
+        resources = await task.value
     }
 }
 
 final class PlayerEDRGlyphView: UIView {
     override class var layerClass: AnyClass { CAMetalLayer.self }
     private var metalLayer: CAMetalLayer { layer as! CAMetalLayer }
-    private let resources = PlayerEDRMetalResources.shared()
+    private let resources = PlayerEDRResources.shared.resources
     private var text = ""
     private var fontSize: CGFloat = 20
     private var brightness: Float = 0.7
@@ -119,8 +110,17 @@ final class PlayerEDRGlyphView: UIView {
     private var image: UIImage?
     private weak var anchor: NowPlayingBackdropAnchor?
     private var displayLink: CADisplayLink?
+    private(set) var isRenderingActive = false
+    var hasActiveDisplayLink: Bool { displayLink?.isPaused == false }
     private var lastRect = CGRect.null
     private var dirty = true
+    private var lastLayout: LayoutInput?
+
+    private struct LayoutInput: Equatable {
+        let bounds: CGRect
+        let scale: CGFloat
+        let traits: UITraitCollection
+    }
 
     private struct MaskInput: Equatable {
         let text: String
@@ -158,36 +158,80 @@ final class PlayerEDRGlyphView: UIView {
     required init?(coder: NSCoder) { nil }
 
     func update(text: String, fontSize: CGFloat, image: UIImage?, anchor: NowPlayingBackdropAnchor?, brightness: Double, isWhite: Bool, fontWeight: UIFont.Weight) {
-        if self.text != text || self.fontSize != fontSize || self.image !== image || self.anchor !== anchor || self.brightness != Float(brightness) || self.isWhite != isWhite || self.fontWeight != fontWeight { dirty = true }
+        guard self.text != text || self.fontSize != fontSize || self.image !== image || self.anchor !== anchor
+                || self.brightness != Float(brightness) || self.isWhite != isWhite || self.fontWeight != fontWeight
+                || shape != nil else { return }
+        let wasWhite = self.isWhite
+        dirty = true
         self.text = text; self.fontSize = fontSize; self.image = image; self.anchor = anchor; self.brightness = Float(brightness); self.isWhite = isWhite; self.fontWeight = fontWeight
         shape = nil
+        if wasWhite != isWhite { updateDisplayLink() }
         setNeedsLayout()
     }
     func update(shape: PlayerEDRMask, image: UIImage?, anchor: NowPlayingBackdropAnchor?, brightness: Double) {
-        if self.shape != shape || self.image !== image || self.anchor !== anchor || self.brightness != Float(brightness) { dirty = true }
+        guard self.shape != shape || self.image !== image || self.anchor !== anchor
+                || self.brightness != Float(brightness) else { return }
+        let wasWhite = isWhite
+        dirty = true
         self.shape = shape; self.image = image; self.anchor = anchor; self.brightness = Float(brightness); self.isWhite = false
+        if wasWhite { updateDisplayLink() }
         setNeedsLayout()
     }
     override func didMoveToWindow() {
         super.didMoveToWindow()
         stop()
-        if window != nil {
+        dirty = true
+        updateDisplayLink()
+        setNeedsLayout()
+    }
+    func setRenderingActive(_ active: Bool) {
+        guard isRenderingActive != active else { return }
+        isRenderingActive = active
+        updateDisplayLink()
+        if active { dirty = true; renderIfNeeded() }
+    }
+    private func updateDisplayLink() {
+        // White EDR glyphs have position-independent pixels. Core Animation moves
+        // their existing layer; text, layout and visibility updates redraw it.
+        guard !isWhite else { stop(); return }
+        guard window != nil, resources != nil else { return }
+        if displayLink == nil, isRenderingActive {
             let link = CADisplayLink(target: DisplayProxy(self), selector: #selector(DisplayProxy.tick))
             link.add(to: .main, forMode: .common)
             displayLink = link
+        }
+        displayLink?.isPaused = !isRenderingActive
+    }
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let layout = LayoutInput(bounds: bounds, scale: window?.screen.scale ?? traitCollection.displayScale,
+                                 traits: traitCollection)
+        if lastLayout != layout {
+            lastLayout = layout
             dirty = true
         }
+        renderIfNeeded()
     }
-    override func layoutSubviews() { super.layoutSubviews(); dirty = true; renderIfNeeded() }
     func stop() { displayLink?.invalidate(); displayLink = nil }
 
     private func renderIfNeeded() {
-        guard let resources, let window,
-              let source = anchor?.view, source.window === window,
-              let image = image?.cgImage, bounds.width > 0, bounds.height > 0,
-              source.bounds.width > 0, source.bounds.height > 0 else { return }
-        let rect = source.convert(bounds, from: self)
-        guard dirty || rect != lastRect else { return }
+        guard isRenderingActive, let resources, let window,
+              let image = image?.cgImage, bounds.width > 0, bounds.height > 0 else { return }
+        let rect: CGRect
+        var uv: SIMD4<Float>
+        if isWhite {
+            // White glyphs do not sample the backdrop's position and can render
+            // before the backdrop anchor finishes its first layout.
+            rect = .zero
+            uv = .zero
+        } else {
+            guard let source = anchor?.view, source.window === window,
+                  source.bounds.width > 0, source.bounds.height > 0 else { return }
+            rect = source.convert(bounds, from: self)
+            uv = SIMD4<Float>(Float(rect.minX / source.bounds.width), Float(rect.minY / source.bounds.height),
+                              Float(rect.width / source.bounds.width), Float(rect.height / source.bounds.height))
+        }
+        guard dirty || (!isWhite && rect != lastRect) else { return }
         dirty = false
         lastRect = rect
         let scale = window.screen.scale
@@ -201,8 +245,6 @@ final class PlayerEDRGlyphView: UIView {
         pass.colorAttachments[0].storeAction = .store
         pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0)
         guard let encoder = command.makeRenderCommandEncoder(descriptor: pass) else { dirty = true; return }
-        var uv = SIMD4<Float>(Float(rect.minX / source.bounds.width), Float(rect.minY / source.bounds.height),
-                              Float(rect.width / source.bounds.width), Float(rect.height / source.bounds.height))
         encoder.setRenderPipelineState(resources.pipeline)
         encoder.setFragmentTexture(textures.mask, index: 0)
         encoder.setFragmentTexture(textures.backdrop, index: 1)

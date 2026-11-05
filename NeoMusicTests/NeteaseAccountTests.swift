@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import SwiftUI
 import UIKit
 import XCTest
@@ -11,6 +12,137 @@ final class NeteaseAccountTests: XCTestCase {
 
     private func credential(_ value: String) throws -> NeteaseCredential {
         try NeteaseCredential(musicU: value)
+    }
+
+    func testCachedContentRestorationFinishesBeforeNetworkValidation() async throws {
+        let storage = AccountTestStorage()
+        storage.saved = NeteaseSavedSession(profile: first, credential: try credential("saved"))
+        let network = AccountTestRequest<NeteaseProfile>()
+        var validations = 0
+        let account = makeAccount(storage, validate: { _ in
+            validations += 1
+            return try await network.value()
+        })
+        await account.restoreCachedContent()
+        XCTAssertEqual(account.profile, first)
+        XCTAssertEqual(account.validationState, .unverified)
+        XCTAssertEqual(validations, 0)
+        XCTAssertEqual(storage.reads, 1)
+
+        let validation = Task { await account.revalidate() }
+        await network.started.wait()
+        // A foreground validation must not turn the completed cache phase into a network wait.
+        await account.restoreCachedContent()
+        XCTAssertEqual(storage.reads, 1)
+        XCTAssertEqual(validations, 1)
+        network.finish(.success(first))
+        await validation.value
+        XCTAssertEqual(account.validationState, .valid)
+    }
+
+    func testEmptyOrUnreadableCredentialFinishesCachePhaseWithoutNetwork() async {
+        for fails in [false, true] {
+            let storage = AccountTestStorage()
+            if fails { storage.readError = NeteaseAccountError.keychain(-1) }
+            let account = makeAccount(storage, validate: { _ in
+                XCTFail("The cache phase must not validate credentials")
+                return self.first
+            })
+            await account.restoreCachedContent()
+            XCTAssertNil(account.profile)
+            XCTAssertEqual(storage.reads, 1)
+            XCTAssertEqual(account.validationState, fails ? .unverified : .signedOut)
+            XCTAssertEqual(account.error != nil, fails)
+            XCTAssertEqual(storage.deletions, 0)
+            XCTAssertEqual(account.restoredPlaybackIdentity, fails ? .pending : .signedOut)
+        }
+    }
+
+    func testTransientCredentialReadRetainsQueueSnapshotUntilIdentityRecovery() async throws {
+        let storage = AccountTestStorage()
+        storage.saved = NeteaseSavedSession(profile: first, credential: try credential("saved"))
+        storage.readError = NeteaseAccountError.keychain(-25308)
+        let account = makeAccount(storage, validate: { _ in self.first })
+        let url = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let song = LibrarySongItem(id: "netease:1:9", title: "Saved song", artist: "Saved artist",
+                                  album: "", albumArtist: "", trackNumber: 0, artwork: .file(URL(fileURLWithPath: "/tmp/saved-cover.jpg")))
+        let saved = NowPlayingModel.SavedQueue(ids: [song.id], index: 0, elapsed: 32,
+            repeatMode: .off, shuffled: false, songs: [PlaybackSongSnapshot(song)])
+        let player = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false)
+        defer { player.shutdownPlayback(); try? FileManager.default.removeItem(at: url) }
+        player.configurePlayback(resolveURL: { _ in nil }, persistenceURL: url)
+        XCTAssertTrue(player.restoreQueue(songs: [], restoredState: .success(saved)))
+
+        await account.restoreCachedContent()
+        XCTAssertEqual(account.restoredPlaybackIdentity, .pending)
+        player.saveQueueForBackground()
+        await player.flushQueuePersistence()
+        let retained = try JSONDecoder().decode(NowPlayingModel.SavedQueue.self, from: Data(contentsOf: url))
+        XCTAssertEqual(retained.songs?.first?.title, song.title)
+        XCTAssertEqual(retained.elapsed, 32)
+        XCTAssertFalse(player.hasAudioEngine)
+
+        storage.readError = nil
+        await account.restoreCachedContent()
+        XCTAssertEqual(account.restoredPlaybackIdentity, .signedIn("1"))
+        guard case let .signedIn(owner) = account.restoredPlaybackIdentity else {
+            return XCTFail("Recovered credentials must publish the saved owner")
+        }
+        player.restoreOnlineIdentity(ownerID: owner)
+        XCTAssertEqual(player.current.title, song.title)
+        XCTAssertEqual(player.current.artist, song.artist)
+        XCTAssertEqual(player.current.artwork, song.artwork)
+        XCTAssertEqual(player.elapsed, 32)
+        XCTAssertFalse(player.isPlaying)
+        XCTAssertFalse(player.hasAudioEngine)
+        XCTAssertEqual(storage.reads, 2)
+        XCTAssertEqual(storage.deletions, 0)
+        await player.flushQueuePersistence()
+    }
+
+    func testLibraryCacheRestorationLeavesHomeForItsIndependentPhase() async throws {
+        let directory = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let home = NeteaseHomeStore(directory: directory)
+        let saved = NeteaseSavedSession(profile: first, credential: try credential("saved"))
+        var validations = 0
+        let account = NeteaseAccount(readSession: { saved }, saveSession: { _ in }, deleteSession: {},
+            validateCredential: { _ in validations += 1; return self.first }, cachedAvatar: { _ in nil },
+            loadAvatar: { _ in Data() }, clearAvatarCache: {}, home: home)
+
+        await account.restoreCachedContent()
+        XCTAssertEqual(account.profile, first)
+        XCTAssertNil(home.userID)
+        XCTAssertEqual(validations, 0)
+
+        await account.restoreHomeCachedContent()
+        XCTAssertEqual(home.userID, first.userID)
+        XCTAssertEqual(validations, 0)
+        XCTAssertEqual(account.validationState, .unverified)
+    }
+
+    func testLogoutWaitsForCacheReadAndRejectsItsLateSession() async throws {
+        let storage = AccountTestStorage()
+        storage.saved = NeteaseSavedSession(profile: first, credential: try credential("saved"))
+        let read = AccountTestRequest<Void>()
+        storage.beforeRead = { try await read.value() }
+        let account = makeAccount(storage, validate: { _ in
+            XCTFail("Cancelled cache restoration must not validate credentials")
+            return self.first
+        })
+        let restoration = Task { await account.restoreCachedContent() }
+        await read.started.wait()
+        let loggingOut = expectation(description: "Logout cancels cached session restoration")
+        _ = withObservationTracking { account.isLoggingOut } onChange: { loggingOut.fulfill() }
+        let logout = Task { try await account.logout() }
+        await fulfillment(of: [loggingOut], timeout: 2)
+        read.finish(.success(()))
+        await restoration.value
+        try await logout.value
+        XCTAssertNil(account.profile)
+        XCTAssertNil(storage.saved)
+        XCTAssertEqual(account.validationState, .signedOut)
+        XCTAssertEqual(account.restoredPlaybackIdentity, .signedOut)
     }
 
     private func makeAccount(_ storage: AccountTestStorage,

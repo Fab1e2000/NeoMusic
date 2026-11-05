@@ -1,6 +1,6 @@
 import Foundation
 
-struct NeteaseArtistReference: Codable, Sendable, Identifiable {
+struct NeteaseArtistReference: Codable, Sendable, Equatable, Identifiable {
     let id: Int64
     let name: String
     var artworkURL: URL?
@@ -26,24 +26,24 @@ struct NeteaseArtistAlbumDetail: Codable, Sendable {
 }
 
 extension NeteaseMusicClient {
-    func songDetail(id: Int64, credential: NeteaseCredential?) async throws -> NeteaseMusicSong {
+    @concurrent func songDetail(id: Int64, credential: NeteaseCredential?) async throws -> NeteaseMusicSong {
         struct Response: Decodable { let songs: [Song] }
         let response: Response = try await read("/api/v3/song/detail", ["c": "[{\"id\":\(id)}]"], credential)
         guard let song = response.songs.first(where: { $0.id == id }) else { throw NeteaseAccountError.invalidResponse }
         return song.model
     }
-    func artistDetail(id: Int64, credential: NeteaseCredential?) async throws -> NeteaseArtistDetail {
+    @concurrent func artistDetail(id: Int64, credential: NeteaseCredential?) async throws -> NeteaseArtistDetail {
         struct Response: Decodable { let artist: ArtistDTO; let hotSongs: [Song] }
         let response: Response = try await read("/api/v1/artist/\(id)", [:], credential)
         return .init(artist: response.artist.model, biography: response.artist.briefDesc ?? "", songs: response.hotSongs.map(\.model))
     }
-    func artistBiography(id: Int64, credential: NeteaseCredential?) async throws -> String {
+    @concurrent func artistBiography(id: Int64, credential: NeteaseCredential?) async throws -> String {
         struct Section: Decodable { let ti: String; let txt: String }
         struct Response: Decodable { let briefDesc: String?; let introduction: [Section]? }
         let response: Response = try await read("/api/artist/introduction", ["id": id], credential)
         return ([response.briefDesc ?? ""] + (response.introduction ?? []).map { $0.ti + "\n" + $0.txt }).filter { !$0.isEmpty }.joined(separator: "\n\n")
     }
-    func artistAlbums(id: Int64, credential: NeteaseCredential?) async throws -> [NeteaseArtistAlbum] {
+    @concurrent func artistAlbums(id: Int64, credential: NeteaseCredential?) async throws -> [NeteaseArtistAlbum] {
         struct Response: Decodable { let hotAlbums: [AlbumDTO]; let more: Bool }
         var result: [NeteaseArtistAlbum] = [], offset = 0, seen = Set<Int64>()
         while true {
@@ -54,18 +54,18 @@ extension NeteaseMusicClient {
             offset += response.hotAlbums.count
         }
     }
-    func similarArtists(id: Int64, credential: NeteaseCredential?) async throws -> [NeteaseArtistReference] {
+    @concurrent func similarArtists(id: Int64, credential: NeteaseCredential?) async throws -> [NeteaseArtistReference] {
         struct Response: Decodable { let artists: [ArtistDTO] }
         let response: Response = try await read("/api/discovery/simiArtist", ["artistid": id], credential)
         return response.artists.map(\.model)
     }
-    func albumDetail(id: Int64, credential: NeteaseCredential?) async throws -> NeteaseArtistAlbumDetail {
+    @concurrent func albumDetail(id: Int64, credential: NeteaseCredential?) async throws -> NeteaseArtistAlbumDetail {
         struct Response: Decodable { let album: AlbumDTO; let songs: [Song] }
         let response: Response = try await read("/api/v1/album/\(id)", [:], credential)
         guard response.album.size.map({ $0 == response.songs.count }) ?? true else { throw NeteaseAccountError.invalidResponse }
         return .init(album: response.album.model, songs: response.songs.map(\.model))
     }
-    func subscribedArtists(credential: NeteaseCredential) async throws -> [NeteaseArtistReference] {
+    @concurrent func subscribedArtists(credential: NeteaseCredential) async throws -> [NeteaseArtistReference] {
         struct Response: Decodable { let data: [ArtistDTO]; let hasMore: Bool }
         var result: [NeteaseArtistReference] = [], offset = 0, seen = Set<Int64>()
         while true {
@@ -76,7 +76,7 @@ extension NeteaseMusicClient {
             offset += page.data.count
         }
     }
-    func subscribedAlbums(credential: NeteaseCredential) async throws -> [NeteaseArtistAlbum] {
+    @concurrent func subscribedAlbums(credential: NeteaseCredential) async throws -> [NeteaseArtistAlbum] {
         struct Response: Decodable { let data: [AlbumDTO]; let hasMore: Bool }
         var result: [NeteaseArtistAlbum] = [], offset = 0, seen = Set<Int64>()
         while true {
@@ -87,10 +87,10 @@ extension NeteaseMusicClient {
             offset += page.data.count
         }
     }
-    func setArtistSubscribed(id: Int64, subscribed: Bool, credential: NeteaseCredential) async throws {
+    @concurrent func setArtistSubscribed(id: Int64, subscribed: Bool, credential: NeteaseCredential) async throws {
         _ = try await transport.requestWeb(path: subscribed ? "/api/artist/sub" : "/api/artist/unsub", fields: ["artistId": id, "artistIds": "[\(id)]"], credential: credential)
     }
-    func setAlbumSubscribed(id: Int64, subscribed: Bool, credential: NeteaseCredential) async throws {
+    @concurrent func setAlbumSubscribed(id: Int64, subscribed: Bool, credential: NeteaseCredential) async throws {
         _ = try await transport.requestWeb(path: subscribed ? "/api/album/sub" : "/api/album/unsub", fields: ["id": id], credential: credential)
     }
     private struct ArtistDTO: Decodable {

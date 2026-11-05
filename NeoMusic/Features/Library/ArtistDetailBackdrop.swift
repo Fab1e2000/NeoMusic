@@ -5,11 +5,15 @@ import CoreImage.CIFilterBuiltins
 struct ArtistDetailBackdrop: View {
     let artwork: Artwork?
     @State private var preparedImage: UIImage?
+    @State private var preparedRequest: ArtistBackdropRequest?
     private static let preparer = ArtistBackdropPreparer()
     @Environment(\.displayScale) private var displayScale
+    @Environment(\.artworkLoadAction) private var loadArtwork
+    private var artworkURL: URL? { if case .file(let url) = artwork { url } else { nil } }
 
     var body: some View {
         GeometryReader { geometry in
+            let request = ArtistBackdropRequest(url: artworkURL, width: geometry.size.width, scale: displayScale)
             let y = geometry.frame(in: .scrollView).minY
             let upward = max(0, -y)
             // Blur and color loss are one image transition, independent of the page shade.
@@ -19,7 +23,7 @@ struct ArtistDetailBackdrop: View {
             let magnification = 1 + pull / 500
 
             ZStack(alignment: .top) {
-                if let preparedImage {
+                if let preparedImage, preparedRequest == request {
                     Image(uiImage: preparedImage).resizable()
                         .frame(width: geometry.size.width, height: extent)
                 }
@@ -37,25 +41,39 @@ struct ArtistDetailBackdrop: View {
             .scaleEffect(magnification, anchor: .top)
             .offset(y: upward * 0.6 - pull)
             .opacity(1 - imageProgress)
-            .task(id: String(describing: artwork) + String(describing: geometry.size.width)) {
-                guard case .file(let url) = artwork else { preparedImage = nil; return }
+            .task(id: request) {
+                guard let url = request.url else { preparedImage = nil; return }
                 let image = await LocalArtworkImages.load(url, pixels: LocalArtworkImages.pixelSize(max(geometry.size.width, 520) * displayScale))
                 guard !Task.isCancelled, let image else { return }
-                let prepared = await Self.preparer.prepare(image, width: geometry.size.width, displayScale: displayScale)
+                let prepared = await Self.preparer.prepare(image, request: request)
                 guard !Task.isCancelled else { return }
                 preparedImage = prepared
+                preparedRequest = request
             }
         }
         .allowsHitTesting(false)
+        .task(id: artwork?.loadID) { loadArtwork(artwork?.loadID) }
     }
 
 }
 
+private struct ArtistBackdropRequest: Hashable, Sendable {
+    let url: URL?
+    let width: CGFloat
+    let scale: CGFloat
+}
+
 private actor ArtistBackdropPreparer {
     private let context = CIContext()
+    private let cache = NSCache<NSString, UIImage>()
 
-    func prepare(_ image: UIImage, width: CGFloat, displayScale: CGFloat) -> UIImage? {
-        guard width > 0 else { return nil }
+    init() { cache.totalCostLimit = 24 * 1_024 * 1_024 }
+
+    func prepare(_ image: UIImage, request: ArtistBackdropRequest) -> UIImage? {
+        let width = request.width, displayScale = request.scale
+        guard width > 0, !Task.isCancelled else { return nil }
+        let key = "\(request.url?.absoluteString ?? ""):\(width):\(displayScale)" as NSString
+        if let cached = cache.object(forKey: key) { return cached }
         let format = UIGraphicsImageRendererFormat()
         format.scale = displayScale
         format.opaque = true
@@ -97,7 +115,10 @@ private actor ArtistBackdropPreparer {
         blur.radius = Float(22 * displayScale)
         guard let output = blur.outputImage,
               let rendered = context.createCGImage(output, from: input.extent) else { return nil }
-        return UIImage(cgImage: rendered, scale: displayScale, orientation: .up)
+        guard !Task.isCancelled else { return nil }
+        let result = UIImage(cgImage: rendered, scale: displayScale, orientation: .up)
+        cache.setObject(result, forKey: key, cost: rendered.bytesPerRow * rendered.height)
+        return result
     }
 }
 

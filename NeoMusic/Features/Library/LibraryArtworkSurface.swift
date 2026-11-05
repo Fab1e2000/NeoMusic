@@ -75,11 +75,12 @@ extension UIView {
 }
 
 /// Independent hosting roots inherit traits from UIKit. Copy only explicit public
-/// appearance values, never SwiftUI's parent navigation/interaction internals.
+/// appearance values and the image-loading action, never navigation internals.
 extension View {
     func libraryHostedAppearance(_ environment: EnvironmentValues) -> some View {
         self.environment(\.colorScheme, environment.colorScheme)
             .environment(\.locale, environment.locale)
             .environment(\.dynamicTypeSize, environment.dynamicTypeSize)
+            .environment(\.artworkLoadAction, environment.artworkLoadAction)
     }
 }

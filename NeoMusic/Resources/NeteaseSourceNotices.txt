@@ -13,3 +13,42 @@ The playlist, song, lyrics, likes and stream endpoint parameters also follow
 NeoDizzy / MeloX. NeoMusic isolates website and API sessions, and supplies
 its own account lifecycle, credential storage,
 cancellation handling and native account presentation.
+
+Playlist pagination, prefetched song reuse, and scoped page-cache organization
+reference youshen2/MeloX at commit 09713edb847a0f0a3515a34f779cc630d4fe5985:
+MeloX/Core/Networking/NeteaseAPI.swift
+MeloX/Features/Playlist/PlaylistDetailView.swift
+MeloX/Core/Storage/PageContentCache.swift
+NeoMusic uses the system SQLite library for its page store and its existing
+Nuke dependency for artwork requests, with its own account task lifecycle.
+
+Independent library restoration and playback display snapshots reference
+the same MeloX revision:
+MeloX/App/ContentView.swift
+MeloX/Core/Library/LibraryStore.swift
+MeloX/Core/Playback/Queue/PlaybackPersistence.swift
+NeoMusic retains its native playback engine and account-scoped identities.
+
+Homepage resource decoding references the same GPL-3.0 NeoDizzy/MeloX
+HomePageModels and HomePageResourceModels lineage. NeoMusic supplies its own
+ordered presentation, scoped cache and request lifecycle. Supplemental
+read-only chart and followed-artist endpoint parameters were checked against:
+https://github.com/neteasecloudmusicapienhanced/api-enhanced/blob/main/module/toplist.js
+https://github.com/neteasecloudmusicapienhanced/api-enhanced/blob/main/module/artist_new_song.js
+
+Homepage refresh composition, six quick actions and missing-section sources
+reference MeloX at commit 09713edb847a0f0a3515a34f779cc630d4fe5985:
+MeloX/Features/Home/HomeRecommendedView.swift
+MeloX/Features/Home/HomeQuickActionsView.swift
+MeloX/Features/Home/HomeRecommendationFallbackLoader.swift
+MeloX/Core/Networking/NeteaseAPI+Home.swift
+MeloX/Core/Networking/NeteaseAPI+IntelligenceMode.swift
+NeoMusic provides its own SwiftUI cards, complete-refresh snapshots, account
+cancellation, seed-scoped caches and batch playback through its native player.
+
+Playback URL requests use the iOS EAPI header and scoped cookie profile from
+MeloX at the same 09713edb847a0f0a3515a34f779cc630d4fe5985 commit:
+MeloX/Core/Networking/NeteaseDirectClient.swift (default EAPI profile)
+MeloX/Core/Networking/NeteaseAPI.swift (requestPlaybackSource)
+NeoMusic retains its account isolation, cancellation, complete-track checks
+and explicit quality fallback.

@@ -1,5 +1,20 @@
 import SwiftUI
 
+/// Each page keeps only its last projection. Unrelated presentation updates reuse it,
+/// while changed data and controls produce their result in the same render pass.
+@MainActor final class LibraryListProjection<Input: Equatable, Output> {
+    private var input: Input?
+    private var output: Output?
+
+    func value(for input: Input, calculate: () -> Output) -> Output {
+        if self.input == input, let output { return output }
+        let output = calculate()
+        self.input = input
+        self.output = output
+        return output
+    }
+}
+
 /// 列表页的筛选：全部、喜爱、已下载。本地音乐都在本机，“下载”保留位置但不可用。
 enum LibraryFilter: Hashable {
     case all, favorites, downloaded
@@ -23,6 +38,7 @@ struct LibraryFilterMenu: View {
     @Binding var filter: LibraryFilter
     let allTitle: String
     let allImage: String
+    @Environment(\.accessibilityReduceMotion) private var reducesMotion
 
     var body: some View {
         Menu {
@@ -39,7 +55,9 @@ struct LibraryFilterMenu: View {
     }
 
     private func option(_ value: LibraryFilter, @ViewBuilder label: () -> some View) -> some View {
-        Toggle(isOn: Binding(get: { filter == value }, set: { if $0 { filter = value } }), label: label)
+        Toggle(isOn: Binding(get: { filter == value }, set: {
+            if $0 { withAnimation(reducesMotion ? nil : .default) { filter = value } }
+        }), label: label)
     }
 }
 
@@ -51,6 +69,7 @@ struct LibrarySortMenu<Sort: Hashable & Sendable>: View {
     /// 页面自身的操作，分别排在显示方式之前与排序之后（例如文件夹页的重新命名与删除）。
     var leading: LibraryMenuSections = []
     var trailing: LibraryMenuSections = []
+    @Environment(\.accessibilityReduceMotion) private var reducesMotion
 
     var body: some View {
         Menu {
@@ -81,7 +100,9 @@ struct LibrarySortMenu<Sort: Hashable & Sendable>: View {
     }
 
     private func toggle(isOn: Bool, set: @escaping () -> Void, @ViewBuilder label: () -> some View) -> some View {
-        Toggle(isOn: Binding(get: { isOn }, set: { if $0 { set() } }), label: label)
+        Toggle(isOn: Binding(get: { isOn }, set: {
+            if $0 { withAnimation(reducesMotion ? nil : .default, set) }
+        }), label: label)
     }
 }
 

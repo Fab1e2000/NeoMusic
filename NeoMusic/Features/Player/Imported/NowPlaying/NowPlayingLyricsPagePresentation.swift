@@ -3,6 +3,7 @@
 import SwiftUI
 
 private struct NowPlayingLyricsPagePresentationModifier: ViewModifier {
+    @Environment(\.playerVisualsActive) private var visualsActive
     let visualState: NowPlayingPageVisualState
     let opacityTransition: NowPlayingInterruptibleProgress
     let spatialTransition: NowPlayingInterruptibleSpringProgress
@@ -14,7 +15,7 @@ private struct NowPlayingLyricsPagePresentationModifier: ViewModifier {
         TimelineView(
             .animation(
                 paused:
-                    reducesMotion
+                    !visualsActive || reducesMotion
                     || !opacityTransition.isAnimating
                         && !spatialTransition.isAnimating
             )

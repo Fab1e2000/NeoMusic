@@ -13,6 +13,7 @@ struct LibraryRouteLink<Label: View>: View {
     @Environment(\.songRowPlayback) private var playback
     @Environment(\.libraryDownloads) private var downloads
     @Environment(\.nativeArtworkSurfaceEnabled) private var nativeArtwork
+    @Environment(\.artworkLoadAction) private var loadArtwork
     var body: some View {
         if let makePage = destination.makePage {
             NavigationLink {
@@ -24,6 +25,7 @@ struct LibraryRouteLink<Label: View>: View {
                     .environment(\.songRowPlayback, playback)
                     .environment(\.libraryDownloads, downloads)
                     .environment(\.nativeArtworkSurfaceEnabled, nativeArtwork)
+                    .environment(\.artworkLoadAction, loadArtwork)
             } label: { label }
         } else { NavigationLink(value: value) { label } }
     }
@@ -86,6 +88,7 @@ private struct LibraryLinkedPageAttachment: UIViewControllerRepresentable {
             while let controller = candidate {
                 if nav.viewControllers.contains(where: { $0 === controller }) {
                     chrome.attach(controller)
+                    guard registeredScroll?.isDescendant(of: controller.view) != true else { return }
                     if let scroll = firstScroll(in: controller.view), registeredScroll !== scroll {
                         registeredScroll = scroll
                         controller.setContentScrollView(scroll, for: .top)

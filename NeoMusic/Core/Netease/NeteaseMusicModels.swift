@@ -1,6 +1,6 @@
 import Foundation
 
-struct NeteaseMusicSong: Codable, Sendable, Identifiable {
+struct NeteaseMusicSong: Codable, Sendable, Equatable, Identifiable {
     let id: Int64
     let title: String
     let artist: String
@@ -11,7 +11,7 @@ struct NeteaseMusicSong: Codable, Sendable, Identifiable {
     var artists: [NeteaseArtistReference]? = nil
     var albumID: Int64? = nil
 }
-struct NeteaseMusicPlaylist: Codable, Sendable, Identifiable {
+struct NeteaseMusicPlaylist: Codable, Sendable, Equatable, Identifiable {
     let id: Int64
     let title: String
     let creator: String
@@ -26,6 +26,12 @@ struct NeteasePlaylistDetail: Codable, Sendable {
     let playlist: NeteaseMusicPlaylist
     let songs: [NeteaseMusicSong]
     let addedTimes: [Int64: Date]
+    var trackIDs: [Int64]? = nil
+    var loadedTrackCount: Int? = nil
+
+    var orderedTrackIDs: [Int64] { trackIDs ?? songs.map(\.id) }
+    var nextOffset: Int { min(loadedTrackCount ?? songs.count, orderedTrackIDs.count) }
+    var isComplete: Bool { nextOffset >= orderedTrackIDs.count }
 }
 enum NeteaseMusicQuality: String, Codable, CaseIterable, Sendable {
     case standard, high = "exhigh", lossless, hiRes = "hires"

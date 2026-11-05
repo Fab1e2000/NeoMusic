@@ -17,6 +17,11 @@ import Observation
     private var playbackRevision = UUID()
     private var loaded: [String: (LibraryPlaylistItem, [NeteaseMusicSong])] = [:]
     private var owner: String?
+    private var pendingFeedPlayback: (songs: [NeteaseMusicSong], index: Int, title: String)?
+    private(set) var pendingQuickAction: HomeQuickAction?
+    @ObservationIgnored private var artworkSongs: [URL: [NeteaseMusicSong]] = [:]
+    @ObservationIgnored private var retainedArtworkIDs: Set<String> = []
+    @ObservationIgnored private var retainedArtworkSession: UUID?
     struct Pending {
         let route: String
         let songID: Int64?
@@ -33,6 +38,15 @@ import Observation
         model.login = { [weak self] in self?.showsLogin = true }
         model.retryFeatured = { [weak self] in Task { await self?.account.home?.refresh() } }
         model.retryRecommendations = model.retryFeatured
+        model.refresh = { [weak self] in
+            guard let self else { return }
+            self.model.isLoading = true
+            await self.account.home?.refresh()
+            self.model.isLoading = false
+        }
+        model.play = { [weak self] section, item in self?.playFeed(section: section, item: item) }
+        model.performQuickAction = { [weak self] action in self?.requestQuickAction(action) }
+        model.prepareNavigation = { [weak self] in self?.prepareNavigation($0) }
         player.onCollectionPlaybackStarted = { [weak self] reference in
             self?.history.record(reference)
             if reference.kind == .localPlaylist { LocalLibrary.playlistLibrary.markPlayed(reference.id) }
@@ -42,61 +56,195 @@ import Observation
             }
         }
         account.home?.onChange = { [weak self] in self?.publish() }
+        account.home?.onDetailChange = { [weak self] in self?.publishDetail($0) }
+        account.home?.onArtworkChange = { [weak self] in self?.publishArtwork($0) }
         detailLibrary.loadOnlinePlaylist = { [weak self] id in
-            do { try await self?.load(id) } catch { /* load publishes the retry error. */ }
+            guard let self else { return }
+            do {
+                let retry = self.detailLibrary.onlineErrors[id] != nil
+                try await self.load(id, loadMore: retry && self.detailLibrary.onlineHasMore.contains(id), force: retry)
+            } catch { /* load publishes the retry error. */ }
+        }
+        detailLibrary.loadMoreOnlinePlaylist = { [weak self] id in
+            do { try await self?.load(id, loadMore: true) } catch { /* load preserves the visible page. */ }
+        }
+        detailLibrary.completeOnlinePlaylist = { [weak self] id in
+            guard let self else { return false }
+            do { try await self.load(id, complete: true); return true } catch { return false }
         }
         observe()
+        observeCurrentSong()
+        observeRecent()
     }
+    func restore() async { await history.restore() }
+    func flushHistory() async { await history.flush() }
+    func flushHistoryForBackground() {
+        var identifier = UIBackgroundTaskIdentifier.invalid
+        identifier = UIApplication.shared.beginBackgroundTask(withName: "SavePlaybackHistory") {
+            if identifier != .invalid {
+                UIApplication.shared.endBackgroundTask(identifier)
+                identifier = .invalid
+            }
+        }
+        Task {
+            await history.flush()
+            if identifier != .invalid {
+                UIApplication.shared.endBackgroundTask(identifier)
+                identifier = .invalid
+            }
+        }
+    }
+
     private func observe() {
         withObservationTracking {
             _ = account.profile
             _ = account.validationState
-            _ = account.home?.userID
             _ = account.music?.userID
-            _ = account.home?.daily
-            _ = account.home?.recommendations
-            _ = account.home?.dailyError
-            _ = account.home?.recommendationsError
             _ = account.music?.likedIDs
             _ = account.music?.likedAt
-            _ = LocalLibrary.playlistLibrary.playlists
-            _ = LocalLibrary.songLibrary.songs
-            _ = history.recent(for: owner)
+            _ = account.music?.playlists
+            _ = account.music?.songs
+            _ = account.music?.playlistTracks
         } onChange: { [weak self] in
             Task { @MainActor in self?.observe() }
         }
         publish()
     }
-    private func artwork(_ remote: URL?) -> Artwork {
-        remote.flatMap { account.home?.cachedArtworkURL(remote: $0) }.map(Artwork.file) ?? .playlist
+    private func observeCurrentSong() {
+        withObservationTracking {
+            _ = player.current
+        } onChange: { [weak self] in
+            Task { @MainActor in self?.observeCurrentSong() }
+        }
+        publishQuickActions()
+    }
+    private func observeRecent() {
+        withObservationTracking {
+            _ = LocalLibrary.playlistLibrary.playlists
+            _ = LocalLibrary.songLibrary.songs
+            _ = history.recent(for: owner)
+        } onChange: { [weak self] in
+            Task { @MainActor in self?.observeRecent() }
+        }
+        refreshRetainedArtwork()
+        updateRecent()
+        for (id, value) in loaded where id.hasPrefix("home:playlist:") {
+            guard let owner, let number = id.split(separator: ":").last else { continue }
+            let retained = LocalLibrary.playlistLibrary.playlist("netease-playlist:\(owner):\(number)")
+            var item = value.0
+            item.isFavorite = retained?.isFavorite ?? false
+            item.isPinned = retained?.isPinned ?? false
+            if item != value.0 {
+                loaded[id]?.0 = item
+                detailLibrary.setExternalCollection(item: item, songs: detailLibrary.songs(in: id), error: detailLibrary.onlineErrors[id])
+            }
+        }
+    }
+    private func artwork(_ remote: URL?, placeholder: ArtworkPlaceholder = .playlist) -> Artwork {
+        guard let remote, let home = account.home else { return placeholder == .playlist ? .playlist : .missing }
+        if let file = home.cachedArtworkURL(remote: remote) { return .file(file) }
+        return .deferred(id: "home:\(home.sessionRevision.uuidString):\(remote.absoluteString)", placeholder: placeholder)
+    }
+    func requestArtwork(for id: String) {
+        guard let home = account.home, home.userID == account.profile?.userID else { return }
+        let prefix = "home:\(home.sessionRevision.uuidString):"
+        guard id.hasPrefix(prefix), let url = URL(string: String(id.dropFirst(prefix.count))) else { return }
+        home.requestArtwork([url])
+    }
+    func cachedArtworkFile(for id: String) async -> URL? {
+        guard let home = account.home, home.userID == account.profile?.userID, !Task.isCancelled else { return nil }
+        let revision = home.sessionRevision, owner = home.userID
+        let prefix = "home:\(revision.uuidString):"
+        guard id.hasPrefix(prefix), let url = URL(string: String(id.dropFirst(prefix.count))) else { return nil }
+        let file = await home.cachedArtworkFile(url)
+        guard revision == home.sessionRevision, home.userID == owner,
+              account.profile?.userID == owner, !Task.isCancelled else { return nil }
+        return file
     }
     private func publish() {
         let currentOwner = account.profile.map { String($0.userID) }
         if owner != currentOwner {
-            if owner != nil { cancelPendingPlayback() }
+            if owner != nil {
+                cancelPendingPlayback(); pendingFeedPlayback = nil; pendingQuickAction = nil
+            }
+            model.quickActionRoute = nil
+            model.quickActionPreview = nil
             owner = currentOwner
-            for (id, _) in loaded {
-                var item = LibraryPlaylistItem(id: id, title: "播放列表", artwork: .playlist)
+            for id in detailLibrary.playlists.map(\.id) where id.hasPrefix("home:") {
+                var item = LibraryPlaylistItem(id: id, title: "播放列表", artwork: .playlist, sourceOwnerID: currentOwner)
                 item.isReadOnlyContent = true
                 detailLibrary.setExternalCollection(item: item, songs: [])
+                detailLibrary.setOnlineHasMore(id, false)
             }
             loaded = [:]
             cachedSongs = []
             if currentOwner == nil { cancelPendingPlayback() }
         }
+        if model.navigationOwnerID != currentOwner { model.navigationOwnerID = currentOwner }
+        updateLikedSongs()
+        publishFeed()
         resumePendingPlayback()
-        LocalLibrary.playbackAccountID = currentOwner
-        model.isGuest = currentOwner == nil
-        model.featured = [.init(id: "favorites", title: "喜爱歌曲", subtitle: "你喜欢的音乐，都在这里。", artwork: .favorites, route: .playlist("favorites"), style: .favorites)]
+        if LocalLibrary.playbackAccountID != currentOwner { LocalLibrary.playbackAccountID = currentOwner }
+        resumePendingQuickAction()
+        if let pendingFeedPlayback, let userID = account.profile?.userID,
+           account.validationState == .valid, account.home?.userID == userID, account.music?.userID == userID {
+            self.pendingFeedPlayback = nil
+            completingLogin = showsLogin
+            showsLogin = false
+            player.requestPlay(pendingFeedPlayback.songs.map(mapSong), startingAt: pendingFeedPlayback.index, from: pendingFeedPlayback.title)
+        }
+
+        if model.isGuest != (currentOwner == nil) { model.isGuest = currentOwner == nil }
+        var featured: [HomeContentItem] = [.init(id: "favorites", title: "喜爱歌曲", subtitle: "你喜欢的音乐，都在这里。", artwork: .favorites, style: .favorites, action: .navigate(.playlist("favorites")))]
         if let daily = account.home?.daily, let owner, account.home?.userID == account.profile?.userID {
-            model.featured.append(.init(id: "daily", title: "每日推荐", subtitle: "每天为你挑选的音乐。", artwork: .playlist, route: .playlist("home:daily:\(owner):\(daily.id)"), style: .daily))
+            featured.append(.init(id: "daily", title: "每日推荐", subtitle: "每天为你挑选的音乐。", artwork: artwork(daily.songs.first?.artworkURL), action: .navigate(.playlist("home:daily:\(owner):\(daily.id)"))))
         }
-        model.featuredError = account.home?.dailyError
-        model.recommendationsError = account.home?.recommendationsError
-        model.recommendations = (account.home?.userID == account.profile?.userID ? account.home?.recommendations ?? [] : []).map {
-            .init(id: String($0.id), title: $0.title, subtitle: $0.creator, artwork: artwork($0.artworkURL), route: .playlist("home:playlist:\($0.id)"))
+        if model.featured != featured { model.featured = featured }
+        if model.featuredError != account.home?.dailyError { model.featuredError = account.home?.dailyError }
+        if model.recommendationsError != account.home?.recommendationsError { model.recommendationsError = account.home?.recommendationsError }
+        let recommendations: [HomeContentItem] = (account.home?.userID == account.profile?.userID ? account.home?.recommendations ?? [] : []).map {
+            .init(id: String($0.id), title: $0.title, subtitle: $0.creator, artwork: artwork($0.artworkURL), action: .navigate(.playlist("home:playlist:\($0.id)")))
         }
-        model.recent = history.recent(for: owner).compactMap { reference in
+        if model.recommendations != recommendations { model.recommendations = recommendations }
+        updateRecent()
+        for (id, value) in loaded { updateDetail(id, item: value.0, songs: value.1) }
+        let values = account.home?.userID == account.profile?.userID ? account.home?.cachedSongs ?? [] : []
+        artworkSongs = Dictionary(grouping: values.filter { $0.artworkURL != nil }, by: { $0.artworkURL! })
+        let songs = values.map(mapSong)
+        if cachedSongs != songs { cachedSongs = songs }
+        LocalLibrary.songLibrary.replaceExternalSongs(songs)
+        refreshRetainedArtwork(contentChanged: true)
+    }
+
+    private func publishDetail(_ number: Int64) {
+        guard let home = account.home, home.userID == account.profile?.userID,
+              owner == account.profile.map({ String($0.userID) }),
+              let detail = home.cachedDetail(id: number) else { return }
+        let route = "home:playlist:\(number)"
+        if detailLibrary.playlist(route) != nil { applyDetail(detail, id: route, clearError: true) }
+        let values = home.cachedSongs
+        artworkSongs = Dictionary(grouping: values.filter { $0.artworkURL != nil }, by: { $0.artworkURL! })
+        let songs = values.map(mapSong)
+        if cachedSongs != songs { cachedSongs = songs }
+        LocalLibrary.songLibrary.replaceExternalSongs(songs)
+        refreshRetainedArtwork(contentChanged: true)
+        updateRecent()
+    }
+
+    private func refreshRetainedArtwork(contentChanged: Bool = false) {
+        guard let home = account.home, let owner, home.userID == account.profile?.userID else {
+            retainedArtworkIDs = []; retainedArtworkSession = nil
+            return
+        }
+        let ids = Set(LocalLibrary.playlistLibrary.playlists.filter { $0.sourceOwnerID == owner }.map(\.id))
+        guard contentChanged || retainedArtworkSession != home.sessionRevision || retainedArtworkIDs != ids else { return }
+        retainedArtworkIDs = ids
+        retainedArtworkSession = home.sessionRevision
+        Self.updateRetainedArtwork(in: LocalLibrary.playlistLibrary, home: home, owner: owner)
+    }
+
+    private func updateRecent() {
+        let recent: [HomeContentItem] = history.recent(for: owner).compactMap { reference in
             let route: LibraryRoute
             let cover: Artwork
             switch reference.kind {
@@ -115,19 +263,318 @@ import Observation
                 cover = Int64(id).flatMap { account.home?.cachedDetail(id: $0)?.playlist.artworkURL }.map { artwork($0) } ?? .playlist
             case .daily:
                 guard let owner = reference.ownerID else { return nil }
-                route = .playlist("home:daily:\(owner):\(reference.id)"); cover = .playlist
+                route = .playlist("home:daily:\(owner):\(reference.id)")
+                cover = artwork(account.home?.dailySnapshot(id: reference.id)?.songs.first?.artworkURL)
             }
-            return .init(id: "\(reference.kind.rawValue):\(reference.ownerID ?? "local"):\(reference.id)", title: reference.title, subtitle: "", artwork: cover, route: route, style: reference.kind == .daily ? .daily : reference.kind == .favorites ? .favorites : .artwork)
+            return .init(id: "\(reference.kind.rawValue):\(reference.ownerID ?? "local"):\(reference.id)", title: reference.title, subtitle: "", artwork: cover, style: reference.kind == .favorites ? .favorites : .artwork, action: .navigate(route))
         }
-        for (id, value) in loaded { updateDetail(id, item: value.0, songs: value.1) }
-        cachedSongs = (account.home?.userID == account.profile?.userID ? account.home?.cachedSongs ?? [] : []).map(mapSong)
-        LocalLibrary.songLibrary.replaceExternalSongs(cachedSongs)
+        if model.recent != recent { model.recent = recent }
     }
+
+    private func publishArtwork(_ urls: Set<URL>) {
+        guard let home = account.home, home.userID == account.profile?.userID,
+              owner == account.profile.map({ String($0.userID) }) else { return }
+        let remoteByID = Dictionary(uniqueKeysWithValues: home.recommendations.map { (String($0.id), $0.artworkURL) })
+        for index in model.recommendations.indices {
+            if let remote = remoteByID[model.recommendations[index].id] ?? nil, urls.contains(remote) {
+                let cover = artwork(remote)
+                if model.recommendations[index].artwork != cover { model.recommendations[index].artwork = cover }
+            }
+        }
+        publishFeed()
+        var songs: [String: LibrarySongItem] = [:]
+        for remote in urls {
+            for value in artworkSongs[remote] ?? [] {
+                let item = mapSong(value)
+                songs[item.id] = item
+            }
+        }
+        var covers: [String: Artwork] = [:]
+        for (id, value) in loaded {
+            if id.hasPrefix("home:playlist:"), let number = Int64(id.split(separator: ":").last ?? ""),
+               let remote = home.cachedDetail(id: number)?.playlist.artworkURL, urls.contains(remote) {
+                let cover = artwork(remote)
+                if value.0.artwork != cover { loaded[id]?.0.artwork = cover; covers[id] = cover }
+            }
+            if id.hasPrefix("home:daily:"), let remote = value.1.first?.artworkURL, urls.contains(remote) {
+                let cover = artwork(remote)
+                if value.0.artwork != cover { loaded[id]?.0.artwork = cover; covers[id] = cover }
+            }
+            for value in value.1 where value.artworkURL.map(urls.contains) == true {
+                let item = mapSong(value)
+                songs[item.id] = item
+            }
+        }
+        detailLibrary.updateArtwork(songs: songs, playlists: covers)
+        if let owner {
+            Self.updateRetainedArtwork(in: LocalLibrary.playlistLibrary, home: home, owner: owner, urls: urls, songs: songs)
+        }
+        let updated = cachedSongs.map { item in songs[item.id].map { item.replacingArtwork(from: $0) } ?? item }
+        if cachedSongs != updated { cachedSongs = updated }
+        LocalLibrary.songLibrary.updateOnlineArtwork(songs, source: "home")
+        player.updateArtwork(songs)
+        updateRecent()
+    }
+    /// A retained Home collection keeps its stable library identity when its images arrive later.
+    /// With no URL filter, replay cached files when either the Home cache or retained collections restore.
+    static func updateRetainedArtwork(in library: PlaylistLibrary, home: NeteaseHomeStore, owner: String,
+                                      urls: Set<URL>? = nil, songs: [String: LibrarySongItem] = [:]) {
+        guard home.userID.map(String.init) == owner else { return }
+        let prefix = "netease-playlist:\(owner):"
+        var covers: [String: Artwork] = [:]
+        var songImages = songs
+        for item in library.playlists where item.sourceOwnerID == owner && item.id.hasPrefix(prefix) {
+            guard let number = Int64(item.id.dropFirst(prefix.count)), let detail = home.cachedDetail(id: number) else { continue }
+            if let remote = detail.playlist.artworkURL, urls?.contains(remote) != false {
+                if let file = home.cachedArtworkURL(remote: remote) { covers[item.id] = .file(file) }
+                else if urls?.contains(remote) == true {
+                    covers[item.id] = .deferred(id: "home:\(home.sessionRevision.uuidString):\(remote.absoluteString)", placeholder: .playlist)
+                }
+            }
+            let current = Dictionary(library.songs(in: item.id).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            for value in detail.songs {
+                guard let remote = value.artworkURL, urls?.contains(remote) != false,
+                      var song = current["netease:\(owner):\(value.id)"] else { continue }
+                let file = home.cachedArtworkURL(remote: remote)
+                guard file != nil || urls?.contains(remote) == true else { continue }
+                song.artwork = file.map(Artwork.file) ?? .deferred(id: "home:\(home.sessionRevision.uuidString):\(remote.absoluteString)", placeholder: .missing)
+                song.artworkURL = file
+                song.artworkData = nil; song.artworkBackdrop = nil
+                songImages[song.id] = song
+            }
+        }
+        library.updateArtwork(songs: songImages, playlists: covers)
+    }
+
+    private func publishFeed() {
+        let home = account.home
+        let matches = home?.userID == account.profile?.userID
+        let displayFeed = home.map { NeteaseHomeFeed(blocks: $0.displayFeedBlocks, hasMore: nil, cursor: nil) }
+        let sections = Self.feedSections(matches ? displayFeed : nil, artwork: { self.artwork($0) })
+        if model.sections != sections { model.sections = sections }
+        let failures = matches ? [home?.feedError.map { "推荐内容：" + $0 },
+                                  home?.recommendationsError.map { "推荐歌单：" + $0 },
+                                  home?.likedRecommendationsError.map { "喜欢歌曲推荐：" + $0 },
+                                  home?.chartsError.map { "排行榜：" + $0 },
+                                  home?.followedReleasesError.map { "艺人新动向：" + $0 },
+                                  home?.newSongsError.map { "新歌速递：" + $0 }].compactMap { $0 } : []
+        let error = failures.isEmpty ? nil : failures.joined(separator: "\n")
+        if model.feedError != error { model.feedError = error }
+        publishQuickActions()
+    }
+
+    static func feedSections(_ feed: NeteaseHomeFeed?, artwork: (URL?) -> Artwork) -> [HomeContentSection] {
+        let sections: [HomeContentSection] = (feed?.blocks ?? []).compactMap { block in
+            guard let category = block.category, !block.title.isEmpty else { return nil }
+            var seen = Set<String>()
+            let items: [HomeContentItem] = (block.creatives ?? []).flatMap { creative in
+                let resources = creative.resources ?? []
+                let group = creative.creativeId ?? resources.first?.id
+                return resources.compactMap { resource -> HomeContentItem? in
+                    guard resource.isSupportedMusicResource, !seen.contains(resource.id),
+                          let id = resource.numericID, !resource.title.isEmpty else { return nil }
+                    if [.likedSongs, .songRecommendations].contains(category) {
+                        guard let song = resource.song, resource.resourceType == "song" else { return nil }
+                        seen.insert(resource.id)
+                        return .init(id: resource.id, title: song.title, subtitle: song.artist,
+                                     artwork: artwork(resource.artworkURL), groupID: group, action: .playSong)
+                    }
+                    switch resource.resourceType {
+                    case "song":
+                        guard let song = resource.song, category == .newSongs else { return nil }
+                        seen.insert(resource.id)
+                        return .init(id: resource.id, title: song.title, subtitle: song.artist,
+                                     artwork: artwork(resource.artworkURL), groupID: group, action: .playSong)
+                    case "album":
+                        seen.insert(resource.id)
+                        return .init(id: resource.id, title: resource.title, subtitle: resource.uiElement?.subTitle?.title ?? "",
+                                     artwork: artwork(resource.artworkURL), action: .navigate(.album("catalog:album:\(id)")))
+                    case "artist":
+                        seen.insert(resource.id)
+                        return .init(id: resource.id, title: resource.title, subtitle: resource.uiElement?.subTitle?.title ?? "",
+                                     artwork: artwork(resource.artworkURL), action: .navigate(.artist("catalog:artist:\(id)")))
+                    case "list", "playlist":
+                        seen.insert(resource.id)
+                        return .init(id: resource.id, title: resource.title, subtitle: "",
+                                     artwork: artwork(resource.artworkURL), action: .navigate(.playlist("home:playlist:\(id)")))
+                    default: return nil
+                    }
+                }
+            }
+            guard !items.isEmpty else { return nil }
+            return .init(id: block.id, title: block.title,
+                         kind: [.likedSongs, .songRecommendations].contains(category) ? .songs : .covers, items: items)
+        }
+        return NeteaseHomeCategory.allCases.compactMap { category in
+            sections.first { $0.id == category.rawValue }
+        }
+    }
+
+    static func feedPlayback(_ feed: NeteaseHomeFeed?, section: String, item: String) -> (songs: [NeteaseMusicSong], index: Int, title: String)? {
+        guard let block = feed?.blocks.first(where: { $0.id == section }),
+              let category = block.category, [.likedSongs, .songRecommendations, .newSongs].contains(category),
+              let group = block.creatives?.first(where: { ($0.resources ?? []).contains { $0.id == item } }),
+              let target = group.resources?.first(where: { $0.id == item })?.song else { return nil }
+        var seen = Set<Int64>()
+        let songs = (group.resources ?? []).filter(\.isSupportedMusicResource).compactMap(\.song).filter { seen.insert($0.id).inserted }
+        guard let index = songs.firstIndex(where: { $0.id == target.id }) else { return nil }
+        return (songs, index, block.title)
+    }
+
+    private func playFeed(section: String, item: String) {
+        let feed = account.home.map { NeteaseHomeFeed(blocks: $0.displayFeedBlocks, hasMore: nil, cursor: nil) }
+        guard let selection = Self.feedPlayback(feed, section: section, item: item) else { return }
+        cancelPendingPlayback()
+        pendingQuickAction = nil
+        guard let userID = account.profile?.userID, account.validationState == .valid,
+              account.home?.userID == userID, account.music?.userID == userID else {
+            pendingFeedPlayback = selection
+            showsLogin = true
+            return
+        }
+        player.requestPlay(selection.songs.map(mapSong), startingAt: selection.index, from: selection.title)
+    }
+
+    private func updateLikedSongs() {
+        guard let userID = account.profile?.userID, let home = account.home, let music = account.music,
+              home.userID == userID, music.userID == userID else { return }
+        let playlist = music.playlists.first { $0.isFavorites && $0.creatorID == userID }
+        home.updateLikedSongs(playlistID: playlist?.id, songs: music.songs.values.filter { music.likedIDs.contains($0.id) },
+                              likedAt: music.likedAt, likedIDs: music.likedIDs,
+                              orderedLikedIDs: playlist.flatMap { music.playlistTracks[$0.id] } ?? [])
+    }
+
+    static func currentOnlineSongID(_ song: LibrarySongItem, owner: String?) -> Int64? {
+        guard let owner, song.onlineOwnerID == owner, song.unavailabilityReason == nil,
+              let id = song.onlineSongID, id > 0 else { return nil }
+        return id
+    }
+
+    private func publishQuickActions() {
+        let home = account.home
+        let matches = home?.userID == account.profile?.userID
+        let items = HomeQuickAction.allCases.map { action -> HomeQuickActionItem in
+            let businessAction = NeteaseHomeQuickAction(rawValue: action.rawValue)!
+            var cover = matches ? home?.quickActionArtwork(businessAction).map { artwork($0) } : nil
+            let subtitle: String
+            switch action {
+            case .dailySongs: subtitle = "每天为你挑选的音乐"
+            case .hotSongs: subtitle = "网易云音乐热歌榜"
+            case .heartMode: subtitle = "从你喜欢的音乐开始"
+            case .privateRadar: subtitle = "发现与你合拍的歌单"
+            case .privateRoaming: subtitle = "听听接下来会遇见什么"
+            case .similarSongs:
+                if Self.currentOnlineSongID(player.current, owner: owner) != nil {
+                    subtitle = "根据《\(player.current.title)》推荐"
+                    cover = player.current.artwork
+                } else { subtitle = "从当前播放的网易云歌曲出发" }
+            }
+            return .init(action: action, artwork: cover, subtitle: subtitle)
+        }
+        if model.quickActions != items { model.quickActions = items }
+        let states: [HomeQuickAction: HomeQuickActionState] = Dictionary(uniqueKeysWithValues:
+            (matches ? home?.quickActionStates ?? [:] : [:]).compactMap { key, value in
+                guard let action = HomeQuickAction(rawValue: key.rawValue) else { return nil }
+                let state: HomeQuickActionState
+                switch value {
+                case .loading: state = .loading
+                case .failed(let message): state = .failed(message)
+                }
+                return (action, state)
+            })
+        if model.quickActionStates != states { model.quickActionStates = states }
+    }
+
+    func requestQuickAction(_ action: HomeQuickAction) {
+        cancelPendingPlayback()
+        pendingFeedPlayback = nil
+        pendingQuickAction = nil
+        model.quickActionRoute = nil
+        model.quickActionPreview = nil
+        let ready = (account.profile?.userID).map { userID in
+            account.validationState == .valid && account.home?.userID == userID && account.music?.userID == userID
+        } ?? false
+        if action != .hotSongs && !ready {
+            pendingQuickAction = action
+            showsLogin = true
+            return
+        }
+        runQuickAction(action)
+    }
+
+    private func resumePendingQuickAction() {
+        guard let action = pendingQuickAction, let userID = account.profile?.userID,
+              account.validationState == .valid, account.home?.userID == userID, account.music?.userID == userID else { return }
+        pendingQuickAction = nil
+        completingLogin = showsLogin
+        showsLogin = false
+        runQuickAction(action)
+    }
+
+    private func runQuickAction(_ action: HomeQuickAction) {
+        guard let home = account.home, home.userID == account.profile?.userID else { return }
+        let revision = home.sessionRevision, userID = account.profile?.userID
+        let playbackID = playbackRevision
+        let currentSongID = Self.currentOnlineSongID(player.current, owner: userID.map(String.init))
+        let businessAction = NeteaseHomeQuickAction(rawValue: action.rawValue)!
+        let displayedArtwork = model.quickActions.first(where: { $0.action == action })?.artwork
+        playbackTask = Task { [weak self] in
+            defer {
+                if let self, self.playbackRevision == playbackID { self.playbackTask = nil }
+            }
+            do {
+                try Task.checkCancellation()
+                let result = try await home.performQuickAction(businessAction, currentSongID: currentSongID)
+                guard let self, !Task.isCancelled, self.playbackRevision == playbackID, home.sessionRevision == revision,
+                      self.account.profile?.userID == userID, home.userID == userID else { return }
+                switch result {
+                case .daily(let snapshot):
+                    guard let userID else { return }
+                    let route = LibraryRoute.playlist("home:daily:\(userID):\(snapshot.id)")
+                    let cover = displayedArtwork ?? self.artwork(snapshot.songs.first?.artworkURL)
+                    self.publishNavigation(.init(route: route, ownerID: String(userID), title: "每日推荐", subtitle: snapshot.date, artwork: cover))
+                case .playlist(let playlist):
+                    let preview = LibraryNavigationPreview(route: .playlist("home:playlist:\(playlist.id)"), ownerID: userID.map(String.init),
+                        title: playlist.title, subtitle: playlist.creator,
+                        artwork: self.model.quickActions.first(where: { $0.action == action })?.artwork ?? self.artwork(playlist.artworkURL))
+                    self.publishNavigation(preview)
+                case .songs(let songs):
+                    guard !songs.isEmpty, userID != nil else { return }
+                    self.player.requestPlay(songs.map(self.mapSong), from: action.title, shuffled: false)
+                case .roaming(let id, let songs):
+                    guard !songs.isEmpty, userID != nil else { return }
+                    self.player.requestPlay(songs.map(self.mapSong), from: action.title, shuffled: false, onStarted: { [weak selectedHome = home] in
+                        guard let selectedHome, selectedHome.sessionRevision == revision else { return }
+                        selectedHome.consumeRoamingBatch(id: id)
+                    })
+                }
+            } catch { /* The home store publishes each action's retry state. */ }
+        }
+    }
+
+    private func publishNavigation(_ preview: LibraryNavigationPreview) {
+        prepareNavigation(preview)
+        model.quickActionPreview = preview
+        model.quickActionRoute = preview.route
+    }
+
+    private func prepareNavigation(_ preview: LibraryNavigationPreview) {
+        guard preview.ownerID == owner, case .playlist(let id) = preview.route, id.hasPrefix("home:") else { return }
+        var item = detailLibrary.playlist(id) ?? LibraryPlaylistItem(id: id, title: preview.title, artwork: preview.artwork)
+        item.title = preview.title
+        item.subtitle = preview.subtitle
+        item.artwork = preview.artwork
+        item.sourceOwnerID = owner
+        item.isReadOnlyContent = true
+        detailLibrary.setExternalCollection(item: item, songs: detailLibrary.songs(in: id), error: detailLibrary.onlineErrors[id])
+        if loaded[id] != nil { loaded[id]?.0 = item }
+    }
+
     private func mapSong(_ song: NeteaseMusicSong) -> LibrarySongItem {
         let id = owner.map { "netease:\($0):\(song.id)" } ?? "home-guest:\(song.id)"
         let url = song.artworkURL.flatMap { account.home?.cachedArtworkURL(remote: $0) }
         return LibrarySongItem(id: id, title: song.title, artist: song.artist, album: song.album, albumArtist: song.artist, trackNumber: 0,
-                               artwork: url.map(Artwork.file) ?? .missing, artworkURL: url, duration: Int(song.duration),
+                               artwork: artwork(song.artworkURL, placeholder: .missing), artworkURL: url, duration: Int(song.duration),
                                isFavorite: account.music?.likedIDs.contains(song.id) == true,
                                favoriteAddedAt: account.music?.likedAt[song.id], unavailabilityReason: song.unavailable ? "暂无完整音源" : nil, onlineAlbumID: song.albumID,
                 artistReferences: (song.artists ?? []).map { .init(id: "catalog:artist:\($0.id)", name: $0.name) })
@@ -142,9 +589,13 @@ import Observation
         detailLibrary.setExternalCollection(item: item, songs: songs.map(mapSong), error: clearError ? nil : detailLibrary.onlineErrors[id])
     }
     private func applyDetail(_ detail: NeteasePlaylistDetail, id: String, clearError: Bool) {
-        var item = LibraryPlaylistItem(id: id, title: detail.playlist.title, artwork: artwork(detail.playlist.artworkURL), subtitle: detail.playlist.creator)
+        let existing = detailLibrary.playlist(id)
+        let cover = detail.playlist.artworkURL == nil && existing?.sourceOwnerID == owner
+            ? existing?.artwork ?? .playlist : artwork(detail.playlist.artworkURL)
+        var item = LibraryPlaylistItem(id: id, title: detail.playlist.title, artwork: cover, sourceOwnerID: owner, subtitle: detail.playlist.creator)
         item.isReadOnlyContent = true
         loaded[id] = (item, detail.songs)
+        detailLibrary.setOnlineHasMore(id, !detail.isComplete, totalCount: detail.orderedTrackIDs.count)
         updateDetail(id, item: item, songs: detail.songs, clearError: clearError)
     }
     private func restoreCachedDetail(_ id: String) {
@@ -154,7 +605,7 @@ import Observation
               let detail = home.cachedDetail(id: number) else { return }
         applyDetail(detail, id: id, clearError: false)
     }
-    private func load(_ id: String) async throws {
+    private func load(_ id: String, complete: Bool = false, loadMore: Bool = false, force: Bool = false) async throws {
         guard let home = account.home else { throw NeteaseAccountError.invalidResponse }
         let homeOwner = home.userID
         let profileOwner = account.profile?.userID
@@ -162,14 +613,19 @@ import Observation
         restoreCachedDetail(id)
         do {
             if id.hasPrefix("home:playlist:"), let number = Int64(id.split(separator: ":").last ?? "") {
-                let detail = try await home.detail(id: number)
+                let detail: NeteasePlaylistDetail
+                if complete { detail = try await home.completeDetail(id: number) }
+                else if loadMore { detail = try await home.loadMoreDetail(id: number) }
+                else { detail = try await home.detail(id: number, force: force) }
                 try Task.checkCancellation()
                 guard home.userID == homeOwner, account.profile?.userID == profileOwner,
                       owner == profileOwner.map(String.init) else { throw CancellationError() }
                 applyDetail(detail, id: id, clearError: true)
             } else if id.hasPrefix("home:daily:"), id.split(separator: ":").dropFirst(2).first.map(String.init) == owner,
-                      let date = id.split(separator: ":").last.map(String.init), let snapshot = home.dailySnapshot(id: date) {
-                var item = LibraryPlaylistItem(id: id, title: "每日推荐", artwork: .playlist, subtitle: snapshot.date)
+                      let date = id.split(separator: ":").last.map(String.init), let snapshot = try await home.loadDailySnapshot(id: date) {
+                let cover = snapshot.songs.first?.artworkURL.map { artwork($0) }
+                    ?? detailLibrary.playlist(id)?.artwork ?? .playlist
+                var item = LibraryPlaylistItem(id: id, title: "每日推荐", artwork: cover, sourceOwnerID: owner, subtitle: snapshot.date)
                 item.isReadOnlyContent = true
                 loaded[id] = (item, snapshot.songs)
                 updateDetail(id, item: item, songs: snapshot.songs, clearError: true)
@@ -193,19 +649,20 @@ import Observation
         restoreCachedDetail(id)
         var actions = ExternalPlaylistActions(addSongs: { [weak self] in
             guard let self else { return }
-            if self.owner == nil { self.showsLogin = true; return }
-            LocalLibrary.playlistLibrary.pendingAddition = .init(songs: self.detailLibrary.songs(in: id))
+            self.withCompleteCollection(id) { songs in
+                LocalLibrary.playlistLibrary.pendingAddition = .init(songs: songs)
+            }
         })
         if id.hasPrefix("home:playlist:") {
             actions.toggleFavorite = { [weak self] in self?.retain(id, action: .favorite) }
             actions.togglePin = { [weak self] in self?.retain(id, action: .pin) }
             actions.moveToFolder = { [weak self] in self?.retain(id, action: .folder) }
         }
-        var collection = CollectionMenuActions()
+        var collection = LocalLibrary.menuActions
         collection.play = { [weak self] _, shuffled in self?.requestPlayback(id, songID: nil, shuffled: shuffled) }
-        collection.playNext = { [weak self] _ in if let self, self.owner != nil { self.player.insertNext(self.detailLibrary.songs(in: id)) } }
-        collection.playLater = { [weak self] _ in if let self, self.owner != nil { self.player.appendLater(self.detailLibrary.songs(in: id)) } }
-        var songs = SongMenuActions()
+        collection.playNext = { [weak self] _ in self?.withCompleteCollection(id) { [weak self] in self?.player.insertNext($0) } }
+        collection.playLater = { [weak self] _ in self?.withCompleteCollection(id) { [weak self] in self?.player.appendLater($0) } }
+        var songs = SongMenuActions(downloads: LocalLibrary.downloads)
         songs.play = { [weak self] list, index, _ in
             guard list.indices.contains(index), let songID = Int64(list[index].id.split(separator: ":").last ?? "") else { return }
             self?.requestPlayback(id, songID: songID, shuffled: false)
@@ -228,14 +685,21 @@ import Observation
             }
         }
         return AnyView(HomeCollectionDetailView(playlistID: id, library: detailLibrary, actions: actions,
-            artwork: id.hasPrefix("home:daily:") ? AnyView(HomeDailyArtwork()) : nil,
             onAppear: { [weak self] in self?.detailAppeared(id) },
             onDisappear: { [weak self] in self?.detailDisappeared(id) })
-            .environment(\.collectionMenuActions, collection).environment(\.songMenuActions, songs)
-            .task { [weak self] in
-                do { try await self?.load(id) }
-                catch { /* load owns visible errors and cancellation isolation. */ }
-            })
+            .environment(\.collectionMenuActions, collection).environment(\.songMenuActions, songs))
+    }
+    private func withCompleteCollection(_ id: String, action: @escaping @MainActor ([LibrarySongItem]) -> Void) {
+        guard let owner else { showsLogin = true; return }
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.load(id, complete: true)
+                guard !Task.isCancelled, self.owner == owner,
+                      self.account.profile.map({ String($0.userID) }) == owner else { return }
+                action(self.detailLibrary.songs(in: id))
+            } catch is CancellationError {} catch { LocalLibrary.toasts.show(.error(error.localizedDescription)) }
+        }
     }
     private enum RetainAction { case favorite, pin, folder }
     private func retain(_ id: String, action: RetainAction) {
@@ -244,16 +708,18 @@ import Observation
             guard let self, self.owner == owner, self.account.profile.map({ String($0.userID) }) == owner,
                   self.account.home?.userID.map(String.init) == owner, self.account.music?.userID.map(String.init) == owner else { return }
             do {
-                try await self.load(id)
+                try await self.load(id, complete: true)
                 guard self.owner == owner, self.account.profile.map({ String($0.userID) }) == owner, let detail = self.detailLibrary.playlist(id) else { return }
                 let stableID = "netease-playlist:\(owner):\(number)"
                 var item = LocalLibrary.playlistLibrary.playlist(stableID) ?? LibraryPlaylistItem(id: stableID, title: detail.title, artwork: detail.artwork, sourceOwnerID: owner, subtitle: detail.subtitle)
                 item.sourceOwnerID = owner
                 LocalLibrary.playlistLibrary.retainOnlinePlaylist(item, songs: self.detailLibrary.songs(in: id))
-                switch action {
-                case .favorite: LocalLibrary.playlistLibrary.toggleFavorite(stableID)
-                case .pin: LocalLibrary.playlistLibrary.togglePin(stableID)
-                case .folder: LocalLibrary.playlistLibrary.pendingMove = LocalLibrary.playlistLibrary.playlist(stableID)
+                withAnimation {
+                    switch action {
+                    case .favorite: LocalLibrary.playlistLibrary.toggleFavorite(stableID)
+                    case .pin: LocalLibrary.playlistLibrary.togglePin(stableID)
+                    case .folder: LocalLibrary.playlistLibrary.pendingMove = LocalLibrary.playlistLibrary.playlist(stableID)
+                    }
                 }
                 if let retained = LocalLibrary.playlistLibrary.playlist(stableID), var value = self.loaded[id] {
                     value.0.isFavorite = retained.isFavorite; value.0.isPinned = retained.isPinned
@@ -273,11 +739,15 @@ import Observation
         cancelPendingPlayback()
     }
     func loginDismissed() {
+        pendingFeedPlayback = nil
         if completingLogin { completingLogin = false; return }
+        pendingQuickAction = nil
         cancelPendingPlayback()
     }
     func requestPlayback(_ id: String, songID: Int64?, shuffled: Bool) {
         cancelPendingPlayback()
+        pendingQuickAction = nil
+        pendingFeedPlayback = nil
         pending = Pending(route: id, songID: songID, shuffled: shuffled)
         if owner == nil { showsLogin = true } else { resumePendingPlayback() }
     }
@@ -296,7 +766,7 @@ import Observation
         playbackTask = Task { [weak self] in
             guard let self else { return }
             do {
-                try await self.load(request.route)
+                try await self.load(request.route, complete: true)
                 guard !Task.isCancelled, revision == self.playbackRevision, self.account.profile.map({ String($0.userID) }) == owner, self.activeRoute == request.route,
                       self.account.home?.userID == userID, self.account.music?.userID == userID else { return }
                 let list = self.detailLibrary.songs(in: request.route)

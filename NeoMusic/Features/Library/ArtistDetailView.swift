@@ -27,7 +27,6 @@ struct ArtistDetailView: View {
     var retry: ((String) -> Void)?
     @Environment(\.collectionMenuActions) private var actions
     @Environment(\.libraryNavigationChrome) private var chrome
-    @State private var shade: CGFloat = 96
     @State private var biography = false
     private var identity: String { detail.id.isEmpty ? detail.name : detail.id }
     var body: some View {
@@ -73,20 +72,20 @@ struct ArtistDetailView: View {
                     VStack(alignment: .leading, spacing: 12) {
                         heading(.similar).padding(.horizontal, 20)
                         ScrollView(.horizontal) {
-                            HStack(spacing: 12) {
+                            LazyHStack(spacing: 12) {
                                 ForEach(detail.similar) { artist in
                                     LibraryRouteLink(value: .artist(artist.id)) {
                                         VStack { ArtistAvatar(artwork: artist.artwork).frame(width: 120, height: 120); Text(artist.name).font(.system(size: 14)).lineLimit(1) }.frame(width: 120)
                                     }
                                 }
                             }.scrollTargetLayout()
-                        }.contentMargins(.horizontal, 20).scrollTargetBehavior(.viewAligned).scrollIndicators(.hidden)
+                        }.fixedSize(horizontal: false, vertical: true)
+                            .contentMargins(.horizontal, 20).scrollTargetBehavior(.viewAligned).scrollIndicators(.hidden)
                     }.padding(.top, 24)
                 }
             }.padding(.bottom, 24).background { ArtistDetailBackdrop(artwork: detail.artwork) }
         }
-        .onScrollGeometryChange(for: CGFloat.self) { max(44, 96 - max(0, $0.contentOffset.y + $0.contentInsets.top - 192) * 0.047) } action: { _, value in shade = value }
-        .background { Color(red: shade / 255, green: (shade - 1) / 255, blue: (shade - 2) / 255).ignoresSafeArea() }
+        .modifier(ArtistPageShade())
         .ignoresSafeArea(edges: .top).scrollEdgeEffectHidden(true, for: .top).foregroundStyle(.white)
         .toolbarColorScheme(.dark, for: .navigationBar, .tabBar)
         .libraryTitleDisplayMode(.inline)
@@ -109,9 +108,26 @@ struct ArtistDetailView: View {
         if !items.isEmpty {
             VStack(alignment: .leading, spacing: 12) {
                 heading(section).padding(.horizontal, 20)
-                ScrollView(.horizontal) { HStack(alignment: .top, spacing: 12) { ForEach(items) { item in CollectionCardLink(item: item) { AlbumCard(item: item) }.frame(width: 160) } }.scrollTargetLayout() }.contentMargins(.horizontal, 20).scrollTargetBehavior(.viewAligned).scrollIndicators(.hidden)
+                ScrollView(.horizontal) { LazyHStack(alignment: .top, spacing: 12) { ForEach(items) { item in CollectionCardLink(item: item) { AlbumCard(item: item) }.frame(width: 160) } }.scrollTargetLayout() }
+                    .fixedSize(horizontal: false, vertical: true)
+                    .contentMargins(.horizontal, 20).scrollTargetBehavior(.viewAligned).scrollIndicators(.hidden)
             }.padding(.top, 24)
         }
+    }
+}
+
+/// Continuous scrolling updates only this background, leaving the page's content stable.
+private struct ArtistPageShade: ViewModifier {
+    @State private var shade: CGFloat = 96
+
+    func body(content: Content) -> some View {
+        content
+            .onScrollGeometryChange(for: CGFloat.self) {
+                max(44, 96 - max(0, $0.contentOffset.y + $0.contentInsets.top - 192) * 0.047)
+            } action: { _, value in shade = value }
+            .background {
+                Color(red: shade / 255, green: (shade - 1) / 255, blue: (shade - 2) / 255).ignoresSafeArea()
+            }
     }
 }
 

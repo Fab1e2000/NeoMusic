@@ -42,14 +42,14 @@ internal struct LNPopupContainerViewWrapper<Content, PopupContent>: UIViewContro
 	func makeUIViewController(context: UIViewControllerRepresentableContext<LNPopupContainerViewWrapper>) -> LNPopupProxyViewController<Content, PopupContent> {
 		let rv = LNPopupProxyViewController<Content, PopupContent>(rootView: passthroughContent)
 		let state = self.state(context: context)
-		rv.handlePopupState(state)
+		rv.handlePopupState(state, animated: !context.transaction.disablesAnimations)
 		return rv
 	}
 	
 	func updateUIViewController(_ uiViewController: LNPopupProxyViewController<Content, PopupContent>, context: UIViewControllerRepresentableContext<LNPopupContainerViewWrapper>) {
 		uiViewController.rootView = passthroughContent
 		let state = self.state(context: context)
-		uiViewController.handlePopupState(state)
+		uiViewController.handlePopupState(state, animated: !context.transaction.disablesAnimations)
 	}
 }
 

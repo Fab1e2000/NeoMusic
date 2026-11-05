@@ -9,7 +9,7 @@ struct LibrarySongItem: Identifiable, Equatable {
     let album: String
     let albumArtist: String
     let trackNumber: Int
-    let artwork: Artwork
+    var artwork: Artwork
     var albumDirectory: String? = nil
     var discNumber: Int = 1
     var artworkData: Data? = nil
@@ -37,6 +37,15 @@ struct LibrarySongItem: Identifiable, Equatable {
 }
 
 extension LibrarySongItem {
+    func replacingArtwork(from value: Self) -> Self {
+        var result = self
+        result.artwork = value.artwork
+        result.artworkData = value.artworkData
+        result.artworkURL = value.artworkURL
+        result.artworkBackdrop = value.artworkBackdrop
+        return result
+    }
+
     static func unavailable(_ id: String) -> Self {
         if id.hasPrefix("netease:") {
             return Self(id: id, title: "在线歌曲", artist: "登录原账号后可用", album: "", albumArtist: "", trackNumber: 0,
@@ -61,7 +70,7 @@ struct LibraryArtistReference: Equatable {
 }
 
 /// 资料库里的一位艺人；本地音乐没有艺人照片时使用占位图。
-struct LibraryArtistItem: Identifiable {
+struct LibraryArtistItem: Identifiable, Equatable {
     let id: String
     let name: String
     var artwork: Artwork?
@@ -101,13 +110,34 @@ struct SongsListView: View {
     @State private var sort = SongSort.artist
     @State private var filter = LibraryFilter.all
     @State private var query = ""
+    @State private var projection = LibraryListProjection<ProjectionInput, Projection>()
     @Environment(\.songMenuActions) private var actions
 
+    struct ProjectionInput: Equatable {
+        let songs: [LibrarySongItem]
+        let query: String
+        let filter: LibraryFilter
+        let sort: SongSort
+
+        func calculate() -> Projection {
+            let matching = query.isEmpty ? songs : songs.filter {
+                $0.title.localizedStandardContains(query) || $0.artist.localizedStandardContains(query) || $0.album.localizedStandardContains(query)
+            }
+            let shown = filter == .favorites ? matching.filter(\.isFavorite) : matching
+            let sections = sort.sections(of: shown)
+            return Projection(sections: sections, ordered: sections.flatMap(\.items))
+        }
+    }
+    struct Projection {
+        let sections: [TitleSection<LibrarySongItem>]
+        let ordered: [LibrarySongItem]
+    }
+
     var body: some View {
-        let matching = songs.filter { query.isEmpty || [$0.title, $0.artist, $0.album].contains { $0.localizedStandardContains(query) } }
-        let shown = filter == .favorites ? matching.filter(\.isFavorite) : matching
-        let sections = sort.sections(of: shown)
-        let ordered = sections.flatMap(\.items)
+        let input = ProjectionInput(songs: songs, query: query, filter: filter, sort: sort)
+        let result = projection.value(for: input, calculate: input.calculate)
+        let sections = result.sections
+        let ordered = result.ordered
         List {
             PlayShuffleButtons(play: { playAll(ordered, false) }, shuffle: { playAll(ordered, true) })
                 .disabled(ordered.isEmpty)
@@ -156,12 +186,14 @@ struct SongRow: View {
     let song: LibrarySongItem
     var play: () -> Void = {}
     @Environment(\.songMenuActions) private var actions
+    @Environment(\.libraryDownloads) private var downloads
 
     var body: some View {
         HStack(spacing: 12) {
             Button(action: play) {
                 HStack(spacing: 12) {
                     ArtworkView(artwork: song.artwork, cornerRadius: 6)
+                        .environment(\.nativeArtworkSurfaceEnabled, false)
                         .frame(width: 48)
                         .overlay(alignment: .leading) { FavoriteMark(isFavorite: song.isFavorite) }
                     VStack(alignment: .leading, spacing: 0) {
@@ -174,22 +206,28 @@ struct SongRow: View {
                 .contentShape(.rect)
             }
             .buttonStyle(.plain)
+            SongDownloadStatus(song: song, showsImported: false)
             TrackMoreButton(song: song)
         }
         .frame(minHeight: 56)
         .songContextMenu(song)
-        // 右滑插播，左滑下载；对照 Apple Music 只显示图标。下载在本地音乐中不可用，系统不会把
-        // 禁用的滑动按钮变灰，所以直接用灰色表示；从资料库删除暂不提供。
+        // 右滑插播，左滑下载；本地导入文件保留原有布局。
         .swipeActions(edge: .leading) {
             Button("插播", systemImage: "text.line.first.and.arrowtriangle.forward") { actions.playNext(song) }
                 .labelStyle(.iconOnly)
                 .tint(.indigo)
         }
         .swipeActions(edge: .trailing) {
-            Button("下载", systemImage: "arrow.down") {}
-                .labelStyle(.iconOnly)
-                .tint(.gray)
-                .disabled(true)
+            if downloads?.state(of: song.id)?.isActive == true {
+                Button("停止下载", systemImage: "stop.fill") { downloads?.stop([song]) }.tint(.blue)
+            } else if downloads?.canRemove(song) == true {
+                Button("移除下载", systemImage: "xmark.circle") { downloads?.requestRemoval([song]) }.tint(.red)
+            } else {
+                Button("下载", systemImage: "arrow.down") { downloads?.download([song]) }
+                    .labelStyle(.iconOnly)
+                    .tint(downloads?.isDownloadable(song) == true ? .blue : .gray)
+                    .disabled(downloads?.isDownloadable(song) != true)
+            }
         }
         .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
         .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] + 60 }
@@ -227,11 +265,23 @@ struct AlbumsGridView: View {
     @State private var filter = LibraryFilter.all
     @State private var sort = AlbumSort.artist
     @State private var layout = LibraryLayout.grid
+    @State private var projection = LibraryListProjection<ProjectionInput, [LibraryShelfItem]>()
     private let columns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
 
+    private struct ProjectionInput: Equatable {
+        let albums: [LibraryShelfItem]
+        let query: String
+        let filter: LibraryFilter
+        let sort: AlbumSort
+    }
+
     var body: some View {
-        let matching = albums.filter { query.isEmpty || [$0.title, $0.subtitle ?? ""].contains { $0.localizedStandardContains(query) } }
-        let shown = sort.apply(to: filter == .favorites ? matching.filter(\.isFavorite) : matching)
+        let shown = projection.value(for: ProjectionInput(albums: albums, query: query, filter: filter, sort: sort)) {
+            let matching = query.isEmpty ? albums : albums.filter {
+                $0.title.localizedStandardContains(query) || ($0.subtitle?.localizedStandardContains(query) ?? false)
+            }
+            return sort.apply(to: filter == .favorites ? matching.filter(\.isFavorite) : matching)
+        }
         ScrollView {
             VStack(spacing: 24) {
                 PlayShuffleButtons(play: { playAll(shown.map(\.id), false) }, shuffle: { playAll(shown.map(\.id), true) })
@@ -255,7 +305,6 @@ struct AlbumsGridView: View {
             .padding(.horizontal, 20)
             .padding(.top, 10)
             .padding(.bottom, 24)
-            .libraryCollectionAnimation(value: shown.map(\.id))
         }
         .libraryNavigationTitle("专辑")
         .libraryTitleDisplayMode(.large)

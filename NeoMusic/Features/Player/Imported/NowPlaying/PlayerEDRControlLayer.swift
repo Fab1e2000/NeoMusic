@@ -37,12 +37,14 @@ struct PlayerEDRControlAvailable: ViewModifier {
 }
 
 private struct PlayerEDRMaskView: UIViewRepresentable {
+    @Environment(\.playerVisualsActive) private var visualsActive
     let shape: PlayerEDRMask
     let image: UIImage
     let anchor: NowPlayingBackdropAnchor
     let brightness: Double
     func makeUIView(context: Context) -> PlayerEDRGlyphView { PlayerEDRGlyphView() }
     func updateUIView(_ view: PlayerEDRGlyphView, context: Context) {
+        view.setRenderingActive(visualsActive)
         view.update(shape: shape, image: image, anchor: anchor, brightness: brightness)
     }
     static func dismantleUIView(_ view: PlayerEDRGlyphView, coordinator: ()) { view.stop() }

@@ -32,13 +32,14 @@ final class LibraryDetailNavigation: NSObject, UINavigationControllerDelegate {
         return nav
     }
 
-    func makePage(_ content: AnyView, route: LibraryRoute?) -> LibraryDetailHostingController {
+    func makePage(_ content: AnyView, route: LibraryRoute?, preview: LibraryNavigationPreview? = nil) -> LibraryDetailHostingController {
         let chrome = LibraryNavigationChrome(isRoot: route == nil, route: route)
         let page = LibraryDetailHostingController(chrome: chrome)
         if case .artist = route { chrome.setColorScheme(.dark) }
         page.updateEnvironment = { [weak self, weak page] environment in
             guard let page else { return }
-            page.rootView = AnyView(content
+            page.rootView = AnyView(LibraryNavigationPreviewScope(content: content, preview: preview,
+                                                               account: environment[NeteaseAccount.self])
             // Transfer app dependencies, not the parent hosting tree's transient
             // navigation/toolbar/interaction environment into a new page root.
             .environment(environment[NeteaseAccount.self])
@@ -46,6 +47,7 @@ final class LibraryDetailNavigation: NSObject, UINavigationControllerDelegate {
             .environment(\.songMenuActions, environment.songMenuActions)
             .environment(\.songRowPlayback, environment.songRowPlayback)
             .environment(\.libraryDownloads, environment.libraryDownloads)
+            .environment(\.artworkLoadAction, environment.artworkLoadAction)
             .environment(\.colorScheme, environment.colorScheme)
             .environment(\.locale, environment.locale)
             .environment(\.dynamicTypeSize, environment.dynamicTypeSize)
@@ -56,7 +58,8 @@ final class LibraryDetailNavigation: NSObject, UINavigationControllerDelegate {
             .environment(\.openLibraryRoute, OpenLibraryRouteAction(
                 handler: { [weak self] in self?.open($0) },
                 sourceHandler: { [weak self] in self?.open($0, source: $1) },
-                sourceProviderHandler: { [weak self] in self?.open($0, sourceProvider: $1) }))
+                sourceProviderHandler: { [weak self] in self?.open($0, sourceProvider: $1) },
+                previewSourceHandler: { [weak self] in self?.open($0, sourceProvider: $2, preview: $1) }))
             .environment(\.closeLibraryDetail, CloseLibraryDetailAction { [weak page] in
                 guard let page, let nav = page.navigationController, nav.topViewController === page else { return }
                 nav.popViewController(animated: true)
@@ -67,22 +70,20 @@ final class LibraryDetailNavigation: NSObject, UINavigationControllerDelegate {
     }
 
     func open(_ route: LibraryRoute, source: UIView? = nil, animated: Bool = true,
-              sourceProvider: (() -> UIView?)? = nil) {
+              sourceProvider: (() -> UIView?)? = nil, preview: LibraryNavigationPreview? = nil) {
         NavigationDiagnostics.event("UIKitLibrary.openRequested", page: route.diagnosticPage)
         // UIKit's fluid zoom handles new pushes/pops during an ongoing transition.
         // https://developer.apple.com/documentation/uikit/enhancing-your-app-with-fluid-transitions
         guard let nav = navigationController, let destination else { return }
-        let page = makePage(destination(route), route: route)
+        let page = makePage(destination(route), route: route, preview: preview?.route == route ? preview : nil)
         switch route {
         case .album, .playlist:
             if sourceProvider != nil || source != nil {
                 let options = UIViewController.Transition.ZoomOptions()
-                if case .album = route {
-                    options.alignmentRectProvider = { context in
-                        let view = context.zoomedViewController.view!
-                        view.layoutIfNeeded()
-                        return view.libraryArtworkAlignmentRect()
-                    }
+                options.alignmentRectProvider = { context in
+                    let view = context.zoomedViewController.view!
+                    view.layoutIfNeeded()
+                    return view.libraryArtworkAlignmentRect()
                 }
                 page.preferredTransition = .zoom(options: options) { [weak source] _ in
                     // A provider must not fall back to a cell that has since been reused.
@@ -112,6 +113,16 @@ final class LibraryDetailNavigation: NSObject, UINavigationControllerDelegate {
     fileprivate func updateColorScheme(_ scheme: ColorScheme?) {
         navigationController?.navigationBar.overrideUserInterfaceStyle = scheme.map { UIUserInterfaceStyle($0) } ?? .unspecified
         if colorScheme != scheme { colorScheme = scheme }
+    }
+}
+
+private struct LibraryNavigationPreviewScope: View {
+    let content: AnyView
+    let preview: LibraryNavigationPreview?
+    let account: NeteaseAccount?
+    var body: some View {
+        content.environment(\.libraryNavigationPreview,
+            preview?.ownerID == nil || preview?.ownerID == account?.profile.map({ String($0.userID) }) ? preview : nil)
     }
 }
 
@@ -159,6 +170,7 @@ final class LibraryDetailHostingController: UIHostingController<AnyView> {
         super.viewDidLayoutSubviews()
         // SwiftUI List may materialize after the controller's first appearance.
         // Register it using the public API once it exists, just like the UIKit lab.
+        guard registeredScroll?.isDescendant(of: view) != true else { return }
         if let scroll = firstScroll(in: view), scroll !== registeredScroll {
             registeredScroll = scroll
             setContentScrollView(scroll, for: .top)
@@ -182,6 +194,7 @@ final class LibraryDetailHostingController: UIHostingController<AnyView> {
         super.viewDidAppear(animated)
         chrome.isActive = true
         chrome.hasAppeared = true
+        PerformanceDiagnostics.event("PageAppeared")
     }
 }
 

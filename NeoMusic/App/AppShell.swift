@@ -20,6 +20,7 @@ struct AppShell<Library: View>: View {
     let referencePlayer: ReferencePlayerState
     let referenceLibrary: ReferenceLibrary
     let makePlayerActions: (@escaping (LibraryRoute) -> Void) -> ReferencePlayerActions
+    var isInitialContentReady = true
     @State private var pendingRoute: LibraryRoute?
     @State private var selection = AppTab.library
     @State var libraryPath: [LibraryRoute] = []
@@ -64,7 +65,7 @@ struct AppShell<Library: View>: View {
         .addToPlaylistSheet(playlistLibrary, toasts: toasts)
         .moveToFolderSheet(playlistLibrary)
         .modifier(ClearQueueConfirmation(player: nowPlaying))
-        .modifier(PlayerPopup(isPresented: $isPlayerPresented, isSuppressed: false,
+        .modifier(PlayerPopup(isPresented: $isPlayerPresented, isSuppressed: !isInitialContentReady,
                               onClose: finishPlayerNavigation, barColorScheme: chromeColorScheme))
         .environment(referencePlayer)
         .environment(referenceLibrary)

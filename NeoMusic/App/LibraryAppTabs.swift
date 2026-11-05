@@ -18,14 +18,11 @@ struct LibraryAppTabs<Library: View>: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> UITabBarController {
         let account = context.environment[NeteaseAccount.self]
         navigation.configure(environment: context.environment, destination: destination)
-        let libraryController = navigation.makeNavigationController(root: AnyView(library), initialPath: initialPath)
         let homeBridge = homeNavigation ?? context.coordinator.homeNavigation
         context.coordinator.libraryBridge = navigation
         context.coordinator.homeBridge = homeBridge
         homeBridge.configure(environment: context.environment, destination: homeDestination ?? destination)
-        let homeController = homeBridge.makeNavigationController(
-            root: homeContent ?? AnyView(HomeFeedView(model: context.coordinator.emptyHome)),
-            rootTitle: "主页", rootColorScheme: .light)
+        let homeRoot = homeContent ?? AnyView(HomeFeedView(model: context.coordinator.emptyHome))
         let controller = UITabBarController()
         controller.delegate = context.coordinator
         context.coordinator.preferredStyle = colorScheme.map { UIUserInterfaceStyle($0) }
@@ -39,16 +36,21 @@ struct LibraryAppTabs<Library: View>: UIViewControllerRepresentable {
             UIHostingController(rootView: PlaceholderTab(title: "搜索").environment(account))
         }
         context.coordinator.searchIdentifier = search.identifier
-        controller.tabs = [
+        let tabs: [UITab] = [
             UITab(title: "主页", image: UIImage(named: "HomeTabIcon"), identifier: AppTab.home.rawValue) { _ in
-                homeController
+                homeBridge.makeNavigationController(root: homeRoot, rootTitle: "主页", rootColorScheme: .light)
             },
             tab(.discover, "新发现", "square.grid.2x2.fill"),
             tab(.radio, "广播", "dot.radiowaves.left.and.right"),
-            UITab(title: "资料库", image: UIImage(systemName: "music.note.square.stack.fill"), identifier: AppTab.library.rawValue) { _ in libraryController },
+            UITab(title: "资料库", image: UIImage(systemName: "music.note.square.stack.fill"), identifier: AppTab.library.rawValue) { _ in
+                navigation.makeNavigationController(root: AnyView(library), initialPath: initialPath)
+            },
             search
         ]
-        controller.selectedTab = controller.tabs.first { $0.identifier == selection.rawValue }
+        UIView.performWithoutAnimation {
+            controller.setTabs(tabs, animated: false)
+            controller.selectedTab = tabs.first { $0.identifier == selection.rawValue }
+        }
         // Resolve system appearance from the container when a page has no preference.
         controller.registerForTraitChanges([UITraitUserInterfaceStyle.self]) { [weak coordinator = context.coordinator] (controller: UITabBarController, _) in
             let style = coordinator?.preferredStyle ?? controller.traitCollection.userInterfaceStyle

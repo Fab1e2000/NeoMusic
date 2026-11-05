@@ -3,7 +3,7 @@ import AVFoundation
 @testable import NeoMusic
 
 @MainActor final class PlaybackCollectionHistoryTests: XCTestCase {
-    func testHistoryRestoresDeduplicatesAndIsolatesAccounts() throws {
+    func testHistoryRestoresDeduplicatesAndIsolatesAccounts() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appendingPathComponent("history.json")
@@ -15,10 +15,78 @@ import AVFoundation
         history.record(first, at: Date(timeIntervalSince1970: 2))
         history.record(second, at: Date(timeIntervalSince1970: 3))
         history.record(local, at: Date(timeIntervalSince1970: 4))
+        await history.flush()
         let restored = PlaybackCollectionHistory(url: url)
+        await restored.restore()
         XCTAssertEqual(restored.recent(for: "first"), [local, first])
         XCTAssertEqual(restored.recent(for: "second"), [local, second])
         XCTAssertEqual(restored.recent(for: nil), [local])
+    }
+
+    func testConcurrentRestoreMergesPlaybackRecordedDuringRead() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("history.json")
+        let original = PlaybackCollectionReference(kind: .localAlbum, id: "album", ownerID: nil, title: "Original")
+        let other = PlaybackCollectionReference(kind: .onlinePlaylist, id: "online", ownerID: "42", title: "Online")
+        let seed = PlaybackCollectionHistory(url: url)
+        seed.record(original, at: Date(timeIntervalSince1970: 1))
+        seed.record(other, at: Date(timeIntervalSince1970: 2))
+        await seed.flush()
+        let gate = HistoryReadGate(data: try Data(contentsOf: url))
+        let history = PlaybackCollectionHistory(url: url, loadData: { _ in await gate.load() })
+        let readsBeforeRestore = await gate.loadCount
+        XCTAssertEqual(readsBeforeRestore, 0, "Constructing the home model must not read history on the launch path")
+        let firstRestore = Task { await history.restore() }
+        await gate.waitUntilStarted()
+        let secondRestore = Task { await history.restore() }
+        let renamed = PlaybackCollectionReference(kind: .localAlbum, id: "album", ownerID: nil, title: "Renamed")
+        history.record(renamed, at: Date(timeIntervalSince1970: 3))
+        XCTAssertEqual(history.recent(for: "42"), [renamed])
+        await gate.finish()
+        await firstRestore.value
+        await secondRestore.value
+        await history.flush()
+        let readCount = await gate.loadCount
+        XCTAssertEqual(readCount, 1)
+        XCTAssertEqual(history.recent(for: "42"), [renamed, other])
+        XCTAssertEqual(history.recent(for: nil), [renamed])
+        let restored = PlaybackCollectionHistory(url: url)
+        await restored.restore()
+        XCTAssertEqual(restored.recent(for: "42"), [renamed, other])
+    }
+
+    func testPlaybackBeforeRestorePreservesExistingHistory() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("history.json")
+        let previous = PlaybackCollectionReference(kind: .localAlbum, id: "previous", ownerID: nil, title: "Previous")
+        let current = PlaybackCollectionReference(kind: .localAlbum, id: "current", ownerID: nil, title: "Current")
+        let seed = PlaybackCollectionHistory(url: url)
+        seed.record(previous, at: Date(timeIntervalSince1970: 1))
+        await seed.flush()
+        let history = PlaybackCollectionHistory(url: url)
+        history.record(current, at: Date(timeIntervalSince1970: 2))
+        await history.flush()
+        let restored = PlaybackCollectionHistory(url: url)
+        await restored.restore()
+        XCTAssertEqual(restored.recent(for: nil), [current, previous])
+    }
+
+    func testFlushPersistsLatestOfOrderedSnapshots() async {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("history.json")
+        let history = PlaybackCollectionHistory(url: url)
+        await history.restore()
+        for index in 0..<25 {
+            history.record(.init(kind: .localPlaylist, id: String(index), ownerID: nil, title: String(index)),
+                           at: Date(timeIntervalSince1970: Double(index)))
+        }
+        await history.flush()
+        let restored = PlaybackCollectionHistory(url: url)
+        await restored.restore()
+        XCTAssertEqual(restored.recent(for: nil).map(\.id), (5..<25).reversed().map(String.init))
     }
 
     func testHistoryKeepsTwentyMostRecentCollections() {
@@ -55,6 +123,7 @@ import AVFoundation
         player.togglePlayback()
         try await Task.sleep(for: .milliseconds(300))
         XCTAssertEqual(recorded, [reference])
+        await player.flushQueuePersistence()
     }
 
     func testFailedResolutionDoesNotRecordPlayback() async throws {
@@ -70,6 +139,7 @@ import AVFoundation
         for _ in 0..<20 where player.errorMessage == nil { try await Task.sleep(for: .milliseconds(50)) }
         XCTAssertNotNil(player.errorMessage)
         XCTAssertFalse(recorded)
+        await player.flushQueuePersistence()
     }
 
     func testPendingQueueReplacementPreservesCollectionAndDoesNotRecordBeforePlayback() {
@@ -86,5 +156,31 @@ import AVFoundation
         XCTAssertTrue(recorded.isEmpty)
         player.requestPlay([], from: "Empty", shuffled: false, collection: reference)
         XCTAssertTrue(recorded.isEmpty)
+    }
+}
+
+private actor HistoryReadGate {
+    let data: Data
+    private(set) var loadCount = 0
+    private var pending: CheckedContinuation<Data, Never>?
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+
+    init(data: Data) { self.data = data }
+
+    func load() async -> Data {
+        loadCount += 1
+        startWaiters.forEach { $0.resume() }
+        startWaiters.removeAll()
+        return await withCheckedContinuation { pending = $0 }
+    }
+
+    func waitUntilStarted() async {
+        guard loadCount == 0 else { return }
+        await withCheckedContinuation { startWaiters.append($0) }
+    }
+
+    func finish() {
+        pending?.resume(returning: data)
+        pending = nil
     }
 }

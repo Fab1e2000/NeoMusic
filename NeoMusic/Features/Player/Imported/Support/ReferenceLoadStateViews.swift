@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// 已就绪的内容直接显示；首次加载时保持隐藏，就绪后以 0.5 秒淡入。
-/// 背景和导航栏按钮照常显示，不展示等待提示器。
+/// 内容就绪时立即显示，导航和背景保持原生生命周期。
 extension View {
     func pageContentReveal(isReady: Bool = true) -> some View {
         modifier(PageContentReveal(isReady: isReady))
@@ -10,35 +9,13 @@ extension View {
 
 private struct PageContentReveal: ViewModifier {
     let isReady: Bool
-    @State private var visible: Bool
-
-    init(isReady: Bool) {
-        self.isReady = isReady
-        // Seed once per page identity: cached/local content must be visible in
-        // its first navigation frame. Later readiness changes use the task below.
-        _visible = State(initialValue: isReady)
-    }
 
     func body(content: Content) -> some View {
         content
-            .opacity(visible ? 1 : 0)
-            .allowsHitTesting(isReady && visible)
-            .accessibilityHidden(!isReady || !visible)
-            .task(id: isReady) {
-                guard isReady else {
-                    var transaction = Transaction(animation: nil)
-                    transaction.disablesAnimations = true
-                    withTransaction(transaction) { visible = false }
-                    return
-                }
-                guard !visible else { return }
-                // The loading state already committed the transparent frame.
-                // Reveal the stable container once, after its content is ready.
-                guard !Task.isCancelled else { return }
-                var transaction = Transaction(animation: .easeOut(duration: 0.5))
-                transaction.disablesAnimations = false
-                withTransaction(transaction) { visible = true }
-            }
+            .opacity(isReady ? 1 : 0)
+            .allowsHitTesting(isReady)
+            .accessibilityHidden(!isReady)
+            .transaction(value: isReady) { $0.animation = nil; $0.disablesAnimations = true }
     }
 }
 

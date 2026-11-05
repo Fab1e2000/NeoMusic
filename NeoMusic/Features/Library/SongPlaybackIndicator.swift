@@ -42,6 +42,8 @@ struct PlaylistSongArtwork: View {
 
     var body: some View {
         ArtworkView(artwork: song.artwork, cornerRadius: cornerRadius)
+            // Track thumbnails are not collection zoom sources.
+            .environment(\.nativeArtworkSurfaceEnabled, false)
             .overlay {
                 if let playback, playback.hasCurrent, playback.current.id == song.id {
                     RoundedRectangle(cornerRadius: cornerRadius)

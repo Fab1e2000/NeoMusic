@@ -6,6 +6,7 @@ import LNPopupController
 @MainActor @Observable
 private final class StartupLibraryProbe {
     var isReady = false
+    var pinCount = 4
     let library = PlaylistLibrary(playlists: [])
 }
 
@@ -17,17 +18,39 @@ private final class NavigationAccountStorage {
 private struct StartupLibraryProbeView: View {
     let probe: StartupLibraryProbe
     var body: some View {
-        LibraryHomeView(pinned: probe.isReady ? [
+        let pins: [LibraryShelfItem] = [
             .init(id: "first", title: "专辑一", artwork: .missing, route: .album("first")),
             .init(id: "second", title: "专辑二", artwork: .missing, route: .album("second")),
             .init(id: "third", title: "专辑三", artwork: .missing, route: .album("third")),
             .init(id: "favorites", title: "喜爱歌曲", artwork: .favorites, route: .playlist("favorites"))
-        ] : [], recentlyAdded: probe.isReady ? [
+        ]
+        LibraryHomeView(pinned: probe.isReady ? Array(pins.prefix(probe.pinCount)) : [], recentlyAdded: probe.isReady ? [
             .init(id: "recent-first", title: "最近专辑一", artwork: .missing, route: .album("recent-first")),
             .init(id: "recent-second", title: "最近专辑二", artwork: .missing, route: .album("recent-second"))
         ] : [],
                         playlistLibrary: probe.library, isContentReady: probe.isReady)
     }
+}
+
+@MainActor
+private final class NativeDisplayFrameSampler: NSObject {
+    private let sample: (CADisplayLink) -> Void
+    private var displayLink: CADisplayLink?
+
+    init(sample: @escaping (CADisplayLink) -> Void) { self.sample = sample }
+
+    func start() {
+        let link = CADisplayLink(target: self, selector: #selector(displayFrame(_:)))
+        displayLink = link
+        link.add(to: .main, forMode: .common)
+    }
+
+    func stop() {
+        displayLink?.invalidate()
+        displayLink = nil
+    }
+
+    @objc private func displayFrame(_ link: CADisplayLink) { sample(link) }
 }
 
 @MainActor
@@ -45,8 +68,68 @@ final class LibraryDetailNavigationTests: XCTestCase {
 
     private func settle() async throws { try await Task.sleep(for: .milliseconds(1400)) }
 
-    private func mount(_ bridge: LibraryDetailNavigation) throws -> UIWindow {
-        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+    func testListProjectionReusesInputsAndImmediatelyReflectsDataAndControls() {
+        let cache = LibraryListProjection<SongsListView.ProjectionInput, SongsListView.Projection>()
+        var calculations = 0
+        let source = [
+            LibrarySongItem(id: "zhou", title: "周杰伦", artist: "艺人", album: "专辑", albumArtist: "艺人",
+                            trackNumber: 1, artwork: .missing, addedOrder: 2),
+            LibrarySongItem(id: "chen", title: "陈奕迅", artist: "艺人", album: "专辑", albumArtist: "艺人",
+                            trackNumber: 2, artwork: .missing, addedOrder: 1, isFavorite: true)
+        ]
+        func project(_ songs: [LibrarySongItem], query: String = "", filter: LibraryFilter = .all,
+                     sort: SongSort = .name) -> SongsListView.Projection {
+            let input = SongsListView.ProjectionInput(songs: songs, query: query, filter: filter, sort: sort)
+            return cache.value(for: input) { calculations += 1; return input.calculate() }
+        }
+        let initial = project(source)
+        XCTAssertEqual(initial.sections.map(\.letter), ["C", "Z"])
+        XCTAssertEqual(initial.ordered.map(\.id), ["chen", "zhou"])
+        XCTAssertEqual(project(source).ordered.map(\.id), ["chen", "zhou"])
+        XCTAssertEqual(calculations, 1, "Presentation-only updates reuse the last result")
+
+        let updated = source + [LibrarySongItem(id: "ashin", title: "阿信", artist: "艺人", album: "专辑", albumArtist: "艺人",
+                                               trackNumber: 3, artwork: .missing, addedOrder: 3, isFavorite: true)]
+        XCTAssertEqual(project(updated).ordered.map(\.id), ["ashin", "chen", "zhou"])
+        XCTAssertEqual(calculations, 2)
+        XCTAssertEqual(project(updated, query: "周").ordered.map(\.id), ["zhou"])
+        XCTAssertEqual(calculations, 3)
+        XCTAssertTrue(project(updated, query: "周", filter: .favorites).ordered.isEmpty)
+        XCTAssertEqual(calculations, 4)
+        XCTAssertTrue(project(updated, query: "周", filter: .favorites, sort: .addedDate).ordered.isEmpty)
+        XCTAssertEqual(calculations, 5)
+        XCTAssertEqual(project(updated, filter: .favorites, sort: .addedDate).ordered.map(\.id), ["ashin", "chen"])
+        XCTAssertEqual(calculations, 6)
+        XCTAssertEqual(project(updated, filter: .favorites, sort: .addedDate).ordered.map(\.id), ["ashin", "chen"])
+        XCTAssertEqual(calculations, 6)
+    }
+
+    func testArtworkDemandStartsOnlyForVisibleLazyRows() async throws {
+        let scene = try await applicationWindowScene()
+        let window = UIWindow(windowScene: scene)
+        defer { window.isHidden = true }
+        var requested = Set<String>()
+        let first = expectation(description: "Visible cover requests its image")
+        let content = ScrollView {
+            LazyVStack {
+                ForEach(0..<100, id: \.self) { index in
+                    ArtworkView(artwork: .deferred(id: "cover:\(index)", placeholder: .missing))
+                        .frame(width: 72, height: 72)
+                }
+            }
+        }.environment(\.artworkLoadAction, ArtworkLoadAction { id in
+            if requested.insert(id).inserted, id == "cover:0" { first.fulfill() }
+        })
+        window.rootViewController = UIHostingController(rootView: content)
+        window.makeKeyAndVisible()
+        await fulfillment(of: [first], timeout: 3)
+        try await settle()
+        XCTAssertTrue(requested.contains("cover:0"))
+        XCTAssertLessThan(requested.count, 100, "Off-screen rows must not start the entire artwork catalog")
+    }
+
+    private func mount(_ bridge: LibraryDetailNavigation) async throws -> UIWindow {
+        let scene = try await applicationWindowScene()
         let window = UIWindow(windowScene: scene)
         window.rootViewController = UIHostingController(rootView:
             LibraryNavigationContainer(navigation: bridge, root: TestRoot(),
@@ -57,7 +140,7 @@ final class LibraryDetailNavigationTests: XCTestCase {
 
     func testOwnsNativeStackAndRetainsOriginalToolbarGroups() async throws {
         let bridge = LibraryDetailNavigation()
-        let window = try mount(bridge)
+        let window = try await mount(bridge)
         defer { window.isHidden = true }
         try await settle()
         let nav = try XCTUnwrap(bridge.navigationController)
@@ -89,7 +172,7 @@ final class LibraryDetailNavigationTests: XCTestCase {
 
     func testAlbumAppearanceIsRestoredOnReturn() async throws {
         let bridge = LibraryDetailNavigation()
-        let window = try mount(bridge)
+        let window = try await mount(bridge)
         window.overrideUserInterfaceStyle = .light
         defer { window.isHidden = true }
         try await settle()
@@ -118,7 +201,7 @@ final class LibraryDetailNavigationTests: XCTestCase {
     }
 
     func testAppShellBarsChangeDuringZoomAndRestoreOnTabChange() async throws {
-        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let scene = try await applicationWindowScene()
         let window = UIWindow(windowScene: scene)
         window.overrideUserInterfaceStyle = .light
         defer { window.isHidden = true }
@@ -257,8 +340,81 @@ final class LibraryDetailNavigationTests: XCTestCase {
         assertAppearance(.light)
     }
 
+    func testPlayerTransitionGlassRetainsAlbumAppearanceAcrossRepeatedCloses() async throws {
+        let scene = try await applicationWindowScene()
+        let window = UIWindow(windowScene: scene)
+        window.overrideUserInterfaceStyle = .light
+        defer { window.isHidden = true }
+        let player = PlayerTestFixtures.state(tracks: [ReferenceTrack(id: "appearance", title: "Track",
+            artists: "Artist", albumTitle: "Album", coverURL: nil, duration: 60)])
+        window.rootViewController = UIHostingController(rootView: AppShell(
+            library: { TestRoot(showsArtwork: true) }, detailDestination: { route in
+                let dark = route == .album("dark")
+                return AnyView(CollectionDetailView(detail: CollectionDetail(kind: .album,
+                    title: dark ? "Dark Album" : "Light Album", artwork: .missing, tint: .clear,
+                    albumBackdrop: AlbumArtworkBackdrop(red: dark ? 0 : 1, green: dark ? 0 : 1,
+                                                       blue: dark ? 0 : 1), songs: [], route: route)))
+            }, nowPlaying: nil, playlistLibrary: PlaylistLibrary(playlists: []), toasts: LibraryToastCenter(),
+            referencePlayer: player, referenceLibrary: PlayerTestFixtures.library(),
+            makePlayerActions: { _ in PlayerTestFixtures.actions() }).environment(account))
+        window.makeKeyAndVisible()
+        try await settle()
+        func findTabs(in controller: UIViewController) -> UITabBarController? {
+            if let tabs = controller as? UITabBarController { return tabs }
+            return controller.children.lazy.compactMap { findTabs(in: $0) }.first
+        }
+        let tabs = try XCTUnwrap(findTabs(in: window.rootViewController!))
+        let nav = try XCTUnwrap(tabs.selectedViewController as? UINavigationController)
+        let bridge = try XCTUnwrap(nav.delegate as? LibraryDetailNavigation)
+        let root = try XCTUnwrap(nav.topViewController)
+        for style in [UIUserInterfaceStyle.dark, .light] {
+            window.overrideUserInterfaceStyle = style == .dark ? .light : .dark
+            bridge.open(.album(style == .dark ? "dark" : "light"), animated: false)
+            try await settle()
+            XCTAssertEqual(tabs.popupBar.traitCollection.userInterfaceStyle, style)
+            for cycle in 1...2 {
+                for opens in [true, false] {
+                    var sampledFrames = 0
+                    var mismatchedFrames = 0
+                    let sampler = NativeDisplayFrameSampler { _ in
+                        // Inspect the actual mounted sibling, not the configured bar endpoint.
+                        guard let wrapper = tabs.popupContentView.value(forKey: "transitionView") as? UIView,
+                              wrapper.window === window else { return }
+                        sampledFrames += 1
+                        let effects = self.descendants(of: UIVisualEffectView.self, in: wrapper)
+                        if wrapper.traitCollection.userInterfaceStyle != style || effects.isEmpty ||
+                            effects.contains(where: { $0.traitCollection.userInterfaceStyle != style }) {
+                            mismatchedFrames += 1
+                        }
+                    }
+                    sampler.start()
+                    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                        if opens { tabs.openPopup(animated: true) { continuation.resume() } }
+                        else { tabs.closePopup(animated: true) { continuation.resume() } }
+                    }
+                    sampler.stop()
+                    XCTAssertGreaterThan(sampledFrames, 0, "The native glass transition must be sampled")
+                    XCTAssertEqual(mismatchedFrames, 0, "style=\(style.rawValue), cycle=\(cycle), opening=\(opens)")
+                    let evidence = XCTAttachment(string: "style=\(style.rawValue), cycle=\(cycle), opening=\(opens), frames=\(sampledFrames), mismatches=\(mismatchedFrames)")
+                    evidence.lifetime = .keepAlways
+                    add(evidence)
+                }
+                let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                    window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+                }
+                let frame = XCTAttachment(image: image)
+                frame.name = "mini-player-style-\(style.rawValue)-close-\(cycle)"
+                frame.lifetime = .keepAlways
+                add(frame)
+            }
+            nav.popViewController(animated: false)
+            try await settle()
+            XCTAssertEqual(root.traitCollection.userInterfaceStyle, window.traitCollection.userInterfaceStyle)
+        }
+    }
+
     func testAlbumScrollContentExtendsBehindBarsWithNativeTopEffect() async throws {
-        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let scene = try await applicationWindowScene()
         let window = UIWindow(windowScene: scene)
         window.overrideUserInterfaceStyle = .light
         defer { window.isHidden = true }
@@ -280,6 +436,9 @@ final class LibraryDetailNavigationTests: XCTestCase {
         window.makeKeyAndVisible()
         try await settle()
         func findNavigation(in controller: UIViewController) -> UINavigationController? {
+            if let tabs = controller as? UITabBarController {
+                return tabs.selectedViewController.flatMap(findNavigation)
+            }
             if let nav = controller as? UINavigationController { return nav }
             for child in controller.children { if let nav = findNavigation(in: child) { return nav } }
             return nil
@@ -323,7 +482,7 @@ final class LibraryDetailNavigationTests: XCTestCase {
 
     func testRapidNativeZoomReturnAllowsOpeningAgain() async throws {
         let bridge = LibraryDetailNavigation()
-        let window = try mount(bridge)
+        let window = try await mount(bridge)
         defer { window.isHidden = true }
         try await settle()
         let nav = try XCTUnwrap(bridge.navigationController)
@@ -345,7 +504,7 @@ final class LibraryDetailNavigationTests: XCTestCase {
     }
 
     func testNavigationGeometryMatchesOriginalSwiftUIContainer() async throws {
-        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let scene = try await applicationWindowScene()
         let window = UIWindow(windowScene: scene)
         defer { window.isHidden = true }
         window.rootViewController = UIHostingController(rootView: TabView {
@@ -381,7 +540,7 @@ final class LibraryDetailNavigationTests: XCTestCase {
     }
 
     func testStartupShowsNativeChromeBeforeContentWithoutReplacingNavigation() async throws {
-        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let scene = try await applicationWindowScene()
         let window = UIWindow(windowScene: scene)
         defer { window.isHidden = true }
         let bridge = LibraryDetailNavigation()
@@ -451,18 +610,124 @@ final class LibraryDetailNavigationTests: XCTestCase {
         XCTAssertEqual(pinned.numberOfItems(inSection: 0), 4)
         let finalCategoryY = try XCTUnwrap(firstCategoryCell()).frame.minY
         XCTAssertGreaterThan(finalCategoryY - initialCategoryY, 250, "Two rows of pins must push the categories down")
-        XCTAssertTrue(categoryPositions.contains { $0 > initialCategoryY + 1 && $0 < finalCategoryY - 1 },
-                      "The categories must move through intermediate positions during insertion")
+        XCTAssertFalse(categoryPositions.contains { $0 > initialCategoryY + 1 && $0 < finalCategoryY - 1 },
+                       "Restored content must take its final layout without an insertion animation")
         let finalCoverFrame = try XCTUnwrap(recentCoverFrame(presentation: false))
         XCTAssertGreaterThan(recentCoverFrames.count, 5)
         for frame in recentCoverFrames {
             XCTAssertEqual(frame.minX, finalCoverFrame.minX, accuracy: 1, "Album fill must not slide inside the recently-added row")
-            XCTAssertEqual(frame.minY, finalCoverFrame.minY, accuracy: 1, "The shelf insertion moves the row, not its album content")
+            XCTAssertEqual(frame.minY, finalCoverFrame.minY, accuracy: 1, "Restored artwork must occupy its final position")
+        }
+
+        let survivingPin = try XCTUnwrap(pinned.cellForItem(at: IndexPath(item: 0, section: 0)))
+        let categoryCell = try XCTUnwrap(firstCategoryCell())
+        func windowPresentationFrame(_ view: UIView) -> CGRect? {
+            guard view.window === window, let layer = view.layer.presentation(),
+                  let root = window.layer.presentation() else { return nil }
+            return layer.convert(layer.bounds, to: root)
+        }
+        func layerEvidence(_ view: UIView) -> [String: Any] {
+            var ancestors: [[String: Any]] = []
+            var layer: CALayer? = view.layer
+            while let current = layer {
+                let presentation = current.presentation()
+                ancestors.append([
+                    "type": String(describing: type(of: current)),
+                    "frame": NSCoder.string(for: current.frame),
+                    "bounds": NSCoder.string(for: current.bounds),
+                    "presentationFrame": presentation.map { NSCoder.string(for: $0.frame) } ?? "none",
+                    "presentationBounds": presentation.map { NSCoder.string(for: $0.bounds) } ?? "none",
+                    "presentationOpacity": presentation.map { Double($0.opacity) } ?? Double(current.opacity),
+                    "animations": current.animationKeys() ?? []
+                ])
+                layer = current.superlayer
+            }
+            return [
+                "attachedToWindow": view.window === window,
+                "modelWindowFrame": NSCoder.string(for: view.convert(view.bounds, to: window)),
+                "presentationWindowFrame": windowPresentationFrame(view).map { NSCoder.string(for: $0) } ?? "none",
+                "ancestors": ancestors
+            ]
+        }
+        func attachEditFrame(_ name: String) {
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            let attachment = XCTAttachment(image: image)
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        attachEditFrame("explicit-pin-removal-before")
+        let initialPinWindowFrame = try XCTUnwrap(windowPresentationFrame(survivingPin))
+        var editSamples: [[String: Any]] = [[
+            "phase": "before", "pin": layerEvidence(survivingPin),
+            "category": firstCategoryCell().map(layerEvidence) ?? [:],
+            "listOffset": NSCoder.string(for: list.contentOffset),
+            "uiAnimationsEnabled": UIView.areAnimationsEnabled
+        ]]
+        let sampled = expectation(description: "Native frames after the explicit pin edit")
+        var started: CFTimeInterval?
+        var finished = false
+        var frames: [(elapsed: CFTimeInterval, timestamp: CFTimeInterval, pin: CGRect?, pinModel: CGRect,
+                      category: CGRect?, grid: CGRect?, offset: CGPoint)] = []
+        let sampler = NativeDisplayFrameSampler { link in
+            guard !finished else { return }
+            let now = CACurrentMediaTime()
+            guard let start = started else {
+                started = now
+                withAnimation(.linear(duration: 0.5)) { probe.pinCount = 1 }
+                return
+            }
+            frames.append((now - start, link.timestamp, windowPresentationFrame(survivingPin),
+                           survivingPin.convert(survivingPin.bounds, to: window),
+                           windowPresentationFrame(categoryCell), windowPresentationFrame(pinned), list.contentOffset))
+            if now - start >= 0.8 {
+                finished = true
+                sampled.fulfill()
+            }
+        }
+        sampler.start()
+        defer { sampler.stop() }
+        await fulfillment(of: [sampled], timeout: 3)
+        sampler.stop()
+        let pinWindowFrames = frames.compactMap { $0.pin }
+        for (index, frame) in frames.enumerated() {
+            editSamples.append([
+                "phase": "sample", "index": index, "elapsed": frame.elapsed, "displayTimestamp": frame.timestamp,
+                "pin": [
+                    "presentationWindowFrame": frame.pin.map { NSCoder.string(for: $0) } ?? "none",
+                    "modelWindowFrame": NSCoder.string(for: frame.pinModel)
+                ],
+                "category": ["presentationWindowFrame": frame.category.map { NSCoder.string(for: $0) } ?? "none"],
+                "gridWindowFrame": frame.grid.map { NSCoder.string(for: $0) } ?? "none",
+                "listOffset": NSCoder.string(for: frame.offset)
+            ])
+        }
+        attachEditFrame("explicit-pin-removal-after")
+        let editEvidence = XCTAttachment(data: try JSONSerialization.data(withJSONObject: editSamples, options: [.prettyPrinted, .sortedKeys]),
+                                         uniformTypeIdentifier: "public.json")
+        editEvidence.name = "explicit-pin-removal-window-and-layer-evidence"
+        editEvidence.lifetime = .keepAlways
+        add(editEvidence)
+        let removedCategoryY = try XCTUnwrap(firstCategoryCell()).frame.minY
+        XCTAssertEqual(pinned.numberOfItems(inSection: 0), 1)
+        XCTAssertLessThan(removedCategoryY, finalCategoryY - 1)
+        // List owns its row resize; the diffable shelf owns continuous item movement.
+        let finalPinWindowFrame = survivingPin.convert(survivingPin.bounds, to: window)
+        XCTAssertGreaterThan(finalPinWindowFrame.minX, initialPinWindowFrame.minX + 1)
+        XCTAssertTrue(pinWindowFrames.contains {
+            $0.minX > initialPinWindowFrame.minX + 1 && $0.minX < finalPinWindowFrame.minX - 1
+        }, "The retained cover must move continuously into its centered single-item position")
+        XCTAssertFalse(pinWindowFrames.isEmpty)
+        for frame in pinWindowFrames {
+            XCTAssertEqual(frame.minY, initialPinWindowFrame.minY, accuracy: 2,
+                           "The retained first-row cover must stay vertically anchored while the pinned shelf shrinks")
         }
     }
 
     func testActualLibraryHomePublishesItsToolbar() async throws {
-        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let scene = try await applicationWindowScene()
         let window = UIWindow(windowScene: scene)
         defer { window.isHidden = true }
         let bridge = LibraryDetailNavigation()
@@ -485,6 +750,11 @@ final class LibraryDetailNavigationTests: XCTestCase {
         window.rootViewController = UIHostingController(rootView: LocalLibrary.app.environment(account))
         try await settle()
         func inspect(_ vc: UIViewController) throws {
+            if let tabs = vc as? UITabBarController {
+                XCTAssertEqual(tabs.selectedTab?.identifier, AppTab.library.rawValue)
+                try inspect(XCTUnwrap(tabs.selectedViewController))
+                return
+            }
             if let nav = vc as? UINavigationController {
                 try assertNativeToolbar(in: nav)
             }
@@ -494,7 +764,7 @@ final class LibraryDetailNavigationTests: XCTestCase {
     }
 
     func testLibraryHomeRevealsPinsOnceAndKeepsTheirLayoutOnReturn() async throws {
-        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let scene = try await applicationWindowScene()
         let window = UIWindow(windowScene: scene)
         defer { window.isHidden = true }
         let bridge = LibraryDetailNavigation()
@@ -502,7 +772,7 @@ final class LibraryDetailNavigationTests: XCTestCase {
             .init(id: "favorites", title: "喜爱歌曲", artwork: .favorites, route: .playlist("favorites")),
             .init(id: "album", title: "专辑", artwork: .missing, route: .album("album"))
         ]
-        var nextRootAppearance = expectation(description: "Root appears before revealing pins")
+        var nextRootAppearance = expectation(description: "Root appears with its pinned content")
         let destinationReady = expectation(description: "Destination appears")
         var firstCollection: UICollectionView?
         var firstFrame: CGRect?
@@ -512,25 +782,23 @@ final class LibraryDetailNavigationTests: XCTestCase {
             root: LibraryHomeView(pinned: items, recentlyAdded: [], playlistLibrary: PlaylistLibrary(playlists: []))
                 .background {
                     AlbumAppearanceProbe(onAppearance: { _ in }, onDisplayed: { probe in
-                        if appearances > 0 {
-                            do {
-                                let page = try XCTUnwrap(probe.navigationController?.topViewController)
-                                let collection = try XCTUnwrap(self.descendants(of: UICollectionView.self, in: page.view)
-                                    .first { $0.visibleCells.contains { $0 is PinnedCollectionCell } })
-                                XCTAssertEqual(collection.numberOfItems(inSection: 0), items.count)
-                                XCTAssertEqual(collection.visibleCells.count, items.count)
-                                let frame = collection.convert(collection.bounds, to: page.view)
-                                XCTAssertGreaterThan(frame.width, 0)
-                                XCTAssertGreaterThan(frame.height, 0)
-                                if let firstCollection, let firstFrame {
-                                    XCTAssertTrue(collection === firstCollection, "Returning must retain the existing pinned collection")
-                                    XCTAssertEqual(frame.minX, firstFrame.minX, accuracy: 1)
-                                    XCTAssertEqual(frame.minY, firstFrame.minY, accuracy: 1)
-                                    XCTAssertEqual(frame.width, firstFrame.width, accuracy: 1)
-                                    XCTAssertEqual(frame.height, firstFrame.height, accuracy: 1)
-                                }
-                            } catch { XCTFail("Returning must keep the revealed shelf in place: \(error)") }
-                        }
+                        do {
+                            let page = try XCTUnwrap(probe.navigationController?.topViewController)
+                            let collection = try XCTUnwrap(self.descendants(of: UICollectionView.self, in: page.view)
+                                .first { $0.visibleCells.contains { $0 is PinnedCollectionCell } })
+                            XCTAssertEqual(collection.numberOfItems(inSection: 0), items.count)
+                            XCTAssertEqual(collection.visibleCells.count, items.count)
+                            let frame = collection.convert(collection.bounds, to: page.view)
+                            XCTAssertGreaterThan(frame.width, 0)
+                            XCTAssertGreaterThan(frame.height, 0)
+                            if let firstCollection, let firstFrame {
+                                XCTAssertTrue(collection === firstCollection, "Returning must retain the existing pinned collection")
+                                XCTAssertEqual(frame.minX, firstFrame.minX, accuracy: 1)
+                                XCTAssertEqual(frame.minY, firstFrame.minY, accuracy: 1)
+                                XCTAssertEqual(frame.width, firstFrame.width, accuracy: 1)
+                                XCTAssertEqual(frame.height, firstFrame.height, accuracy: 1)
+                            }
+                        } catch { XCTFail("The first and returning frames must contain the pinned shelf: \(error)") }
                         appearances += 1
                         nextRootAppearance.fulfill()
                     }).frame(width: 0, height: 0)
@@ -562,7 +830,7 @@ final class LibraryDetailNavigationTests: XCTestCase {
     }
 
     func testPlaylistScrollIncludesLargeTitleDuringPush() async throws {
-        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let scene = try await applicationWindowScene()
         let window = UIWindow(windowScene: scene)
         defer { window.isHidden = true }
         let bridge = LibraryDetailNavigation()
@@ -673,6 +941,21 @@ final class LibraryDetailNavigationTests: XCTestCase {
         XCTAssertNil(UILabel().libraryArtworkSource())
     }
 
+    func testHomeZoomSourceResolvesReplacementByStableIdentity() {
+        let sources = HomeArtworkSources()
+        let first = UIView(), replacement = UIView(), otherAccount = UIView()
+        sources.register(first, for: "42:recommended:list/12")
+        let provider = { sources.view(for: "42:recommended:list/12") }
+        XCTAssertTrue(provider() === first)
+        sources.register(replacement, for: "42:recommended:list/12")
+        sources.remove(first, for: "42:recommended:list/12")
+        sources.register(otherAccount, for: "43:recommended:list/12")
+        XCTAssertTrue(provider() === replacement)
+        sources.remove(replacement, for: "42:recommended:list/12")
+        XCTAssertNil(provider())
+        XCTAssertTrue(sources.view(for: "43:recommended:list/12") === otherAccount)
+    }
+
     func testZoomAlignmentTracksCoverThroughScrollingAndClipping() throws {
         let page = UIView(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         let scroll = UIScrollView(frame: CGRect(x: 0, y: 100, width: 390, height: 600))
@@ -698,7 +981,7 @@ final class LibraryDetailNavigationTests: XCTestCase {
 
     func testActualAlbumHeaderExposesZoomAlignmentTarget() async throws {
         let bridge = LibraryDetailNavigation()
-        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let scene = try await applicationWindowScene()
         let window = UIWindow(windowScene: scene)
         defer { window.isHidden = true }
         window.rootViewController = UIHostingController(rootView: LibraryNavigationContainer(
@@ -725,8 +1008,97 @@ final class LibraryDetailNavigationTests: XCTestCase {
         XCTAssertTrue(nav.topViewController === root)
     }
 
+    func testHomeDailyDetailExposesNativePlaylistZoomTarget() async throws {
+        let bridge = LibraryDetailNavigation()
+        let scene = try await applicationWindowScene()
+        let window = UIWindow(windowScene: scene)
+        defer { window.isHidden = true }
+        let library = PlaylistLibrary(playlists: [.init(id: "daily", title: "每日推荐", artwork: .image(Image("AlbumSample01")))])
+        window.rootViewController = UIHostingController(rootView: LibraryNavigationContainer(
+            navigation: bridge, root: TestRoot(), destination: { _ in
+                AnyView(PlaylistDetailView(playlistID: "daily", library: library, songs: []))
+            }))
+        window.makeKeyAndVisible()
+        try await settle()
+        let nav = try XCTUnwrap(bridge.navigationController)
+        let root = try XCTUnwrap(nav.topViewController)
+        let source = UIView(frame: CGRect(x: 20, y: 160, width: 248, height: 330))
+        root.view.addSubview(source)
+        bridge.open(.playlist("daily"), source: source)
+        try await settle()
+        let page = try XCTUnwrap(nav.topViewController)
+        let rect = try XCTUnwrap(page.view.libraryArtworkAlignmentRect())
+        XCTAssertEqual(rect.width, 266, accuracy: 0.5)
+        XCTAssertEqual(rect.height, 266, accuracy: 0.5)
+        XCTAssertNotNil(page.preferredTransition)
+        nav.popViewController(animated: true)
+        try await settle()
+        XCTAssertTrue(nav.topViewController === root)
+    }
+
+    func testLibraryAlbumCardOpensWithCoverBeforeDetailLoads() async throws {
+        let bridge = LibraryDetailNavigation()
+        let integration = ArtistMusicIntegration(account: account)
+        let scene = try await applicationWindowScene()
+        let window = UIWindow(windowScene: scene)
+        defer { window.isHidden = true }
+        let item = LibraryShelfItem(id: "catalog:album:88", title: "Visible album", subtitle: "Artist",
+                                   artwork: .image(Image(systemName: "circle.fill")), route: .album("catalog:album:88"))
+        window.rootViewController = UIHostingController(rootView: LibraryNavigationContainer(
+            navigation: bridge,
+            root: CollectionCardLink(item: item) { AlbumCard(item: item) }.frame(width: 160),
+            destination: { integration.destination($0) ?? AnyView(Color.clear) }))
+        window.makeKeyAndVisible()
+        try await settle()
+        let nav = try XCTUnwrap(bridge.navigationController)
+        let root = try XCTUnwrap(nav.topViewController)
+        let selector = NSSelectorFromString("openCard")
+        let source = try XCTUnwrap(descendants(of: UIView.self, in: root.view).first { $0.responds(to: selector) })
+        source.perform(selector)
+        try await settle()
+        XCTAssertEqual(nav.viewControllers.count, 2)
+        XCTAssertNotNil(nav.topViewController?.view.libraryArtworkAlignmentRect())
+        XCTAssertNil(integration.albumDetail(88))
+        let view = try XCTUnwrap(nav.topViewController?.view)
+        let image = UIGraphicsImageRenderer(bounds: view.bounds).image { _ in
+            view.drawHierarchy(in: view.bounds, afterScreenUpdates: true)
+        }
+        let attachment = XCTAttachment(image: image)
+        attachment.name = "Library album cover before detail response"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    func testUnloadedHomeAlbumUsesPreviewHeaderAndRejectsAnotherAccountsPreview() async throws {
+        let bridge = LibraryDetailNavigation()
+        let integration = ArtistMusicIntegration(account: account)
+        let scene = try await applicationWindowScene()
+        let window = UIWindow(windowScene: scene)
+        defer { window.isHidden = true }
+        window.rootViewController = UIHostingController(rootView: LibraryNavigationContainer(
+            navigation: bridge, root: TestRoot(), destination: { integration.destination($0) ?? AnyView(Color.clear) }))
+        window.makeKeyAndVisible()
+        try await settle()
+        let nav = try XCTUnwrap(bridge.navigationController)
+        let root = try XCTUnwrap(nav.topViewController)
+        let source = UIView(frame: CGRect(x: 20, y: 160, width: 161, height: 161))
+        root.view.addSubview(source)
+        let route = LibraryRoute.album("catalog:album:88")
+        let preview = LibraryNavigationPreview(route: route, ownerID: nil, title: "Visible album", subtitle: "Artist", artwork: .missing)
+        bridge.open(route, source: source, animated: false, preview: preview)
+        try await settle()
+        XCTAssertNotNil(nav.topViewController?.view.libraryArtworkAlignmentRect())
+        XCTAssertNil(integration.albumDetail(88))
+        nav.popViewController(animated: false)
+        try await settle()
+        let other = LibraryNavigationPreview(route: route, ownerID: "42", title: "Other account", artwork: .favorites)
+        bridge.open(route, source: source, animated: false, preview: other)
+        try await settle()
+        XCTAssertNil(nav.topViewController?.view.libraryArtworkAlignmentRect())
+    }
+
     func testPinnedCellsKeepOneArtworkOnlyZoomSurfaceWhenEditing() async throws {
-        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let scene = try await applicationWindowScene()
         let window = UIWindow(windowScene: scene)
         defer { window.isHidden = true }
         let host = UIHostingController(rootView: TestPinnedShelf(isEditing: false))
@@ -767,7 +1139,7 @@ final class LibraryDetailNavigationTests: XCTestCase {
     }
 
     func testPinnedEditingWobbleStopsAndRestartsWithCellLifecycle() async throws {
-        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let scene = try await applicationWindowScene()
         let window = UIWindow(windowScene: scene)
         defer { window.isHidden = true }
         let host = UIHostingController(rootView: TestPinnedShelf(isEditing: true))
@@ -837,7 +1209,7 @@ final class LibraryDetailNavigationTests: XCTestCase {
             throw XCTSkip("Requires system zoom animations to exercise UIKit's source-provider callbacks")
         }
         let bridge = LibraryDetailNavigation()
-        let window = try mount(bridge)
+        let window = try await mount(bridge)
         defer { window.isHidden = true }
         try await settle()
         let nav = try XCTUnwrap(bridge.navigationController)
@@ -892,7 +1264,7 @@ final class LibraryDetailNavigationTests: XCTestCase {
 
     func testRootRegistersActualSwiftUIListForNativeMinimization() async throws {
         let bridge = LibraryDetailNavigation()
-        let window = try mount(bridge)
+        let window = try await mount(bridge)
         defer { window.isHidden = true }
         try await settle()
         let page = try XCTUnwrap(bridge.navigationController?.topViewController as? LibraryDetailHostingController)
@@ -907,7 +1279,7 @@ final class LibraryDetailNavigationTests: XCTestCase {
 final class AlbumInitialAppearanceTests: XCTestCase {
     func testPreparedAppearanceBeforeLayoutAndInitialRenderedBackground() async throws {
         let bridge = LibraryDetailNavigation()
-        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
+        let scene = try await applicationWindowScene()
         let window = UIWindow(windowScene: scene)
         window.overrideUserInterfaceStyle = .light
         defer { window.isHidden = true }

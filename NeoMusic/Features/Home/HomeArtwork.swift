@@ -192,23 +192,3 @@ private struct HomeMoodHeart: Shape {
         }
     }
 }
-
-struct HomeDailyArtwork: View {
-    var body: some View {
-                MeshGradient(width: 3, height: 3, points: [
-                    [0, 0], [0.5, 0], [1, 0],
-                    [0, 0.5], [0.7, 0.38], [1, 0.5],
-                    [0, 1], [0.5, 1], [1, 1]
-                ], colors: [
-                    Color(red: 1, green: 0.02, blue: 0.12), .pink, Color(red: 1, green: 0.18, blue: 0.25),
-                    .red, Color(red: 1, green: 0.63, blue: 0.69), Color(red: 1, green: 0.19, blue: 0.35),
-                    Color(red: 1, green: 0.47, blue: 0.49), Color(red: 1, green: 0.63, blue: 0.69), Color(red: 1, green: 0.38, blue: 0.51)
-                ])
-                .overlay {
-                    Text("每日推荐")
-                        .font(.system(size: 44, weight: .bold))
-                        .foregroundStyle(.white)
-                }
-
-    }
-}

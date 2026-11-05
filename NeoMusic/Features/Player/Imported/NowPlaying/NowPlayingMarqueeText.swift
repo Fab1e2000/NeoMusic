@@ -9,6 +9,8 @@ struct NowPlayingMarqueeText: View {
     var edrFontSize: CGFloat? = nil
 
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+    @Environment(\.playerVisualsActive) private var visualsActive
+    @Environment(\.scenePhase) private var scenePhase
     @State private var textWidth: CGFloat = 0
     @State private var containerWidth: CGFloat = 0
     /// 这一轮滚动的起点；换歌时重新计时，从头开始。
@@ -24,7 +26,8 @@ struct NowPlayingMarqueeText: View {
     private static let fadeWidth: CGFloat = 12
 
     private var scrolls: Bool {
-        isActive && !accessibilityReduceMotion && containerWidth > 0 && textWidth > containerWidth + 0.5
+        isActive && visualsActive && scenePhase == .active && !accessibilityReduceMotion
+            && containerWidth > 0 && textWidth > containerWidth + 0.5
     }
 
     @ViewBuilder private var titleText: some View {
@@ -53,6 +56,7 @@ struct NowPlayingMarqueeText: View {
                 }
             }
             .onChange(of: text) { startDate = .now }
+            .onChange(of: scrolls) { _, active in if active { startDate = .now } }
             .accessibilityLabel(text)
     }
 

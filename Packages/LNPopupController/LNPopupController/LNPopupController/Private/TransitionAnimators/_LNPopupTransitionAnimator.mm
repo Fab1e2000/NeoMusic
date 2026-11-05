@@ -62,6 +62,9 @@ static const void* _LNPopupOpenCloseTransitionViewKey = &_LNPopupOpenCloseTransi
 				_popupBarTransitionView.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin | UIViewAutoresizingFlexibleBottomMargin;
 				
 				_contentTransitionWrapperView = [[UIView alloc] initWithFrame:popupContentView.frame];
+				// This sibling of the popup content does not inherit the bar's appearance.
+				// Resolve its glass in the same style as the mini-player endpoint.
+				_contentTransitionWrapperView.overrideUserInterfaceStyle = popupBar.traitCollection.userInterfaceStyle;
 				_contentTransitionEffectView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
 				[_contentTransitionWrapperView addSubview:_contentTransitionEffectView];
 				_contentTransitionEffectView.frame = _contentTransitionWrapperView.bounds;

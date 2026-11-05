@@ -27,12 +27,13 @@ struct PlaylistCollectionList: UIViewControllerRepresentable {
         collectionView.dragDelegate = coordinator
         collectionView.dropDelegate = coordinator
         collectionView.dragInteractionEnabled = true
-        coordinator.attach(to: collectionView, initial: self)
+        coordinator.attach(to: collectionView, initial: self, environment: context.environment)
         return controller
     }
 
     func updateUIViewController(_ controller: UICollectionViewController, context: Context) {
-        context.coordinator.update(with: self)
+        context.coordinator.update(with: self, environment: context.environment,
+                                   animated: context.transaction.animation != nil && !context.transaction.disablesAnimations)
     }
 
     @MainActor
@@ -41,13 +42,14 @@ struct PlaylistCollectionList: UIViewControllerRepresentable {
         private var entriesByID: [String: PlaylistEntry] = [:]
         private var dataSource: UICollectionViewDiffableDataSource<Int, String>?
         private var hasApplied = false
+        private var environment = EnvironmentValues()
         private weak var collectionView: UICollectionView?
 
         /// 分隔线从标题起点画到右边距，最后一行不画；与 SwiftUI 版本及 Apple Music 一致。
         private static let separatorLeading: CGFloat = 20 + 64 + 12
         private static let rowHeight: CGFloat = 80
 
-        func attach(to collectionView: UICollectionView, initial: PlaylistCollectionList) {
+        func attach(to collectionView: UICollectionView, initial: PlaylistCollectionList, environment: EnvironmentValues) {
             self.collectionView = collectionView
             let registration = UICollectionView.CellRegistration<UICollectionViewListCell, String> { [weak self] cell, _, id in
                 self?.configure(cell, id: id)
@@ -55,11 +57,12 @@ struct PlaylistCollectionList: UIViewControllerRepresentable {
             dataSource = UICollectionViewDiffableDataSource(collectionView: collectionView) { collectionView, indexPath, id in
                 collectionView.dequeueConfiguredReusableCell(using: registration, for: indexPath, item: id)
             }
-            update(with: initial)
+            update(with: initial, environment: environment)
         }
 
-        func update(with list: PlaylistCollectionList) {
+        func update(with list: PlaylistCollectionList, environment: EnvironmentValues, animated: Bool = false) {
             guard let dataSource else { return }
+            self.environment = environment
             let previous = entriesByID
             latest = list
             entriesByID = Dictionary(list.entries.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -69,11 +72,11 @@ struct PlaylistCollectionList: UIViewControllerRepresentable {
             snapshot.appendItems(list.entries.map(\.id))
             // 标题、数量、喜爱等变化后重新配置对应的行。
             let changed = list.entries.filter { entry in
-                previous[entry.id].map { $0.signature != entry.signature } ?? false
+                previous[entry.id].map { $0.shelfItem != entry.shelfItem } ?? false
             }.map(\.id)
             snapshot.reconfigureItems(changed)
             if hasApplied, changed.isEmpty, dataSource.snapshot().itemIdentifiers == snapshot.itemIdentifiers { return }
-            dataSource.apply(snapshot, animatingDifferences: hasApplied)
+            dataSource.apply(snapshot, animatingDifferences: hasApplied && animated && !environment.accessibilityReduceMotion)
             hasApplied = true
         }
 
@@ -83,8 +86,10 @@ struct PlaylistCollectionList: UIViewControllerRepresentable {
 
         private func configure(_ cell: UICollectionViewListCell, id: String) {
             guard let entry = entriesByID[id] else { return }
+            let environment = environment
             cell.contentConfiguration = UIHostingConfiguration {
                 PlaylistListRow(item: entry.shelfItem, usesCellArtwork: true)
+                    .libraryHostedAppearance(environment)
                     .environment(\.nativeArtworkSurfaceEnabled, false)
             }
                 .margins(.leading, 20)
@@ -128,9 +133,11 @@ struct PlaylistCollectionList: UIViewControllerRepresentable {
             guard indexPaths.count == 1, let indexPath = indexPaths.first, let entry = entry(at: indexPath),
                   let latest else { return nil }
             let item = entry.shelfItem
+            let environment = environment
             return UIContextMenuConfiguration(identifier: entry.id as NSString) {
                 let size = MenuPreviewCard.size(for: item.previewLines)
                 let preview = UIHostingController(rootView: MenuPreviewCard(artwork: item.artwork, lines: item.previewLines)
+                    .libraryHostedAppearance(environment)
                     .frame(width: size.width, height: size.height))
                 preview.safeAreaRegions = []
                 preview.preferredContentSize = size
@@ -226,6 +233,7 @@ struct PlaylistCellArtwork: UIViewRepresentable {
     func updateUIView(_ view: LibraryArtworkSurfaceView, context: Context) {
         let configuration = UIHostingConfiguration {
             ArtworkView(artwork: artwork, cornerRadius: 6)
+                .libraryHostedAppearance(context.environment)
                 .environment(\.nativeArtworkSurfaceEnabled, false)
         }.margins(.all, 0)
         if let content = view.subviews.first as? (UIView & UIContentView) {

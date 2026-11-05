@@ -42,7 +42,8 @@ final class UnifiedFavoritesTests: XCTestCase {
         library.setFavorite("old", true)
         let time = try XCTUnwrap(library.songs[0].favoriteAddedAt)
         let restored = SongLibrary(songs: [song("old")], defaults: defaults)
-        XCTAssertEqual(restored.songs[0].favoriteAddedAt, time)
+        let restoredTime = try XCTUnwrap(restored.songs[0].favoriteAddedAt)
+        XCTAssertEqual(restoredTime.timeIntervalSince1970, time.timeIntervalSince1970)
         restored.setFavorite("old", false)
         XCTAssertNil(restored.songs[0].favoriteAddedAt)
     }

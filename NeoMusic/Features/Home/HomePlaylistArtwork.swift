@@ -7,7 +7,7 @@ struct HomePlaylistArtwork: View {
     let artwork: Artwork
     @Environment(\.displayScale) private var displayScale
     @State private var rendered: HomePlaylistArtworkRenderer.Images?
-    @State private var renderedURL: URL?
+    @Environment(\.artworkLoadAction) private var loadArtwork
     private var url: URL? { if case .file(let url) = artwork { url } else { nil } }
     private static let fade = Gradient(stops: (0...64).map { index in
         let t = Double(index) / 64
@@ -17,7 +17,7 @@ struct HomePlaylistArtwork: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            if let rendered, renderedURL == url {
+            if let rendered {
                 Image(uiImage: rendered.background).resizable()
                 Color.black.opacity(0.2)
                 Image(uiImage: rendered.cover).resizable()
@@ -25,21 +25,23 @@ struct HomePlaylistArtwork: View {
                     .mask(LinearGradient(gradient: Self.fade, startPoint: .top, endPoint: .bottom))
             } else {
                 Color(.secondarySystemFill)
-                ArtworkView(artwork: artwork, cornerRadius: 0)
-                    .environment(\.nativeArtworkSurfaceEnabled, false)
-                    .frame(width: HomeMetrics.heroWidth, height: HomeMetrics.heroWidth)
+                if case .image = artwork {
+                    ArtworkView(artwork: artwork, cornerRadius: 0)
+                        .environment(\.nativeArtworkSurfaceEnabled, false)
+                        .frame(width: HomeMetrics.heroWidth, height: HomeMetrics.heroWidth)
+                }
             }
         }
         .frame(width: HomeMetrics.heroWidth, height: HomeMetrics.heroHeight)
         .clipped()
+        .task(id: artwork.loadID) { loadArtwork(artwork.loadID) }
         .task(id: url) {
-            guard let url else { rendered = nil; renderedURL = nil; return }
+            guard let url else { return }
             let pixels = LocalArtworkImages.pixelSize(HomeMetrics.heroWidth * displayScale)
             guard let image = await LocalArtworkImages.load(url, pixels: pixels), !Task.isCancelled else { return }
-            let result = await HomePlaylistArtworkRenderer.shared.render(image, key: url.absoluteString, scale: displayScale)
-            guard !Task.isCancelled else { return }
+            guard let result = await HomePlaylistArtworkRenderer.shared.render(image, key: url.absoluteString, scale: displayScale),
+                  !Task.isCancelled else { return }
             rendered = result
-            renderedURL = url
         }
     }
 }

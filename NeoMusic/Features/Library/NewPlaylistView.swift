@@ -60,7 +60,8 @@ struct NewPlaylistView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button {
                         let artwork = coverSelection.image.map { Artwork.image(Image(uiImage: $0)) } ?? .playlist
-                        if library.createPlaylist(named: title, artwork: artwork, in: folderID) != nil { dismiss() }
+                        let created = withAnimation { library.createPlaylist(named: title, artwork: artwork, in: folderID) }
+                        if created != nil { dismiss() }
                     } label: {
                         Image(systemName: "checkmark")
                             .foregroundStyle(canCreate ? Color(.systemBackground) : Color(.secondaryLabel))

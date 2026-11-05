@@ -11,6 +11,7 @@ extension EnvironmentValues {
 /// 从封面颜色生成静态背景；只在换歌时交叉淡入。
 struct NowPlayingArtworkBackdrop: View {
     let artworkURL: URL?
+    var trackID: String? = nil
     var ignoresSafeArea = true
     /// 作为背景副本画在别的视图底下：没有封面时完全透明（露出真背景），不画黑色打底和压暗。
     var isUnderlay = false
@@ -22,9 +23,11 @@ struct NowPlayingArtworkBackdrop: View {
 
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @State private var image: UIImage?
+    @State private var renderedTrackID: String?
 
     init(
         artworkURL: URL?,
+        trackID: String? = nil,
         ignoresSafeArea: Bool = true,
         isUnderlay: Bool = false,
         onFrameChange: ((CGRect) -> Void)? = nil,
@@ -33,6 +36,8 @@ struct NowPlayingArtworkBackdrop: View {
         anchor: NowPlayingBackdropAnchor? = nil
     ) {
         self.artworkURL = artworkURL
+        self.trackID = trackID
+        _renderedTrackID = State(initialValue: trackID)
         self.ignoresSafeArea = ignoresSafeArea
         self.isUnderlay = isUnderlay
         self.onFrameChange = onFrameChange
@@ -40,9 +45,14 @@ struct NowPlayingArtworkBackdrop: View {
         self.onUndimmedImageChange = onUndimmedImageChange
         self.anchor = anchor
         // 已经缓存的封面直接拿来用，第一次出现就有图，不会先黑一下再淡入。
-        _image = State(initialValue: Self.request(for: artworkURL).flatMap {
-            ImagePipeline.shared.cache.cachedImage(for: $0)?.image
-        }.flatMap(NowPlayingBackdropRenderer.render))
+        _image = State(initialValue: artworkURL.flatMap {
+            NowPlayingBackdropRenderer.shared.cached(for: $0)?.dimmed
+        })
+    }
+
+    private struct BackdropRequestID: Equatable {
+        let url: URL?
+        let trackID: String?
     }
 
     private static func request(for url: URL?) -> ImageRequest? {
@@ -83,35 +93,72 @@ struct NowPlayingArtworkBackdrop: View {
         .ignoresSafeArea(edges: ignoresSafeArea ? .all : [])
         .accessibilityHidden(true)
         .onChange(of: image, initial: true) { _, value in onImageChange?(value) }
-        .task(id: artworkURL) {
+        .task(id: BackdropRequestID(url: artworkURL, trackID: trackID)) {
             // Retain the backdrop while loading, but never attribute another song's cover to a missing image.
-            guard let request = Self.request(for: artworkURL) else { image = nil; onUndimmedImageChange?(nil); return }
-            let loaded = try? await ImagePipeline.shared.image(for: request)
-            guard !Task.isCancelled else { return }
-            guard let loaded, let rendered = NowPlayingBackdropRenderer.render(loaded) else {
-                image = nil
-                onUndimmedImageChange?(nil)
+            guard let artworkURL, let request = Self.request(for: artworkURL) else {
+                if trackID == nil || renderedTrackID != trackID {
+                    image = nil; onUndimmedImageChange?(nil)
+                }
                 return
             }
-            onUndimmedImageChange?(NowPlayingBackdropRenderer.renderUndimmed(loaded))
-            guard rendered !== image else { return }
+            let renderer = NowPlayingBackdropRenderer.shared
+            let rendered: NowPlayingBackdropRenderer.Images?
+            if let cached = renderer.cached(for: artworkURL) {
+                rendered = cached
+            } else if let loaded = try? await ImagePipeline.shared.image(for: request), !Task.isCancelled {
+                rendered = await renderer.render(loaded, for: artworkURL)
+            } else {
+                rendered = nil
+            }
+            guard !Task.isCancelled else { return }
+            if rendered == nil, trackID != nil, renderedTrackID == trackID { return }
+            renderedTrackID = trackID
+            onUndimmedImageChange?(rendered?.undimmed)
+            guard rendered?.dimmed !== image else { return }
             // The image view owns the overlay fade; the opaque base stays in place.
-            image = rendered
+            image = rendered?.dimmed
         }
     }
 }
 
 
-/// Three cover-derived color anchors, calibrated against eight AM screenshots.
-/// No track IDs, bundled reference images, or per-cover palette overrides.
-/// All sampling and interpolation use encoded sRGB; UIKit handles display gamut.
+/// Keeps both derived backgrounds together without retaining decoded source covers.
 @MainActor
-private enum NowPlayingBackdropRenderer {
-    private static let cache: NSCache<UIImage, UIImage> = {
-        let value = NSCache<UIImage, UIImage>()
-        value.countLimit = 32
-        return value
+final class NowPlayingBackdropRenderer {
+    struct Images: Sendable {
+        let dimmed: UIImage
+        let undimmed: UIImage
+    }
+    final class CacheEntry {
+        let images: Images
+        init(_ images: Images) { self.images = images }
+    }
+    static let shared = NowPlayingBackdropRenderer()
+    let cache: NSCache<NSURL, CacheEntry> = {
+        let cache = NSCache<NSURL, CacheEntry>()
+        cache.countLimit = 32
+        cache.totalCostLimit = 64 * 1_024
+        return cache
     }()
+    private let processor = NowPlayingBackdropProcessor()
+
+    func cached(for url: URL) -> Images? { cache.object(forKey: url as NSURL)?.images }
+
+    func render(_ image: UIImage, for url: URL) async -> Images? {
+        guard !Task.isCancelled else { return nil }
+        if let cached = cached(for: url) { return cached }
+        guard let source = image.cgImage, let images = await processor.render(source), !Task.isCancelled else { return nil }
+        let cost = [images.dimmed, images.undimmed].reduce(0) {
+            $0 + ($1.cgImage?.bytesPerRow ?? 0) * ($1.cgImage?.height ?? 0)
+        }
+        cache.setObject(CacheEntry(images), forKey: url as NSURL, cost: cost)
+        return images
+    }
+}
+
+/// Three cover-derived color anchors, calibrated against eight AM screenshots.
+/// Sampling and interpolation stay in encoded sRGB, away from the UI actor.
+private actor NowPlayingBackdropProcessor {
 
     private struct Tuning {
         let lightPower: Double
@@ -133,16 +180,8 @@ private enum NowPlayingBackdropRenderer {
               luminanceGain: 0.357, luminanceBias: 0.056, saturation: 0.546)
     ]
 
-    private static let undimmedCache = NSCache<UIImage, UIImage>()
-
-    static func render(_ image: UIImage) -> UIImage? { render(image, undimmed: false) }
-    static func renderUndimmed(_ image: UIImage) -> UIImage? { render(image, undimmed: true) }
-
-    private static func render(_ image: UIImage, undimmed: Bool) -> UIImage? {
-        let selectedCache = undimmed ? undimmedCache : cache
-        if let existing = selectedCache.object(forKey: image) { return existing }
-        guard let source = image.cgImage,
-              let space = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
+    func render(_ source: CGImage) -> NowPlayingBackdropRenderer.Images? {
+        guard !Task.isCancelled, let space = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
         let side = 32
         var pixels = [UInt8](repeating: 0, count: side * side * 4)
         let sampled = pixels.withUnsafeMutableBytes { bytes -> Bool in
@@ -165,7 +204,7 @@ private enum NowPlayingBackdropRenderer {
             let chroma = max(color.x, color.y, color.z) - min(color.x, color.y, color.z)
             meanLight += light
             meanChroma += chroma
-            for (i, setting) in tuning.enumerated() {
+            for (i, setting) in Self.tuning.enumerated() {
                 let weight = pow(max(light, 0.005), setting.lightPower)
                     * pow(max(1 - light, 0.005), setting.darkPower)
                     * (1 + setting.chromaWeight * chroma)
@@ -178,14 +217,22 @@ private enum NowPlayingBackdropRenderer {
         meanChroma /= Double(side * side)
         // Keep light, colorful covers luminous without lifting neutral white covers.
         let pastelLift = min(0.12, max(0, meanLight - 0.45) * max(0, meanChroma - 0.12) * 4)
-        let anchors = tuning.enumerated().map { i, setting in
-            let average = sums[i] / max(totals[i], 0.001)
-            if undimmed { return SIMD3(clamp(average.x), clamp(average.y), clamp(average.z)) }
+        let averages = sums.enumerated().map { $0.element / max(totals[$0.offset], 0.001) }
+        let undimmed = averages.map { SIMD3(clamp($0.x), clamp($0.y), clamp($0.z)) }
+        let dimmed = Self.tuning.enumerated().map { i, setting in
+            let average = averages[i]
             let light = luminance(average)
             let color = (average - SIMD3(repeating: light)) * setting.saturation
                 + SIMD3(repeating: light * setting.luminanceGain + setting.luminanceBias + (i < 2 ? pastelLift : 0))
             return SIMD3(clamp(color.x), clamp(color.y), clamp(color.z))
         }
+        guard !Task.isCancelled,
+              let dimmedImage = rasterize(dimmed, space: space),
+              let undimmedImage = rasterize(undimmed, space: space) else { return nil }
+        return NowPlayingBackdropRenderer.Images(dimmed: dimmedImage, undimmed: undimmedImage)
+    }
+
+    private func rasterize(_ anchors: [SIMD3<Double>], space: CGColorSpace) -> UIImage? {
         // Rasterize once so SwiftUI does not change the calibrated interpolation space.
         let height = 256
         var gradient = [UInt8](repeating: 255, count: height * 4)
@@ -201,13 +248,11 @@ private enum NowPlayingBackdropRenderer {
                 bitsPerPixel: 32, bytesPerRow: 4, space: space,
                 bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
                 provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent) else { return nil }
-        let result = UIImage(cgImage: rendered)
-        selectedCache.setObject(result, forKey: image)
-        return result
+        return UIImage(cgImage: rendered)
     }
 
-    private static func luminance(_ c: SIMD3<Double>) -> Double {
+    private func luminance(_ c: SIMD3<Double>) -> Double {
         c.x * 0.2126 + c.y * 0.7152 + c.z * 0.0722
     }
-    private static func clamp(_ value: Double) -> Double { min(1, max(0, value)) }
+    private func clamp(_ value: Double) -> Double { min(1, max(0, value)) }
 }

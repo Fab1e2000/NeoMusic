@@ -34,8 +34,8 @@ struct CollectionDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.closeLibraryDetail) private var closeLibraryDetail
     @Environment(\.libraryNavigationChrome) private var navigationChrome
+    @Environment(\.libraryNavigationPreview) private var navigationPreview
     @State private var query = ""
-    @State private var isConfirmingRemoval = false
     @State private var isConfirmingAlbumDeletion = false
     /// 原生滚动距离：上滑为正、下拉为负，驱动星标缩放、视差与虚化。
     @State private var scrollDistance: CGFloat = 0
@@ -46,6 +46,14 @@ struct CollectionDetailView: View {
     }
 
     private var usesFavoritesBackground: Bool { isFavorites && colorScheme == .light }
+    private var matchingPreview: LibraryNavigationPreview? {
+        guard let navigationPreview, navigationPreview.route == detail.route else { return nil }
+        return navigationPreview
+    }
+    private var displayedArtwork: Artwork {
+        if case .missing = detail.artwork, let matchingPreview { return matchingPreview.artwork }
+        return detail.artwork
+    }
     private var albumColorScheme: ColorScheme? { detail.kind == .album ? detail.albumBackdrop?.colorScheme : nil }
     private var pageBackground: Color {
         if detail.kind == .album, let albumBackdrop = detail.albumBackdrop { return albumBackdrop.color }
@@ -61,11 +69,6 @@ struct CollectionDetailView: View {
     var body: some View {
         Group {
             if detail.kind == .album { nativeAlbumList } else { legacyList }
-        }
-        .onChange(of: isConfirmingRemoval) { _, isPresented in
-            guard isPresented else { return }
-            isConfirmingRemoval = false
-            confirmRemoval()
         }
         .background(pageBackground)
         .environment(\.colorScheme, albumColorScheme ?? colorScheme)
@@ -99,7 +102,7 @@ struct CollectionDetailView: View {
         NativeAlbumSongList(songs: detail.songs, title: detail.title,
             header: AnyView(VStack(spacing: 0) {
                 header
-                CollectionActions(detail: detail, albumBackground: detail.albumBackdrop?.color, isConfirmingRemoval: $isConfirmingRemoval)
+                CollectionActions(detail: detail, albumBackground: detail.albumBackdrop?.color)
                     .padding(.top, 13.5 + 4.0 / 3).padding(.bottom, 23 + 2.0 / 3)
             }.frame(maxWidth: .infinity)),
             footer: AnyView(Text(summary).font(.subheadline).foregroundStyle(.secondary)
@@ -115,8 +118,7 @@ struct CollectionDetailView: View {
             Section {
                 VStack(spacing: 0) {
                     header
-                    CollectionActions(detail: detail, albumBackground: detail.kind == .album ? detail.albumBackdrop?.color : nil,
-                                      isConfirmingRemoval: $isConfirmingRemoval)
+                    CollectionActions(detail: detail, albumBackground: detail.kind == .album ? detail.albumBackdrop?.color : nil)
                         .padding(.top, 13.5 + 4.0 / 3)
                         .padding(.bottom, 23 + 2.0 / 3)
                 }
@@ -215,7 +217,10 @@ struct CollectionDetailView: View {
                     .accessibilityHidden(true)
             }
         } else {
-            ArtworkView(artwork: detail.artwork, cornerRadius: 10, isZoomAlignmentTarget: detail.kind == .album)
+            ArtworkView(artwork: displayedArtwork,
+                        contentID: matchingPreview?.contentID ?? detail.route.map { String(describing: $0) },
+                        previewArtwork: matchingPreview?.artwork,
+                        cornerRadius: 10, isZoomAlignmentTarget: detail.kind == .album)
                 .shadow(color: .black.opacity(0.22), radius: 18, y: 10)
         }
     }
@@ -235,20 +240,6 @@ struct CollectionDetailView: View {
             }
             .alignmentGuide(.listRowSeparatorTrailing) { $0.width }
         }
-    }
-
-    /// 对照 Apple Music：在页面中间弹出，说明左对齐，三个按钮纵向排列。
-    private func confirmRemoval() {
-        CenteredActionSheet.present(
-            message: "从资料库移除这张专辑？音乐文件仍保留在“音乐”文件夹，相关播放列表记录会移除。",
-            actions: [
-                .init(title: "从资料库删除", isDestructive: true) {
-                    guard let route = detail.route else { return }
-                    downloads?.remove(detail.songs)
-                    closeDetail()
-                    collectionActions.delete(route)
-                },
-            ])
     }
 
     private var summary: String {
@@ -289,18 +280,26 @@ private struct FavoritesSwipeActions: ViewModifier {
 private struct CollectionActions: View {
     let detail: CollectionDetail
     let albumBackground: Color?
-    @Binding var isConfirmingRemoval: Bool
     @Environment(\.collectionMenuActions) private var actions
     @Environment(\.libraryDownloads) private var downloads
-    /// 在本页下载过：完成时勾号逐笔画出；打开页面时已下载则直接显示。
-    @State private var didDownloadHere = false
+    @State private var actionFeedback = 0
+
+    private var canPlay: Bool { detail.route != nil && !detail.songs.isEmpty }
 
     var body: some View {
+        VStack(spacing: 0) {
         HStack(spacing: 14) {
             circleButton("随机播放", systemImage: "shuffle") {
-                if let route = detail.route { actions.play(route, true) }
+                guard canPlay, let route = detail.route else { return }
+                actionFeedback &+= 1
+                actions.play(route, true)
             }
-            Button { if let route = detail.route { actions.play(route, false) } } label: {
+            .disabled(!canPlay)
+            Button {
+                guard canPlay, let route = detail.route else { return }
+                actionFeedback &+= 1
+                actions.play(route, false)
+            } label: {
                 // 实测 Apple Music：三角约 14×15pt，与文字间距约 7pt。
                 HStack(spacing: 5.5) {
                     Image(systemName: "play.fill").font(.system(size: 18, weight: .semibold))
@@ -312,50 +311,39 @@ private struct CollectionActions: View {
                 .background(Color.primary, in: .capsule)
             }
             .buttonStyle(.plain)
+            .disabled(!canPlay)
             switch detail.kind {
             case .album:
-                downloadButton
+                if case .album(let id) = detail.route, id.hasPrefix("catalog:"), !detail.isFavorite {
+                    albumCollectionButton
+                } else {
+                    if let route = detail.route { CollectionDownloadButton(route: route, songs: detail.songs) }
+                }
             case .playlist:
-                circleButton("下载", systemImage: "arrow.down") {}
+                if let route = detail.route { CollectionDownloadButton(route: route, songs: detail.songs) }
             }
+        }
+        .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.6), trigger: actionFeedback)
+        if let route = detail.route { CollectionDownloadSummary(route: route) }
         }
     }
 
-    @ViewBuilder private var downloadButton: some View {
-        let songs = detail.songs
-        let isDownloaded = downloads?.isDownloaded(songs) == true
-        let isDownloading = downloads?.isDownloading(songs) == true
+    private var albumCollectionButton: some View {
         Button {
-            if isDownloaded {
-                isConfirmingRemoval = true
-            } else if isDownloading {
-                downloads?.stop(songs)
-            } else {
-                downloads?.download(songs)
-            }
+            guard !detail.isFavorite, let route = detail.route else { return }
+            actionFeedback &+= 1
+            actions.toggleFavorite(route)
         } label: {
-            // 对照 Apple Music 逐帧：完成时进度环一帧内消失，勾号从短边起笔画出，约 0.37 秒。
-            ZStack {
-                if isDownloading {
-                    DownloadProgressRing(progress: downloads?.progress(of: songs) ?? 0)
-                        .transition(.identity)
-                } else if isDownloaded {
-                    DrawnCheckmark(animates: didDownloadHere)
-                        .transition(.identity)
-                } else {
-                    Image(systemName: "arrow.down")
-                        .font(.system(size: 17, weight: .semibold))
-                        .transition(.identity)
-                }
-            }
-            .frame(width: 48, height: 48)
-            .background(Color.primary.opacity(0.08), in: .circle)
+            Image(systemName: detail.isFavorite ? "arrow.down" : "plus")
+                .contentTransition(.symbolEffect(.replace))
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.primary)
+                .frame(width: 48, height: 48)
+                .background(Color.primary.opacity(0.08), in: .circle)
         }
         .buttonStyle(.plain)
-        .onChange(of: isDownloading) { _, downloading in
-            if downloading { didDownloadHere = true }
-        }
-        .accessibilityLabel(isDownloaded ? "已下载" : isDownloading ? "停止下载" : "下载")
+        .accessibilityLabel("收藏专辑")
+        .accessibilityIdentifier("album-collection-action")
     }
 
     private func circleButton(_ title: LocalizedStringKey, systemImage: String,
@@ -372,7 +360,7 @@ private struct CollectionActions: View {
 
 /// 下载完成的勾号。实测 Apple Music（相对按钮中心，pt）：起点 (-6.8, 1.3)、拐点 (-1.7, 7.7)、终点 (8, -6.3)，线宽约 2.2pt。
 /// 逐帧计量：起笔点停留约 2 帧，随后快速画出并长时间减速，约 0.5 秒画完，四分之一时间时已画一半。
-private struct DrawnCheckmark: View {
+struct DrawnCheckmark: View {
     let animates: Bool
     @State private var progress: CGFloat = 1
 
@@ -402,7 +390,7 @@ private struct CheckmarkShape: Shape {
 }
 
 /// 下载按钮中的整体进度：灰色轨道、白色进度弧，中间是停止方块。实测 Apple Music：圆环直径约 28pt。
-private struct DownloadProgressRing: View {
+struct DownloadProgressRing: View {
     let progress: Double
 
     var body: some View {
@@ -444,6 +432,7 @@ private struct PlaylistTrackRow: View {
                 .contentShape(.rect)
             }
             .buttonStyle(.automatic)
+            SongDownloadStatus(song: song, showsImported: false)
             TrackMoreButton(song: song)
         }
         .frame(minHeight: 56)
@@ -674,6 +663,7 @@ private final class AlbumSongsController: UICollectionViewController {
             .environment(\.locale, environment.locale)
             .environment(\.dynamicTypeSize, environment.dynamicTypeSize)
             .environment(\.scenePhase, environment.scenePhase)
+            .environment(\.artworkLoadAction, environment.artworkLoadAction)
             .environment(\.nativeArtworkSurfaceEnabled, true)
     }
 
@@ -737,7 +727,7 @@ private final class AlbumSongsController: UICollectionViewController {
         let downloads = environment.libraryDownloads
         let downloaded = downloads?.state(of: id) == .downloaded
         var sections = environment.songMenuActions.albumTrackSections(for: song, isDownloaded: downloaded,
-            download: { downloads?.download([song]) }, removeDownload: { downloads?.remove([song]) },
+            download: { downloads?.download([song]) }, removeDownload: { downloads?.requestRemoval([song]) },
             requestDelete: { [weak self] in self?.confirmDeletion(song, fromSwipe: false) },
             notify: environment.collectionMenuActions.notify)
         if !song.artistReferences.isEmpty {
@@ -785,20 +775,22 @@ private final class AlbumSongsController: UICollectionViewController {
         remove.image = UIImage(systemName: "trash"); remove.backgroundColor = .systemRed
         remove.image?.accessibilityLabel = "删除"
         var items = [remove]
-        if environment.libraryDownloads?.state(of: song.id) != .downloaded {
+        if environment.libraryDownloads?.isDownloadable(song) == true, environment.libraryDownloads?.state(of: song.id) != .downloaded {
+            let active = environment.libraryDownloads?.state(of: song.id)?.isActive == true
             let download = UIContextualAction(style: .normal, title: nil) { [weak self] _, _, done in
-                self?.environment.libraryDownloads?.download([song]); done(true)
+                if active { self?.environment.libraryDownloads?.stop([song]) }
+                else { self?.environment.libraryDownloads?.download([song]) }
+                done(true)
             }
-            download.image = UIImage(systemName: "arrow.down"); download.backgroundColor = .systemBlue
-            download.image?.accessibilityLabel = "下载"
+            download.image = UIImage(systemName: active ? "stop.fill" : "arrow.down"); download.backgroundColor = .systemBlue
+            download.image?.accessibilityLabel = active ? "停止下载" : "下载"
             items.insert(download, at: 0)
         }
         return UISwipeActionsConfiguration(actions: items)
     }
 
     private func confirmDeletion(_ song: LibrarySongItem, fromSwipe: Bool) {
-        let remove = { [weak self] in
-            self?.environment.libraryDownloads?.remove([song])
+        let remove: () -> Void = { [weak self] in
             self?.environment.songMenuActions.delete(song)
         }
         if fromSwipe, environment.libraryDownloads?.state(of: song.id) == .downloaded {
@@ -825,7 +817,7 @@ private struct NativeAlbumRowContent: View {
             AlbumSongPosition(song: song)
             Text(song.title).font(.callout).foregroundStyle(.primary).lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            SongDownloadIndicator(state: downloads?.state(of: song.id))
+            SongDownloadStatus(song: song)
         }
         .frame(minHeight: 52 + 1.0 / 3)
     }

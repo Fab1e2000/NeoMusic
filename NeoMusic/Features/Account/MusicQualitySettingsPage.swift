@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MusicQualitySettingsPage: View {
     @Bindable var music: NeteaseMusicStore
+    var downloads: NeteaseDownloadStore? = nil
     @Environment(\.songRowPlayback) private var playback
 
     var body: some View {
@@ -16,6 +17,7 @@ struct MusicQualitySettingsPage: View {
             } footer: {
                 Text("更高音质会使用更多流量。更改设置或切换网络后，将立即切换当前歌曲的音质并保留播放进度。")
             }
+            if let downloads { DownloadQualitySection(downloads: downloads) }
             Section {
                 LabeledContent("当前音质", value: actualQuality)
                     .accessibilityIdentifier("quality.actual")
@@ -40,5 +42,24 @@ struct MusicQualitySettingsPage: View {
             }
         } label: { Text(title) }
         .pickerStyle(.navigationLink)
+    }
+}
+
+private struct DownloadQualitySection: View {
+    @Bindable var downloads: NeteaseDownloadStore
+    var body: some View {
+        Section {
+            Picker(selection: $downloads.quality) {
+                ForEach(NeteaseMusicQuality.allCases, id: \.self) { Text($0.title).tag($0) }
+            } label: { Text("下载音质") }
+            .pickerStyle(.navigationLink)
+            .accessibilityIdentifier("quality.download")
+            Toggle("允许蜂窝网络下载", isOn: $downloads.allowsCellular)
+                .accessibilityIdentifier("quality.download.cellular")
+        } header: {
+            Text("下载")
+        } footer: {
+            Text("更高音质会占用更多空间和流量。所选音质不可用时使用可用的较低音质。更改音质仅影响新的下载，已下载文件保持原样。")
+        }
     }
 }

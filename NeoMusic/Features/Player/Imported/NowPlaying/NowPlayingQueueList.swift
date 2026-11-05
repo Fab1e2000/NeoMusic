@@ -2,12 +2,7 @@ import SwiftUI
 import UIKit
 
 nonisolated struct UpcomingQueueEntry: Identifiable, Hashable, Sendable {
-    struct ID: Hashable {
-        let songID: String
-        let occurrence: Int
-    }
-
-    let id: ID
+    let id: UUID
     let queueIndex: Int
     let song: ReferenceTrack
 }
@@ -15,6 +10,8 @@ nonisolated struct UpcomingQueueEntry: Identifiable, Hashable, Sendable {
 /// 继续播放列表。使用原生列表单元格及重排手柄，行内容由 SwiftUI 渲染。
 /// 歌曲行采用透明底色的系统背景配置，交互状态变化由 UIKit 自动处理。
 struct NowPlayingQueueList: UIViewRepresentable {
+    static let topFadeHeight: CGFloat = 24
+    static let bottomFadeHeight: CGFloat = 80
     @Environment(ReferencePlayerActions.self) private var actions
     @Environment(ReferencePlayerState.self) private var player
     @Environment(ReferenceLibrary.self) private var library
@@ -23,7 +20,10 @@ struct NowPlayingQueueList: UIViewRepresentable {
     @Environment(\.nowPlayingBackdropAnchor) private var backdropAnchor
     @Environment(\.playerArtistEDREnabled) private var edrEnabled
     @Environment(\.playerEDRLevels) private var edrLevels
+    @Environment(\.playerVisualsActive) private var visualsActive
+    @Environment(\.artworkLoadAction) private var loadArtwork
     let entries: [UpcomingQueueEntry]
+    let version: UpcomingQueueVersion
     var subtitle: String = "接下来播放的歌曲"
     /// 顶部给歌曲头部和模式按钮预留的高度，头部叠在上层，随列表滚动。
     let headerHeight: CGFloat
@@ -54,6 +54,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
         collectionView.contentInset.bottom = bottomInset
         collectionView.allowsSelection = false
         collectionView.showsVerticalScrollIndicator = true
+        collectionView.automaticallyAdjustsScrollIndicatorInsets = false
         collectionView.overrideUserInterfaceStyle = .dark
         collectionView.delegate = context.coordinator
         context.coordinator.attach(to: collectionView, initial: self)
@@ -109,8 +110,12 @@ struct NowPlayingQueueList: UIViewRepresentable {
         private var entriesByID: [UpcomingQueueEntry.ID: UpcomingQueueEntry] = [:]
         private(set) var dataSource: UICollectionViewDiffableDataSource<Section, Item>?
         private var swipeActionsByID: [UpcomingQueueEntry.ID: [SongRowAction]] = [:]
+        private weak var collectionView: UICollectionView?
         private var hasApplied = false
         private var requestedItemIdentifiers: [Item] = []
+        private var currentItemIdentifiers: [Item] = []
+        private var nativeOrderMatches = true
+        private(set) var snapshotApplicationCount = 0
 
         func trailingActions(at indexPath: IndexPath) -> UISwipeActionsConfiguration? {
             guard case .track(let id) = dataSource?.itemIdentifier(for: indexPath),
@@ -132,6 +137,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
 
         func attach(to collectionView: UICollectionView, initial: NowPlayingQueueList) {
             latest = initial
+            self.collectionView = collectionView
             let registration = UICollectionView.CellRegistration<UICollectionViewListCell, Item> {
                 [weak self] cell, _, item in
                 self?.configure(cell, item: item)
@@ -157,12 +163,13 @@ struct NowPlayingQueueList: UIViewRepresentable {
         }
 
         @discardableResult
-        func update(with list: NowPlayingQueueList) -> Bool {
+        func update(with list: NowPlayingQueueList, nativeOrder: [Item]? = nil) -> Bool {
+            let interval = PerformanceDiagnostics.begin("QueueUpdate")
+            defer { PerformanceDiagnostics.end("QueueUpdate", interval) }
             guard let dataSource else { return false }
             let previousList = latest
-            // Keep callbacks fresh even when the rendered inputs are unchanged.
             latest = list
-            let entriesChanged = previousList?.entries != list.entries
+            let entriesChanged = !hasApplied || previousList?.version != list.version
             let insetChanged = previousList?.horizontalInset != list.horizontalInset
             let headerChanged = previousList?.headerHeight != list.headerHeight
             let subtitleChanged = previousList?.subtitle != list.subtitle
@@ -172,51 +179,90 @@ struct NowPlayingQueueList: UIViewRepresentable {
                     || $0.edrEnabled != list.edrEnabled
                     || $0.edrLevels != list.edrLevels
                     || $0.backdropAnchor !== list.backdropAnchor
+                    || $0.visualsActive != list.visualsActive
             } ?? false
             let dependenciesChanged = previousList.map {
                 $0.player !== list.player || $0.actions !== list.actions || $0.library !== list.library
             } ?? false
-            // Read UIKit's actual order: a native reorder may have changed it before
-            // the owner accepts or rejects the move. Equal SwiftUI inputs alone cannot skip it.
-            let currentIdentifiers = dataSource.snapshot().itemIdentifiers
-            if hasApplied, !entriesChanged, !insetChanged, !headerChanged, !subtitleChanged,
-               !appearanceChanged, !dependenciesChanged, currentIdentifiers == requestedItemIdentifiers {
-                return false
+            updateScrollIndicatorInsets()
+            if let nativeOrder {
+                currentItemIdentifiers = nativeOrder
+                nativeOrderMatches = nativeOrder == requestedItemIdentifiers
             }
-            let previous = entriesByID
-            if entriesChanged || !hasApplied {
+            // Ordinary page, backdrop, progress and header updates never walk the queue.
+            guard entriesChanged || !nativeOrderMatches || insetChanged || headerChanged
+                    || subtitleChanged || appearanceChanged || dependenciesChanged else { return false }
+
+            var changedItems: Set<Item> = []
+            if entriesChanged {
+                let previousEntries = entriesByID
                 entriesByID = Dictionary(list.entries.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+                requestedItemIdentifiers = [.spacer, .title]
+                    + (list.entries.isEmpty ? [.empty] : list.entries.map { .track($0.id) })
+                nativeOrderMatches = currentItemIdentifiers == requestedItemIdentifiers
+                changedItems = Set(list.entries.compactMap { entry in
+                    previousEntries[entry.id].map { $0.song != entry.song } == true ? .track(entry.id) : nil
+                })
+            }
+            if headerChanged || insetChanged { changedItems.insert(.spacer) }
+            if subtitleChanged || insetChanged || appearanceChanged { changedItems.insert(.title) }
+            if insetChanged { changedItems.insert(.empty) }
+
+            if !hasApplied || !nativeOrderMatches {
+                var snapshot = NSDiffableDataSourceSnapshot<Section, Item>()
+                snapshot.appendSections([.header, .queue])
+                snapshot.appendItems([.spacer, .title], toSection: .header)
+                snapshot.appendItems(Array(requestedItemIdentifiers.dropFirst(2)), toSection: .queue)
+                snapshot.reconfigureItems(requestedItemIdentifiers.filter(changedItems.contains))
+                PerformanceDiagnostics.event("QueueSnapshot")
+                snapshotApplicationCount += 1
+                dataSource.apply(snapshot, animatingDifferences: hasApplied)
+                currentItemIdentifiers = requestedItemIdentifiers
+                nativeOrderMatches = true
+                hasApplied = true
+                return true
             }
 
-            var snapshot = NSDiffableDataSourceSnapshot<Section, Item>()
-            snapshot.appendSections([.header, .queue])
-            snapshot.appendItems([.spacer, .title], toSection: .header)
-            snapshot.appendItems(
-                list.entries.isEmpty ? [.empty] : list.entries.map { .track($0.id) },
-                toSection: .queue
+            // Updating a hosting configuration preserves its native cell. Rows outside
+            // the viewport receive the latest metadata and environment in willDisplay.
+            // A metadata or visual update doesn't submit a structural snapshot.
+            var refreshed = false
+            if let collectionView {
+                UIView.performWithoutAnimation {
+                    for indexPath in collectionView.indexPathsForVisibleItems {
+                        guard let item = dataSource.itemIdentifier(for: indexPath),
+                              let cell = collectionView.cellForItem(at: indexPath) as? UICollectionViewListCell else { continue }
+                        let refreshTrack: Bool
+                        if case .track = item {
+                            refreshTrack = appearanceChanged || dependenciesChanged || insetChanged
+                        } else { refreshTrack = false }
+                        if changedItems.contains(item) || refreshTrack {
+                            configure(cell, item: item)
+                            refreshed = true
+                        }
+                    }
+                }
+            }
+            return refreshed
+        }
+
+        private func updateScrollIndicatorInsets() {
+            guard let collectionView, let latest else { return }
+            let offset = max(0, collectionView.contentOffset.y + collectionView.adjustedContentInset.top)
+            let insets = UIEdgeInsets(
+                top: max(0, latest.headerHeight - offset) + 44 + NowPlayingQueueList.topFadeHeight,
+                left: 0, bottom: NowPlayingQueueList.bottomFadeHeight, right: 0
             )
-
-            // 同一行换了曲目信息（元数据更新）时重新配置；位置变化不需要，点播时现查下标。
-            var reconfigured: Set<Item> = Set(list.entries.compactMap { entry in
-                previous[entry.id].map { $0.song != entry.song } == true ? .track(entry.id) : nil
-            })
-            // A header measurement or subtitle change doesn't change any song row.
-            // Backdrop/EDR and dependency replacements still reach every affected row.
-            if headerChanged || insetChanged { reconfigured.insert(.spacer) }
-            if subtitleChanged || insetChanged || appearanceChanged { reconfigured.insert(.title) }
-            if insetChanged { reconfigured.insert(.empty) }
-            if insetChanged || appearanceChanged || dependenciesChanged {
-                reconfigured.formUnion(list.entries.map { .track($0.id) })
+            if collectionView.verticalScrollIndicatorInsets != insets {
+                collectionView.verticalScrollIndicatorInsets = insets
             }
-            let identifiers = snapshot.itemIdentifiers
-            snapshot.reconfigureItems(identifiers.filter(reconfigured.contains))
-            requestedItemIdentifiers = identifiers
+        }
 
-            if hasApplied, reconfigured.isEmpty,
-               currentIdentifiers == identifiers { return false }
-            dataSource.apply(snapshot, animatingDifferences: hasApplied)
-            hasApplied = true
-            return true
+        func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell,
+                            forItemAt indexPath: IndexPath) {
+            guard let cell = cell as? UICollectionViewListCell,
+                  let item = dataSource?.itemIdentifier(for: indexPath) else { return }
+            configure(cell, item: item)
         }
 
         func configure(_ cell: UICollectionViewListCell, item: Item) {
@@ -265,6 +311,8 @@ struct NowPlayingQueueList: UIViewRepresentable {
                     .environment(\.nowPlayingBackdropAnchor, latest.backdropAnchor)
                     .environment(\.playerArtistEDREnabled, latest.edrEnabled)
                     .environment(\.playerEDRLevels, latest.edrLevels)
+                    .environment(\.playerVisualsActive, latest.visualsActive)
+                    .environment(\.artworkLoadAction, latest.loadArtwork)
                 }
                 .margins(.horizontal, inset)
                 .margins(.top, 14)
@@ -303,6 +351,11 @@ struct NowPlayingQueueList: UIViewRepresentable {
                     .environment(\.nowPlayingBackdropAnchor, latest.backdropAnchor)
                     .environment(\.playerArtistEDREnabled, latest.edrEnabled)
                     .environment(\.playerEDRLevels, latest.edrLevels)
+                    .environment(\.playerVisualsActive, latest.visualsActive)
+                    .environment(\.artworkLoadAction, latest.loadArtwork)
+                    .task(id: latest.visualsActive ? entry.song.artworkLoadID : nil) {
+                        if latest.visualsActive { latest.loadArtwork(entry.song.artworkLoadID) }
+                    }
                 }
                 .margins(.leading, inset)
                 .margins(.trailing, 0)
@@ -322,9 +375,10 @@ struct NowPlayingQueueList: UIViewRepresentable {
         private func didReorder(
             _ transaction: NSDiffableDataSourceTransaction<Section, Item>
         ) {
-            let initial = transaction.initialSnapshot.itemIdentifiers(inSection: .queue)
-            let final = transaction.finalSnapshot.itemIdentifiers(inSection: .queue)
-            for change in final.difference(from: initial).inferringMoves() {
+            currentItemIdentifiers = transaction.finalSnapshot.itemIdentifiers
+            nativeOrderMatches = currentItemIdentifiers == requestedItemIdentifiers
+            guard let section = transaction.sectionTransactions.first(where: { $0.sectionIdentifier == .queue }) else { return }
+            for change in section.difference.inferringMoves() {
                 guard case let .remove(source, _, associatedWith?) = change else { continue }
                 latest?.onMove(IndexSet(integer: source), associatedWith > source ? associatedWith + 1 : associatedWith)
                 return
@@ -366,6 +420,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
             if scrollView.contentOffset.y < top {
                 scrollView.contentOffset.y = top
             }
+            updateScrollIndicatorInsets()
             let offset = scrollView.contentOffset.y + scrollView.adjustedContentInset.top
             latest.onScroll(min(max(offset, 0), latest.headerHeight))
             // 手指按着往下拉列表时不振。

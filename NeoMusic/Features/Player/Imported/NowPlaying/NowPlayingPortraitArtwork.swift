@@ -10,11 +10,14 @@ struct NowPlayingPortraitArtwork: View {
     @Environment(\.accessibilityReduceMotion)
     private var accessibilityReduceMotion
     @Environment(ReferencePlayerState.self) private var player
+    @Environment(\.playerVisualsActive) private var visualsActive
 
     let song: ReferenceTrack
     let isArtworkPage: Bool
 
     @State private var bounceScale: CGFloat = 1
+    @State private var bounceGeneration = 0
+    @State private var handledBounceGeneration = 0
 
     var body: some View {
         ArtworkImage(
@@ -35,13 +38,18 @@ struct NowPlayingPortraitArtwork: View {
         )
         .accessibilityElement()
         .accessibilityLabel("\(song.title)的封面")
-        .task(id: shouldBounce) {
+        .onChange(of: player.isPlaying) { _, playing in
+            if playing && isArtworkPage && visualsActive { bounceGeneration += 1 }
+        }
+        .task(id: ArtworkBounceRequest(generation: bounceGeneration, isActive: shouldBounce)) {
+            guard bounceGeneration > handledBounceGeneration else { bounceScale = 1; return }
+            handledBounceGeneration = bounceGeneration
             await animateBounce()
         }
     }
 
     private var shouldBounce: Bool {
-        isArtworkPage && player.isPlaying
+        isArtworkPage && visualsActive && player.isPlaying
     }
 
     private var shadowOpacity: Double {
@@ -66,6 +74,7 @@ struct NowPlayingPortraitArtwork: View {
         }
 
         await Task.yield()
+        guard !Task.isCancelled else { return }
         withAnimation(.easeOut(duration: 0.17)) {
             bounceScale = 1.055
         }

@@ -9,6 +9,7 @@ struct NowPlayingArtworkPage: View {
     @Environment(\.displayScale) private var displayScale
     @Environment(ReferencePlayerState.self) private var player
     @Environment(\.nowPlayingLayout) private var layout
+    @Environment(\.playerVisualsActive) private var visualsActive
 
     let song: ReferenceTrack
     let artworkNamespace: Namespace.ID
@@ -17,6 +18,8 @@ struct NowPlayingArtworkPage: View {
     let onArtworkFrameChange: (CGRect) -> Void
 
     @State private var artworkBounceScale: CGFloat = 1
+    @State private var bounceGeneration = 0
+    @State private var handledBounceGeneration = 0
 
     init(
         song: ReferenceTrack,
@@ -39,7 +42,7 @@ struct NowPlayingArtworkPage: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let artworkSize = min(layout.width(354), max(170, layout.contentY(490) - layout.contentY(112) - 22))
+            let artworkSize = layout.artworkSide
             let displayedArtworkSize =
                 artworkSize
                 * (
@@ -110,7 +113,12 @@ struct NowPlayingArtworkPage: View {
                 .accessibilityElement()
                 .accessibilityLabel("\(song.title)的封面")
                 .accessibilityHidden(!showsArtwork)
-                .task(id: player.isPlaying) {
+                .onChange(of: player.isPlaying) { _, playing in
+                    if playing && showsArtwork && visualsActive { bounceGeneration += 1 }
+                }
+                .task(id: ArtworkBounceRequest(generation: bounceGeneration, isActive: visualsActive && player.isPlaying)) {
+                    guard bounceGeneration > handledBounceGeneration else { artworkBounceScale = 1; return }
+                    handledBounceGeneration = bounceGeneration
                     await animateArtworkBounce(
                         whenPlaying: player.isPlaying
                     )
@@ -145,7 +153,8 @@ struct NowPlayingArtworkPage: View {
                     .position(x: layout.x(329.875), y: layout.pageY(517.25))
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
-            .task(id: ArtworkPrefetchKey(urls: player.adjacentArtworkURLs, size: displayedArtworkSize, scale: displayScale)) {
+            .task(id: ArtworkPrefetchKey(urls: visualsActive ? player.adjacentArtworkURLs : [], size: displayedArtworkSize, scale: displayScale)) {
+                guard visualsActive else { return }
                 let requests = player.adjacentArtworkURLs.compactMap {
                     ArtworkImagePipeline.request(for: $0, size: CGSize(width: displayedArtworkSize, height: displayedArtworkSize),
                                                  displayScale: displayScale)
@@ -160,12 +169,14 @@ struct NowPlayingArtworkPage: View {
     ) async {
         artworkBounceScale = 1
         guard showsArtwork,
+              visualsActive,
               isPlaying,
               !accessibilityReduceMotion else {
             return
         }
 
         await Task.yield()
+        guard !Task.isCancelled else { return }
         withAnimation(.easeOut(duration: 0.17)) {
             artworkBounceScale = 1.055
         }
@@ -180,6 +191,30 @@ struct NowPlayingArtworkPage: View {
             artworkBounceScale = 1
         }
     }
+}
+
+/// Measures the cover without mounting controls, lyrics, image requests or timers.
+struct NowPlayingArtworkFrameMeasurement: View {
+    @Environment(\.nowPlayingLayout) private var layout
+    let onFrameChange: (CGRect) -> Void
+
+    var body: some View {
+        GeometryReader { proxy in
+            Color.clear
+                .frame(width: layout.artworkSide, height: layout.artworkSide)
+                .onGeometryChange(for: CGRect.self) {
+                    $0.frame(in: .named(NowPlayingPortraitCoordinateSpace.name))
+                } action: { onFrameChange($0) }
+                .position(x: proxy.size.width / 2, y: layout.pageY(112) + layout.artworkSide / 2)
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+struct ArtworkBounceRequest: Equatable {
+    let generation: Int
+    let isActive: Bool
 }
 
 private struct ArtworkPrefetchKey: Equatable {

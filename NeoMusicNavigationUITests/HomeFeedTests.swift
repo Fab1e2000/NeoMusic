@@ -50,26 +50,41 @@ final class HomeFeedTests: XCTestCase {
         let homeTab = app.tabBars.buttons["主页"]
         XCTAssertTrue(homeTab.waitForExistence(timeout: 10))
         homeTab.tap()
-        let hero = element("home.item.favorites", in: app)
+        let hero = element("home.quick-action.dailySongs", in: app)
         XCTAssertTrue(hero.waitForExistence(timeout: 5))
         XCTAssertEqual(hero.frame.minX, 20, accuracy: 1)
         XCTAssertEqual(hero.frame.width, 248, accuracy: 1)
         XCTAssertEqual(hero.frame.height, 330, accuracy: 1)
         XCTAssertFalse(element("home.heading.jpop", in: app).exists)
-        let original = hero.frame
+        XCTAssertFalse(element("home.item.favorites", in: app).exists)
+        let quickActions = app.scrollViews["home.quick-actions"]
+        XCTAssertTrue(quickActions.exists)
         attachScreenshot("Home production content", app: app)
-        hero.tap()
+        quickActions.swipeLeft(velocity: .slow)
+        let hot = element("home.quick-action.hotSongs", in: app)
+        XCTAssertTrue(hot.isHittable)
+        let original = hot.frame
+        hot.tap()
+        XCTAssertTrue(app.navigationBars.buttons["BackButton"].waitForExistence(timeout: 30))
+        XCTAssertTrue(app.staticTexts["热歌榜"].waitForExistence(timeout: 10))
+        attachScreenshot("Home hot chart cover", app: app)
+        let edge = app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.45))
+        let partialReturn = app.coordinate(withNormalizedOffset: CGVector(dx: 0.16, dy: 0.45))
+        edge.press(forDuration: 0.05, thenDragTo: partialReturn, withVelocity: .slow, thenHoldForDuration: 0.5)
         XCTAssertTrue(app.navigationBars.buttons["BackButton"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["喜爱歌曲"].isHittable)
+        XCTAssertTrue(app.staticTexts["热歌榜"].isHittable)
+        attachScreenshot("Home hot chart after cancelled return", app: app)
         app.tabBars.buttons["资料库"].tap()
         XCTAssertTrue(app.navigationBars["资料库"].waitForExistence(timeout: 5))
         homeTab.tap()
         XCTAssertTrue(app.navigationBars.buttons["BackButton"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["喜爱歌曲"].isHittable)
+        XCTAssertTrue(app.staticTexts["热歌榜"].isHittable)
         app.navigationBars.buttons["BackButton"].tap()
-        XCTAssertTrue(hero.waitForExistence(timeout: 5))
-        XCTAssertEqual(hero.frame.minY, original.minY, accuracy: 1)
-        XCTAssertEqual(hero.frame.minX, original.minX, accuracy: 1)
+        XCTAssertTrue(hot.waitForExistence(timeout: 5))
+        XCTAssertEqual(hot.frame.minY, original.minY, accuracy: 1)
+        XCTAssertEqual(hot.frame.minX, original.minX, accuracy: 1)
+        app.scrollViews["home.feed"].swipeUp(velocity: .slow)
+        XCTAssertFalse(app.buttons["载入更多"].exists)
         attachScreenshot("Home restored after detail", app: app)
     }
 
@@ -80,7 +95,7 @@ final class HomeFeedTests: XCTestCase {
         let home = app.tabBars.buttons["主页"]
         XCTAssertTrue(home.waitForExistence(timeout: 10))
         home.tap()
-        let shelf = app.scrollViews["home.shelf.recommendations"]
+        let shelf = app.scrollViews["home.shelf.recommendedPlaylists"]
         XCTAssertTrue(shelf.waitForExistence(timeout: 30))
         app.scrollViews["home.feed"].swipeUp(velocity: .slow)
         let recommendation = shelf.buttons.firstMatch

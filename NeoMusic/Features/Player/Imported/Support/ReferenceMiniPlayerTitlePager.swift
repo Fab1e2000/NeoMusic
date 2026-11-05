@@ -136,12 +136,16 @@ struct ReferenceMiniPlayerTitlePager<Content: View>: UIViewRepresentable {
             defer { layingOut = false }
             let resized = size != view.bounds.size
             size = view.bounds.size
-            view.contentSize = CGSize(width: size.width * CGFloat(hosts.count), height: size.height)
-            for (index, host) in hosts.enumerated() {
-                host.view.frame = CGRect(x: CGFloat(index) * size.width, y: 0, width: size.width, height: size.height)
-            }
-            if recenter || (resized && !moving) {
-                view.setContentOffset(CGPoint(x: CGFloat(center) * size.width, y: 0), animated: false)
+            // Page geometry is bookkeeping; only the scroll view animates a swipe.
+            UIView.performWithoutAnimation {
+                view.contentSize = CGSize(width: size.width * CGFloat(hosts.count), height: size.height)
+                for (index, host) in hosts.enumerated() {
+                    host.view.frame = CGRect(x: CGFloat(index) * size.width, y: 0, width: size.width, height: size.height)
+                }
+                if recenter || (resized && !moving) {
+                    view.setContentOffset(CGPoint(x: CGFloat(center) * size.width, y: 0), animated: false)
+                }
+                for host in hosts { host.view.layoutIfNeeded() }
             }
         }
         func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {

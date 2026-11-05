@@ -7,4 +7,13 @@ Runtime modifications extracted from NeoDizzy current source:
 - `_LNPopupTitlesController.m`: custom SwiftUI titles fill available title slot so height and hit testing are correct.
 - `_LNPopupTitlesPagingController.m`: disable inactive paging scroll gestures while preserving custom title interaction; restore interaction after cancelled/short drag.
 
-Package-only adjustment: omit unused Xcode project from vendor tree and manifest exclude list. All original runtime source outside the two files is unchanged. No external-accessory portal API, global-hook-disable build flag or obsolete native presentation fork is included.
+Local presentation correction:
+- `LNPopupController.mm`: execute nonanimated presentation inside UIKit's
+  `performWithoutAnimation` scope so hosted-title and tab-bar layout share its
+  animation policy. Complete floating-bar ordering for both animated and immediate
+  presentation using the existing native layout operation.
+- `_LNPopupTransitionAnimator.mm`: carry the mini-player's resolved interface style
+  into the sibling glass transition wrapper, so opening and closing retain the
+  endpoint appearance even when the page overrides the system style.
+
+Package-only adjustment: omit unused Xcode project from vendor tree and manifest exclude list. All original runtime source outside these four files is unchanged. No external-accessory portal API, global-hook-disable build flag or obsolete native presentation fork is included.

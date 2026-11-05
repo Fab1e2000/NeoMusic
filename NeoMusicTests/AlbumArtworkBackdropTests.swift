@@ -214,8 +214,10 @@ final class PlayerEDRTextureReuseTests: XCTestCase {
         return image
     }
 
-    private func view() throws -> PlayerEDRGlyphView {
+    private func view() async throws -> PlayerEDRGlyphView {
         try XCTSkipIf(MTLCreateSystemDefaultDevice() == nil, "Metal texture creation is unavailable on this test destination")
+        await PlayerEDRResources.shared.prepare()
+        XCTAssertTrue(PlayerEDRResources.shared.isReady)
         return PlayerEDRGlyphView(frame: CGRect(x: 0, y: 0, width: 180, height: 28))
     }
 
@@ -231,8 +233,8 @@ final class PlayerEDRTextureReuseTests: XCTestCase {
         try XCTUnwrap(view.preparedTextures(backdrop: image, scale: scale), file: file, line: line)
     }
 
-    func testMovementAndBrightnessReuseTexturesWhileNewImageReplacesOnlyBackdrop() throws {
-        let view = try view()
+    func testMovementAndBrightnessReuseTexturesWhileNewImageReplacesOnlyBackdrop() async throws {
+        let view = try await view()
         let image = backdrop(.red)
         update(view)
         let first = try textures(view, image)
@@ -249,8 +251,8 @@ final class PlayerEDRTextureReuseTests: XCTestCase {
         XCTAssertFalse(first.backdrop === changed.backdrop)
     }
 
-    func testTextShapeAndFontChangesReplaceMaskWithoutReloadingBackdrop() throws {
-        let view = try view()
+    func testTextShapeAndFontChangesReplaceMaskWithoutReloadingBackdrop() async throws {
+        let view = try await view()
         let image = backdrop(.gray)
         update(view)
         var previous = try textures(view, image)
@@ -290,8 +292,8 @@ final class PlayerEDRTextureReuseTests: XCTestCase {
         XCTAssertTrue(previous.backdrop === restoredText.backdrop)
     }
 
-    func testGeometryScaleAndFontTraitsInvalidateOnlyMask() throws {
-        let view = try view()
+    func testGeometryScaleAndFontTraitsInvalidateOnlyMask() async throws {
+        let view = try await view()
         let image = backdrop(.gray)
         update(view)
         var previous = try textures(view, image)

@@ -18,6 +18,7 @@ struct NowPlayingLyricsPage: View {
     let isInterfaceHidden: Bool
     let playerFrame: CGRect
     @Environment(ReferencePlayerState.self) private var player
+    @State private var lastActiveLineID: Int?
     let artworkNamespace: Namespace.ID
     let usesArtworkTransition: Bool
     let showsSongHeader: Bool
@@ -70,6 +71,14 @@ struct NowPlayingLyricsPage: View {
             accessibilityReduceMotion ? nil : .smooth(duration: 0.3),
             value: presentation
         )
+        .onChange(of: activeLineID, initial: true) { _, id in
+            if isActive { lastActiveLineID = id }
+        }
+    }
+
+    private var activeLineID: Int? {
+        guard isActive, let lyrics else { return lastActiveLineID }
+        return lyrics.activeLine(at: player.progress)
     }
 
     private var songHeader: some View {
@@ -91,7 +100,7 @@ struct NowPlayingLyricsPage: View {
                     ContentUnavailableView("暂无歌词", systemImage: "quote.bubble")
                 } else if lyrics.isTimed {
                     AppleMusicLocalLyricsView(
-                        lyrics: lyrics, playerFrame: playerFrame, activeID: lyrics.activeLine(at: player.progress),
+                        lyrics: lyrics, playerFrame: playerFrame, activeID: activeLineID,
                         bottomOverlayHeight: appleMusicBottomOverlayHeight, isActive: isActive,
                         isInterfaceHidden: Binding(get: { isInterfaceHidden }, set: { onInterfaceVisibilityChange?(!$0) }),
                         onSeek: { player.seek(to: $0) },

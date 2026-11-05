@@ -16,6 +16,158 @@ final class PlaylistLibraryTests: XCTestCase {
                         trackNumber: 1, artwork: .missing)
     }
 
+    func testMixedPlaylistRestoresSavedOnlineMetadataOnlyAfterMatchingIdentity() throws {
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("playlists.json")
+        let cover = root.appendingPathComponent("cover.image")
+        let local = song("local.mp3")
+        let online = LibrarySongItem(id: "netease:42:7", title: "Saved title", artist: "Saved artist", album: "Album", albumArtist: "Saved artist", trackNumber: 1,
+                                    artwork: .file(cover), artworkData: Data([1, 2, 3]), artworkURL: cover, duration: 240, onlineAlbumID: 9,
+                                    artistReferences: [.init(id: "catalog:artist:3", name: "Saved artist")])
+        let original = library()
+        XCTAssertTrue(original.configurePersistence(url: url, songs: [local]))
+        original.restoreOnlineIdentity(ownerID: "42")
+        original.addSongs([online, local], to: "one")
+
+        let restored = PlaylistLibrary(playlists: [])
+        XCTAssertTrue(restored.configurePersistence(url: url, songs: [local]))
+        XCTAssertEqual(restored.songs(in: "one").map(\.id), [online.id, local.id])
+        XCTAssertEqual(restored.songs(in: "one").first, .unavailable(online.id))
+        XCTAssertEqual(restored.songs(in: "one").last, local)
+        restored.restoreOnlineIdentity(ownerID: "42")
+        let visible = try XCTUnwrap(restored.songs(in: "one").first)
+        XCTAssertEqual(visible.title, online.title)
+        XCTAssertEqual(visible.artistReferences, online.artistReferences)
+        XCTAssertEqual(visible.onlineAlbumID, online.onlineAlbumID)
+        XCTAssertEqual(visible.duration, 240)
+        XCTAssertEqual(visible.artwork, .file(cover))
+        XCTAssertNil(visible.artworkData)
+
+        restored.restoreOnlineIdentity(ownerID: "43")
+        XCTAssertEqual(restored.songs(in: "one").first, .unavailable(online.id))
+        restored.reconcileOnlineSongs([online])
+        restored.updateArtwork(songs: [online.id: online])
+        XCTAssertEqual(restored.songs(in: "one").first, .unavailable(online.id))
+        restored.renamePlaylist("one", to: "Edited while another account is active")
+
+        let reopened = PlaylistLibrary(playlists: [])
+        XCTAssertTrue(reopened.configurePersistence(url: url, songs: [local]))
+        reopened.restoreOnlineIdentity(ownerID: "42")
+        XCTAssertEqual(reopened.songs(in: "one").first?.title, online.title)
+        reopened.replaceOnlinePlaylists(items: [], songs: [:], ownerID: nil)
+        XCTAssertEqual(reopened.songs(in: "one").first, .unavailable(online.id))
+        XCTAssertEqual(reopened.songs(in: "one").last, local)
+        reopened.restoreOnlineIdentity(ownerID: "42")
+        XCTAssertEqual(reopened.songs(in: "one").first?.title, online.title)
+    }
+
+    func testMixedPlaylistSnapshotIncludesOnlyReferencedOnlineSongsAndFileArtwork() throws {
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("playlists.json")
+        let library = library()
+        XCTAssertTrue(library.configurePersistence(url: url, songs: []))
+        let remote = URL(string: "https://fixture.test/temporary-cover")!
+        let selected = LibrarySongItem(id: "netease:42:7", title: "Selected", artist: "Artist", album: "Album", albumArtist: "Artist", trackNumber: 1,
+                                       artwork: .missing, artworkData: Data([1, 2, 3]), artworkURL: remote)
+        let unrelated = song("netease:42:8")
+        let external = LibraryPlaylistItem(id: "netease-playlist:42:1", title: "External", artwork: .playlist, sourceOwnerID: "42")
+        library.replaceOnlinePlaylists(items: [external], songs: [external.id: [selected, unrelated]], ownerID: "42")
+        library.addSongs([selected, song("local.mp3")], to: "one")
+
+        let snapshot = try JSONDecoder().decode(PlaylistLibrary.Snapshot.self, from: Data(contentsOf: url))
+        XCTAssertEqual(Set(snapshot.onlineSongs?.keys.map { $0 } ?? []), [selected.id])
+        XCTAssertNil(snapshot.onlineSongs?[selected.id]?.artworkURL)
+        XCTAssertFalse(snapshot.playlists.contains { $0.id == external.id })
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let metadata = try XCTUnwrap(object["onlineSongs"] as? [String: [String: Any]])
+        XCTAssertNil(metadata[selected.id]?["artworkData"])
+
+        library.removeSong(selected.id, from: "one")
+        let removed = try JSONDecoder().decode(PlaylistLibrary.Snapshot.self, from: Data(contentsOf: url))
+        XCTAssertTrue(removed.onlineSongs?.isEmpty == true)
+        XCTAssertEqual(library.songs(in: external.id).count, 2)
+    }
+
+    func testMixedPlaylistPersistsLaterOnlineMetadataAndArtworkWithoutCatalogRestore() throws {
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("playlists.json")
+        let library = library()
+        XCTAssertTrue(library.configurePersistence(url: url, songs: []))
+        library.restoreOnlineIdentity(ownerID: "42")
+        library.addSongs([song("netease:42:7")], to: "one")
+        let initialBytes = try Data(contentsOf: url)
+        let updated = LibrarySongItem(id: "netease:42:7", title: "Updated", artist: "New artist", album: "Album", albumArtist: "New artist", trackNumber: 1, artwork: .missing)
+        library.reconcileOnlineSongs([updated])
+        let cover = root.appendingPathComponent("later-cover.image")
+        var artwork = updated
+        artwork.artwork = .file(cover)
+        artwork.artworkURL = cover
+        library.updateArtwork(songs: [artwork.id: artwork])
+        library.restoreOnlineIdentity(ownerID: nil)
+        XCTAssertEqual(library.songs(in: "one").first, .unavailable(artwork.id))
+        XCTAssertEqual(try Data(contentsOf: url), initialBytes)
+        library.persistRestoredMetadata()
+
+        let restored = PlaylistLibrary(playlists: [])
+        restored.restoreOnlineIdentity(ownerID: "42")
+        XCTAssertTrue(restored.configurePersistence(url: url, songs: []))
+        XCTAssertEqual(restored.songs(in: "one").first?.title, "Updated")
+        XCTAssertEqual(restored.songs(in: "one").first?.artist, "New artist")
+        XCTAssertEqual(restored.songs(in: "one").first?.artwork, .file(cover))
+        restored.reconcileSongs([])
+        XCTAssertEqual(restored.songs(in: "one").first?.title, "Updated")
+    }
+
+    func testLegacyMixedPlaylistWithoutMetadataKeepsReferencesAndAcceptsCurrentOwnerRefresh() throws {
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("playlists.json")
+        let original = library()
+        XCTAssertTrue(original.configurePersistence(url: url, songs: []))
+        original.addSongs([song("netease:42:7")], to: "one")
+        var legacy = try JSONDecoder().decode(PlaylistLibrary.Snapshot.self, from: Data(contentsOf: url))
+        legacy.onlineSongs = nil
+        let data = try JSONEncoder().encode(legacy)
+        let decoded = try JSONDecoder().decode(PlaylistLibrary.Snapshot.self, from: data)
+        XCTAssertNil(decoded.onlineSongs)
+
+        let restored = PlaylistLibrary(playlists: [])
+        XCTAssertTrue(restored.configurePersistence(url: url, songs: [], restoredState: .success(decoded)))
+        restored.restoreOnlineIdentity(ownerID: "42")
+        XCTAssertEqual(restored.songs(in: "one").map(\.id), ["netease:42:7"])
+        XCTAssertEqual(restored.songs(in: "one").first, .unavailable("netease:42:7"))
+        let refreshed = song("netease:42:7")
+        restored.reconcileOnlineSongs([refreshed])
+        XCTAssertEqual(restored.songs(in: "one").first?.title, refreshed.title)
+    }
+
+    func testPlaylistDetailProjectionUpdatesControlsAndDataWithoutRepeatingWork() {
+        let first = LibrarySongItem(id: "a", title: "Alpha", artist: "Zed", album: "Record two",
+                                   albumArtist: "Zed", trackNumber: 1, artwork: .missing, duration: 125)
+        let second = LibrarySongItem(id: "b", title: "Beta", artist: "Ada", album: "Record one",
+                                    albumArtist: "Ada", trackNumber: 2, artwork: .missing, duration: 65)
+        let projection = LibraryListProjection<PlaylistDetailView.ProjectionInput, PlaylistDetailView.Projection>()
+        var calculations = 0
+        func result(_ input: PlaylistDetailView.ProjectionInput) -> PlaylistDetailView.Projection {
+            projection.value(for: input) { calculations += 1; return input.calculate() }
+        }
+        let input = PlaylistDetailView.ProjectionInput(tracks: [second, first], query: "", sort: .order)
+        XCTAssertEqual(result(input).tracks.map(\.id), ["b", "a"])
+        XCTAssertEqual(result(input).totalDuration, 190)
+        XCTAssertEqual(calculations, 1)
+        XCTAssertEqual(result(.init(tracks: input.tracks, query: "", sort: .title)).tracks.map(\.id), ["a", "b"])
+        XCTAssertEqual(result(.init(tracks: input.tracks, query: "", sort: .artist)).tracks.map(\.id), ["b", "a"])
+        XCTAssertEqual(result(.init(tracks: input.tracks, query: "Record one", sort: .album)).tracks.map(\.id), ["b"])
+        XCTAssertEqual(result(.init(tracks: input.tracks, query: "zed", sort: .order)).tracks.map(\.id), ["a"])
+        let changed = result(.init(tracks: [second], query: "", sort: .order))
+        XCTAssertEqual(changed.tracks.map(\.id), ["b"])
+        XCTAssertEqual(changed.totalDuration, 65)
+        XCTAssertEqual(calculations, 6)
+    }
+
     func testCancelFavoriteKeepsSongInLibraryAndCanBeRestored() {
         var favorite = song("a")
         favorite.isFavorite = true

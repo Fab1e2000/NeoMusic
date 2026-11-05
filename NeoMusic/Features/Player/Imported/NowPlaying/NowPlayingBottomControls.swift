@@ -3,9 +3,9 @@
 import SwiftUI
 
 struct NowPlayingBottomControls: View {
-    static let utilityHeight: CGFloat = 62
-    static let coreHeight: CGFloat = 279
-    static let overlayHeight = utilityHeight + coreHeight
+    nonisolated static let utilityHeight: CGFloat = 62
+    nonisolated static let coreHeight: CGFloat = 279
+    nonisolated static let overlayHeight = utilityHeight + coreHeight
 
     @Environment(\.accessibilityReduceMotion)
     private var accessibilityReduceMotion

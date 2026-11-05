@@ -13,14 +13,13 @@ struct ArtworkImage: View {
     var decodeSize: CGSize? = nil
     var contentMode: ContentMode = .fill
 
-    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @Environment(\.displayScale) private var displayScale
 
     var body: some View {
         GeometryReader { proxy in
             LazyImage(
                 request: imageRequest(for: proxy.size),
-                transaction: Transaction(animation: imageLoadAnimation)
+                transaction: Transaction(animation: nil)
             ) { state in
                 content(image: state.image, hasError: state.error != nil)
                     .frame(width: proxy.size.width, height: proxy.size.height)
@@ -39,17 +38,12 @@ struct ArtworkImage: View {
         )
     }
 
-    private var imageLoadAnimation: Animation? {
-        accessibilityReduceMotion ? nil : .easeOut(duration: 0.18)
-    }
-
     @ViewBuilder
     private func content(image: Image?, hasError: Bool) -> some View {
         if let image {
             image
                 .resizable()
                 .aspectRatio(contentMode: contentMode)
-                .transition(.opacity)
         } else if hasError || url == nil {
             ZStack {
                 DizzyPalette.artworkPlaceholder

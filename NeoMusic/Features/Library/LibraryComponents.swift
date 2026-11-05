@@ -1,22 +1,5 @@
 import SwiftUI
 
-extension View {
-    /// Animate collection membership/order at its owner, including changes coming
-    /// from another hosting controller. Titles and artwork updates alone do not reflow.
-    func libraryCollectionAnimation<Value: Equatable>(value: Value) -> some View {
-        modifier(LibraryCollectionAnimation(value: value))
-    }
-}
-
-private struct LibraryCollectionAnimation<Value: Equatable>: ViewModifier {
-    let value: Value
-    @Environment(\.accessibilityReduceMotion) private var reducesMotion
-
-    func body(content: Content) -> some View {
-        content.animation(reducesMotion ? nil : .smooth(duration: 0.3), value: value)
-    }
-}
-
 /// 列表页标题下方的“播放 / 随机播放”两个胶囊按钮。
 struct PlayShuffleButtons: View {
     let play: () -> Void
@@ -51,7 +34,7 @@ struct AlbumCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
-            ArtworkView(artwork: item.artwork, cornerRadius: 8)
+            ArtworkView(artwork: item.artwork, contentID: item.id, cornerRadius: 8)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     Text(item.title).lineLimit(1)
@@ -72,11 +55,21 @@ struct AlbumCard: View {
     }
 }
 
+struct LibraryNavigationPreview: Equatable {
+    let route: LibraryRoute
+    let ownerID: String?
+    let title: String
+    var subtitle: String? = nil
+    let artwork: Artwork
+    var contentID: String { "\(ownerID ?? "public"):\(route)" }
+}
+
 /// 在资料库导航栈中推入一页，由持有导航路径的宿主提供。
 struct OpenLibraryRouteAction {
     let handler: (LibraryRoute) -> Void
     var sourceHandler: ((LibraryRoute, UIView?) -> Void)?
     var sourceProviderHandler: ((LibraryRoute, @escaping () -> UIView?) -> Void)?
+    var previewSourceHandler: ((LibraryRoute, LibraryNavigationPreview, @escaping () -> UIView?) -> Void)?
     func callAsFunction(_ route: LibraryRoute, source: UIView? = nil) {
         if let sourceHandler { sourceHandler(route, source) } else { handler(route) }
     }
@@ -85,10 +78,26 @@ struct OpenLibraryRouteAction {
         if let sourceProviderHandler { sourceProviderHandler(route, sourceProvider) }
         else { callAsFunction(route, source: sourceProvider()) }
     }
+    func callAsFunction(_ route: LibraryRoute, preview: LibraryNavigationPreview, sourceProvider: @escaping () -> UIView?) {
+        if let previewSourceHandler { previewSourceHandler(route, preview, sourceProvider) }
+        else { callAsFunction(route, sourceProvider: sourceProvider) }
+    }
+    @MainActor func callAsFunction(_ item: LibraryShelfItem, sourceProvider: @escaping () -> UIView?) {
+        guard let route = item.route else { return }
+        var artwork = item.artwork
+        // Retain the decoded source pixels while the detail prepares its larger cover.
+        if case .file(let url) = artwork, let image = LocalArtworkImages.cached(url, pixels: 0) {
+            artwork = .image(Image(uiImage: image))
+        }
+        let preview = LibraryNavigationPreview(route: route, ownerID: item.sourceOwnerID,
+            title: item.title, subtitle: item.subtitle, artwork: artwork)
+        callAsFunction(route, preview: preview, sourceProvider: sourceProvider)
+    }
 }
 
 extension EnvironmentValues {
     @Entry var openLibraryRoute = OpenLibraryRouteAction { _ in }
+    @Entry var libraryNavigationPreview: LibraryNavigationPreview?
 }
 
 /// 喜爱的条目在行首留白处显示的小星标，不挤动封面与文字。
@@ -116,9 +125,7 @@ struct TitleSection<Item>: Identifiable {
 
     /// 排序用的键：中文转为拼音，去掉声调，小写。
     static func sortKey(_ title: String) -> String {
-        let latin = title.applyingTransform(.toLatin, reverse: false)?
-            .applyingTransform(.stripDiacritics, reverse: false) ?? title
-        return latin.lowercased()
+        LibraryTitleSortKeys.key(for: title)
     }
 
     static func group(_ items: [Item], by title: (Item) -> String) -> [TitleSection] {
@@ -130,6 +137,25 @@ struct TitleSection<Item>: Identifiable {
         return grouped.keys
             .sorted { lhs, rhs in lhs == "#" ? false : rhs == "#" ? true : lhs < rhs }
             .map { TitleSection(letter: $0, items: grouped[$0]!.map(\.item)) }
+    }
+}
+
+/// Transliteration is shared by song, album and playlist sorting and bounded by NSCache.
+private enum LibraryTitleSortKeys {
+    // NSCache supports concurrent access; no UI actor is needed for pure sort keys.
+    nonisolated(unsafe) private static let cache: NSCache<NSString, NSString> = {
+        let cache = NSCache<NSString, NSString>()
+        cache.totalCostLimit = 2 * 1_024 * 1_024
+        return cache
+    }()
+
+    static func key(for title: String) -> String {
+        let source = title as NSString
+        if let value = cache.object(forKey: source) { return value as String }
+        let key = (title.applyingTransform(.toLatin, reverse: false)?
+            .applyingTransform(.stripDiacritics, reverse: false) ?? title).lowercased()
+        cache.setObject(key as NSString, forKey: source, cost: (title.utf16.count + key.utf16.count) * 2)
+        return key
     }
 }
 

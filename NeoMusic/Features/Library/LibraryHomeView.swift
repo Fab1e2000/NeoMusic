@@ -1,17 +1,18 @@
 import SwiftUI
 
 /// 资料库首页展示用的一项专辑或播放列表。
-struct LibraryShelfItem: Identifiable {
+struct LibraryShelfItem: Identifiable, Equatable {
     let id: String
     let title: String
     var subtitle: String?
-    let artwork: Artwork
+    var artwork: Artwork
     var route: LibraryRoute?
     var isFavorite = false
     var isPinned = false
     /// 排序用：数值越大越晚加入资料库；专辑的发行年份。
     var addedOrder = 0
     var year: Int?
+    var sourceOwnerID: String?
 }
 
 /// 资料库内的页面跳转。
@@ -34,14 +35,13 @@ struct LibraryHomeView: View {
     var reorderPinned: ([LibraryRoute]) -> Bool = { _ in false }
     @State private var isCreatingPlaylist = false
     @Environment(\.collectionMenuActions) private var actions
-    @Environment(\.libraryNavigationChrome) private var chrome
     @State private var isEditingPinned = false
     /// 各置顶项的“轻点操作”，只保存在本次运行中。
     @State private var tapActions: [String: PinnedTapAction] = [:]
     @Namespace private var playlistCreationTransition
 
     private var visiblePinned: [LibraryShelfItem] {
-        isContentReady && chrome?.hasAppeared != false ? pinned : []
+        isContentReady ? pinned : []
     }
 
     var body: some View {
@@ -52,6 +52,7 @@ struct LibraryHomeView: View {
                     guard let route = item.route else { return }
                     withAnimation { actions.togglePin(route) }
                 }
+                    .frame(maxHeight: .infinity, alignment: .top)
                     .listRowInsets(EdgeInsets(top: 10, leading: 20, bottom: 22, trailing: 20))
                     .listRowSeparator(.hidden)
             }
@@ -65,18 +66,13 @@ struct LibraryHomeView: View {
                     .padding(.top, 17)
                     .padding(.bottom, 16)
                     .frame(maxHeight: .infinity, alignment: .top)
-                    // First fill stays below its heading while List moves the row
-                    // for the pinned insertion. Later collection edits still animate.
-                    .transaction(value: isContentReady) { $0.animation = nil }
                     .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
                     .listRowSeparator(.hidden)
             }
             .listSectionSeparator(.hidden)
         }
         .listStyle(.plain)
-        // The List owns row heights as well as the grids. Animate here so losing
-        // a pinned row (or the final pin) also moves the categories below it.
-        .libraryCollectionAnimation(value: [visiblePinned.map(\.id), recentlyAdded.map(\.id)])
+        .transaction(value: isContentReady) { $0.animation = nil; $0.disablesAnimations = true }
         .navigationDiagnostics("library")
         .libraryHomeNavigation()
         .toolbar {
@@ -220,7 +216,6 @@ struct DownloadedMockView: View {
             }
         }
         .listStyle(.plain)
-        .libraryCollectionAnimation(value: albums.map(\.id))
         .libraryNavigationTitle("已下载")
         .libraryTitleDisplayMode(.inline)
     }

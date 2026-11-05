@@ -36,6 +36,73 @@ import Nuke
         XCTAssertEqual(player.progress, 24)
         XCTAssertEqual(player.upcoming.map(\.track.id), ["a", "c", "d"])
     }
+    func testLongQueueProjectionReusesStorageAcrossPlaybackProgress() {
+        let owner = PlayerTestFixtures.owner(tracks: (0..<2_000).map { track("song-\($0)") })
+        let player = ReferencePlayerState(model: owner)
+        let initial = player.upcomingQueueEntries
+        let version = player.upcomingQueueVersion
+        XCTAssertEqual(initial.count, 1_999)
+        XCTAssertEqual(initial.first?.queueIndex, 1)
+        XCTAssertEqual(initial.last?.queueIndex, 1_999)
+
+        for second in 1...5 {
+            player.seek(to: Double(second))
+            owner.volume = 0.5
+            let current = player.upcomingQueueEntries
+            XCTAssertEqual(player.upcomingQueueVersion, version)
+            initial.withUnsafeBufferPointer { originalBuffer in
+                current.withUnsafeBufferPointer { currentBuffer in
+                    XCTAssertEqual(originalBuffer.baseAddress, currentBuffer.baseAddress,
+                                   "Playback progress must reuse the long queue's presentation storage")
+                }
+            }
+        }
+    }
+    func testLongQueueReorderPublishesOnceAndPreservesDuplicateOccurrences() {
+        let owner = PlayerTestFixtures.owner(tracks: (0..<2_000).map { track("song-\($0 % 50)") })
+        let player = ReferencePlayerState(model: owner)
+        player.skip(toQueueIndex: 900)
+        let current = owner.entryIDs[owner.currentIndex]
+        let original = player.upcomingQueueEntries
+        let songsByEntry = Dictionary(uniqueKeysWithValues: original.map { ($0.id, $0.song) })
+        var expected = original.map(\.id)
+        expected.insert(expected.remove(at: 1_500), at: 0)
+        let revision = owner.queueRevision
+
+        player.moveUpcomingQueueItems(fromOffsets: IndexSet(integer: 1_500), toOffset: 0)
+
+        XCTAssertEqual(owner.queueRevision, revision + 1, "A native reorder publishes one completed queue")
+        XCTAssertEqual(player.upcomingQueueEntries.map(\.id), expected)
+        XCTAssertEqual(owner.entryIDs[owner.currentIndex], current)
+        XCTAssertEqual(owner.currentIndex, 900)
+        XCTAssertEqual(Set(player.upcomingQueueEntries.map(\.id)).count, 1_999)
+        XCTAssertEqual(player.upcomingQueueEntries.map(\.song), expected.map { songsByEntry[$0]! })
+    }
+    func testQueueProjectionRefreshesForSelectionReorderAndArtwork() {
+        let owner = PlayerTestFixtures.owner(tracks: [track("a"), track("b"), track("c"), track("d")])
+        let player = ReferencePlayerState(model: owner)
+        XCTAssertEqual(player.upcomingQueueEntries.map(\.song.id), ["b", "c", "d"])
+        player.skip(toQueueIndex: 1)
+        XCTAssertEqual(player.upcomingQueueEntries.map(\.song.id), ["c", "d", "a"])
+        owner.repeatMode = .off
+        XCTAssertEqual(player.upcomingQueueEntries.map(\.song.id), ["c", "d"])
+        owner.repeatMode = .all
+        player.moveUpcomingQueueItems(fromOffsets: IndexSet(integer: 2), toOffset: 0)
+        XCTAssertEqual(player.upcomingQueueEntries.map(\.song.id), ["a", "c", "d"])
+        XCTAssertEqual(player.upcomingQueueEntries.map(\.queueIndex), [2, 3, 0])
+
+        var ready = owner.queue[3]
+        let file = URL(fileURLWithPath: "/tmp/queue-cover.image")
+        ready.artwork = .file(file)
+        ready.artworkURL = file
+        owner.updateArtwork([ready.id: ready])
+        XCTAssertEqual(player.upcomingQueueEntries.first { $0.song.id == "c" }?.song.coverURL, file)
+
+        player.enqueue(track("b"), next: true)
+        XCTAssertEqual(player.upcomingQueueEntries.map(\.song.id), ["b", "a", "c", "d"])
+        player.removeFromQueue(at: 2)
+        XCTAssertEqual(player.upcomingQueueEntries.map(\.song.id), ["a", "c", "d"])
+    }
     func testFavoriteAndNativeMenuGrouping() {
         var favorites: Set<String> = []
         var openedArtistID: String?
@@ -135,6 +202,31 @@ import Nuke
 }
 
 extension ReferencePlayerAdapterTests {
+    func testDeferredArtworkIdentityReachesCurrentAdjacentAndQueueTracksUntilFileArrives() {
+        let songs = (0..<3).map { index in
+            LibrarySongItem(id: "song-\(index)", title: "Song \(index)", artist: "Artist", album: "Album",
+                albumArtist: "Artist", trackNumber: index + 1,
+                artwork: .deferred(id: "cover-\(index)", placeholder: .missing), duration: 90)
+        }
+        let owner = NowPlayingModel(queue: songs, currentIndex: 1, isPlaying: false, elapsed: 12)
+        let player = ReferencePlayerState(model: owner)
+        XCTAssertEqual(player.currentTrack?.artworkLoadID, "cover-1")
+        XCTAssertEqual(player.previousInOrder?.track.artworkLoadID, "cover-0")
+        XCTAssertEqual(player.nextInOrder?.track.artworkLoadID, "cover-2")
+        XCTAssertEqual(player.upcoming.map(\.track.artworkLoadID), ["cover-2", "cover-0"])
+
+        var ready = songs[1]
+        let file = URL(fileURLWithPath: "/tmp/player-cover.image")
+        ready.artwork = .file(file)
+        ready.artworkURL = file
+        owner.updateArtwork([ready.id: ready])
+        XCTAssertNil(player.currentTrack?.artworkLoadID)
+        XCTAssertEqual(player.currentTrack?.coverURL, file)
+        XCTAssertEqual(player.currentQueueIndex, 1)
+        XCTAssertEqual(player.progress, 12)
+        XCTAssertEqual(player.nextInOrder?.track.artworkLoadID, "cover-2")
+    }
+
     func testProductionFacadeReadsLiveQueueAndWritesSameOwner() {
         let a = LibrarySongItem(id: "local/a", title: "A", artist: "Artist", album: "Album", albumArtist: "Artist", trackNumber: 1, artwork: .missing, duration: 90)
         let b = LibrarySongItem(id: "local/b", title: "B", artist: "Artist", album: "Album", albumArtist: "Artist", trackNumber: 2, artwork: .missing, duration: 100)

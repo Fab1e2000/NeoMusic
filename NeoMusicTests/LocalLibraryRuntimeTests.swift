@@ -102,6 +102,175 @@ final class LocalLibraryAlbumProjectionTests: XCTestCase {
 
 @MainActor
 final class LocalLibraryRuntimeTests: XCTestCase {
+    func testUnreadablePlaybackDoesNotPublishOrOverwriteAndCanRestoreOnRetry() async throws {
+        let documents = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let previous = LocalLibrary.songLibrary.songs
+        let player = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false)
+        defer {
+            player.shutdownPlayback()
+            LocalLibrary.songLibrary.replace(previous)
+            try? FileManager.default.removeItem(at: documents)
+        }
+        let store = documents.appendingPathComponent("state")
+        try FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
+        let url = store.appendingPathComponent("playback.json")
+        let unreadable = Data("incomplete snapshot".utf8)
+        try unreadable.write(to: url)
+        let runtime = LocalLibraryRuntime(documents: documents, store: store,
+            playlistLibrary: PlaylistLibrary(playlists: []), player: player)
+        await runtime.restoreCachedState()
+        XCTAssertFalse(runtime.hasRestoredPlayback)
+        runtime.completeInitialPlaybackRestoration(ownerID: "42", songs: [])
+        XCTAssertFalse(runtime.isInitialPlaybackReady)
+        player.saveQueueForBackground()
+        await player.flushQueuePersistence()
+        XCTAssertEqual(try Data(contentsOf: url), unreadable)
+
+        let song = LibrarySongItem(id: "netease:42:9", title: "Saved song", artist: "Artist",
+            album: "", albumArtist: "", trackNumber: 0, artwork: .missing)
+        let saved = NowPlayingModel.SavedQueue(ids: [song.id], index: 0, elapsed: 28,
+            repeatMode: .off, shuffled: false, songs: [PlaybackSongSnapshot(song)])
+        try JSONEncoder().encode(saved).write(to: url)
+        await runtime.refresh()
+        XCTAssertTrue(runtime.hasRestoredPlayback)
+        runtime.completeInitialPlaybackRestoration(ownerID: "42", songs: [])
+        XCTAssertTrue(runtime.isInitialPlaybackReady)
+        XCTAssertEqual(player.current.title, song.title)
+        XCTAssertEqual(player.elapsed, 28)
+        XCTAssertFalse(player.isPlaying)
+        XCTAssertFalse(player.hasAudioEngine)
+        await player.flushQueuePersistence()
+    }
+
+    func testLocalPlaybackRemainsUsableAfterUnreadableQueueAndRetryKeepsChosenSong() async throws {
+        let documents = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let previous = LocalLibrary.songLibrary.songs
+        let player = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false)
+        defer {
+            player.shutdownPlayback()
+            LocalLibrary.songLibrary.replace(previous)
+            try? FileManager.default.removeItem(at: documents)
+        }
+        let root = try LocalMusicScanner.prepareDirectory(documents: documents)
+        try writeWave(root.appendingPathComponent("chosen.wav"))
+        let store = documents.appendingPathComponent("state")
+        try FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
+        let url = store.appendingPathComponent("playback.json")
+        let broken = Data("unreadable queue".utf8)
+        try broken.write(to: url)
+        let runtime = LocalLibraryRuntime(documents: documents, store: store,
+            playlistLibrary: PlaylistLibrary(playlists: []), player: player)
+        await runtime.restoreCachedState()
+        player.saveQueueForBackground()
+        await player.flushQueuePersistence()
+        XCTAssertEqual(try Data(contentsOf: url), broken)
+        XCTAssertFalse(runtime.hasRestoredPlayback)
+
+        let chosen = LibrarySongItem(id: "chosen.wav", title: "Chosen song", artist: "Artist",
+            album: "", albumArtist: "", trackNumber: 0, artwork: .missing)
+        player.repeatMode = .off
+        player.play([chosen], from: "Local album", shuffled: false)
+        XCTAssertTrue(player.hasAudioEngine)
+        XCTAssertNil(player.errorMessage)
+        XCTAssertEqual(player.current.id, chosen.id)
+        await player.flushQueuePersistence()
+        let selected = try JSONDecoder().decode(NowPlayingModel.SavedQueue.self, from: Data(contentsOf: url))
+        XCTAssertEqual(selected.ids, [chosen.id])
+        let occurrence = player.entryIDs
+        await runtime.refresh()
+        XCTAssertTrue(runtime.hasRestoredPlayback)
+        XCTAssertEqual(player.current.id, chosen.id)
+        XCTAssertEqual(player.entryIDs, occurrence)
+        await player.flushQueuePersistence()
+    }
+
+    func testCachedStateRestoresBeforeScanAndPresentationIsReleasedExplicitly() async throws {
+        let documents = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let previous = LocalLibrary.songLibrary.songs
+        let player = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false)
+        defer {
+            player.shutdownPlayback()
+            LocalLibrary.songLibrary.replace(previous)
+            try? FileManager.default.removeItem(at: documents)
+        }
+        let root = try LocalMusicScanner.prepareDirectory(documents: documents)
+        try writeWave(root.appendingPathComponent("new.wav"))
+        let store = documents.appendingPathComponent("state")
+        try FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
+        let cached = LocalTrack(id: "cached.wav", title: "Cached", artist: "A", album: "B", albumArtist: "A",
+                                trackNumber: 1, duration: 1, artworkData: nil, addedDate: .distantPast)
+        try JSONEncoder().encode([cached]).write(to: store.appendingPathComponent("tracks.json"))
+        let saved = NowPlayingModel.SavedQueue(ids: [cached.id], index: 0, elapsed: 0, repeatMode: .off, shuffled: false)
+        try JSONEncoder().encode(saved).write(to: store.appendingPathComponent("playback.json"))
+        let runtime = LocalLibraryRuntime(documents: documents, store: store,
+                                          playlistLibrary: PlaylistLibrary(playlists: []), player: player)
+        await runtime.restoreCachedState()
+        XCTAssertEqual(LocalLibrary.songs.map(\.id), [cached.id])
+        XCTAssertEqual(player.queue.map(\.title), [cached.title])
+        XCTAssertTrue(runtime.isInitialLibraryReady)
+        XCTAssertFalse(runtime.isInitialPresentationReady)
+        XCTAssertFalse(player.hasAudioEngine)
+        runtime.completeInitialPresentation(songs: LocalLibrary.songs)
+        XCTAssertTrue(runtime.isInitialPresentationReady)
+        XCTAssertFalse(runtime.isInitialPlaybackReady)
+        runtime.completeInitialPlaybackRestoration(ownerID: nil, songs: LocalLibrary.songs)
+        XCTAssertTrue(runtime.isInitialPlaybackReady)
+        await runtime.refresh()
+        XCTAssertEqual(LocalLibrary.songs.map(\.id), ["new.wav"])
+        XCTAssertTrue(runtime.isInitialPresentationReady)
+    }
+
+    func testLibraryPresentationDoesNotWaitForOnlineQueueMetadata() async throws {
+        let documents = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let previous = LocalLibrary.songLibrary.songs
+        let player = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false)
+        defer {
+            player.shutdownPlayback()
+            LocalLibrary.songLibrary.replace(previous)
+            try? FileManager.default.removeItem(at: documents)
+        }
+        let store = documents.appendingPathComponent("state")
+        try FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
+        let song = LibrarySongItem(id: "netease:42:9", title: "Cached recommendation", artist: "Artist",
+                                  album: "Album", albumArtist: "Artist", trackNumber: 1, artwork: .missing)
+        let original = PlaylistLibrary(playlists: [])
+        original.configurePersistence(url: store.appendingPathComponent("playlists.json"), songs: [song])
+        let playlistID = try XCTUnwrap(original.createPlaylist(named: "Saved", artwork: .playlist, in: nil)).id
+        XCTAssertEqual(original.addSongs([song], to: playlistID), 1)
+        let saved = NowPlayingModel.SavedQueue(ids: [song.id], index: 0, elapsed: 4, repeatMode: .all, shuffled: false)
+        try JSONEncoder().encode(saved).write(to: store.appendingPathComponent("playback.json"))
+        let restored = PlaylistLibrary(playlists: [])
+        let runtime = LocalLibraryRuntime(documents: documents, store: store, playlistLibrary: restored, player: player)
+
+        await runtime.restoreCachedState()
+        XCTAssertEqual(player.unavailableIDs, [song.id])
+        XCTAssertNotEqual(player.current.title, song.title)
+        XCTAssertNotEqual(restored.songs(in: playlistID).first?.title, song.title)
+        XCTAssertFalse(runtime.isInitialPresentationReady)
+
+        runtime.completeInitialPresentation(songs: LocalLibrary.songs)
+        XCTAssertTrue(runtime.isInitialPresentationReady)
+        XCTAssertFalse(runtime.isInitialPlaybackReady)
+
+        let titlesAtReady = Mutex<[String]?>(nil)
+        _ = withObservationTracking { runtime.isInitialPlaybackReady } onChange: {
+            MainActor.assumeIsolated {
+                titlesAtReady.withLock {
+                    $0 = [player.current.title] + restored.songs(in: playlistID).map(\.title)
+                }
+            }
+        }
+        runtime.completeInitialPlaybackRestoration(ownerID: "42", songs: [song])
+
+        XCTAssertEqual(titlesAtReady.withLock { $0 }, [song.title, song.title])
+        XCTAssertTrue(runtime.isInitialPresentationReady)
+        XCTAssertTrue(runtime.isInitialPlaybackReady)
+        XCTAssertTrue(player.unavailableIDs.isEmpty)
+        XCTAssertEqual(player.elapsed, 4)
+        XCTAssertEqual(player.repeatMode, .all)
+        XCTAssertFalse(player.hasAudioEngine)
+    }
+
     private func writeWave(_ url: URL) throws {
         let format = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1)!
         let file = try AVAudioFile(forWriting: url, settings: format.settings)
@@ -203,6 +372,7 @@ final class LocalLibraryRuntimeTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: playlistURL), playlistData)
         // The audio engine may persist generated occurrence IDs after restoration;
         // a failed scan must preserve the restored queue and playback preferences.
+        await player.flushQueuePersistence()
         let savedQueue = try JSONDecoder().decode(NowPlayingModel.SavedQueue.self, from: Data(contentsOf: playbackURL))
         XCTAssertEqual(savedQueue.ids, [song.id])
         XCTAssertEqual(savedQueue.index, 0)
@@ -244,7 +414,7 @@ final class LocalLibraryRuntimeTests: XCTestCase {
         XCTAssertEqual(LocalLibrary.songs.map(\.id), ["new.wav"])
     }
 
-    func testIncompleteQueueRestoresReferencesWithoutPreparingAudioOrRewritingState() throws {
+    func testIncompleteQueueRestoresReferencesWithoutPreparingAudioOrRewritingState() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let player = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false)
         defer { player.shutdownPlayback(); try? FileManager.default.removeItem(at: url) }
@@ -257,6 +427,7 @@ final class LocalLibraryRuntimeTests: XCTestCase {
         XCTAssertEqual(player.unavailableIDs, ["new.wav"])
         XCTAssertNil(player.errorMessage, "Missing cached metadata is resolved by the scan before reporting a missing file")
         XCTAssertFalse(player.hasAudioEngine)
+        await player.flushQueuePersistence()
         XCTAssertEqual(try Data(contentsOf: url), saved)
         let song = LibrarySongItem(id: "new.wav", title: "New", artist: "A", album: "B", albumArtist: "A",
                                    trackNumber: 1, artwork: .missing)
@@ -266,6 +437,7 @@ final class LocalLibraryRuntimeTests: XCTestCase {
         XCTAssertFalse(player.hasAudioEngine)
         XCTAssertEqual(player.queue.map(\.id), [song.id])
         XCTAssertEqual(player.repeatMode, .all)
+        await player.flushQueuePersistence()
         XCTAssertEqual(try Data(contentsOf: url), saved)
     }
 

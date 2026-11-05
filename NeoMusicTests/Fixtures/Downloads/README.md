@@ -1,0 +1,1 @@
+Synthetic 0.1-second silent audio and NCM containers from NeoDizzy (GPL-3.0). No commercial music or account data. Audio fixtures include Chinese tags and a generated 1x1 PNG. The long container appends 150003 deterministic bytes to exercise 64 KiB decryption boundaries. Original generation scripts: NeoDizzy/scripts/generate-local-audio-fixtures.py and generate-ncm-fixtures.py.

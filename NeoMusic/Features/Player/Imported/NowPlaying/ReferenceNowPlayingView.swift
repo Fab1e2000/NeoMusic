@@ -11,6 +11,7 @@ struct ReferenceNowPlayingView: View {
     @Environment(\.accessibilityVoiceOverEnabled) private var accessibilityVoiceOverEnabled
     @Environment(ReferencePlayerState.self) private var player
     @Environment(ReferenceLibrary.self) private var library
+    @Environment(\.scenePhase) private var scenePhase
     @State private var pageTransition: NowPlayingTransitionCoordinator
     @State private var showsLyricsControls = true
     @State private var appleMusicControlsActivityGeneration = 0
@@ -25,12 +26,16 @@ struct ReferenceNowPlayingView: View {
     @State private var lyricsModel = NowPlayingLyricsModel()
     @State private var importingLyrics = false
     @State private var importTrackID: String?
+    @State private var pagePerformanceInterval: PerformanceDiagnostics.Interval?
     @Namespace private var pageArtworkNamespace
     private var page: NowPlayingPage { pageTransition.page }
     private let onDismiss: (() -> Void)?
+    private let isActive: Bool
+    private var visualsActive: Bool { isActive && scenePhase == .active }
     init(initialPage: NowPlayingPage = .artwork, onDismiss: (() -> Void)? = nil,
-         geometry: NowPlayingGeometry = NowPlayingGeometry()) {
+         geometry: NowPlayingGeometry = NowPlayingGeometry(), isActive: Bool = true) {
         self.onDismiss = onDismiss
+        self.isActive = isActive
         _pageTransition = State(initialValue: NowPlayingTransitionCoordinator(initialPage: initialPage))
         // Geometry belongs to this presentation's identity; callers may supply
         // its initial owner to observe layout without screen-coordinate feedback.
@@ -43,6 +48,7 @@ struct ReferenceNowPlayingView: View {
                 // 背景自己在铺满安全区之后上报位置，背景副本才能和它完全重合。
                 NowPlayingArtworkBackdrop(
                     artworkURL: player.currentTrack?.coverURL,
+                    trackID: player.currentTrack?.id,
                     onFrameChange: { geometryState.backdropFrame = $0 },
                     onImageChange: { backdropImage = $0 },
                     onUndimmedImageChange: { undimmedBackdropImage = $0 },
@@ -63,6 +69,11 @@ struct ReferenceNowPlayingView: View {
         .coordinateSpace(.named(NowPlayingContentCoordinateSpace.name))
         .foregroundStyle(.white)
         .environment(\.colorScheme, .dark)
+        .environment(\.playerVisualsActive, visualsActive)
+        .environment(\.playerArtistEDREnabled, PlayerEDRResources.shared.isReady)
+        .task(id: visualsActive) {
+            if visualsActive { await PlayerEDRResources.shared.prepare() }
+        }
         .onGeometryChange(for: CGSize.self) { $0.size } action: { geometryState.contentSize = $0 }
         .task(id: "\(player.currentTrack?.id ?? "")/\(library.contentRevision)/\(lyricsModel.revision)") {
             guard let track = player.currentTrack else { return }
@@ -78,6 +89,7 @@ struct ReferenceNowPlayingView: View {
             }
         }
         .onChange(of: player.currentTrack == nil) { _, empty in if empty { closePlayer() } }
+        .onDisappear { finishPageMeasurement() }
         .fileImporter(isPresented: $importingLyrics, allowedContentTypes: [.data, .plainText]) { result in
             guard let id = importTrackID, case .success(let url) = result else { return }
             Task { await lyricsModel.importFile(url, trackID: id, reader: library.reader) }
@@ -137,6 +149,9 @@ struct ReferenceNowPlayingView: View {
             get: { page },
             set: { newPage in
                 guard newPage != .lyrics || lyricsAvailability == .available else { return }
+                guard newPage != page else { return }
+                finishPageMeasurement()
+                pagePerformanceInterval = PerformanceDiagnostics.beginAnimation("PlayerPageSwitch")
                 pageTransition.select(
                     newPage,
                     usesAppleMusicLyrics:
@@ -217,7 +232,7 @@ struct ReferenceNowPlayingView: View {
         }
         .background {
             if keepsStableArtworkFrameMeasurement {
-                artworkFrameMeasurement(for: song)
+                NowPlayingArtworkFrameMeasurement(onFrameChange: recordArtworkPageFrame)
             }
         }
         .overlay {
@@ -288,21 +303,6 @@ struct ReferenceNowPlayingView: View {
                 pageContentTransition(for: .artwork)
             )
         }
-    }
-
-    private func artworkFrameMeasurement(
-        for song: ReferenceTrack
-    ) -> some View {
-        NowPlayingArtworkPage(
-            song: song,
-            artworkNamespace: pageArtworkNamespace,
-            usesArtworkTransition: false,
-            showsArtwork: false,
-            onArtworkFrameChange: recordArtworkPageFrame
-        )
-        .hidden()
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
     }
 
     private var keepsStableArtworkFrameMeasurement: Bool {
@@ -376,6 +376,7 @@ struct ReferenceNowPlayingView: View {
         )
         .allowsHitTesting(page == .queue)
         .accessibilityHidden(page != .queue)
+        .environment(\.playerVisualsActive, visualsActive && (page == .queue || pageTransition.transition?.source == .queue))
     }
 
     private func portraitLyricsPage(
@@ -384,7 +385,7 @@ struct ReferenceNowPlayingView: View {
     ) -> some View {
         NowPlayingLyricsPage(
             song: song, lyrics: lyricsModel.lyrics, errorMessage: lyricsModel.error,
-            isActive: page == .lyrics, isInterfaceHidden: hidesLyricsControls,
+            isActive: visualsActive && page == .lyrics, isInterfaceHidden: hidesLyricsControls,
             artworkNamespace: pageArtworkNamespace, showsSongHeader: false,
             playerFrame: geometryState.contentFrame,
             onInterfaceVisibilityChange: setAppleMusicLyricsControlsVisible,
@@ -427,6 +428,7 @@ struct ReferenceNowPlayingView: View {
         )
         .allowsHitTesting(page == .lyrics)
         .accessibilityHidden(page != .lyrics)
+        .environment(\.playerVisualsActive, visualsActive && (page == .lyrics || pageTransition.transition?.source == .lyrics))
     }
 
     private var residentLyricsVisualState: NowPlayingPageVisualState {
@@ -581,6 +583,13 @@ struct ReferenceNowPlayingView: View {
                 requestID: transition.id
             )
         }
+        finishPageMeasurement()
+    }
+
+    private func finishPageMeasurement() {
+        guard let interval = pagePerformanceInterval else { return }
+        PerformanceDiagnostics.end("PlayerPageSwitch", interval)
+        pagePerformanceInterval = nil
     }
 
     private func presentLyricsEntrance() async {

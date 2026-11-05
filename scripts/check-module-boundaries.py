@@ -17,6 +17,8 @@ def check_source(relative: Path, text: str) -> list[str]:
     account_ui = relative.is_relative_to("NeoMusic/Features/Account")
     app = relative.is_relative_to("NeoMusic/App")
     player = relative.is_relative_to("NeoMusic/Features/Player")
+    if relative.suffix == ".metal" and not player:
+        errors.append("player shaders belong in Features/Player")
     if "Modules" in relative.parts:
         errors.append("online source code belongs in Core/Netease")
     if relative.suffix == ".swift":
@@ -31,6 +33,10 @@ def check_source(relative: Path, text: str) -> list[str]:
             allowed |= account_ui and module == "WebKit"
             allowed |= relative == Path("NeoMusic/Core/Netease/NeteaseAvatarSnapshot.swift") and module == "ImageIO"
             allowed |= relative == Path("NeoMusic/Core/Netease/NeteaseMusicStore.swift") and module == "Network"
+            allowed |= relative == Path("NeoMusic/Core/Netease/NeteaseArtworkCache.swift") and module == "Nuke"
+            allowed |= relative == Path("NeoMusic/Core/Netease/NeteasePageCache.swift") and module == "SQLite3"
+            allowed |= relative == Path("NeoMusic/Core/PerformanceDiagnostics.swift") and module == "os"
+            allowed |= relative == Path("NeoMusic/Core/LocalMusic/DownloadedAudioTags.swift") and module == "AudioTagBridge"
             if not allowed:
                 errors.append(f"import {module} is outside this source's dependency boundary")
     # Scan Swift and Objective-C together; moving code does not exempt it.
@@ -49,7 +55,7 @@ def check_source(relative: Path, text: str) -> list[str]:
 
 def main() -> int:
     sources = sorted(path for path in (ROOT / "NeoMusic").rglob("*")
-                     if path.suffix in {".swift", ".m", ".mm", ".h"})
+                     if path.suffix in {".swift", ".m", ".mm", ".h", ".metal"})
     errors = [error for source in sources
               for error in check_source(source.relative_to(ROOT), source.read_text())]
     if not sources:

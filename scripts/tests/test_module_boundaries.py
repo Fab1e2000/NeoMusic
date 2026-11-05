@@ -59,6 +59,23 @@ class ModuleBoundaryTests(unittest.TestCase):
                      "NeoMusic/Features/Library/PlaylistsPage.swift"]:
             self.assertTrue(boundaries.check_source(Path(path), "import Network"))
 
+    def test_performance_logging_has_one_native_owner(self):
+        self.assertEqual(boundaries.check_source(Path("NeoMusic/Core/PerformanceDiagnostics.swift"), "import os"), [])
+        self.assertTrue(boundaries.check_source(Path("NeoMusic/Core/Netease/Client.swift"), "import os"))
+        self.assertTrue(boundaries.check_source(Path("NeoMusic/Features/Home/HomeFeedView.swift"), "import os"))
+
+    def test_resource_dependencies_have_concrete_owners(self):
+        self.assertEqual(boundaries.check_source(Path("NeoMusic/Core/Netease/NeteaseArtworkCache.swift"), "import Nuke"), [])
+        self.assertEqual(boundaries.check_source(Path("NeoMusic/Core/Netease/NeteasePageCache.swift"), "import SQLite3"), [])
+        for module in ["Nuke", "SQLite3"]:
+            self.assertTrue(boundaries.check_source(Path("NeoMusic/Core/Netease/Account.swift"), "import " + module))
+            self.assertTrue(boundaries.check_source(Path("NeoMusic/Core/Library/LocalLibrary.swift"), "import " + module))
+
+    def test_player_shaders_are_scanned_in_their_owner(self):
+        self.assertEqual(boundaries.check_source(Path("NeoMusic/Features/Player/PlayerEDRShaders.metal"), "#include <metal_stdlib>"), [])
+        self.assertTrue(boundaries.check_source(Path("NeoMusic/Features/Home/PlayerEDRShaders.metal"), "#include <metal_stdlib>"))
+        self.assertTrue(boundaries.check_source(Path("NeoMusic/Features/Player/PlayerEDRShaders.metal"), "URLSession.shared"))
+
 
 if __name__ == "__main__":
     unittest.main()

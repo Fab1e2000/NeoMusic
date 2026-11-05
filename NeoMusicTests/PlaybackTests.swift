@@ -9,7 +9,7 @@ final class PlaybackTests: XCTestCase {
     func song(_ id: String) -> LibrarySongItem {
         LibrarySongItem(id: id, title: id, artist: "", album: "", albumArtist: "", trackNumber: 0, artwork: .missing)
     }
-    func testCrossfadePreferencePersistsAndOldRecordsDefaultOff() throws {
+    func testCrossfadePreferencePersistsAndOldRecordsDefaultOff() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let url = root.appendingPathComponent("queue.json")
@@ -18,6 +18,7 @@ final class PlaybackTests: XCTestCase {
         model.configurePlayback(resolveURL: { _ in nil }, persistenceURL: url)
         XCTAssertFalse(model.isCrossfadeEnabled)
         model.toggleCrossfade()
+        await model.flushQueuePersistence()
         let saved = try JSONDecoder().decode(NowPlayingModel.SavedQueue.self, from: Data(contentsOf: url))
         XCTAssertEqual(saved.crossfadeEnabled, true)
         let old = NowPlayingModel.SavedQueue(ids: ["a"], index: 0, elapsed: 0, repeatMode: .all, shuffled: false)
@@ -122,6 +123,7 @@ final class PlaybackTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(model.elapsed, 4)
         model.togglePlayback()
         let savedElapsed = model.elapsed
+        await model.flushQueuePersistence()
         let restored = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false)
         restored.configurePlayback(resolveURL: { _ in url }, persistenceURL: state)
         restored.restoreQueue(songs: [track])
@@ -145,9 +147,32 @@ final class PlaybackTests: XCTestCase {
         for _ in 0..<50 where model.errorMessage == nil { try await Task.sleep(for: .milliseconds(100)) }
         XCTAssertFalse(model.isPlaying)
         XCTAssertNotNil(model.errorMessage)
+        await model.flushQueuePersistence()
         try Data("broken".utf8).write(to: state)
         model.restoreQueue(songs: [])
         XCTAssertTrue(model.errorMessage?.contains("恢复失败") == true)
+    }
+
+    func testPlaybackAcceptanceCallbackWaitsForConfirmationAndSurvivesCancellation() {
+        let model = NowPlayingModel(queue: [song("original")], currentIndex: 0, isPlaying: false)
+        defer { model.shutdownPlayback() }
+        model.appendLater([song("manual")])
+        var starts = 0
+        model.requestPlay([song("batch")], from: "Roaming", shuffled: false, onStarted: { starts += 1 })
+        XCTAssertEqual(starts, 0)
+        model.pendingPlay = nil
+        XCTAssertEqual(starts, 0)
+        XCTAssertEqual(model.current.id, "original")
+        model.requestPlay([song("batch")], from: "Roaming", shuffled: false, onStarted: { starts += 1 })
+        model.confirmPendingPlay()
+        XCTAssertEqual(starts, 1)
+        XCTAssertEqual(model.current.id, "batch")
+        model.confirmPendingPlay()
+        XCTAssertEqual(starts, 1)
+        model.requestPlay([song("next")], startingAt: 0, from: "Next", onStarted: { starts += 1 })
+        XCTAssertEqual(starts, 2)
+        model.requestPlay([], from: "Empty", shuffled: false, onStarted: { starts += 1 })
+        XCTAssertEqual(starts, 2)
     }
 
     func testSelectedSongWaitsForConfirmationAndKeepsIndex() {
@@ -226,9 +251,10 @@ final class PlaybackTests: XCTestCase {
         XCTAssertFalse(model.isPlaying)
         XCTAssertEqual(center.nowPlayingInfo?[MPMediaItemPropertyTitle] as? String, "missing")
         XCTAssertEqual(center.nowPlayingInfo?[MPNowPlayingInfoPropertyPlaybackRate] as? Double, 0)
+        await model.flushQueuePersistence()
     }
 
-    func testManualNextReusesPreparedOccurrencesAndPreservesPauseAndLoop() throws {
+    func testManualNextReusesPreparedOccurrencesAndPreservesPauseAndLoop() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let url = try temporaryAudio(in: root)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -247,12 +273,13 @@ final class PlaybackTests: XCTestCase {
             XCTAssertEqual(model.entryIDs, ids)
             XCTAssertFalse(model.isPlaying)
             XCTAssertEqual(model.elapsed, 0, accuracy: 0.01)
+            await model.flushQueuePersistence()
             let saved = try JSONDecoder().decode(NowPlayingModel.SavedQueue.self, from: Data(contentsOf: state))
             XCTAssertEqual(saved.index, index)
         }
     }
 
-    func testManualNextReusesPreparedItemWhilePlaying() throws {
+    func testManualNextReusesPreparedItemWhilePlaying() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let url = try temporaryAudio(in: root)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -266,9 +293,10 @@ final class PlaybackTests: XCTestCase {
         XCTAssertTrue(player.currentItem === prepared)
         XCTAssertTrue(model.isPlaying)
         XCTAssertEqual(model.current.id, "b")
+        await model.flushQueuePersistence()
     }
 
-    func testManualSelectionFallsBackForDifferentOrMissingPreparedItem() throws {
+    func testManualSelectionFallsBackForDifferentOrMissingPreparedItem() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let url = try temporaryAudio(in: root)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -286,9 +314,10 @@ final class PlaybackTests: XCTestCase {
         XCTAssertEqual(model.current.id, "b")
         XCTAssertFalse(model.isPlaying)
         XCTAssertNotNil(model.errorMessage)
+        await model.flushQueuePersistence()
     }
 
-    func testManualPreviousLoadsRequestedItemRatherThanPreparedNext() throws {
+    func testManualPreviousLoadsRequestedItemRatherThanPreparedNext() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let url = try temporaryAudio(in: root)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -304,6 +333,7 @@ final class PlaybackTests: XCTestCase {
         XCTAssertEqual(model.current.id, "a")
         XCTAssertFalse(model.isPlaying)
         XCTAssertNil(model.errorMessage)
+        await model.flushQueuePersistence()
     }
 
     func testSystemArtworkFollowsCurrentSongAndClearsMissingCover() async throws {
@@ -336,6 +366,7 @@ final class PlaybackTests: XCTestCase {
         XCTAssertNil(MPNowPlayingInfoCenter.default().nowPlayingInfo?[MPMediaItemPropertyArtwork])
         model.select(0)
         XCTAssertNotNil(MPNowPlayingInfoCenter.default().nowPlayingInfo?[MPMediaItemPropertyArtwork])
+        await model.flushQueuePersistence()
     }
 
 }

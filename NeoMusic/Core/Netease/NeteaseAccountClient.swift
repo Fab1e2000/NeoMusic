@@ -6,8 +6,8 @@ import CryptoKit
 import Foundation
 import Security
 
-@MainActor
-final class NeteaseAccountClient {
+final class NeteaseAccountClient: Sendable {
+    enum EAPIProfile: Sendable { case account, playback }
     private let session: URLSession
     private let deviceID: String
 
@@ -25,7 +25,7 @@ final class NeteaseAccountClient {
         return configuration
     }
 
-    func profile(credential: NeteaseCredential) async throws -> NeteaseProfile {
+    @concurrent func profile(credential: NeteaseCredential) async throws -> NeteaseProfile {
         try Task.checkCancellation()
         let request = try makeRequest(credential: credential)
         let data: Data
@@ -60,7 +60,7 @@ final class NeteaseAccountClient {
         return NeteaseProfile(userID: profile.userId, nickname: profile.nickname, avatarURL: avatarURL)
     }
 
-    func makeRequest(credential: NeteaseCredential?, path: String = "/api/w/nuser/account/get", fields: [String: Any] = [:]) throws -> URLRequest {
+    func makeRequest(credential: NeteaseCredential?, path: String = "/api/w/nuser/account/get", fields: [String: any Sendable] = [:], profile: EAPIProfile = .account) throws -> URLRequest {
         var header = [
             "os": "pc", "appver": "3.1.17.204416", "osver": "Microsoft-Windows-10-Professional-build-19045-64bit",
             "channel": "netease", "versioncode": "140", "mobilename": "", "resolution": "1920x1080",
@@ -69,6 +69,15 @@ final class NeteaseAccountClient {
         ]
         if credential == nil { header.removeValue(forKey: "MUSIC_U") }
         header["requestId"] = "\(Int64(Date().timeIntervalSince1970 * 1000))_\(Int.random(in: 1000...9999))"
+        // MeloX 09713ed: song_url_v1 uses the default iOS EAPI profile,
+        // with MUSIC_U in both the encrypted header and the scoped cookie.
+        if profile == .playback {
+            header = ["os": "ios", "appver": "9.0.90", "osver": "18.0",
+                      "buildver": String(Int(Date().timeIntervalSince1970)),
+                      "channel": "distribution", "__csrf": credential?.csrf ?? "",
+                      "requestId": "\(Int64(Date().timeIntervalSince1970 * 1000))_0000"]
+            if let credential { header["MUSIC_U"] = credential.musicU }
+        }
         var payload = fields
         payload["header"] = header
         payload["e_r"] = false
@@ -84,29 +93,73 @@ final class NeteaseAccountClient {
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.httpShouldHandleCookies = false
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.setValue("NeteaseMusic 9.0.90/5038 (iPhone; iOS 16.2; zh_CN)", forHTTPHeaderField: "User-Agent")
-        request.setValue("https://music.163.com/", forHTTPHeaderField: "Referer")
+        request.setValue(profile == .playback
+            ? "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148"
+            : "NeteaseMusic 9.0.90/5038 (iPhone; iOS 16.2; zh_CN)", forHTTPHeaderField: "User-Agent")
+        if profile == .account { request.setValue("https://music.163.com/", forHTTPHeaderField: "Referer") }
+        let cookies: [String: String]
+        if profile == .playback {
+            var values = ["os": "ios", "appver": "9.0.90", "__remember_me": "true"]
+            if let credential {
+                values["MUSIC_U"] = credential.musicU
+                if let csrf = credential.csrf { values["__csrf"] = csrf }
+            }
+            cookies = values
+        } else { cookies = header }
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
-        request.setValue(header.keys.sorted().map {
-            "\($0)=\(header[$0]!.addingPercentEncoding(withAllowedCharacters: allowed) ?? "")"
+        request.setValue(cookies.keys.sorted().map {
+            "\($0)=\(cookies[$0]!.addingPercentEncoding(withAllowedCharacters: allowed) ?? "")"
         }.joined(separator: "; "), forHTTPHeaderField: "Cookie")
         request.httpBody = Data(("params=" + encrypted.map { String(format: "%02X", $0) }.joined()).utf8)
         return request
     }
 
-    func request(path: String, fields: [String: Any] = [:], credential: NeteaseCredential?) async throws -> Data {
+    @concurrent func request(path: String, fields: [String: any Sendable] = [:], credential: NeteaseCredential?, profile: EAPIProfile = .account) async throws -> Data {
+        let data = try await responseData(path: path, fields: fields, credential: credential, profile: profile)
+        _ = try JSONDecoder().decode(CheckedResponse<EmptyResponse>.self, from: data)
+        return data
+    }
+
+    @concurrent func decoded<Response: Decodable & Sendable>(path: String, fields: [String: any Sendable], credential: NeteaseCredential?, profile: EAPIProfile = .account) async throws -> Response {
+        let data = try await responseData(path: path, fields: fields, credential: credential, profile: profile)
+        let response = try JSONDecoder().decode(CheckedResponse<Response>.self, from: data).value
         try Task.checkCancellation()
-        let request = try makeRequest(credential: credential, path: path, fields: fields)
-        let (data, response) = try await session.data(for: request)
+        return response
+    }
+
+    private func responseData(path: String, fields: [String: any Sendable], credential: NeteaseCredential?, profile: EAPIProfile) async throws -> Data {
+        try Task.checkCancellation()
+        let request = try makeRequest(credential: credential, path: path, fields: fields, profile: profile)
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch let error as URLError where profile == .playback && error.code == .secureConnectionFailed {
+            // The read-only playback POST can recover from the observed transient
+            // TLS handshake failure on a new task. Keep system trust evaluation,
+            // allow one retry, and never retry account writes or server rejections.
+            try Task.checkCancellation()
+            (data, response) = try await session.data(for: makeRequest(
+                credential: credential, path: path, fields: fields, profile: profile))
+        }
         try Task.checkCancellation()
         guard let http = response as? HTTPURLResponse else { throw NeteaseAccountError.invalidResponse }
         if http.statusCode == 401 { throw NeteaseAccountError.authenticationRequired }
         guard (200..<300).contains(http.statusCode) else { throw NeteaseAccountError.http(http.statusCode) }
-        struct Status: Decodable { let code: Int }
-        let status = try JSONDecoder().decode(Status.self, from: data)
-        if status.code == 301 || status.code == 401 { throw NeteaseAccountError.authenticationRequired }
-        guard status.code == 200 else { throw NeteaseAccountError.server(status.code) }
         return data
+    }
+
+    private struct EmptyResponse: Decodable {}
+    private struct CheckedResponse<Value: Decodable>: Decodable {
+        let value: Value
+        private enum CodingKeys: String, CodingKey { case code }
+        init(from decoder: any Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            let code = try values.decode(Int.self, forKey: .code)
+            if code == 301 || code == 401 { throw NeteaseAccountError.authenticationRequired }
+            guard code == 200 else { throw NeteaseAccountError.server(code) }
+            value = try Value(from: decoder)
+        }
     }
 
     /*
@@ -134,7 +187,7 @@ final class NeteaseAccountClient {
     */
     // WEAPI wire format follows api-enhanced util/crypto.js (MIT, Binaryify).
     // Native CommonCrypto CBC and Security RSA implement the protocol without a JS dependency.
-    func makeWebRequest(path: String, fields: [String: Any], credential: NeteaseCredential) throws -> URLRequest {
+    func makeWebRequest(path: String, fields: [String: any Sendable], credential: NeteaseCredential) throws -> URLRequest {
         var payload = fields
         payload["csrf_token"] = credential.csrf ?? ""
         let json = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
@@ -173,7 +226,7 @@ final class NeteaseAccountClient {
         request.httpBody = Data("params=\(encoded)&encSecKey=\(rsa)".utf8)
         return request
     }
-    func requestWeb(path: String, fields: [String: Any], credential: NeteaseCredential) async throws -> Data {
+    @concurrent func requestWeb(path: String, fields: [String: any Sendable], credential: NeteaseCredential) async throws -> Data {
         try Task.checkCancellation()
         let (data, response) = try await session.data(for: makeWebRequest(path: path, fields: fields, credential: credential))
         try Task.checkCancellation()

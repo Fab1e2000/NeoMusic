@@ -1733,7 +1733,17 @@ static void __LNPopupControllerDeeplyEnumerateSubviewsUsingBlock(UIView* view, v
 	}
 	
 	[self _enqueueEvent:[_LNPopupControllerEvent presentEventWithOperation:^{
-		[self _presentPopupBarWithContentViewController:contentViewController openPopup:open animated:animated completion:completionBlock];
+		if(animated)
+		{
+			[self _presentPopupBarWithContentViewController:contentViewController openPopup:open animated:YES completion:completionBlock];
+		}
+		else
+		{
+			// Title hosting and tab-bar layout must share the immediate presentation.
+			[UIView performWithoutAnimation:^{
+				[self _presentPopupBarWithContentViewController:contentViewController openPopup:open animated:NO completion:completionBlock];
+			}];
+		}
 	}]];
 }
 
@@ -1916,7 +1926,10 @@ static void __LNPopupControllerDeeplyEnumerateSubviewsUsingBlock(UIView* view, v
 			{
 				[self.popupBar.os26TransitionView removeFromSuperview];
 				self.popupBar.os26TransitionView = nil;
-				
+			}
+
+			if(LNPopupEnvironmentHasGlass())
+			{
 				[self.containerController _layoutPopupBarOrderForUse];
 			}
 			

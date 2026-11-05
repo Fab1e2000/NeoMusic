@@ -7,6 +7,7 @@ struct PlaylistDetailView: View {
     let playlistID: String
     let library: PlaylistLibrary
     let songs: [LibrarySongItem]
+    var availableSongs: (@MainActor () -> [LibrarySongItem])? = nil
     var externalActions: ExternalPlaylistActions? = nil
     var externalArtwork: AnyView? = nil
     /// 宿主提供示例最近播放，不将资料库顺序当作播放历史。
@@ -16,25 +17,48 @@ struct PlaylistDetailView: View {
     @Environment(\.closeLibraryDetail) private var closeLibraryDetail
     @Environment(\.songMenuActions) private var songActions
     @Environment(\.collectionMenuActions) private var collectionActions
+    @Environment(\.libraryDownloads) private var downloads
+    @Environment(\.libraryNavigationPreview) private var navigationPreview
     @State private var query = ""
     @State private var sort = DetailSort.order
+    @State private var projection = LibraryListProjection<ProjectionInput, Projection>()
     @State private var showsAddMusic = false
     @State private var showsEditor = false
     @State private var showsDestinations = false
+    @State private var playbackTask: Task<Void, Never>?
+    @State private var actionFeedback = 0
 
     private var playlist: LibraryPlaylistItem? { library.playlist(playlistID) }
     private var tracks: [LibrarySongItem] { library.songs(in: playlistID) }
-    private var visibleTracks: [LibrarySongItem] {
-        let filtered = tracks.filter {
-            query.isEmpty || $0.title.localizedStandardContains(query)
-                || $0.artist.localizedStandardContains(query) || $0.album.localizedStandardContains(query)
+    private var displayed: Projection {
+        let input = ProjectionInput(tracks: tracks, query: query, sort: sort)
+        return projection.value(for: input, calculate: input.calculate)
+    }
+    private var visibleTracks: [LibrarySongItem] { displayed.tracks }
+
+    struct ProjectionInput: Equatable {
+        let tracks: [LibrarySongItem]
+        let query: String
+        let sort: DetailSort
+
+        func calculate() -> Projection {
+            let filtered = query.isEmpty ? tracks : tracks.filter {
+                $0.title.localizedStandardContains(query)
+                    || $0.artist.localizedStandardContains(query) || $0.album.localizedStandardContains(query)
+            }
+            let ordered: [LibrarySongItem]
+            switch sort {
+            case .order: ordered = filtered
+            case .title: ordered = filtered.sorted(byName: \.title)
+            case .artist: ordered = filtered.sorted(byName: \.artist)
+            case .album: ordered = filtered.sorted(byName: \.album)
+            }
+            return Projection(tracks: ordered, totalDuration: tracks.reduce(0) { $0 + $1.duration })
         }
-        switch sort {
-        case .order: return filtered
-        case .title: return filtered.sorted(byName: \.title)
-        case .artist: return filtered.sorted(byName: \.artist)
-        case .album: return filtered.sorted(byName: \.album)
-        }
+    }
+    struct Projection {
+        let tracks: [LibrarySongItem]
+        let totalDuration: Int
     }
     var body: some View {
         Group {
@@ -45,6 +69,11 @@ struct PlaylistDetailView: View {
             }
         }
         .task(id: playlistID) { if playlist?.isReadOnly == true { await library.loadOnlinePlaylist?(playlistID) } }
+        .task(id: FullCollectionRequest(playlistID: playlistID, query: query, sort: sort,
+                                        hasMore: library.onlineHasMore.contains(playlistID))) {
+            if !query.isEmpty || sort != .order { _ = await library.prepareCompleteCollection(playlistID) }
+        }
+        .onDisappear { playbackTask?.cancel(); playbackTask = nil }
         .playlistDeletionConfirmation(library)
         .onChange(of: playlist == nil) { _, missing in
             if missing {
@@ -52,24 +81,36 @@ struct PlaylistDetailView: View {
             }
         }
         .sheet(isPresented: $showsAddMusic) {
-            AddPlaylistMusicView(title: playlist?.title ?? "播放列表", songs: songs,
-                                 playlists: library.playlists, existingIDs: Set(tracks.map(\.id)),
-                                 playlistSongs: Dictionary(uniqueKeysWithValues: library.playlists.map { playlist in
-                                     (playlist.id, playlist.isSystem ? songs.filter(\.isFavorite) : library.songs(in: playlist.id))
-                                 }), recentlyPlayedSongs: recentlyPlayedSongs) { selected in
-                library.addSongs(selected, to: playlistID)
-            }
+            PlaylistAddMusicContent(playlistID: playlistID, library: library, songs: availableSongsProvider,
+                                    recentlyPlayedSongs: recentlyPlayedSongs)
         }
         .sheet(isPresented: $showsEditor) {
-            PlaylistEditor(playlistID: playlistID, library: library, availableSongs: songs)
+            PlaylistEditorContent(playlistID: playlistID, library: library, songs: availableSongsProvider)
         }
         .sheet(isPresented: $showsDestinations) {
             PlaylistDestinationPicker(library: library, excluding: playlistID, songs: tracks)
         }
     }
 
+    private var availableSongsProvider: @MainActor () -> [LibrarySongItem] {
+        if let availableSongs { return availableSongs }
+        let songs = songs
+        return { songs }
+    }
+
+    private struct FullCollectionRequest: Equatable {
+        let playlistID: String
+        let query: String
+        let sort: DetailSort
+        let hasMore: Bool
+    }
+
     private func content(_ playlist: LibraryPlaylistItem) -> some View {
-        List {
+        let tracks = tracks
+        let displayed = displayed
+        let visibleTracks = displayed.tracks
+        let hasQuery = !query.isEmpty
+        return List {
             header(playlist)
                 .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: tracks.isEmpty ? 39 : 24, trailing: 20))
                 .listRowSeparator(.hidden, edges: .top)
@@ -85,9 +126,14 @@ struct PlaylistDetailView: View {
             Section {
                 ForEach(visibleTracks) { song in
                     trackRow(song, title: playlist.title)
+                        .task(id: visibleTracks.count) {
+                            guard song.id == visibleTracks.last?.id, query.isEmpty, sort == .order,
+                                  library.onlineHasMore.contains(playlistID), library.onlineErrors[playlistID] == nil else { return }
+                            await library.loadMoreOnlinePlaylist?(playlistID)
+                        }
                         .listRowInsets(EdgeInsets(top: 4, leading: 20, bottom: 4, trailing: 20))
                         .alignmentGuide(.listRowSeparatorLeading) { _ in
-                            !query.isEmpty && song.id == visibleTracks.last?.id ? 0 : 60
+                            hasQuery && song.id == visibleTracks.last?.id ? 0 : 60
                         }
                         .alignmentGuide(.listRowSeparatorTrailing) { $0.width }
                         .swipeActions(edge: .leading) {
@@ -118,7 +164,9 @@ struct PlaylistDetailView: View {
             .listSectionSeparator(.visible, edges: .bottom)
             if query.isEmpty {
                 if !tracks.isEmpty {
-                    Text("\(tracks.count)首歌，\(tracks.reduce(0) { $0 + $1.duration } / 60)分钟")
+                    Text(library.onlineHasMore.contains(playlistID)
+                         ? "\(library.onlineTrackCounts[playlistID] ?? tracks.count)首歌"
+                         : "\(tracks.count)首歌，\(displayed.totalDuration / 60)分钟")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .padding(.top, 14)
@@ -155,13 +203,13 @@ struct PlaylistDetailView: View {
 
     private func header(_ playlist: LibraryPlaylistItem) -> some View {
         VStack(spacing: 0) {
-            Group {
+            LibraryArtworkSurface(content: Group {
                 if let externalArtwork {
                     externalArtwork.clipShape(.rect(cornerRadius: 10))
                 } else {
-                    detailArtwork(playlist.artwork)
+                    detailArtwork(playlist)
                 }
-            }
+            }.environment(\.nativeArtworkSurfaceEnabled, false), cornerRadius: 10, isZoomAlignmentTarget: true)
                 .frame(width: 266, height: 266)
                 .shadow(color: .black.opacity(0.06), radius: 12, y: 6)
                 .padding(.top, 14)
@@ -174,9 +222,13 @@ struct PlaylistDetailView: View {
             if !tracks.isEmpty {
                 HStack(spacing: 14) {
                     Button {
+                        guard !tracks.isEmpty else { return }
+                        actionFeedback &+= 1
                         collectionActions.play(.playlist(playlistID), true)
                     } label: { actionCircle("随机播放", image: "shuffle") }
                     Button {
+                        guard !tracks.isEmpty else { return }
+                        actionFeedback &+= 1
                         collectionActions.play(.playlist(playlistID), false)
                     } label: {
                         HStack(spacing: 5) {
@@ -188,17 +240,22 @@ struct PlaylistDetailView: View {
                             .frame(width: 160, height: 48)
                             .background(Color.primary, in: .capsule)
                     }
-                    Button {} label: { actionCircle("下载", image: "arrow.down") }.disabled(true)
+                    CollectionDownloadButton(route: .playlist(playlistID), songs: tracks)
                 }
                 .buttonStyle(.plain)
+                .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.6), trigger: actionFeedback)
                 .padding(.top, 15)
+                CollectionDownloadSummary(route: .playlist(playlistID))
             }
         }
         .frame(maxWidth: .infinity)
     }
 
-    @ViewBuilder private func detailArtwork(_ artwork: Artwork) -> some View {
-        if case .playlist = artwork {
+    @ViewBuilder private func detailArtwork(_ playlist: LibraryPlaylistItem) -> some View {
+        let preview = navigationPreview.flatMap {
+            $0.route == .playlist(playlistID) && $0.ownerID == playlist.sourceOwnerID ? $0 : nil
+        }
+        if case .playlist = playlist.artwork, preview == nil {
             // 同尺寸 AM 截图：798px 封面内音符宽约311px；详情占位底色为中性灰。
             RoundedRectangle(cornerRadius: 10)
                 .fill(Color(red: 229 / 255, green: 229 / 255, blue: 230 / 255))
@@ -210,7 +267,9 @@ struct PlaylistDetailView: View {
                 .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(.primary.opacity(0.074), lineWidth: 1 / displayScale) }
                 .accessibilityHidden(true)
         } else {
-            ArtworkView(artwork: artwork, cornerRadius: 10)
+            ArtworkView(artwork: playlist.artwork == .playlist ? preview?.artwork ?? playlist.artwork : playlist.artwork,
+                        contentID: preview?.contentID ?? "\(playlist.sourceOwnerID ?? "local"):\(playlistID)",
+                        previewArtwork: preview?.artwork, cornerRadius: 10)
         }
     }
 
@@ -225,11 +284,16 @@ struct PlaylistDetailView: View {
     private func trackRow(_ song: LibrarySongItem, title: String) -> some View {
         HStack(spacing: 12) {
             Button {
-                let list = visibleTracks
-                guard let index = list.firstIndex(where: { $0.id == song.id }) else { return }
-                songActions.play(list, index, title)
+                playbackTask?.cancel()
+                if library.onlineHasMore.contains(playlistID) {
+                    playbackTask = Task {
+                        guard await library.prepareCompleteCollection(playlistID), !Task.isCancelled else { return }
+                        playVisibleSong(song.id, title: title)
+                    }
+                } else { playVisibleSong(song.id, title: title) }
             } label: { PlaylistDetailSongLabel(song: song) }
                 .buttonStyle(.automatic)
+            SongDownloadStatus(song: song, showsImported: false)
             Menu { SongMenuContents(song: song) } label: {
                 Image(systemName: "ellipsis").font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(.secondary).frame(width: 30, height: 44).offset(x: 1)
@@ -240,6 +304,12 @@ struct PlaylistDetailView: View {
             .tint(.secondary)
         }
         .songContextMenu(song)
+    }
+
+    private func playVisibleSong(_ songID: String, title: String) {
+        let list = visibleTracks
+        guard let index = list.firstIndex(where: { $0.id == songID }) else { return }
+        songActions.play(list, index, title)
     }
 
     private var addMusicRow: some View {
@@ -263,9 +333,28 @@ struct PlaylistDetailView: View {
         } else {
             libraryMenu(playlist)
         }
+        if collectionActions.canRemoveDownload(.playlist(playlistID)) {
+            Section {
+                Button("移除下载", systemImage: "xmark.circle") { collectionActions.removeDownload(.playlist(playlistID)) }
+            }
+        }
+    }
+
+    @ViewBuilder private func collectionDownloadMenuAction() -> some View {
+        let route = LibraryRoute.playlist(playlistID)
+        let state = downloads?.collectionState(of: route)
+        if state?.isActive == true {
+            Button("停止下载", systemImage: "stop.circle.fill") { collectionActions.stopDownload(route) }
+        } else if state?.isComplete == true {
+            Button("已下载", systemImage: "checkmark.circle.fill") {}.disabled(true)
+        } else {
+            Button((state?.failedCount ?? 0) > 0 ? "重试下载" : "下载", systemImage: "arrow.down.circle.fill") { collectionActions.download(route) }
+                .disabled(!collectionActions.canDownload(route))
+        }
     }
 
     @ViewBuilder private func externalMenu(_ playlist: LibraryPlaylistItem, actions: ExternalPlaylistActions) -> some View {
+        collectionDownloadMenuAction()
         if let toggleFavorite = actions.toggleFavorite {
             Button(playlist.isFavorite ? "撤销喜爱" : "喜爱", systemImage: playlist.isFavorite ? "star.slash.fill" : "star.fill", action: toggleFavorite)
         }
@@ -292,7 +381,7 @@ struct PlaylistDetailView: View {
 
     @ViewBuilder private func libraryMenu(_ playlist: LibraryPlaylistItem) -> some View {
         ControlGroup {
-            Button("下载", systemImage: "arrow.down.circle.fill") {}.disabled(true)
+            collectionDownloadMenuAction()
             Button(playlist.isFavorite ? "撤销" : "喜爱", systemImage: playlist.isFavorite ? "star.slash.fill" : "star.fill") {
                 library.toggleFavorite(playlistID)
             }
@@ -336,7 +425,7 @@ struct PlaylistDetailView: View {
         } }
     }
 
-    private enum DetailSort: String, CaseIterable, Identifiable {
+    enum DetailSort: String, CaseIterable, Identifiable {
         case order = "播放列表顺序", title = "标题", artist = "艺人", album = "专辑"
         var id: Self { self }
     }
@@ -370,19 +459,48 @@ private struct PlaylistDetailSearch: ViewModifier {
 
 extension View {
     /// 长按菜单等入口请求编辑播放列表时弹出编辑页，挂在应用根部。
-    func playlistEditSheet(_ library: PlaylistLibrary, songs: [LibrarySongItem]) -> some View {
+    func playlistEditSheet(_ library: PlaylistLibrary, songs: @escaping @MainActor () -> [LibrarySongItem]) -> some View {
         modifier(PlaylistEditSheet(library: library, songs: songs))
     }
 }
 
 private struct PlaylistEditSheet: ViewModifier {
     @Bindable var library: PlaylistLibrary
-    let songs: [LibrarySongItem]
+    let songs: @MainActor () -> [LibrarySongItem]
 
     func body(content: Content) -> some View {
         content.sheet(item: $library.pendingEdit) { playlist in
-            PlaylistEditor(playlistID: playlist.id, library: library, availableSongs: songs)
+            PlaylistEditorContent(playlistID: playlist.id, library: library, songs: songs)
         }
+    }
+}
+
+/// Only an open editor observes the full catalog used to add music.
+private struct PlaylistEditorContent: View {
+    let playlistID: String
+    let library: PlaylistLibrary
+    let songs: @MainActor () -> [LibrarySongItem]
+
+    var body: some View {
+        PlaylistEditor(playlistID: playlistID, library: library, availableSongs: songs())
+    }
+}
+
+private struct PlaylistAddMusicContent: View {
+    let playlistID: String
+    let library: PlaylistLibrary
+    let songs: @MainActor () -> [LibrarySongItem]
+    let recentlyPlayedSongs: [LibrarySongItem]
+
+    var body: some View {
+        let available = songs()
+        return AddPlaylistMusicView(title: library.playlist(playlistID)?.title ?? "播放列表", songs: available,
+            playlists: library.playlists, existingIDs: Set(library.songs(in: playlistID).map(\.id)),
+            playlistSongs: Dictionary(uniqueKeysWithValues: library.playlists.map { playlist in
+                (playlist.id, playlist.isSystem ? available.filter(\.isFavorite) : library.songs(in: playlist.id))
+            }), recentlyPlayedSongs: recentlyPlayedSongs) { selected in
+                library.addSongs(selected, to: playlistID)
+            }
     }
 }
 

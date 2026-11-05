@@ -14,12 +14,14 @@ enum HomeMetrics {
 
 struct HomeFeedView: View {
     let model: HomeContentModel
+    @Environment(\.openLibraryRoute) private var openRoute
+    @State private var quickActionScrollID: HomeQuickAction?
+    @State private var quickActionSource: (() -> UIView?)?
+    @State private var artworkSources = HomeArtworkSources()
 
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: HomeMetrics.sectionSpacing) {
-                shelf("专属精选推荐", id: "featured", items: model.featured, large: true,
-                      error: model.featuredError, retry: model.retryFeatured)
                 if model.isGuest {
                     HStack(spacing: 16) {
                         Text("登录，发现为你推荐的音乐").font(.subheadline).foregroundStyle(.secondary)
@@ -27,14 +29,55 @@ struct HomeFeedView: View {
                         Button("登录", action: model.login).font(.subheadline.weight(.semibold))
                     }.padding(.horizontal, HomeMetrics.margin)
                 }
-                if !model.recent.isEmpty {
-                    shelf("最近播放", id: "recent", items: Array(model.recent.prefix(20)), large: false)
+                if !model.quickActions.isEmpty {
+                    ScrollView(.horizontal) {
+                        LazyHStack(spacing: HomeMetrics.cardSpacing) {
+                            ForEach(model.quickActions) { item in
+                                HomeQuickActionCard(item: item, state: model.quickActionStates[item.action] ?? .idle,
+                                                    sources: artworkSources, sourceID: "\(model.navigationOwnerID ?? "public"):quick:\(item.id)",
+                                                    captureSource: { quickActionSource = $0 }) {
+                                    model.performQuickAction(item.action)
+                                }
+                            }
+                        }.scrollTargetLayout()
+                    }
+                    .contentMargins(.horizontal, HomeMetrics.margin, for: .scrollContent)
+                    .scrollTargetBehavior(.viewAligned)
+                    .scrollIndicators(.hidden)
+                    .scrollPosition(id: $quickActionScrollID, anchor: .leading)
+                    .accessibilityIdentifier("home.quick-actions")
                 }
-                shelf("推荐歌单", id: "recommendations", items: model.recommendations, large: true,
-                      error: model.recommendationsError, retry: model.retryRecommendations)
+                ForEach(model.sections) { section in
+                    if !section.items.isEmpty {
+                        HomeContentShelf(section: section, ownerID: model.navigationOwnerID, sources: artworkSources,
+                                         prepareNavigation: model.prepareNavigation) { item in model.play(section.id, item.id) }
+                    }
+                }
+                if let error = model.feedError {
+                    HStack {
+                        Text(error).font(.subheadline).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("重试") { Task { await model.refresh() } }
+                    }.padding(.horizontal, HomeMetrics.margin)
+                }
+                if model.isLoading && model.sections.isEmpty {
+                    ProgressView().frame(maxWidth: .infinity).padding()
+                }
             }
             .padding(.top, 15)
             .padding(.bottom, 24)
+        }
+        .refreshable { await model.refresh() }
+        .onChange(of: model.quickActionRoute, initial: true) { _, route in
+            guard let route else { return }
+            let sourceProvider = quickActionSource
+            let preview = model.quickActionPreview
+            model.quickActionRoute = nil
+            model.quickActionPreview = nil
+            quickActionSource = nil
+            if let preview { openRoute(route, preview: preview, sourceProvider: sourceProvider ?? { nil }) }
+            else if let sourceProvider { openRoute(route, sourceProvider: sourceProvider) }
+            else { openRoute(route) }
         }
         .accessibilityIdentifier("home.feed")
         .background(.white)
@@ -45,61 +88,223 @@ struct HomeFeedView: View {
         .environment(\.colorScheme, .light)
     }
 
-    private func shelf(_ title: String, id: String, items: [HomeContentItem], large: Bool,
-                       error: String? = nil, retry: @escaping () -> Void = {}) -> some View {
-        VStack(alignment: .leading, spacing: HomeMetrics.headingSpacing) {
-            Text(title).font(.system(size: 20, weight: .bold)).lineLimit(1)
-                .frame(height: HomeMetrics.headingHeight, alignment: .leading)
-                .padding(.horizontal, HomeMetrics.margin)
-                .accessibilityAddTraits(.isHeader)
-                .accessibilityIdentifier("home.heading.\(id)")
-            if !items.isEmpty {
-                ScrollView(.horizontal) {
-                    HStack(alignment: .top, spacing: HomeMetrics.cardSpacing) {
-                        ForEach(items) { item in HomeContentCard(item: item, large: large) }
-                    }.scrollTargetLayout()
+}
+
+struct HomeQuickActionCard: View {
+    let item: HomeQuickActionItem
+    let state: HomeQuickActionState
+    var sources: HomeArtworkSources? = nil
+    var sourceID: String? = nil
+    var captureSource: (@escaping () -> UIView?) -> Void = { _ in }
+    let action: () -> Void
+    @State private var localSources = HomeArtworkSources()
+    private var artworkSources: HomeArtworkSources { sources ?? localSources }
+    private var sourceIdentity: String { sourceID ?? "quick:\(item.id)" }
+
+    private var isLoading: Bool { state == .loading }
+    private var accessibilityStatus: String {
+        switch state {
+        case .idle: item.subtitle
+        case .loading: "正在载入"
+        case .failed(let error): "\(error)，轻点重试"
+        }
+    }
+
+    var body: some View {
+        Button {
+            captureSource { [sources = artworkSources, id = sourceIdentity] in sources.view(for: id) }
+            action()
+        } label: {
+            cover
+                .frame(width: HomeMetrics.heroWidth, height: HomeMetrics.heroHeight)
+                .clipShape(.rect(cornerRadius: 16))
+                .shadow(color: .black.opacity(0.18), radius: 16, x: 0, y: 12)
+                .contentShape(.rect(cornerRadius: 16))
+        }
+        .buttonStyle(.plain)
+        .disabled(isLoading)
+        .accessibilityLabel(item.action.title)
+        .accessibilityValue(accessibilityStatus)
+        .accessibilityIdentifier("home.quick-action.\(item.action.rawValue)")
+    }
+
+    private var cover: some View {
+        ZStack(alignment: .bottomLeading) {
+            HomeCardArtwork(content: AnyView(HomeQuickActionArtwork(item: item).id(sourceIdentity)), sources: artworkSources, sourceID: sourceIdentity, cornerRadius: 16)
+            LinearGradient(colors: [.clear, .black.opacity(0.6)], startPoint: .center, endPoint: .bottom)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(item.action.eyebrow)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(0.75))
+                    .lineLimit(1)
+                Text(item.action.title).font(.title2.bold()).lineLimit(2)
+                switch state {
+                case .idle, .loading:
+                    if !item.subtitle.isEmpty {
+                        Text(item.subtitle)
+                            .font(.system(size: 13))
+                            .foregroundStyle(.white.opacity(0.85))
+                            .lineLimit(2)
+                    }
+                case .failed(let error):
+                    Text(error).font(.system(size: 13)).lineLimit(3)
+                    Text("轻点重试").font(.system(size: 13, weight: .semibold))
                 }
-                .contentMargins(.horizontal, HomeMetrics.margin, for: .scrollContent)
-                .scrollTargetBehavior(.viewAligned)
-                .scrollIndicators(.hidden)
-                .scrollClipDisabled()
-                .accessibilityIdentifier("home.shelf.\(id)")
             }
-            if let error {
-                HStack {
-                    Text(error).font(.subheadline).foregroundStyle(.secondary)
-                    Spacer()
-                    Button("重试", action: retry).font(.subheadline.weight(.semibold))
-                }.padding(.horizontal, HomeMetrics.margin)
+            .foregroundStyle(.white)
+            .multilineTextAlignment(.leading)
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(width: HomeMetrics.heroWidth, height: HomeMetrics.heroHeight)
+        .overlay(alignment: .topTrailing) {
+            if isLoading {
+                ProgressView().tint(.white)
+                    .padding(10)
+                    .background(.black.opacity(0.3), in: .circle)
+                    .padding(14)
             }
         }
+    }
+}
+
+private struct HomeQuickActionArtwork: View {
+    let item: HomeQuickActionItem
+
+    var body: some View {
+        Group {
+            if let artwork = item.artwork {
+                HomePlaylistArtwork(artwork: artwork)
+            } else {
+                Color(.secondarySystemFill)
+            }
+        }.accessibilityHidden(true)
+    }
+}
+
+private struct HomeContentShelf: View {
+    let section: HomeContentSection
+    let ownerID: String?
+    let sources: HomeArtworkSources
+    let prepareNavigation: (LibraryNavigationPreview) -> Void
+    let play: (HomeContentItem) -> Void
+    private var songGroups: [[HomeContentItem]] {
+        var groups: [[HomeContentItem]] = []
+        for item in section.items {
+            if let last = groups.last, last.count < 3, last.first?.groupID == item.groupID {
+                groups[groups.count - 1].append(item)
+            } else { groups.append([item]) }
+        }
+        return groups
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: HomeMetrics.headingSpacing) {
+            if !section.title.isEmpty {
+                Text(section.title).font(.system(size: 20, weight: .bold))
+                    .padding(.horizontal, HomeMetrics.margin)
+                    .accessibilityAddTraits(.isHeader)
+                    .accessibilityIdentifier("home.heading.\(section.id)")
+            }
+            if section.kind == .songs || section.kind == .hero {
+                scrollContent.scrollTargetBehavior(.viewAligned)
+            } else {
+                scrollContent
+            }
+        }
+    }
+    private var scrollContent: some View {
+            ScrollView(.horizontal) {
+                LazyHStack(alignment: .top, spacing: HomeMetrics.cardSpacing) {
+                    if section.kind == .songs {
+                        ForEach(songGroups, id: \.first!.id) { group in
+                            VStack(spacing: 0) {
+                                ForEach(group) { item in
+                                    HomeSongRecommendationRow(item: item, ownerID: ownerID, prepareNavigation: prepareNavigation) { play(item) }
+                                    if item.id != group.last?.id { Divider().padding(.leading, 60) }
+                                }
+                            }.containerRelativeFrame(.horizontal, count: 1, spacing: 32)
+                                .padding(.trailing, 12)
+                        }
+                    } else {
+                        ForEach(section.items) { item in
+                            HomeContentCard(item: item, large: section.kind == .hero, ownerID: ownerID,
+                                            sources: sources, sourceID: "\(ownerID ?? "public"):\(section.id):\(item.id)",
+                                            prepareNavigation: prepareNavigation) { play(item) }
+                        }
+                    }
+                }.scrollTargetLayout()
+            }
+            .contentMargins(.horizontal, HomeMetrics.margin, for: .scrollContent)
+            .scrollIndicators(.hidden)
+            .accessibilityIdentifier("home.shelf.\(section.id)")
+    }
+
+}
+
+private struct HomeSongRecommendationRow: View {
+    let item: HomeContentItem
+    let ownerID: String?
+    let prepareNavigation: (LibraryNavigationPreview) -> Void
+    let play: () -> Void
+    @Environment(\.openLibraryRoute) private var openRoute
+    var body: some View {
+        Button {
+            switch item.action {
+            case .navigate(let route):
+                let preview = LibraryNavigationPreview(route: route, ownerID: ownerID, title: item.title, subtitle: item.subtitle, artwork: item.artwork)
+                prepareNavigation(preview)
+                openRoute(route, preview: preview, sourceProvider: { nil })
+            case .playSong: play()
+            }
+        } label: {
+            HStack(spacing: 12) {
+                ArtworkView(artwork: item.artwork, contentID: "\(ownerID ?? "public"):\(item.id)", cornerRadius: 6).frame(width: 48, height: 48)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(item.title).font(.subheadline).foregroundStyle(.primary).lineLimit(1)
+                    Text(item.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }.frame(height: 64).contentShape(.rect)
+        }.buttonStyle(.plain)
+            .accessibilityIdentifier("home.item.\(item.id)")
     }
 }
 
 private struct HomeContentCard: View {
     let item: HomeContentItem
     let large: Bool
+    let ownerID: String?
+    let sources: HomeArtworkSources
+    let sourceID: String
+    let prepareNavigation: (LibraryNavigationPreview) -> Void
+    let play: () -> Void
     @Environment(\.openLibraryRoute) private var openRoute
     @Environment(\.displayScale) private var displayScale
-    @State private var source = HomeCardSource()
 
     var body: some View {
         Button {
-            openRoute(item.route, sourceProvider: { [weak source] in source?.view })
+            switch item.action {
+            case .navigate(let route):
+                let preview = LibraryNavigationPreview(route: route, ownerID: ownerID, title: item.title, subtitle: item.subtitle, artwork: item.artwork)
+                prepareNavigation(preview)
+                openRoute(route, preview: preview, sourceProvider: { [sources, sourceID] in sources.view(for: sourceID) })
+            case .playSong: play()
+            }
         } label: {
             VStack(alignment: .leading, spacing: 6) {
-                HomeCardArtwork(content: AnyView(cover.frame(width: large ? HomeMetrics.heroWidth : HomeMetrics.artworkSize,
-                                                           height: large ? HomeMetrics.heroHeight : HomeMetrics.artworkSize)), source: source)
+                cover
                     .frame(width: large ? HomeMetrics.heroWidth : HomeMetrics.artworkSize,
                            height: large ? HomeMetrics.heroHeight : HomeMetrics.artworkSize)
                     .clipShape(.rect(cornerRadius: large ? 16 : 8))
                     .overlay { if !large { RoundedRectangle(cornerRadius: 8).strokeBorder(.black.opacity(0.10), lineWidth: 1 / displayScale) } }
                     .shadow(color: .black.opacity(large ? 0.18 : 0), radius: 16, x: 0, y: 12)
                 if !large {
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text(item.title).foregroundStyle(.black).frame(height: 16, alignment: .leading)
-                        Text(item.subtitle).foregroundStyle(Color(white: 0.50)).frame(height: 16, alignment: .leading)
-                    }.font(.system(size: 13)).lineLimit(1)
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(item.title).font(.subheadline).foregroundStyle(.primary).lineLimit(2)
+                        if !item.subtitle.isEmpty {
+                            Text(item.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                    }
                 }
             }.frame(width: large ? HomeMetrics.heroWidth : HomeMetrics.artworkSize, alignment: .leading)
                 .contentShape(.rect)
@@ -111,59 +316,78 @@ private struct HomeContentCard: View {
 
     private var cover: some View {
         ZStack(alignment: .bottomLeading) {
+            HomeCardArtwork(content: AnyView(artwork), sources: sources, sourceID: sourceID, cornerRadius: large ? 16 : 8)
+            if large { caption }
+        }
+    }
+
+    private var artwork: some View {
+        Group {
             switch item.style {
             case .favorites: HomeArtwork(artwork: .favorites)
-            case .daily: HomeDailyArtwork()
-            case .artwork:
+            case .daily, .artwork:
                 if large {
-                    HomePlaylistArtwork(artwork: item.artwork)
+                    HomePlaylistArtwork(artwork: item.artwork).id(sourceID)
                 } else {
-                    ArtworkView(artwork: item.artwork, cornerRadius: 0)
+                    ArtworkView(artwork: item.artwork, contentID: sourceID, cornerRadius: 0)
                         .environment(\.nativeArtworkSurfaceEnabled, false)
                 }
             }
-            if large {
-                VStack(alignment: .leading, spacing: 4) {
-                    if let eyebrow = item.eyebrow, !eyebrow.isEmpty {
-                        Text(eyebrow)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.white.opacity(0.75))
-                            .lineLimit(1)
-                    }
-                    if item.style != .daily {
-                        Text(item.title)
-                            .font(.system(size: 15, weight: .semibold))
-                            .lineLimit(2)
-                    }
-                    if !item.subtitle.isEmpty {
-                        Text(item.subtitle)
-                            .font(.system(size: 13))
-                            .foregroundStyle(.white.opacity(0.8))
-                            .lineLimit(1)
-                    }
-                }
-                .multilineTextAlignment(.leading)
-                .foregroundStyle(.white)
-                .frame(width: HomeMetrics.heroWidth - 32, alignment: .leading)
-                .padding(16)
+        }
+    }
+
+    private var caption: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if let eyebrow = item.eyebrow, !eyebrow.isEmpty {
+                Text(eyebrow).font(.system(size: 12)).foregroundStyle(.white.opacity(0.75)).lineLimit(1)
+            }
+            if item.style != .daily { Text(item.title).font(.title2.bold()).lineLimit(2) }
+            if !item.subtitle.isEmpty {
+                Text(item.subtitle).font(.system(size: 13)).foregroundStyle(.white.opacity(0.8)).lineLimit(1)
             }
         }
+        .multilineTextAlignment(.leading)
+        .foregroundStyle(.white)
+        .frame(width: HomeMetrics.heroWidth - 32, alignment: .leading)
+        .padding(16)
     }
 }
 
-@MainActor private final class HomeCardSource { weak var view: UIView? }
+@MainActor final class HomeArtworkSources {
+    private final class Entry { weak var view: UIView?; init(_ view: UIView) { self.view = view } }
+    private var entries: [String: Entry] = [:]
+    func register(_ view: UIView, for id: String) { entries[id] = Entry(view) }
+    func remove(_ view: UIView, for id: String) { if entries[id]?.view === view { entries[id] = nil } }
+    func view(for id: String) -> UIView? { entries[id]?.view }
+}
 
 private struct HomeCardArtwork: UIViewRepresentable {
     let content: AnyView
-    let source: HomeCardSource
+    let sources: HomeArtworkSources
+    let sourceID: String
+    let cornerRadius: CGFloat
+    final class Coordinator {
+        var sources: HomeArtworkSources
+        var sourceID: String
+        init(_ sources: HomeArtworkSources, _ sourceID: String) { self.sources = sources; self.sourceID = sourceID }
+    }
+    func makeCoordinator() -> Coordinator { Coordinator(sources, sourceID) }
     func makeUIView(context: Context) -> LibraryArtworkSurfaceView {
         let view = LibraryArtworkSurfaceView()
         view.isUserInteractionEnabled = false
-        source.view = view
+        sources.register(view, for: sourceID)
+        view.layer.cornerRadius = cornerRadius
+        view.clipsToBounds = true
         return view
     }
     func updateUIView(_ view: LibraryArtworkSurfaceView, context: Context) {
-        let configuration = UIHostingConfiguration { content }.margins(.all, 0)
+        if context.coordinator.sourceID != sourceID || context.coordinator.sources !== sources {
+            context.coordinator.sources.remove(view, for: context.coordinator.sourceID)
+            context.coordinator.sources = sources
+            context.coordinator.sourceID = sourceID
+        }
+        sources.register(view, for: sourceID)
+        let configuration = UIHostingConfiguration { content.libraryHostedAppearance(context.environment) }.margins(.all, 0)
         if let hosted = view.subviews.first as? any UIContentView {
             hosted.configuration = configuration
         } else {
@@ -175,5 +399,8 @@ private struct HomeCardArtwork: UIViewRepresentable {
                 hosted.topAnchor.constraint(equalTo: view.topAnchor), hosted.bottomAnchor.constraint(equalTo: view.bottomAnchor)
             ])
         }
+    }
+    static func dismantleUIView(_ view: LibraryArtworkSurfaceView, coordinator: Coordinator) {
+        coordinator.sources.remove(view, for: coordinator.sourceID)
     }
 }

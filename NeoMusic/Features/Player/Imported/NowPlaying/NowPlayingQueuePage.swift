@@ -15,11 +15,8 @@ struct NowPlayingQueuePage: View {
     let onSongHeaderOffsetChange: (CGFloat) -> Void
 
     private static let contentHorizontalInset: CGFloat = 32
-    private static let bottomFadeHeight: CGFloat = 80
 
-    @State private var scrollOffset: CGFloat = 0
-    @State private var isSongHeaderHidden = false
-    @State private var isSongHeaderAtRest = true
+    @State private var headerScroll = QueueHeaderScrollState()
 
     init(
         song: ReferenceTrack,
@@ -44,7 +41,8 @@ struct NowPlayingQueuePage: View {
     var body: some View {
         VStack(spacing: 0) {
             NowPlayingQueueList(
-                entries: upcomingEntries,
+                entries: player.upcomingQueueEntries,
+                version: player.upcomingQueueVersion,
                 subtitle: player.automaticContinuationDescription,
                 headerHeight: songHeaderHeight,
                 horizontalInset: Self.contentHorizontalInset,
@@ -55,69 +53,29 @@ struct NowPlayingQueuePage: View {
             )
             // 页面外层有 32pt 的水平内边距；列表自己向两侧多出同样的宽度，行内容再缩进回来。
             .mask {
-                // Fade the last row into the live player backdrop without
-                // introducing a tinted material strip above the scrubber.
-                VStack(spacing: 0) {
-                    NowPlayingQueueTopFade(height: 24)
-                    Rectangle()
-                    LinearGradient(
-                        stops: [
-                            .init(color: .black, location: 0),
-                            .init(color: .black.opacity(0.8), location: 0.35),
-                            .init(color: .black.opacity(0.35), location: 0.7),
-                            .init(color: .clear, location: 1)
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                    .frame(height: Self.bottomFadeHeight)
-                }
-                    .padding(.horizontal, -Self.contentHorizontalInset)
-                    .padding(.top, modeControlsOffset + 44)
+                QueueViewportMask(scroll: headerScroll, headerHeight: songHeaderHeight,
+                                  horizontalInset: Self.contentHorizontalInset,
+                                  bottomFadeHeight: NowPlayingQueueList.bottomFadeHeight)
             }
             .overlay(alignment: .top) {
-                NowPlayingQueueModeControls()
-                    .padding(.vertical, 3)
-                    .frame(height: 44)
-                    .offset(y: modeControlsOffset)
+                QueueHeaderControls(scroll: headerScroll, headerHeight: songHeaderHeight)
             }
             .overlay(alignment: .top) {
                 if presentation == .portrait && showsSongHeader {
-                    NowPlayingSongHeader(
-                        song: song,
-                        artworkNamespace: artworkNamespace,
-                        usesReferenceLayout: true,
-                        usesArtworkTransition: usesArtworkTransition && isSongHeaderAtRest
-                    )
-                    .frame(height: NowPlayingSongHeader.referenceHeight)
-                    .padding(.top, NowPlayingSongHeader.topInset)
-                    .frame(height: songHeaderHeight, alignment: .top)
-                    .offset(y: -scrollOffset)
-                    .opacity(NowPlayingSongHeader.scrollFadeOpacity(scrolled: scrollOffset))
+                    QueueSongHeader(scroll: headerScroll, song: song,
+                                    artworkNamespace: artworkNamespace,
+                                    usesArtworkTransition: usesArtworkTransition,
+                                    headerHeight: songHeaderHeight)
                 }
             }
             .padding(.bottom, bottomContentInset)
         }
         .onAppear {
             if presentation == .portrait {
-                scrollOffset = 0
-                isSongHeaderHidden = false
-                isSongHeaderAtRest = true
+                headerScroll.offset = 0
                 onSongHeaderHiddenChange(false)
                 onSongHeaderOffsetChange(0)
             }
-        }
-    }
-
-    private var upcomingEntries: [UpcomingQueueEntry] {
-        var occurrences: [String: Int] = [:]
-        return player.upcoming.map { entry in
-            let occurrence = occurrences[entry.track.id, default: 0]
-            occurrences[entry.track.id] = occurrence + 1
-            return UpcomingQueueEntry(
-                id: .init(songID: entry.track.id, occurrence: occurrence),
-                queueIndex: entry.index, song: entry.track
-            )
         }
     }
 
@@ -129,10 +87,6 @@ struct NowPlayingQueuePage: View {
             : 0
     }
 
-    private var modeControlsOffset: CGFloat {
-        max(songHeaderHeight - scrollOffset, 0)
-    }
-
     private var bottomContentInset: CGFloat {
         // Leave a small gap above the progress track, halfway between the
         // original fixed inset and the track-aligned version.
@@ -142,37 +96,79 @@ struct NowPlayingQueuePage: View {
     }
 
     private func updateSongHeaderState(for offset: CGFloat) {
-        guard presentation == .portrait else { return }
-        scrollOffset = offset
-
-        onSongHeaderOffsetChange(
-            -min(offset, max(songHeaderHeight, 0))
-        )
-
-        let isHidden =
-            songHeaderHeight > 0
-            && offset >= songHeaderHeight
-        if isSongHeaderHidden != isHidden {
-            isSongHeaderHidden = isHidden
-            onSongHeaderHiddenChange(isHidden)
-        }
-
-        let isAtRest = offset <= 0.5
-        if isSongHeaderAtRest != isAtRest {
-            isSongHeaderAtRest = isAtRest
-        }
+        guard presentation == .portrait, headerScroll.offset != offset else { return }
+        let wasHidden = songHeaderHeight > 0 && headerScroll.offset >= songHeaderHeight
+        headerScroll.offset = offset
+        onSongHeaderOffsetChange(-min(offset, max(songHeaderHeight, 0)))
+        let isHidden = songHeaderHeight > 0 && offset >= songHeaderHeight
+        if wasHidden != isHidden { onSongHeaderHiddenChange(isHidden) }
     }
 
     private func moveQueueItems(
         from source: IndexSet,
         to destination: Int
     ) {
-        withAnimation(.smooth(duration: 0.28)) {
-            player.moveUpcomingQueueItems(
-                fromOffsets: source,
-                toOffset: destination
-            )
+        player.moveUpcomingQueueItems(fromOffsets: source, toOffset: destination)
+    }
+}
+
+/// Scroll motion invalidates the header and mask, not the queue's data projection.
+@MainActor @Observable
+private final class QueueHeaderScrollState {
+    var offset: CGFloat = 0
+}
+
+private struct QueueViewportMask: View {
+    let scroll: QueueHeaderScrollState
+    let headerHeight: CGFloat
+    let horizontalInset: CGFloat
+    let bottomFadeHeight: CGFloat
+
+    var body: some View {
+        VStack(spacing: 0) {
+            NowPlayingQueueTopFade(height: NowPlayingQueueList.topFadeHeight)
+            Rectangle()
+            LinearGradient(stops: [
+                .init(color: .black, location: 0),
+                .init(color: .black.opacity(0.8), location: 0.35),
+                .init(color: .black.opacity(0.35), location: 0.7),
+                .init(color: .clear, location: 1)
+            ], startPoint: .top, endPoint: .bottom)
+            .frame(height: bottomFadeHeight)
         }
+        .padding(.horizontal, -horizontalInset)
+        .padding(.top, max(headerHeight - scroll.offset, 0) + 44)
+    }
+}
+
+private struct QueueHeaderControls: View {
+    let scroll: QueueHeaderScrollState
+    let headerHeight: CGFloat
+
+    var body: some View {
+        NowPlayingQueueModeControls()
+            .padding(.vertical, 3)
+            .frame(height: 44)
+            .offset(y: max(headerHeight - scroll.offset, 0))
+    }
+}
+
+private struct QueueSongHeader: View {
+    let scroll: QueueHeaderScrollState
+    let song: ReferenceTrack
+    let artworkNamespace: Namespace.ID
+    let usesArtworkTransition: Bool
+    let headerHeight: CGFloat
+
+    var body: some View {
+        NowPlayingSongHeader(song: song, artworkNamespace: artworkNamespace,
+                             usesReferenceLayout: true,
+                             usesArtworkTransition: usesArtworkTransition && scroll.offset <= 0.5)
+            .frame(height: NowPlayingSongHeader.referenceHeight)
+            .padding(.top, NowPlayingSongHeader.topInset)
+            .frame(height: headerHeight, alignment: .top)
+            .offset(y: -scroll.offset)
+            .opacity(NowPlayingSongHeader.scrollFadeOpacity(scrolled: scroll.offset))
     }
 }
 

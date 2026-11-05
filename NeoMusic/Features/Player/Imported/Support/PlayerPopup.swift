@@ -12,20 +12,34 @@ struct PlayerPopup: ViewModifier {
     var barColorScheme: ColorScheme? = nil
 
     @Environment(\.accessibilityReduceMotion) private var reducesMotion
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(ReferencePlayerState.self) private var player
+    @Environment(\.artworkLoadAction) private var loadArtwork
     @AppStorage(ImmersiveMode.storageKey) private var isImmersive = false
     @State private var isBarPresented = false
+    @State private var hasPresentedBar = false
     @State private var artwork: UIImage?
+    @State private var artworkTrackID: String?
     @State private var compactControls = false
     @State private var interactionDelegate = PlayerPopupInteractionDelegate()
 
     private var shouldShowBar: Bool { player.currentTrack != nil && !isSuppressed }
-    private var prefetchURLs: [URL] { isPresented || player.isPlaying ? player.adjacentArtworkURLs : [] }
+    private var isBarActive: Bool { shouldShowBar && !isPresented && scenePhase == .active }
+    private var prefetchURLs: [URL] { scenePhase == .active && (isPresented || player.isPlaying) ? player.adjacentArtworkURLs : [] }
+    private var artworkLoadIDs: [String] {
+        let current = [player.currentTrack?.artworkLoadID].compactMap { $0 }
+        guard scenePhase == .active, isPresented || player.isPlaying else { return current }
+        return current + [player.previousInOrder?.track.artworkLoadID, player.nextInOrder?.track.artworkLoadID].compactMap { $0 }
+    }
 
     func body(content: Content) -> some View {
         content
             .popup(isBarPresented: $isBarPresented, isPopupOpen: $isPresented, onClose: onClose) {
-                PlayerPopupContent(barImage: barImage, compact: compactControls) { isPresented = false }
+                PlayerPopupContent(barImage: barImage, compact: compactControls,
+                                   barColorScheme: barColorScheme ?? colorScheme,
+                                   isActive: isPresented && scenePhase == .active,
+                                   isBarActive: isBarActive) { isPresented = false }
                     .statusBarHidden(isImmersive)
             }
             .popupBarStyle(.floatingCompact)
@@ -38,7 +52,7 @@ struct PlayerPopup: ViewModifier {
             }
             .popupInteractionStyle(.automatic)
             .popupCloseButtonStyle(.none)
-            .popupBarMarqueeScrollEnabled(!compactControls)
+            .popupBarMarqueeScrollEnabled(isBarActive && !compactControls)
             .onPopupBarGeometryChange(for: Bool.self, of: { proxy in
                 MiniPlayerLayout.usesCompactControls(width: proxy.effectiveBarContentSize.width)
             }) { compact in
@@ -47,17 +61,41 @@ struct PlayerPopup: ViewModifier {
                 DispatchQueue.main.async { compactControls = compact }
             }
             .onChange(of: shouldShowBar, initial: true) { _, visible in
-                if !visible { isPresented = false }
-                isBarPresented = visible
+                PerformanceDiagnostics.restoration("popup.visibility visible=\(visible) suppressed=\(isSuppressed) track=\(player.currentTrack != nil) titleEmpty=\(player.currentTrack?.title.isEmpty ?? true)")
+                let restoresPausedBar = visible && !hasPresentedBar && !player.isPlaying && !isPresented
+                if restoresPausedBar {
+                    var transaction = Transaction(animation: nil)
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) {
+                        isBarPresented = true
+                        hasPresentedBar = true
+                    }
+                } else {
+                    if !visible { isPresented = false }
+                    isBarPresented = visible
+                    if visible { hasPresentedBar = true }
+                }
             }
-            .task(id: player.currentTrack?.coverURL) {
-                guard let url = player.currentTrack?.coverURL else { artwork = nil; return }
+            .task(id: player.currentTrack) {
+                let track = player.currentTrack
+                if artworkTrackID != track?.id {
+                    artwork = nil
+                    artworkTrackID = track?.id
+                }
+                guard let url = track?.coverURL else { return }
+                if let cached = LocalArtworkImages.cached(url, pixels: 160) {
+                    artwork = cached
+                    return
+                }
                 var request = ImageRequest(url: url)
                 request.thumbnail = .init(size: CGSize(width: 160, height: 160), unit: .pixels,
                                           contentMode: .aspectFill)
-                let image = try? await ImagePipeline.shared.image(for: request)
-                guard !Task.isCancelled else { return }
+                guard let image = try? await ImagePipeline.shared.image(for: request),
+                      !Task.isCancelled else { return }
                 artwork = image
+            }
+            .task(id: artworkLoadIDs) {
+                for id in Set(artworkLoadIDs) { loadArtwork(id) }
             }
             .task(id: prefetchURLs) {
                 let requests = prefetchURLs.flatMap { url in
@@ -74,10 +112,11 @@ struct PlayerPopup: ViewModifier {
 
     private var barImage: PopupItemViewImage {
         PopupItemViewImage {
-            if let artwork {
+            if let artwork, artworkTrackID == player.currentTrack?.id {
                 NowPlayingBackdropImage(image: artwork, animated: !reducesMotion)
             } else {
-                Color.clear
+                ArtworkView(artwork: .missing, cornerRadius: 3)
+                    .environment(\.nativeArtworkSurfaceEnabled, false)
             }
         }
     }
@@ -87,6 +126,9 @@ struct PlayerPopup: ViewModifier {
 private struct PlayerPopupContent: View {
     let barImage: PopupItemViewImage
     let compact: Bool
+    let barColorScheme: ColorScheme
+    let isActive: Bool
+    let isBarActive: Bool
     let onDismiss: () -> Void
     @Environment(ReferencePlayerState.self) private var player
     @Environment(\.popupBarPlacement) private var placement
@@ -95,14 +137,17 @@ private struct PlayerPopupContent: View {
         let isCompact = compact || placement == .inline
         Group {
             if let track = player.currentTrack {
-                ReferenceNowPlayingView(onDismiss: onDismiss)
+                ReferenceNowPlayingView(onDismiss: onDismiss, isActive: isActive)
+                    .onChange(of: isActive, initial: true) { _, active in
+                        PerformanceDiagnostics.restoration("popup.content active=\(active) titleEmpty=\(track.title.isEmpty) cover=\(track.coverURL != nil)")
+                    }
                     .popupItem {
                         PopupItem(id: track.id, image: barImage, title: {
                             ReferenceMiniPlayerTitlePager(height: isCompact ? 18 : 36, song: track, currentIndex: player.currentQueueIndex,
                                                  previous: player.previousInOrder, next: player.nextInOrder,
                                                  select: player.skip(toQueueIndex:)) { song, interactive in
                                 VStack(alignment: .leading, spacing: 2) {
-                                    NowPlayingMarqueeText(text: song.title, isActive: interactive && !isCompact)
+                                    NowPlayingMarqueeText(text: song.title, isActive: isBarActive && interactive && !isCompact)
                                         .font(.system(size: 13, weight: .medium))
                                         .foregroundStyle(.primary)
                                     if !isCompact {
@@ -117,12 +162,14 @@ private struct PlayerPopupContent: View {
                             .frame(height: isCompact ? 18 : 36)
                             .clipped()
                             .environment(player)
+                            .environment(\.colorScheme, barColorScheme)
                             .accessibilityIdentifier("mini.trackTitle")
                         }, buttons: {
                             ToolbarItem(placement: .popupBar) {
                                 MiniPlayerControls(isPlaying: player.isPlaying, isLoading: player.isLoading,
                                                    canPlayNext: player.canPlayNext, compact: isCompact,
                                                    togglePlayback: player.togglePlayback, next: player.next)
+                                    .environment(\.colorScheme, barColorScheme)
                             }
                         })
                     }

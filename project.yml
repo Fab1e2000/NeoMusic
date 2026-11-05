@@ -9,6 +9,8 @@ settings:
   base:
     SWIFT_VERSION: "6.0"
 packages:
+  AudioTags:
+    path: Packages/AudioTags
   LNPopupUI:
     path: Packages/LNPopupUI
   LNPopupController:
@@ -29,6 +31,8 @@ targets:
     sources:
       - path: NeoMusic
     dependencies:
+      - package: AudioTags
+        product: AudioTagBridge
       - package: LNPopupUI
         product: LNPopupUI-Static
       - package: Nuke
