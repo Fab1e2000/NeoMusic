@@ -16,8 +16,9 @@ LNPopupUI: https://github.com/LeoNatan/LNPopupUI
 Baseline 60853564423524c9ed15cc74c5969d3e1ca666f1, MIT.
 LNPopupController: https://github.com/LeoNatan/LNPopupController
 Baseline 4.6.1 / 18847353e7cbec66e53a89edb1aec6d00967281c, MIT.
-Only currently used artwork-host, binding synchronization and title gesture
-patches from NeoDizzy are applied. There is no external-accessory portal fork
+Currently used artwork-host, binding synchronization and title gesture patches
+from NeoDizzy are applied, along with NeoMusic appearance and local bar-placement
+trait forwarding corrections. There is no external-accessory portal fork
 in this imported runtime. Package NEOMUSIC-PATCHES.md files describe changes.
 MIT license texts for LNPopup and its utilities accompany this application in
 ThirdPartyLicenses.txt.

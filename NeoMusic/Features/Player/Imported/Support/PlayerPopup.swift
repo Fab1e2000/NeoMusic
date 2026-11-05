@@ -21,7 +21,6 @@ struct PlayerPopup: ViewModifier {
     @State private var hasPresentedBar = false
     @State private var artwork: UIImage?
     @State private var artworkTrackID: String?
-    @State private var compactControls = false
     @State private var interactionDelegate = PlayerPopupInteractionDelegate()
 
     private var shouldShowBar: Bool { player.currentTrack != nil && !isSuppressed }
@@ -36,7 +35,7 @@ struct PlayerPopup: ViewModifier {
     func body(content: Content) -> some View {
         content
             .popup(isBarPresented: $isBarPresented, isPopupOpen: $isPresented, onClose: onClose) {
-                PlayerPopupContent(barImage: barImage, compact: compactControls,
+                PlayerPopupContent(barImage: barImage,
                                    barColorScheme: barColorScheme ?? colorScheme,
                                    isActive: isPresented && scenePhase == .active,
                                    isBarActive: isBarActive) { isPresented = false }
@@ -52,14 +51,7 @@ struct PlayerPopup: ViewModifier {
             }
             .popupInteractionStyle(.automatic)
             .popupCloseButtonStyle(.none)
-            .popupBarMarqueeScrollEnabled(isBarActive && !compactControls)
-            .onPopupBarGeometryChange(for: Bool.self, of: { proxy in
-                MiniPlayerLayout.usesCompactControls(width: proxy.effectiveBarContentSize.width)
-            }) { compact in
-                // LNPopup can report geometry inside updateUIViewController. Publish
-                // after that update returns, preserving the order of layout changes.
-                DispatchQueue.main.async { compactControls = compact }
-            }
+            .popupBarMarqueeScrollEnabled(isBarActive)
             .onChange(of: shouldShowBar, initial: true) { _, visible in
                 PerformanceDiagnostics.restoration("popup.visibility visible=\(visible) suppressed=\(isSuppressed) track=\(player.currentTrack != nil) titleEmpty=\(player.currentTrack?.title.isEmpty ?? true)")
                 let restoresPausedBar = visible && !hasPresentedBar && !player.isPlaying && !isPresented
@@ -125,16 +117,13 @@ struct PlayerPopup: ViewModifier {
 
 private struct PlayerPopupContent: View {
     let barImage: PopupItemViewImage
-    let compact: Bool
     let barColorScheme: ColorScheme
     let isActive: Bool
     let isBarActive: Bool
     let onDismiss: () -> Void
     @Environment(ReferencePlayerState.self) private var player
-    @Environment(\.popupBarPlacement) private var placement
 
     var body: some View {
-        let isCompact = compact || placement == .inline
         Group {
             if let track = player.currentTrack {
                 ReferenceNowPlayingView(onDismiss: onDismiss, isActive: isActive)
@@ -143,31 +132,14 @@ private struct PlayerPopupContent: View {
                     }
                     .popupItem {
                         PopupItem(id: track.id, image: barImage, title: {
-                            ReferenceMiniPlayerTitlePager(height: isCompact ? 18 : 36, song: track, currentIndex: player.currentQueueIndex,
-                                                 previous: player.previousInOrder, next: player.nextInOrder,
-                                                 select: player.skip(toQueueIndex:)) { song, interactive in
-                                VStack(alignment: .leading, spacing: 2) {
-                                    NowPlayingMarqueeText(text: song.title, isActive: isBarActive && interactive && !isCompact)
-                                        .font(.system(size: 13, weight: .medium))
-                                        .foregroundStyle(.primary)
-                                    if !isCompact {
-                                        Text(song.artists)
-                                            .font(.system(size: 12))
-                                            .foregroundStyle(.primary)
-                                    }
-                                }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .contentShape(.rect)
-                            }
-                            .frame(height: isCompact ? 18 : 36)
-                            .clipped()
-                            .environment(player)
-                            .environment(\.colorScheme, barColorScheme)
-                            .accessibilityIdentifier("mini.trackTitle")
+                            MiniPlayerTitle(track: track, isActive: isBarActive)
+                                .environment(player)
+                                .environment(\.colorScheme, barColorScheme)
+                                .accessibilityIdentifier("mini.trackTitle")
                         }, buttons: {
                             ToolbarItem(placement: .popupBar) {
                                 MiniPlayerControls(isPlaying: player.isPlaying, isLoading: player.isLoading,
-                                                   canPlayNext: player.canPlayNext, compact: isCompact,
+                                                   canPlayNext: player.canPlayNext,
                                                    togglePlayback: player.togglePlayback, next: player.next)
                                     .environment(\.colorScheme, barColorScheme)
                             }
@@ -178,20 +150,52 @@ private struct PlayerPopupContent: View {
     }
 }
 
+/// Placement invalidates only the title host, leaving the popup item and full-screen root intact.
+private struct MiniPlayerTitle: View {
+    let track: ReferenceTrack
+    let isActive: Bool
+    @Environment(ReferencePlayerState.self) private var player
+    @Environment(\.popupBarPlacement) private var placement
+
+    var body: some View {
+        let compact = placement == .inline
+        ReferenceMiniPlayerTitlePager(height: compact ? 18 : 36, song: track,
+            currentIndex: player.currentQueueIndex, previous: player.previousInOrder,
+            next: player.nextInOrder, select: player.skip(toQueueIndex:)) { song, interactive in
+                VStack(alignment: .leading, spacing: 2) {
+                    NowPlayingMarqueeText(text: song.title, isActive: isActive && interactive && !compact)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.primary)
+                    Text(song.artists)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.primary)
+                        .frame(height: compact ? 0 : nil)
+                        .opacity(compact ? 0 : 1)
+                        .accessibilityHidden(compact)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(.rect)
+            }
+            .frame(height: compact ? 18 : 36)
+            .clipped()
+    }
+}
+
 /// One fixed-size toolbar item gives LN a single, stable title exclusion rect.
 struct MiniPlayerControls: View {
     let isPlaying: Bool
     let isLoading: Bool
     let canPlayNext: Bool
-    let compact: Bool
     let togglePlayback: () -> Void
     let next: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reducesMotion
+    @Environment(\.popupBarPlacement) private var placement
     @State private var nextTrigger = 0
     @State private var showsLoadingIndicator = false
 
     var body: some View {
+        let compact = placement == .inline
         HStack(spacing: 0) {
             Button(action: togglePlayback) {
                 ZStack {
@@ -220,31 +224,30 @@ struct MiniPlayerControls: View {
                                                         springsBack: true, diameter: 44, showsHighlight: false))
             .accessibilityLabel(isPlaying ? "暂停" : "播放")
             .accessibilityIdentifier("mini.playPause")
-            if !compact {
-                Button {
-                    nextTrigger += 1
-                    next()
-                } label: {
-                    NowPlayingSkipIcon(direction: .forward, trigger: nextTrigger,
-                                       reducesMotion: reducesMotion, cornerRadius: 1.3)
-                        .frame(width: 24, height: 17)
-                        .offset(x: 8)
-                        .frame(width: 44, height: 44)
-                }
-                .buttonStyle(NowPlayingTransportButtonStyle(reducesMotion: reducesMotion, diameter: 44, showsHighlight: false))
-                .disabled(!canPlayNext)
-                .accessibilityLabel("下一首")
-                .accessibilityIdentifier("mini.next")
+            Button {
+                nextTrigger += 1
+                next()
+            } label: {
+                NowPlayingSkipIcon(direction: .forward, trigger: nextTrigger,
+                                   reducesMotion: reducesMotion, cornerRadius: 1.3)
+                    .frame(width: 24, height: 17)
+                    .offset(x: 8)
+                    .frame(width: 44, height: 44)
             }
+            .buttonStyle(NowPlayingTransportButtonStyle(reducesMotion: reducesMotion, diameter: 44, showsHighlight: false))
+            .disabled(!canPlayNext)
+            .accessibilityLabel("下一首")
+            .accessibilityIdentifier("mini.next")
+            .frame(width: compact ? 0 : 44)
+            .opacity(compact ? 0 : 1)
+            .clipped()
+            .allowsHitTesting(!compact)
+            .accessibilityHidden(compact)
         }
         .tint(.primary)
         .foregroundStyle(.primary)
         .fixedSize()
     }
-}
-
-nonisolated enum MiniPlayerLayout {
-    static func usesCompactControls(width: CGFloat) -> Bool { width > 0 && width < 300 }
 }
 
 @MainActor final class PlayerPopupInteractionDelegate: NSObject, UIGestureRecognizerDelegate {

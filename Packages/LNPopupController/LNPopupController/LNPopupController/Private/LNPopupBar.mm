@@ -298,8 +298,19 @@ LNPopupBarProgressViewStyle _LNPopupResolveProgressViewStyleFromProgressViewStyl
 
 #endif
 
+- (void)_updateSwiftUIBarPlacement
+{
+	if(@available(iOS 17.0, *))
+	{
+		// Toolbar hosts live in the window, outside the bar's trait hierarchy.
+		[self.swiftuiHiddenLeadingController.traitOverrides setNSIntegerValue:self.traitCollection.popupBarEnvironment forTrait:LNPopupBarEnvironmentTrait.class];
+		[self.swiftuiHiddenTrailingController.traitOverrides setNSIntegerValue:self.traitCollection.popupBarEnvironment forTrait:LNPopupBarEnvironmentTrait.class];
+	}
+}
+
 - (void)_fixupSwiftUIControllersWithBarStyle
 {
+	[self _updateSwiftUIBarPlacement];
 	if(self.swiftuiHiddenLeadingController != nil)
 	{
 		[self.swiftuiHiddenLeadingController setValue:@(_resolvedIsCompact ? UIUserInterfaceSizeClassCompact : UIUserInterfaceSizeClassRegular) forKey:@"overrideSizeClass"];
@@ -547,6 +558,7 @@ LNPopupBarProgressViewStyle _LNPopupResolveProgressViewStyleFromProgressViewStyl
 		if(@available(iOS 17.0, *))
 		{
 			[self registerForTraitChanges:@[LNPopupBarEnvironmentTrait.class] withHandler:^(__kindof id<UITraitEnvironment>  _Nonnull traitEnvironment, UITraitCollection * _Nonnull previousCollection) {
+				[(LNPopupBar*)traitEnvironment _updateSwiftUIBarPlacement];
 				[traitEnvironment _setNeedsRecalcActiveAppearanceChain];
 				[traitEnvironment _setNeedsAppearanceUpdate];
 			}];

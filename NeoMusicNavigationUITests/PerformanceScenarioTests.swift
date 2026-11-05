@@ -63,6 +63,36 @@ final class PerformanceScenarioTests: XCTestCase {
         screenshot("songs-scroll", app)
     }
 
+    func testMiniPlayerRetainsMinimizationAndRestoresControls() throws {
+        let app = launch()
+        app.buttons["歌曲"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["Track 001"].firstMatch.waitForExistence(timeout: 10))
+        let next = app.buttons["mini.next"]
+        let play = app.buttons["mini.playPause"]
+        XCTAssertTrue(next.waitForExistence(timeout: 5))
+        let expandedY = play.frame.minY
+        for cycle in 0..<3 {
+            app.swipeUp(velocity: .fast)
+            let minimized = XCTNSPredicateExpectation(predicate: NSPredicate(format: "hittable == false"), object: next)
+            XCTAssertEqual(XCTWaiter.wait(for: [minimized], timeout: 5), .completed)
+            XCTAssertTrue(play.isHittable)
+            XCTAssertGreaterThan(play.frame.minY, expandedY + 20, "The bar must actually move into the minimized position")
+            if cycle == 0 { screenshot("mini-inline", app) }
+            app.swipeDown(velocity: .fast)
+            app.swipeDown(velocity: .fast)
+            XCTAssertTrue(next.waitForExistence(timeout: 5))
+            XCTAssertTrue(play.isHittable)
+            XCTAssertTrue(next.isHittable)
+        }
+        screenshot("mini-restored", app)
+        try miniPlayerTitle(app).tap()
+        XCTAssertTrue(app.buttons["收起播放器"].waitForExistence(timeout: 5))
+        app.buttons["收起播放器"].tap()
+        XCTAssertTrue(next.waitForExistence(timeout: 5))
+        next.tap()
+        XCTAssertTrue(app.buttons["mini.playPause"].isHittable)
+    }
+
     func testFirstDetailAndReturn() {
         let app = launch()
         let options = XCTMeasureOptions()

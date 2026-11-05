@@ -1,6 +1,7 @@
 import XCTest
 import SwiftUI
 import LNPopupController
+import Synchronization
 @testable import NeoMusic
 
 @MainActor @Observable
@@ -338,6 +339,55 @@ final class LibraryDetailNavigationTests: XCTestCase {
         window.overrideUserInterfaceStyle = .light
         try await settle()
         assertAppearance(.light)
+    }
+
+    func testMiniPlayerPlacementUpdatesStayInsideBarContent() async throws {
+        let scene = try await applicationWindowScene()
+        let window = UIWindow(windowScene: scene)
+        defer { window.isHidden = true }
+        let tracks = (0..<3).map { ReferenceTrack(id: "mini-\($0)", title: "Track \($0)",
+            artists: "Artist", albumTitle: "Album", coverURL: nil, duration: 60) }
+        let player = PlayerTestFixtures.state(tracks: tracks)
+        window.rootViewController = UIHostingController(rootView: AppShell(
+            library: { TestRoot() }, detailDestination: { AnyView(TestDetail(route: $0)) },
+            nowPlaying: nil, playlistLibrary: PlaylistLibrary(playlists: []), toasts: LibraryToastCenter(),
+            referencePlayer: player, referenceLibrary: PlayerTestFixtures.library(),
+            makePlayerActions: { _ in PlayerTestFixtures.actions() }).environment(account))
+        window.makeKeyAndVisible()
+        try await settle()
+        func findTabs(in controller: UIViewController) -> UITabBarController? {
+            if let tabs = controller as? UITabBarController { return tabs }
+            return controller.children.lazy.compactMap { findTabs(in: $0) }.first
+        }
+        let tabs = try XCTUnwrap(findTabs(in: window.rootViewController!))
+        let content = try XCTUnwrap(tabs.popupContent)
+        let item = try XCTUnwrap(tabs.popupBar.popupItem)
+        let pager = try XCTUnwrap(descendants(of: UIScrollView.self, in: tabs.popupBar).first {
+            $0.panGestureRecognizer.name == "NeoDizzy.NowPlayingTrackSwipe"
+        })
+        let updates = Mutex(0)
+        // LNPopupUI writes userInfo whenever it resubmits a PopupItem, even for the same song.
+        let observation = item.observe(\.userInfo, options: [.new]) { _, _ in updates.withLock { $0 += 1 } }
+        defer { observation.invalidate() }
+        for _ in 0..<3 {
+            for placement in [LNPopupBar.Environment.inline, .regular] {
+                // These are the two native trait updates made by LN's minimization callback.
+                content.traitOverrides[LNPopupBar.EnvironmentTrait.self] = placement
+                tabs.popupBar.traitOverrides[LNPopupBar.EnvironmentTrait.self] = placement
+                try await Task.sleep(for: .milliseconds(350))
+                XCTAssertTrue(tabs.popupContent === content)
+                XCTAssertTrue(tabs.popupBar.popupItem === item)
+                XCTAssertEqual(pager.bounds.height, placement == .inline ? 18 : 36, accuracy: 1)
+            }
+        }
+        let itemUpdates = updates.withLock { $0 }
+        let evidence = XCTAttachment(string: "placementChanges=6, popupItemResubmissions=\(itemUpdates)")
+        evidence.name = "mini-player-placement-updates"
+        evidence.lifetime = .keepAlways
+        add(evidence)
+        XCTAssertEqual(itemUpdates, 0, "Bar placement must not resubmit artwork, controls and fullscreen content")
+        XCTAssertEqual(tabs.tabBarMinimizeBehavior, .onScrollDown)
+        XCTAssertTrue(tabs.popupBar.inheritsBottomBarMetrics)
     }
 
     func testPlayerTransitionGlassRetainsAlbumAppearanceAcrossRepeatedCloses() async throws {

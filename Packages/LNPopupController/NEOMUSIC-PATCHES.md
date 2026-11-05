@@ -15,5 +15,8 @@ Local presentation correction:
 - `_LNPopupTransitionAnimator.mm`: carry the mini-player's resolved interface style
   into the sibling glass transition wrapper, so opening and closing retain the
   endpoint appearance even when the page overrides the system style.
+- `LNPopupBar.mm`: forward the bar placement trait to the detached SwiftUI toolbar
+  hosts at attachment and on trait changes. Buttons can adapt locally without
+  resubmitting the popup item or rebuilding the full-screen content.
 
-Package-only adjustment: omit unused Xcode project from vendor tree and manifest exclude list. All original runtime source outside these four files is unchanged. No external-accessory portal API, global-hook-disable build flag or obsolete native presentation fork is included.
+Package-only adjustment: omit unused Xcode project from vendor tree and manifest exclude list. All original runtime source outside these five files is unchanged. No external-accessory portal API, global-hook-disable build flag or obsolete native presentation fork is included.
