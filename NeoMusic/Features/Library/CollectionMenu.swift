@@ -432,7 +432,8 @@ struct SongMenuActions {
                                        download: @escaping () -> Void, removeDownload: @escaping () -> Void,
                                        requestDelete: @escaping () -> Void,
                                        notify: @escaping (LibraryToast) -> Void) -> LibraryMenuSections {
-        var groups = sections(for: song, goToAlbum: {})
+        let feedback: (LibraryToast) -> Void = song.isOnline ? { _ in } : notify
+        var groups = sections(for: song, notify: feedback, goToAlbum: {})
         if !song.isOnline {
             groups.removeAll { group in group.contains { $0.title == "前往专辑" } }
             groups.append([LibraryMenuItem(title: "从资料库删除", systemImage: "trash", isDestructive: true, perform: requestDelete)])
@@ -453,15 +454,22 @@ struct SongMenuActions {
         return LibraryMenuItem(title: "下载", systemImage: "arrow.down.circle.fill", isDisabled: !downloads.isDownloadable(song)) { downloads.download([song]) }
     }
 
-    @MainActor func sections(for song: LibrarySongItem, goToAlbum: @escaping () -> Void) -> LibraryMenuSections {
-        var quick = [favoriteItem(isFavorite: song.isFavorite) { toggleFavorite(song) }]
+    @MainActor func sections(for song: LibrarySongItem, notify: @escaping (LibraryToast) -> Void = { _ in },
+                            goToAlbum: @escaping () -> Void) -> LibraryMenuSections {
+        var quick = [favoriteItem(isFavorite: song.isFavorite) {
+            toggleFavorite(song)
+            notify(song.isFavorite ? .unfavorited : .favorited)
+        }]
         if let item = downloadItem(for: song) { quick.insert(item, at: 0) }
         var additions = [LibraryMenuItem(title: "添加到播放列表", systemImage: "text.badge.plus") { addToPlaylist(song) }]
         if !song.isOnline {
-            additions.insert(LibraryMenuItem(title: song.isPinned ? "取消置顶" : "置顶歌曲", systemImage: song.isPinned ? "pin.slash" : "pin") { togglePin(song) }, at: 0)
+            additions.insert(LibraryMenuItem(title: song.isPinned ? "取消置顶" : "置顶歌曲", systemImage: song.isPinned ? "pin.slash" : "pin") {
+                togglePin(song)
+                notify(song.isPinned ? .unpinned : .pinned)
+            }, at: 0)
         }
         var groups: LibraryMenuSections = [quick, additions,
-            libraryQueueMenuItems(playbackSource: playbackSource(), playNext: { playNext(song) }, playLater: { playLater(song) })]
+            libraryQueueMenuItems(playbackSource: playbackSource(), playNext: { playNext(song) }, playLater: { playLater(song) }, notify: notify)]
         if !song.isOnline {
             groups.append([LibraryMenuItem(title: "前往专辑", subtitle: song.album, systemImage: "square", customImage: MenuIcons.album, perform: goToAlbum),
                            LibraryMenuItem(title: "查看完整歌词", systemImage: "quote.bubble", isDisabled: true)])

@@ -257,25 +257,79 @@ final class PlaylistLibraryTests: XCTestCase {
 
 @MainActor
 final class AlbumMenuTests: XCTestCase {
-    func testToolbarDownloadAndDeletionUseCurrentStateAndCallbacks() {
+    func testToolbarDownloadAndDeletionUseCurrentStateAndCallbacks() throws {
         let route = LibraryRoute.album("album")
         let item = LibraryShelfItem(id: "album", title: "album", artwork: .playlist, route: route)
         var downloaded = false
+        var requestedRemoval = false
         var requestedDeletion = false
         var actions = CollectionMenuActions()
         actions.canDelete = { $0 == route }
         actions.isDownloaded = { _ in downloaded }
+        actions.canDownload = { $0 == route && !downloaded }
+        actions.canRemoveDownload = { $0 == route && downloaded }
         actions.download = { _ in downloaded = true }
+        actions.removeDownload = { _ in requestedRemoval = true }
         actions.requestDelete = { _ in requestedDeletion = true }
         let initial = actions.toolbarSections(for: item, route: route)
         XCTAssertEqual(initial.first?.map(\.title), ["下载", "喜爱"])
-        initial.flatMap { $0 }.first { $0.title == "下载" }?.perform()
+        XCTAssertFalse(initial.flatMap { $0 }.contains { $0.title == "移除下载" })
+        let download = try XCTUnwrap(initial.flatMap { $0 }.first { $0.title == "下载" })
+        XCTAssertFalse(download.isDisabled)
+        download.perform()
         XCTAssertTrue(downloaded)
         let completed = actions.toolbarSections(for: item, route: route)
         XCTAssertEqual(completed.first?.map(\.title), ["喜爱"])
-        XCTAssertTrue(completed.flatMap { $0 }.contains { $0.title == "移除下载" })
+        let removal = try XCTUnwrap(completed.flatMap { $0 }.first { $0.title == "移除下载" })
+        XCTAssertFalse(removal.isDisabled)
+        removal.perform()
+        XCTAssertTrue(requestedRemoval)
         completed.flatMap { $0 }.first { $0.title == "从资料库删除" }?.perform()
         XCTAssertTrue(requestedDeletion)
+    }
+
+    func testImportedAlbumDoesNotOfferManagedDownloadRemoval() {
+        let route = LibraryRoute.album("imported")
+        let item = LibraryShelfItem(id: "imported", title: "Imported", artwork: .missing, route: route)
+        let actions = CollectionMenuActions(isDownloaded: { _ in true }, canRemoveDownload: { _ in false })
+        let items = actions.toolbarSections(for: item, route: route).flatMap { $0 }
+        XCTAssertFalse(items.contains { $0.title == "移除下载" })
+    }
+
+    func testLocalAlbumSongFavoriteAndPinFeedbackFollowsEachAction() throws {
+        var song = LibrarySongItem(id: "local", title: "Song", artist: "Artist", album: "Album",
+                                  albumArtist: "Artist", trackNumber: 1, artwork: .missing)
+        var events: [String] = []
+        var actions = SongMenuActions()
+        actions.toggleFavorite = { _ in events.append("favorite") }
+        actions.togglePin = { _ in events.append("pin") }
+        for selected in [false, true] {
+            song.isFavorite = selected
+            song.isPinned = selected
+            let items = actions.albumTrackSections(for: song, isDownloaded: true,
+                download: {}, removeDownload: {}, requestDelete: {}, notify: { events.append($0.title) }).flatMap { $0 }
+            events.removeAll()
+            try XCTUnwrap(items.first { $0.title == (selected ? "撤销" : "喜爱") }).perform()
+            try XCTUnwrap(items.first { $0.title == (selected ? "取消置顶" : "置顶歌曲") }).perform()
+            XCTAssertEqual(events, ["favorite", (selected ? LibraryToast.unfavorited : .favorited).title,
+                                    "pin", (selected ? LibraryToast.unpinned : .pinned).title])
+        }
+    }
+
+    func testOnlineAlbumSongFeedbackRemainsWithBusinessActions() throws {
+        let song = LibrarySongItem(id: "netease:42:7", title: "Song", artist: "Artist", album: "Album",
+                                  albumArtist: "Artist", trackNumber: 1, artwork: .missing)
+        var events: [String] = []
+        var actions = SongMenuActions()
+        actions.toggleFavorite = { _ in events.append("favorite") }
+        actions.playNext = { _ in events.append("next") }
+        actions.playLater = { _ in events.append("later") }
+        let items = actions.albumTrackSections(for: song, isDownloaded: false,
+            download: {}, removeDownload: {}, requestDelete: {}, notify: { events.append($0.title) }).flatMap { $0 }
+        for title in ["喜爱", "插播", "添加到队列"] {
+            try XCTUnwrap(items.first { $0.title == title }).perform()
+        }
+        XCTAssertEqual(events, ["favorite", "next", "later"])
     }
 }
 
