@@ -942,7 +942,7 @@ final class LibraryDetailNavigationTests: XCTestCase {
     }
 
     func testHomeZoomSourceResolvesReplacementByStableIdentity() {
-        let sources = HomeArtworkSources()
+        let sources = LibraryArtworkSources()
         let first = UIView(), replacement = UIView(), otherAccount = UIView()
         sources.register(first, for: "42:recommended:list/12")
         let provider = { sources.view(for: "42:recommended:list/12") }

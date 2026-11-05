@@ -1,6 +1,7 @@
 import SwiftUI
 
 extension EnvironmentValues {
+    @Entry var searchMusicIntegration: SearchMusicIntegration? = nil
     @Entry var artistMusicIntegration: ArtistMusicIntegration? = nil
     @Entry var homeMusicIntegration: HomeMusicIntegration? = nil
 }
@@ -21,20 +22,25 @@ struct AppShell<Library: View>: View {
     let referenceLibrary: ReferenceLibrary
     let makePlayerActions: (@escaping (LibraryRoute) -> Void) -> ReferencePlayerActions
     var isInitialContentReady = true
+    var searchContent: AnyView? = nil
+    var searchDestination: ((LibraryRoute) -> AnyView)? = nil
     @State private var pendingRoute: LibraryRoute?
-    @State private var selection = AppTab.library
+    @State var selection = AppTab.library
     @State var libraryPath: [LibraryRoute] = []
     @State var isPlayerPresented = false
     @State private var detailNavigation = LibraryDetailNavigation()
     @State private var homeNavigation = LibraryDetailNavigation()
+    @State private var searchNavigation = LibraryDetailNavigation()
     @State private var emptyHome = HomeContentModel()
     @Environment(\.homeMusicIntegration) private var home
     @Environment(\.artistMusicIntegration) private var artists
+    @Environment(\.searchMusicIntegration) private var search
     @Environment(NeteaseAccount.self) private var account
     private var chromeColorScheme: ColorScheme? {
         switch selection {
         case .home: homeNavigation.colorScheme ?? .light
         case .library: detailNavigation.colorScheme
+        case .search: searchNavigation.colorScheme
         default: nil
         }
     }
@@ -46,13 +52,17 @@ struct AppShell<Library: View>: View {
             initialPath: libraryPath, colorScheme: chromeColorScheme,
             homeNavigation: homeNavigation,
             homeContent: AnyView(HomeFeedView(model: home?.model ?? emptyHome)),
-            homeDestination: { artists?.destination($0) ?? home?.destination(for: $0) ?? detailDestination($0) })
+            homeDestination: { artists?.destination($0) ?? home?.destination(for: $0) ?? detailDestination($0) },
+            searchNavigation: searchNavigation, searchContent: effectiveSearchContent, searchDestination: searchDestination ?? searchDetail)
         .ignoresSafeArea()
         .sheet(isPresented: Binding(get: { home?.showsLogin == true }, set: { home?.showsLogin = $0 }),
                onDismiss: { home?.loginDismissed() }) {
             AccountPage(account: account, initialRoute: .login)
         }
         .sheet(isPresented: Binding(get: { artists?.showsLogin == true }, set: { artists?.showsLogin = $0 })) {
+            AccountPage(account: account, initialRoute: .login)
+        }
+        .sheet(isPresented: Binding(get: { search?.showsLogin == true }, set: { search?.showsLogin = $0 })) {
             AccountPage(account: account, initialRoute: .login)
         }
         .onChange(of: account.profile?.userID) { _, id in
@@ -87,8 +97,20 @@ struct AppShell<Library: View>: View {
         } message: { Text(nowPlaying?.errorMessage ?? "") }
 
     }
+    private var effectiveSearchContent: AnyView? {
+        if let searchContent { return searchContent }
+        guard let search else { return nil }
+        return AnyView(SearchPageView(model: search.model).environment(\.songMenuActions, search.songActions))
+    }
+    private func searchDetail(_ route: LibraryRoute) -> AnyView {
+        if case .playlistFolder(let key) = route, key.hasPrefix("search-category:"), let search {
+            return AnyView(SearchCategoryPage(model: search.model, category: String(key.dropFirst("search-category:".count))))
+        }
+        return artists?.destination(route) ?? home?.destination(for: route) ?? detailDestination(route)
+    }
     private func openInCurrentTab(_ route: LibraryRoute) {
         if selection == .home { homeNavigation.open(route) }
+        else if selection == .search, effectiveSearchContent != nil { searchNavigation.open(route) }
         else { selection = .library; detailNavigation.open(route) }
     }
     private func finishPlayerNavigation() {

@@ -20,6 +20,7 @@ final class NeteaseMusicStore {
     private(set) var isCellular = false
     @ObservationIgnored var onAuthenticationRequired: (() -> Void)?
     @ObservationIgnored var onChange: (() -> Void)?
+    @ObservationIgnored var onLibraryChange: (() -> Void)?
     @ObservationIgnored var onArtworkChange: ((Set<URL>) -> Void)?
     var sessionRevision: UUID { generation }
     @ObservationIgnored var onSessionInvalidated: (() -> Void)?
@@ -186,7 +187,9 @@ final class NeteaseMusicStore {
     private func refreshPlaylists(userID: Int64, revision: UUID) async -> Bool {
         do {
             let value = try await run { [client] in try await client.playlists(userID: userID, credential: $0) }
+            let changed = playlists != value
             playlists = value; saveSummary(); onChange?()
+            if changed { onLibraryChange?() }
             requestArtwork(value.prefix(6).compactMap(\.artworkURL))
             PerformanceDiagnostics.event("NetworkContentReady")
             return true
@@ -196,8 +199,10 @@ final class NeteaseMusicStore {
 
     private func refreshLikes(userID: Int64, revision: UUID) async -> Bool {
         do {
-            likedIDs = try await run { [client] in try await client.likedIDs(userID: userID, credential: $0) }
-            saveSummary(); onChange?()
+            let value = try await run { [client] in try await client.likedIDs(userID: userID, credential: $0) }
+            let changed = likedIDs != value
+            likedIDs = value; saveSummary(); onChange?()
+            if changed { onLibraryChange?() }
             return true
         } catch is CancellationError { return false }
         catch { if generation == revision { self.error = error.localizedDescription; onChange?() }; return false }
@@ -375,7 +380,7 @@ final class NeteaseMusicStore {
         }
         if liked { likedIDs.insert(songID); likedAt[songID] = Date() }
         else { likedIDs.remove(songID); likedAt.removeValue(forKey: songID) }
-        saveSummary(); onChange?()
+        saveSummary(); onChange?(); onLibraryChange?()
         guard let favorites = playlists.first(where: \.isFavorites) else { return }
         if liked, songs[songID] == nil {
             let single = NeteasePlaylistDetail(playlist: favorites, songs: [], addedTimes: [:], trackIDs: [songID], loadedTrackCount: 0)

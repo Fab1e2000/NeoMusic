@@ -7,7 +7,7 @@ import Foundation
 import Security
 
 final class NeteaseAccountClient: Sendable {
-    enum EAPIProfile: Sendable { case account, playback }
+    enum EAPIProfile: Sendable { case account, playback, search }
     private let session: URLSession
     private let deviceID: String
 
@@ -71,7 +71,7 @@ final class NeteaseAccountClient: Sendable {
         header["requestId"] = "\(Int64(Date().timeIntervalSince1970 * 1000))_\(Int.random(in: 1000...9999))"
         // MeloX 09713ed: song_url_v1 uses the default iOS EAPI profile,
         // with MUSIC_U in both the encrypted header and the scoped cookie.
-        if profile == .playback {
+        if profile != .account {
             header = ["os": "ios", "appver": "9.0.90", "osver": "18.0",
                       "buildver": String(Int(Date().timeIntervalSince1970)),
                       "channel": "distribution", "__csrf": credential?.csrf ?? "",
@@ -93,12 +93,12 @@ final class NeteaseAccountClient: Sendable {
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.httpShouldHandleCookies = false
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.setValue(profile == .playback
+        request.setValue(profile != .account
             ? "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148"
             : "NeteaseMusic 9.0.90/5038 (iPhone; iOS 16.2; zh_CN)", forHTTPHeaderField: "User-Agent")
         if profile == .account { request.setValue("https://music.163.com/", forHTTPHeaderField: "Referer") }
         let cookies: [String: String]
-        if profile == .playback {
+        if profile != .account {
             var values = ["os": "ios", "appver": "9.0.90", "__remember_me": "true"]
             if let credential {
                 values["MUSIC_U"] = credential.musicU
@@ -187,9 +187,9 @@ final class NeteaseAccountClient: Sendable {
     */
     // WEAPI wire format follows api-enhanced util/crypto.js (MIT, Binaryify).
     // Native CommonCrypto CBC and Security RSA implement the protocol without a JS dependency.
-    func makeWebRequest(path: String, fields: [String: any Sendable], credential: NeteaseCredential) throws -> URLRequest {
+    func makeWebRequest(path: String, fields: [String: any Sendable], credential: NeteaseCredential?) throws -> URLRequest {
         var payload = fields
-        payload["csrf_token"] = credential.csrf ?? ""
+        payload["csrf_token"] = credential?.csrf ?? ""
         let json = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
         let alphabet = Array("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".utf8)
         var generator = SystemRandomNumberGenerator()
@@ -215,18 +215,19 @@ final class NeteaseAccountClient: Sendable {
         request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
         // Web client profile adapted from NeoDizzy NeteaseClient.makeWebRequest (GPL-3.0).
         let timestamp = Int64(Date().timeIntervalSince1970 * 1000)
-        let cookies = ["MUSIC_U": credential.musicU, "__csrf": credential.csrf ?? "",
+        var cookies = ["__csrf": credential?.csrf ?? "",
                        "os": "ios", "appver": "9.0.90", "osver": "16.2", "channel": "distribution",
                        "deviceId": deviceID, "__remember_me": "true", "ntes_kaola_ad": "1",
                        "_ntes_nuid": deviceID, "_ntes_nnid": "\(deviceID),\(timestamp)", "WEVNSM": "1.0.0",
                        "WNMCID": "\(deviceID.prefix(6)).\(timestamp).01.0", "NMTID": UUID().uuidString.replacingOccurrences(of: "-", with: "")]
+        if let credential { cookies["MUSIC_U"] = credential.musicU }
         request.setValue(cookies.keys.sorted().map {
             "\($0)=\(cookies[$0]!.addingPercentEncoding(withAllowedCharacters: allowed) ?? "")"
         }.joined(separator: "; "), forHTTPHeaderField: "Cookie")
         request.httpBody = Data("params=\(encoded)&encSecKey=\(rsa)".utf8)
         return request
     }
-    @concurrent func requestWeb(path: String, fields: [String: any Sendable], credential: NeteaseCredential) async throws -> Data {
+    @concurrent func requestWeb(path: String, fields: [String: any Sendable], credential: NeteaseCredential?) async throws -> Data {
         try Task.checkCancellation()
         let (data, response) = try await session.data(for: makeWebRequest(path: path, fields: fields, credential: credential))
         try Task.checkCancellation()

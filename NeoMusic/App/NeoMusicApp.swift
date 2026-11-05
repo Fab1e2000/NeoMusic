@@ -7,6 +7,7 @@ struct NeoMusicApp: App {
     @State private var integration: OnlineMusicIntegration
     @State private var artists: ArtistMusicIntegration
     @State private var home: HomeMusicIntegration
+    @State private var search: SearchMusicIntegration
     @State private var downloads: DownloadMusicIntegration
     init() {
         let interval = PerformanceDiagnostics.begin("AppInitialization")
@@ -22,6 +23,7 @@ struct NeoMusicApp: App {
         _integration = State(initialValue: OnlineMusicIntegration(account: account))
         _home = State(initialValue: HomeMusicIntegration(account: account))
         _artists = State(initialValue: ArtistMusicIntegration(account: account))
+        _search = State(initialValue: SearchMusicIntegration(account: account))
         let downloads = DownloadMusicIntegration(account: account)
         _downloads = State(initialValue: downloads)
         downloads.connect()
@@ -34,7 +36,9 @@ struct NeoMusicApp: App {
     var body: some Scene {
         WindowGroup {
             #if DEBUG
-            if ProcessInfo.processInfo.arguments.contains("-downloadsPreview") {
+            if ProcessInfo.processInfo.arguments.contains("-searchPreview") {
+                SearchPreviewRoot().environment(account)
+            } else if ProcessInfo.processInfo.arguments.contains("-downloadsPreview") {
                 DownloadsPreview()
             } else if ProcessInfo.processInfo.arguments.contains("-homeFeedPreview") {
                 HomeFeedPreview().environment(account)
@@ -72,15 +76,20 @@ struct NeoMusicApp: App {
             .environment(account)
             .environment(\.homeMusicIntegration, home)
             .environment(\.artistMusicIntegration, artists)
+            .environment(\.searchMusicIntegration, search)
             .environment(\.artworkLoadAction, ArtworkLoadAction { id in
                 home.requestArtwork(for: id)
                 artists.requestArtwork(for: id)
                 integration.requestArtwork(for: id)
+                search.requestArtwork(for: id)
             })
             .task {
                 downloads.requestLogin = { home.showsLogin = true }
                 integration.onPublication = { downloads.publishMetadata() }
                 await downloads.restore()
+                search.prepareNavigation = { home.prepareNavigation($0) }
+                search.onPublication = { downloads.publishMetadata() }
+                search.connect()
                 home.connect()
                 artists.connect()
                 integration.connect()
@@ -98,6 +107,9 @@ struct NeoMusicApp: App {
                     guard !Task.isCancelled else { return }
                     completeRestoredPlayback()
                     #if DEBUG
+                    if ProcessInfo.processInfo.arguments.contains("-searchReadProbe") {
+                        Task { await NeteaseSearchReadProbe.run(account: account) }
+                    }
                     if ProcessInfo.processInfo.arguments.contains("-playbackReadProbe") {
                         Task { await NeteasePlaybackReadProbe.run() }
                     }

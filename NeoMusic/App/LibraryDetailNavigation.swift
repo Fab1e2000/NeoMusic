@@ -194,6 +194,7 @@ final class LibraryDetailHostingController: UIHostingController<AnyView> {
         super.viewDidAppear(animated)
         chrome.isActive = true
         chrome.hasAppeared = true
+        chrome.activateSearchPageIfNeeded()
         PerformanceDiagnostics.event("PageAppeared")
     }
 }
@@ -220,7 +221,7 @@ extension LibraryRoute {
 }
 
 @MainActor @Observable
-final class LibraryNavigationChrome: NSObject, UISearchResultsUpdating {
+final class LibraryNavigationChrome: NSObject, UISearchResultsUpdating, UISearchBarDelegate, UISearchControllerDelegate {
     var isActive = false
     /// Set by the native appearance callback; returning keeps the shelf in place.
     var hasAppeared = false
@@ -232,6 +233,7 @@ final class LibraryNavigationChrome: NSObject, UISearchResultsUpdating {
     @ObservationIgnored private var search: UISearchController?
     @ObservationIgnored private var query: Binding<String>?
     @ObservationIgnored private var searchPrompt = ""
+    @ObservationIgnored private var searchPage: SearchPageModel?
 
     init(isRoot: Bool, route: LibraryRoute? = nil) {
         self.isRoot = isRoot
@@ -291,8 +293,43 @@ final class LibraryNavigationChrome: NSObject, UISearchResultsUpdating {
         if search?.searchBar.text != binding.wrappedValue { search?.searchBar.text = binding.wrappedValue }
     }
     func updateSearchResults(for searchController: UISearchController) {
+        if let searchPage {
+            guard searchController.searchBar.searchTextField.markedTextRange == nil else { return }
+            searchPage.input(searchController.searchBar.text ?? "")
+            return
+        }
         let text = searchController.searchBar.text ?? ""
         if query?.wrappedValue != text { query?.wrappedValue = text }
+    }
+
+    func setSearchPage(_ model: SearchPageModel) {
+        searchPage = model
+        setSearch(Binding(get: { model.query }, set: { model.input($0) }), prompt: "歌曲、艺人、专辑及歌单")
+        guard let search else { return }
+        search.delegate = self
+        search.searchBar.delegate = self
+        let scopes = MusicSearchScope.allCases.map(\.rawValue)
+        if search.searchBar.scopeButtonTitles != scopes { search.searchBar.scopeButtonTitles = scopes }
+        search.scopeBarActivation = .manual
+        search.searchBar.showsScopeBar = model.isSearching && !model.submitted
+        search.searchBar.selectedScopeButtonIndex = model.scope == .online ? 0 : 1
+        controller?.navigationItem.preferredSearchBarPlacement = .stacked
+        if model.submitted { search.searchBar.resignFirstResponder() }
+    }
+    func activateSearchPageIfNeeded() {
+        guard hasAppeared, searchPage?.isSearching == true, search?.isActive == false else { return }
+        search?.isActive = true
+    }
+    func willPresentSearchController(_ searchController: UISearchController) { searchPage?.isSearching = true }
+    func didPresentSearchController(_ searchController: UISearchController) {
+        if searchPage?.submitted == true { searchController.searchBar.resignFirstResponder() }
+        else { searchController.searchBar.becomeFirstResponder() }
+    }
+    func didDismissSearchController(_ searchController: UISearchController) { searchPage?.cancel() }
+    func searchBarSearchButtonClicked(_ searchBar: UISearchBar) { searchPage?.submit(); searchBar.resignFirstResponder() }
+    func searchBarTextDidBeginEditing(_ searchBar: UISearchBar) { searchPage?.resumeEditing() }
+    func searchBar(_ searchBar: UISearchBar, selectedScopeButtonIndexDidChange selectedScope: Int) {
+        searchPage?.selectScope(selectedScope == 0 ? .online : .library)
     }
 }
 
@@ -306,6 +343,15 @@ extension View {
     func libraryHomeNavigation(title: String = "资料库") -> some View { modifier(LibraryHomeChrome(title: title)) }
     func librarySearchable(text: Binding<String>, prompt: String, enabled: Bool = true) -> some View {
         modifier(LibrarySearch(query: text, prompt: prompt, enabled: enabled))
+    }
+    func librarySearchPage(_ model: SearchPageModel) -> some View { modifier(LibrarySearchPage(model: model)) }
+}
+
+private struct LibrarySearchPage: ViewModifier {
+    let model: SearchPageModel
+    @Environment(\.libraryNavigationChrome) private var chrome
+    func body(content: Content) -> some View {
+        content.background { LibraryChromeUpdate { chrome?.setSearchPage(model) }.frame(width: 0, height: 0) }
     }
 }
 

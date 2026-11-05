@@ -52,3 +52,10 @@ MeloX/Core/Networking/NeteaseDirectClient.swift (default EAPI profile)
 MeloX/Core/Networking/NeteaseAPI.swift (requestPlaybackSource)
 NeoMusic retains its account isolation, cancellation, complete-track checks
 and explicit quality fallback.
+
+Search suggestions, typed search endpoints and query/type result reuse reference
+MeloX at commit 09713edb847a0f0a3515a34f779cc630d4fe5985:
+MeloX/Features/Search
+MeloX/Core/Networking/NeteaseAPI+SearchSuggestions.swift
+NeoMusic provides its native search tab/controller, SF Symbols category cards,
+account-owned cancellation and a complete library index using system SQLite.

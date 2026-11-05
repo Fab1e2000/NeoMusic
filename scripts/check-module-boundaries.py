@@ -34,7 +34,10 @@ def check_source(relative: Path, text: str) -> list[str]:
             allowed |= relative == Path("NeoMusic/Core/Netease/NeteaseAvatarSnapshot.swift") and module == "ImageIO"
             allowed |= relative == Path("NeoMusic/Core/Netease/NeteaseMusicStore.swift") and module == "Network"
             allowed |= relative == Path("NeoMusic/Core/Netease/NeteaseArtworkCache.swift") and module == "Nuke"
-            allowed |= relative == Path("NeoMusic/Core/Netease/NeteasePageCache.swift") and module == "SQLite3"
+            allowed |= relative in {
+                Path("NeoMusic/Core/Netease/NeteasePageCache.swift"),
+                Path("NeoMusic/Core/Netease/NeteaseLibrarySearchIndex.swift"),
+            } and module == "SQLite3"
             allowed |= relative == Path("NeoMusic/Core/PerformanceDiagnostics.swift") and module == "os"
             allowed |= relative == Path("NeoMusic/Core/LocalMusic/DownloadedAudioTags.swift") and module == "AudioTagBridge"
             if not allowed:

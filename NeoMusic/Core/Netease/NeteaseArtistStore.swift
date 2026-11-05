@@ -16,6 +16,7 @@ final class NeteaseArtistStore {
     private(set) var subscribedAlbums: [NeteaseArtistAlbum] = []
     private(set) var errors: [String: String] = [:]
     @ObservationIgnored var onChange: (() -> Void)?
+    @ObservationIgnored var onLibraryChange: (() -> Void)?
     @ObservationIgnored var onContentChange: ((Change) -> Void)?
     @ObservationIgnored var onArtworkChange: ((Set<URL>) -> Void)?
     var sessionRevision: UUID { revision }
@@ -168,7 +169,7 @@ final class NeteaseArtistStore {
             try check(token)
             let ids = Self.changedArtistIDs(subscribedArtists, value)
             let changed = subscribedArtists != value
-            if changed { subscribedArtists = value }
+            if changed { subscribedArtists = value; onLibraryChange?() }
             cacheArtwork(value.prefix(6).compactMap(\.artworkURL), token: token)
             return changed ? .subscribedArtists(ids) : nil
         }
@@ -180,7 +181,7 @@ final class NeteaseArtistStore {
             try check(token)
             let ids = Self.changedAlbumIDs(subscribedAlbums, value)
             let changed = !Self.sameAlbums(subscribedAlbums, value)
-            if changed { subscribedAlbums = value }
+            if changed { subscribedAlbums = value; onLibraryChange?() }
             cacheArtwork(value.prefix(6).compactMap(\.artworkURL), token: token)
             return changed ? .subscribedAlbums(ids) : nil
         }
@@ -375,6 +376,7 @@ final class NeteaseArtistStore {
                 change = .subscribedAlbums(ids)
             }
             save("subscriptions")
+            onLibraryChange?()
             if !confirmed {
                 publish(change)
                 throw failure ?? NeteaseAccountError.invalidResponse

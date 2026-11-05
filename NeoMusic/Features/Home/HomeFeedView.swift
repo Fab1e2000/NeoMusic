@@ -17,7 +17,7 @@ struct HomeFeedView: View {
     @Environment(\.openLibraryRoute) private var openRoute
     @State private var quickActionScrollID: HomeQuickAction?
     @State private var quickActionSource: (() -> UIView?)?
-    @State private var artworkSources = HomeArtworkSources()
+    @State private var artworkSources = LibraryArtworkSources()
 
     var body: some View {
         ScrollView {
@@ -93,12 +93,12 @@ struct HomeFeedView: View {
 struct HomeQuickActionCard: View {
     let item: HomeQuickActionItem
     let state: HomeQuickActionState
-    var sources: HomeArtworkSources? = nil
+    var sources: LibraryArtworkSources? = nil
     var sourceID: String? = nil
     var captureSource: (@escaping () -> UIView?) -> Void = { _ in }
     let action: () -> Void
-    @State private var localSources = HomeArtworkSources()
-    private var artworkSources: HomeArtworkSources { sources ?? localSources }
+    @State private var localSources = LibraryArtworkSources()
+    private var artworkSources: LibraryArtworkSources { sources ?? localSources }
     private var sourceIdentity: String { sourceID ?? "quick:\(item.id)" }
 
     private var isLoading: Bool { state == .loading }
@@ -130,7 +130,7 @@ struct HomeQuickActionCard: View {
 
     private var cover: some View {
         ZStack(alignment: .bottomLeading) {
-            HomeCardArtwork(content: AnyView(HomeQuickActionArtwork(item: item).id(sourceIdentity)), sources: artworkSources, sourceID: sourceIdentity, cornerRadius: 16)
+            LibraryCardArtwork(content: AnyView(HomeQuickActionArtwork(item: item).id(sourceIdentity)), sources: artworkSources, sourceID: sourceIdentity, cornerRadius: 16)
             LinearGradient(colors: [.clear, .black.opacity(0.6)], startPoint: .center, endPoint: .bottom)
             VStack(alignment: .leading, spacing: 4) {
                 Text(item.action.eyebrow)
@@ -185,7 +185,7 @@ private struct HomeQuickActionArtwork: View {
 private struct HomeContentShelf: View {
     let section: HomeContentSection
     let ownerID: String?
-    let sources: HomeArtworkSources
+    let sources: LibraryArtworkSources
     let prepareNavigation: (LibraryNavigationPreview) -> Void
     let play: (HomeContentItem) -> Void
     private var songGroups: [[HomeContentItem]] {
@@ -274,7 +274,7 @@ private struct HomeContentCard: View {
     let item: HomeContentItem
     let large: Bool
     let ownerID: String?
-    let sources: HomeArtworkSources
+    let sources: LibraryArtworkSources
     let sourceID: String
     let prepareNavigation: (LibraryNavigationPreview) -> Void
     let play: () -> Void
@@ -316,7 +316,7 @@ private struct HomeContentCard: View {
 
     private var cover: some View {
         ZStack(alignment: .bottomLeading) {
-            HomeCardArtwork(content: AnyView(artwork), sources: sources, sourceID: sourceID, cornerRadius: large ? 16 : 8)
+            LibraryCardArtwork(content: AnyView(artwork), sources: sources, sourceID: sourceID, cornerRadius: large ? 16 : 8)
             if large { caption }
         }
     }
@@ -350,57 +350,5 @@ private struct HomeContentCard: View {
         .foregroundStyle(.white)
         .frame(width: HomeMetrics.heroWidth - 32, alignment: .leading)
         .padding(16)
-    }
-}
-
-@MainActor final class HomeArtworkSources {
-    private final class Entry { weak var view: UIView?; init(_ view: UIView) { self.view = view } }
-    private var entries: [String: Entry] = [:]
-    func register(_ view: UIView, for id: String) { entries[id] = Entry(view) }
-    func remove(_ view: UIView, for id: String) { if entries[id]?.view === view { entries[id] = nil } }
-    func view(for id: String) -> UIView? { entries[id]?.view }
-}
-
-private struct HomeCardArtwork: UIViewRepresentable {
-    let content: AnyView
-    let sources: HomeArtworkSources
-    let sourceID: String
-    let cornerRadius: CGFloat
-    final class Coordinator {
-        var sources: HomeArtworkSources
-        var sourceID: String
-        init(_ sources: HomeArtworkSources, _ sourceID: String) { self.sources = sources; self.sourceID = sourceID }
-    }
-    func makeCoordinator() -> Coordinator { Coordinator(sources, sourceID) }
-    func makeUIView(context: Context) -> LibraryArtworkSurfaceView {
-        let view = LibraryArtworkSurfaceView()
-        view.isUserInteractionEnabled = false
-        sources.register(view, for: sourceID)
-        view.layer.cornerRadius = cornerRadius
-        view.clipsToBounds = true
-        return view
-    }
-    func updateUIView(_ view: LibraryArtworkSurfaceView, context: Context) {
-        if context.coordinator.sourceID != sourceID || context.coordinator.sources !== sources {
-            context.coordinator.sources.remove(view, for: context.coordinator.sourceID)
-            context.coordinator.sources = sources
-            context.coordinator.sourceID = sourceID
-        }
-        sources.register(view, for: sourceID)
-        let configuration = UIHostingConfiguration { content.libraryHostedAppearance(context.environment) }.margins(.all, 0)
-        if let hosted = view.subviews.first as? any UIContentView {
-            hosted.configuration = configuration
-        } else {
-            let hosted = configuration.makeContentView()
-            hosted.translatesAutoresizingMaskIntoConstraints = false
-            view.addSubview(hosted)
-            NSLayoutConstraint.activate([
-                hosted.leadingAnchor.constraint(equalTo: view.leadingAnchor), hosted.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-                hosted.topAnchor.constraint(equalTo: view.topAnchor), hosted.bottomAnchor.constraint(equalTo: view.bottomAnchor)
-            ])
-        }
-    }
-    static func dismantleUIView(_ view: LibraryArtworkSurfaceView, coordinator: Coordinator) {
-        coordinator.sources.remove(view, for: coordinator.sourceID)
     }
 }

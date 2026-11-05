@@ -13,6 +13,9 @@ struct LibraryAppTabs<Library: View>: UIViewControllerRepresentable {
     var homeNavigation: LibraryDetailNavigation? = nil
     var homeContent: AnyView? = nil
     var homeDestination: ((LibraryRoute) -> AnyView)? = nil
+    var searchNavigation: LibraryDetailNavigation? = nil
+    var searchContent: AnyView? = nil
+    var searchDestination: ((LibraryRoute) -> AnyView)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(selection: $selection) }
     func makeUIViewController(context: Context) -> UITabBarController {
@@ -33,8 +36,13 @@ struct LibraryAppTabs<Library: View>: UIViewControllerRepresentable {
             }
         }
         let search = UISearchTab { _ in
-            UIHostingController(rootView: PlaceholderTab(title: "搜索").environment(account))
+            if let searchNavigation, let searchContent {
+                searchNavigation.configure(environment: context.environment, destination: searchDestination ?? destination)
+                return searchNavigation.makeNavigationController(root: searchContent, rootTitle: "搜索")
+            }
+            return UIHostingController(rootView: PlaceholderTab(title: "搜索").environment(account))
         }
+        search.automaticallyActivatesSearch = false
         context.coordinator.searchIdentifier = search.identifier
         let tabs: [UITab] = [
             UITab(title: "主页", image: UIImage(named: "HomeTabIcon"), identifier: AppTab.home.rawValue) { _ in
@@ -49,7 +57,7 @@ struct LibraryAppTabs<Library: View>: UIViewControllerRepresentable {
         ]
         UIView.performWithoutAnimation {
             controller.setTabs(tabs, animated: false)
-            controller.selectedTab = tabs.first { $0.identifier == selection.rawValue }
+            controller.selectedTab = tabs.first { $0.identifier == (selection == .search ? search.identifier : selection.rawValue) }
         }
         // Resolve system appearance from the container when a page has no preference.
         controller.registerForTraitChanges([UITraitUserInterfaceStyle.self]) { [weak coordinator = context.coordinator] (controller: UITabBarController, _) in
@@ -64,6 +72,7 @@ struct LibraryAppTabs<Library: View>: UIViewControllerRepresentable {
         context.coordinator.selection = $selection
         context.coordinator.preferredStyle = colorScheme.map { UIUserInterfaceStyle($0) }
         navigation.configure(environment: context.environment, destination: destination)
+        searchNavigation?.configure(environment: context.environment, destination: searchDestination ?? destination)
         (homeNavigation ?? context.coordinator.homeNavigation).configure(environment: context.environment,
                                                                         destination: homeDestination ?? destination)
         let id = selection == .search ? context.coordinator.searchIdentifier : selection.rawValue

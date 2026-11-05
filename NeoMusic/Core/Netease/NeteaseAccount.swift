@@ -8,6 +8,8 @@ final class NeteaseAccount {
     let home: NeteaseHomeStore?
     let artists: NeteaseArtistStore?
     let downloads: NeteaseDownloadStore?
+    let search: NeteaseSearchStore?
+    let librarySearch: NeteaseLibrarySearchStore?
 
     enum ValidationState: Equatable {
         case signedOut, validating, valid, unverified, requiresLogin
@@ -69,11 +71,15 @@ final class NeteaseAccount {
          home: NeteaseHomeStore? = nil,
          artists: NeteaseArtistStore? = nil,
          downloads: NeteaseDownloadStore? = nil,
+         search: NeteaseSearchStore? = nil,
+         librarySearch: NeteaseLibrarySearchStore? = nil,
          saveAvatarSnapshot: @escaping @MainActor (Data, NeteaseProfile) async -> Void = { _, _ in }) {
         self.music = music
         self.home = home
         self.artists = artists
         self.downloads = downloads
+        self.search = search
+        self.librarySearch = librarySearch
         self.readSession = readSession
         self.saveSession = saveSession
         self.deleteSession = deleteSession
@@ -85,6 +91,8 @@ final class NeteaseAccount {
         self.avatarData = startupAvatar?.data
         self.avatarDataURL = startupAvatar?.avatarURL
         self.saveAvatarSnapshot = saveAvatarSnapshot
+        music?.onLibraryChange = { [weak librarySearch] in librarySearch?.scheduleSynchronization(changed: true) }
+        artists?.onLibraryChange = { [weak librarySearch] in librarySearch?.scheduleSynchronization(changed: true) }
     }
 
     convenience init(client: NeteaseAccountClient, credentialStore: NeteaseCredentialStore,
@@ -105,6 +113,8 @@ final class NeteaseAccount {
                   home: NeteaseHomeStore(),
                   artists: NeteaseArtistStore(),
                   downloads: NeteaseDownloadStore(),
+                  search: NeteaseSearchStore(),
+                  librarySearch: NeteaseLibrarySearchStore(),
                   saveAvatarSnapshot: { await avatarSnapshotStore.save($0, for: $1) })
         music?.onAuthenticationRequired = { [weak self] in
             guard let self else { return }
@@ -145,7 +155,7 @@ final class NeteaseAccount {
             await restoreCachedContent()
             guard hasRestored, !Task.isCancelled else { return }
         }
-        guard session != nil else { await downloads?.activate(nil); await home?.activate(nil); await artists?.activate(nil); return }
+        guard session != nil else { await downloads?.activate(nil); await home?.activate(nil); await artists?.activate(nil); await activateSearch(nil); return }
         await validate(restoring: false)
     }
 
@@ -193,7 +203,7 @@ final class NeteaseAccount {
                     guard validationID == id, generation == revision, !Task.isCancelled else { return }
                 }
                 guard validateSession else { validationState = previousState; return }
-                guard let saved = session else { validationState = .signedOut; error = nil; await home?.activate(nil); await artists?.activate(nil); return }
+                guard let saved = session else { validationState = .signedOut; error = nil; await home?.activate(nil); await artists?.activate(nil); await activateSearch(nil); return }
                 validationState = .validating
                 error = nil
                 let refreshed = try await validateCredential(saved.credential)
@@ -232,6 +242,7 @@ final class NeteaseAccount {
                     await artists?.activate(nil, refresh: false)
                     guard validationID == id, generation == revision, !Task.isCancelled else { return }
                     await downloads?.activate(nil)
+                    await activateSearch(nil)
                     await music?.invalidate()
                     guard validationID == id, generation == revision, !Task.isCancelled else { return }
                     session = nil
@@ -277,10 +288,19 @@ final class NeteaseAccount {
     private func activateLibraryContent(_ session: NeteaseSavedSession?, refresh: Bool) async {
         guard !Task.isCancelled else { return }
         await downloads?.activate(session)
+        await activateSearch(session)
         guard !Task.isCancelled else { return }
         async let artistContent: Void? = artists?.activate(session, refresh: refresh)
         if let session { await music?.activate(session, refresh: refresh) }
         _ = await artistContent
+    }
+
+    private func activateSearch(_ session: NeteaseSavedSession?) async {
+        await search?.setSession(owner: session?.profile.userID, credential: session?.credential)
+        guard !Task.isCancelled else { return }
+        await librarySearch?.setSession(owner: session?.profile.userID, credential: session?.credential)
+        guard !Task.isCancelled else { return }
+        librarySearch?.scheduleSynchronization()
     }
 
     func completeLogin(credential: NeteaseCredential) async throws {
@@ -319,6 +339,7 @@ final class NeteaseAccount {
                 await artists?.activate(nil, refresh: false)
                 try checkLogin(id)
                 await downloads?.activate(nil)
+                await activateSearch(nil)
                 await music?.invalidate()
                 await oldValidation?.value
                 await oldAvatar?.value
@@ -390,6 +411,7 @@ final class NeteaseAccount {
             guard generation == revision, loginID == nil, logoutID == nil, !Task.isCancelled else { return }
             if let session { await music?.activate(session, refresh: false) }
             await downloads?.activate(session)
+            await activateSearch(session)
             if validationID == nil { validationTask = nil }
             if avatarID == nil { avatarTask = nil }
             if validationState == .validating, validationID == nil { validationState = .unverified }
@@ -422,6 +444,7 @@ final class NeteaseAccount {
             await artists?.activate(nil, refresh: false)
             guard logoutID == id else { return }
             await downloads?.activate(nil)
+            await activateSearch(nil)
             await music?.invalidate()
             _ = await oldLogin?.result
             await oldValidation?.value

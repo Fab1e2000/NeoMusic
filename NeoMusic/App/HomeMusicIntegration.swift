@@ -558,7 +558,7 @@ import Observation
         model.quickActionRoute = preview.route
     }
 
-    private func prepareNavigation(_ preview: LibraryNavigationPreview) {
+    func prepareNavigation(_ preview: LibraryNavigationPreview) {
         guard preview.ownerID == owner, case .playlist(let id) = preview.route, id.hasPrefix("home:") else { return }
         var item = detailLibrary.playlist(id) ?? LibraryPlaylistItem(id: id, title: preview.title, artwork: preview.artwork)
         item.title = preview.title
