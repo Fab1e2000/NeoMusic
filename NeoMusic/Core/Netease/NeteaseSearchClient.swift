@@ -49,7 +49,7 @@ final class NeteaseSearchClient: Sendable {
             struct Category: Decodable { let name: String; let category: Int; let hot: Bool? }
             let sub: [Category]
         }
-        let response: Response = try await transport.decoded(path: "/api/playlist/catalogue", fields: [:], credential: credential, profile: .search)
+        let response: Response = try await transport.decoded(path: "/api/playlist/catalogue", fields: [:], credential: credential, profile: .search, retryTLS: true)
         var seen = Set<String>()
         return response.sub.enumerated().filter { !$0.element.name.isEmpty && seen.insert($0.element.name).inserted }
             .sorted { a, b in
@@ -64,7 +64,7 @@ final class NeteaseSearchClient: Sendable {
         struct Response: Decodable { let playlists: [Playlist]; let more: Bool }
         let response: Response = try await transport.decoded(path: "/api/playlist/list",
             fields: ["cat": category, "order": "hot", "offset": offset, "limit": limit, "total": true],
-            credential: credential, profile: .search)
+            credential: credential, profile: .search, retryTLS: true)
         let items = Self.unique(response.playlists.map(\.resource))
         let more = response.more && !items.isEmpty
         return .init(groups: [.init(kind: .playlist, items: items, hasMore: more)],
@@ -75,7 +75,7 @@ final class NeteaseSearchClient: Sendable {
                             credential: NeteaseCredential?) async throws -> NeteaseSearchPage {
         let data = try await transport.request(path: "/api/search/get",
             fields: ["s": query, "type": kind.rawValue, "limit": 30, "offset": offset],
-            credential: credential, profile: .search)
+            credential: credential, profile: .search, retryTLS: true)
         var page = try Self.parse(data, kind: kind, offset: offset)
         let songs = page.groups.flatMap(\.items).compactMap(\.song)
         let missing = songs.filter { $0.artworkURL == nil || $0.duration <= 0 }.map(\.id)
@@ -111,7 +111,7 @@ final class NeteaseSearchClient: Sendable {
             }
             let result: Result?
         }
-        let data = try await transport.requestWeb(path: "/api/search/suggest/keyword", fields: ["s": query], credential: credential)
+        let data = try await transport.requestWeb(path: "/api/search/suggest/keyword", fields: ["s": query], credential: credential, retryTLS: true)
         let response = try JSONDecoder().decode(Response.self, from: data)
         var seen = Set<String>()
         return Array((response.result?.allMatch ?? []).map(\.keyword).filter { !$0.isEmpty && seen.insert($0).inserted }.prefix(8))
@@ -124,7 +124,7 @@ final class NeteaseSearchClient: Sendable {
         }
         do {
             let response: Response = try await transport.decoded(path: "/api/search/suggest/multimatch",
-                fields: ["s": query, "type": 1], credential: credential, profile: .search)
+                fields: ["s": query, "type": 1], credential: credential, profile: .search, retryTLS: true)
             guard let result = response.result else { return [] }
             return Self.unique((result.orders ?? ["artist", "album"]).flatMap { key -> [NeteaseSearchResource] in
                 return switch key { case "artist": (result.artist ?? []).map(\.resource)

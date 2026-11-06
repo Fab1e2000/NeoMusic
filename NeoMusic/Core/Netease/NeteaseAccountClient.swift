@@ -31,7 +31,7 @@ final class NeteaseAccountClient: Sendable {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await session.data(for: request)
+            (data, response) = try await dataWithTLSRetry(for: request, enabled: true)
         } catch let error as URLError {
             if Task.isCancelled || error.code == .cancelled { throw CancellationError() }
             throw NeteaseAccountError.network(error.code)
@@ -114,39 +114,39 @@ final class NeteaseAccountClient: Sendable {
         return request
     }
 
-    @concurrent func request(path: String, fields: [String: any Sendable] = [:], credential: NeteaseCredential?, profile: EAPIProfile = .account) async throws -> Data {
-        let data = try await responseData(path: path, fields: fields, credential: credential, profile: profile)
+    @concurrent func request(path: String, fields: [String: any Sendable] = [:], credential: NeteaseCredential?, profile: EAPIProfile = .account, retryTLS: Bool = false) async throws -> Data {
+        let data = try await responseData(path: path, fields: fields, credential: credential, profile: profile, retryTLS: retryTLS)
         _ = try JSONDecoder().decode(CheckedResponse<EmptyResponse>.self, from: data)
         return data
     }
 
-    @concurrent func decoded<Response: Decodable & Sendable>(path: String, fields: [String: any Sendable], credential: NeteaseCredential?, profile: EAPIProfile = .account) async throws -> Response {
-        let data = try await responseData(path: path, fields: fields, credential: credential, profile: profile)
+    @concurrent func decoded<Response: Decodable & Sendable>(path: String, fields: [String: any Sendable], credential: NeteaseCredential?, profile: EAPIProfile = .account, retryTLS: Bool = false) async throws -> Response {
+        let data = try await responseData(path: path, fields: fields, credential: credential, profile: profile, retryTLS: retryTLS)
         let response = try JSONDecoder().decode(CheckedResponse<Response>.self, from: data).value
         try Task.checkCancellation()
         return response
     }
 
-    private func responseData(path: String, fields: [String: any Sendable], credential: NeteaseCredential?, profile: EAPIProfile) async throws -> Data {
+    private func responseData(path: String, fields: [String: any Sendable], credential: NeteaseCredential?, profile: EAPIProfile, retryTLS: Bool) async throws -> Data {
         try Task.checkCancellation()
         let request = try makeRequest(credential: credential, path: path, fields: fields, profile: profile)
-        let data: Data
-        let response: URLResponse
-        do {
-            (data, response) = try await session.data(for: request)
-        } catch let error as URLError where profile == .playback && error.code == .secureConnectionFailed {
-            // The read-only playback POST can recover from the observed transient
-            // TLS handshake failure on a new task. Keep system trust evaluation,
-            // allow one retry, and never retry account writes or server rejections.
-            try Task.checkCancellation()
-            (data, response) = try await session.data(for: makeRequest(
-                credential: credential, path: path, fields: fields, profile: profile))
-        }
+        let (data, response) = try await dataWithTLSRetry(for: request, enabled: retryTLS || profile == .playback)
         try Task.checkCancellation()
         guard let http = response as? HTTPURLResponse else { throw NeteaseAccountError.invalidResponse }
         if http.statusCode == 401 { throw NeteaseAccountError.authenticationRequired }
         guard (200..<300).contains(http.statusCode) else { throw NeteaseAccountError.http(http.statusCode) }
         return data
+    }
+
+    /// Only explicitly read-only operations opt in. URLSession retains system trust validation.
+    private func dataWithTLSRetry(for request: URLRequest, enabled: Bool) async throws -> (Data, URLResponse) {
+        try Task.checkCancellation()
+        do {
+            return try await session.data(for: request)
+        } catch let error as URLError where enabled && error.code == .secureConnectionFailed {
+            try Task.checkCancellation()
+            return try await session.data(for: request)
+        }
     }
 
     private struct EmptyResponse: Decodable {}
@@ -227,9 +227,9 @@ final class NeteaseAccountClient: Sendable {
         request.httpBody = Data("params=\(encoded)&encSecKey=\(rsa)".utf8)
         return request
     }
-    @concurrent func requestWeb(path: String, fields: [String: any Sendable], credential: NeteaseCredential?) async throws -> Data {
+    @concurrent func requestWeb(path: String, fields: [String: any Sendable], credential: NeteaseCredential?, retryTLS: Bool = false) async throws -> Data {
         try Task.checkCancellation()
-        let (data, response) = try await session.data(for: makeWebRequest(path: path, fields: fields, credential: credential))
+        let (data, response) = try await dataWithTLSRetry(for: makeWebRequest(path: path, fields: fields, credential: credential), enabled: retryTLS)
         try Task.checkCancellation()
         guard let http = response as? HTTPURLResponse else { throw NeteaseAccountError.invalidResponse }
         guard (200..<300).contains(http.statusCode) else { throw NeteaseAccountError.http(http.statusCode) }

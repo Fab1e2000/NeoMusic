@@ -87,7 +87,7 @@ enum NeteaseHomeSupplemental {
             return NeteaseHomeSupplemental.block(code: "NEOMUSIC_FOLLOWED_RELEASES", title: "你关注的艺人新动向", resources: resources)
         }
     }
-    private static func block(code: String, title: String, resources: [NeteaseHomeFeed.Resource]) -> NeteaseHomeFeed.Block {
+    fileprivate static func block(code: String, title: String, resources: [NeteaseHomeFeed.Resource]) -> NeteaseHomeFeed.Block {
         .init(blockCode: code, uiElement: .init(mainTitle: nil, subTitle: .init(title: title), image: nil),
               creatives: [.init(creativeId: code, creativeType: nil, uiElement: nil, resources: resources)])
     }
@@ -135,9 +135,34 @@ extension NeteaseMusicClient {
         let response: NeteaseHomeSupplemental.Charts = try await read("/api/toplist", [:], credential)
         return response.block
     }
-    @concurrent func followedArtistReleases(credential: NeteaseCredential) async throws -> NeteaseHomeFeed.Block {
+    @concurrent func followedArtistReleases(credential: NeteaseCredential, cached: NeteaseHomeFeed.Block? = nil) async throws -> NeteaseHomeFeed.Block {
         let response: NeteaseHomeSupplemental.Followed = try await read("/api/sub/artist/new/works/song/list",
             ["limit": 20, "startTimestamp": Int64(Date().timeIntervalSince1970 * 1000)], credential)
-        return response.block
+        let block = response.block
+        var covers: [Int64: URL] = [:]
+        // Reuse the account-owned snapshot; request details only for uncovered albums.
+        for resource in cached?.resources ?? [] {
+            if let id = resource.numericID, let url = resource.artworkURL { covers[id] = url }
+        }
+        for resource in block.resources where resource.artworkURL == nil {
+            guard let id = resource.numericID, covers[id] == nil else { continue }
+            try Task.checkCancellation()
+            do {
+                let detail = try await albumDetail(id: id, credential: credential)
+                covers[id] = detail.album.artworkURL
+            } catch {
+                try Task.checkCancellation()
+                if error is CancellationError { throw error }
+            }
+        }
+        try Task.checkCancellation()
+        let resources = block.resources.map { resource in
+            NeteaseHomeFeed.Resource(type: "album", id: resource.numericID ?? 0,
+                title: resource.uiElement?.mainTitle?.title ?? "",
+                artist: resource.uiElement?.subTitle?.title ?? "",
+                image: (resource.artworkURL ?? resource.numericID.flatMap { covers[$0] })?.absoluteString)
+        }
+        return NeteaseHomeSupplemental.block(code: block.blockCode,
+            title: "你关注的艺人新动向", resources: resources)
     }
 }

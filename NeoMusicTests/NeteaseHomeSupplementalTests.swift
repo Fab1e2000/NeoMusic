@@ -20,6 +20,72 @@ final class NeteaseHomeSupplementalTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(block.resources.first?.resourceType, "album")
         XCTAssertEqual(block.resources.first?.uiElement?.subTitle?.title, "Artist")
     }
+    @MainActor func testFollowedFillsMissingCoverAndKeepsExistingCover() async throws {
+        let client = makeClient([
+            #"{"code":200,"data":{"newWorks":[{"blockType":"album","blockTitle":{"resourceId":1,"resourceName":"Existing","artistName":"A","resourcePicUrl":"https://example.com/existing.jpg"}},{"blockType":"song","albumId":2,"blockTitle":{"resourceId":20,"resourceName":"Missing","artistName":"B"}}]}}"#,
+            #"{"code":200,"album":{"id":2,"name":"Album","picUrl":"http://p1.music.126.net/cover.jpg"},"songs":[]}"#
+        ])
+        let block = try await client.followedArtistReleases(credential: credential())
+        XCTAssertEqual(block.resources.map(\.numericID), [1, 2])
+        XCTAssertEqual(block.resources.map(\.artworkURL?.absoluteString),
+                       ["https://example.com/existing.jpg", "https://p1.music.126.net/cover.jpg"])
+        XCTAssertEqual(block.resources.last?.uiElement?.subTitle?.title, "B")
+        XCTAssertEqual(SupplementalFixtureProtocol.paths.withLock { $0 },
+                       ["/eapi/sub/artist/new/works/song/list", "/eapi/v1/album/2"])
+    }
+
+    @MainActor func testFollowedRefreshReusesPersistedCoverAndOnlyFetchesNewAlbum() async throws {
+        let first = #"{"code":200,"data":{"newWorks":[{"blockType":"album","blockTitle":{"resourceId":2,"resourceName":"Old title","artistName":"B"}}]}}"#
+        let refreshed = #"{"code":200,"data":{"newWorks":[{"blockType":"album","blockTitle":{"resourceId":2,"resourceName":"Updated title","artistName":"Updated artist"}},{"blockType":"album","blockTitle":{"resourceId":3,"resourceName":"New album","artistName":"C"}}]}}"#
+        let client = makeClient([first,
+            #"{"code":200,"album":{"id":2,"name":"Album","picUrl":"https://example.com/2.jpg"},"songs":[]}"#,
+            refreshed,
+            #"{"code":200,"album":{"id":3,"name":"Album","picUrl":"https://example.com/3.jpg"},"songs":[]}"#,
+            refreshed])
+        let initial = try await client.followedArtistReleases(credential: credential())
+        let restored = try JSONDecoder().decode(NeteaseHomeFeed.Block.self, from: JSONEncoder().encode(initial))
+        let updated = try await client.followedArtistReleases(credential: credential(), cached: restored)
+        let repeated = try await client.followedArtistReleases(credential: credential(), cached: updated)
+        XCTAssertEqual(repeated.resources.map(\.numericID), [2, 3])
+        XCTAssertEqual(repeated.resources.map(\.artworkURL?.absoluteString), ["https://example.com/2.jpg", "https://example.com/3.jpg"])
+        XCTAssertEqual(repeated.resources.first?.uiElement?.mainTitle?.title, "Updated title")
+        XCTAssertEqual(repeated.resources.first?.uiElement?.subTitle?.title, "Updated artist")
+        XCTAssertEqual(SupplementalFixtureProtocol.paths.withLock { $0 }, [
+            "/eapi/sub/artist/new/works/song/list", "/eapi/v1/album/2",
+            "/eapi/sub/artist/new/works/song/list", "/eapi/v1/album/3",
+            "/eapi/sub/artist/new/works/song/list"])
+    }
+
+    @MainActor func testFollowedServerCoverOverridesCachedCoverAndRemovedAlbumsStayRemoved() async throws {
+        let cached = try JSONDecoder().decode(NeteaseHomeSupplemental.Charts.self, from: Data(#"{"list":[{"id":2,"name":"Old","coverImgUrl":"https://example.com/old.jpg"},{"id":3,"name":"Removed","coverImgUrl":"https://example.com/removed.jpg"}]}"#.utf8)).block
+        let client = makeClient([#"{"code":200,"data":{"newWorks":[{"blockType":"album","blockTitle":{"resourceId":2,"resourceName":"New","artistName":"B","resourcePicUrl":"https://example.com/new.jpg"}}]}}"#])
+        let result = try await client.followedArtistReleases(credential: credential(), cached: cached)
+        XCTAssertEqual(result.resources.map(\.numericID), [2])
+        XCTAssertEqual(result.resources.first?.artworkURL?.absoluteString, "https://example.com/new.jpg")
+        XCTAssertEqual(SupplementalFixtureProtocol.paths.withLock { $0.count }, 1)
+    }
+
+    @MainActor func testFollowedCoverFailurePreservesRelease() async throws {
+        let client = makeClient([
+            #"{"code":200,"data":{"newWorks":[{"blockType":"album","blockTitle":{"resourceId":2,"resourceName":"Missing","artistName":"B"}}]}}"#,
+            #"{"code":500}"#
+        ])
+        let block = try await client.followedArtistReleases(credential: credential())
+        XCTAssertEqual(block.resources.map(\.numericID), [2])
+        XCTAssertNil(block.resources.first?.artworkURL)
+    }
+
+    @MainActor func testCancelledFollowedRequestDoesNotPublish() async throws {
+        let client = makeClient([#"{"code":200,"data":{"newWorks":[]}}"#])
+        let credential = try credential()
+        let task = Task { try await client.followedArtistReleases(credential: credential) }
+        task.cancel()
+        do {
+            _ = try await task.value
+            XCTFail("Expected cancellation")
+        } catch { XCTAssertTrue(error is CancellationError || (error as? URLError)?.code == .cancelled) }
+    }
+
     func testSongBatchPreservesMusicIdentityAcrossResponseShapes() throws {
         let data = Data(#"{"data":[{"id":7,"name":"Older keys","artists":[{"id":11,"name":"First"},{"id":12,"name":"Second"}],"album":{"id":13,"name":"Album","picUrl":"http://p1.music.126.net/cover.jpg"},"duration":90000},{"id":8,"name":"Detail keys","ar":[{"id":21,"name":"Artist"}],"al":{"id":23,"name":"Album"},"dt":120000},{"id":7,"name":"Duplicate","ar":[],"al":{"name":"Album"},"dt":0},{"id":0,"name":"Invalid","ar":[],"al":{"name":"Album"},"dt":0}]}"#.utf8)
         let songs = try JSONDecoder().decode(NeteaseHomeSupplemental.SongBatch.self, from: data).songs

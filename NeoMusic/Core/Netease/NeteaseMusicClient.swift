@@ -5,7 +5,7 @@ final class NeteaseMusicClient: Sendable {
     let transport: NeteaseAccountClient
     init(transport: NeteaseAccountClient = NeteaseAccountClient()) { self.transport = transport }
     @concurrent func read<T: Decodable & Sendable>(_ path: String, _ fields: [String: any Sendable], _ credential: NeteaseCredential?) async throws -> T {
-        try await transport.decoded(path: path, fields: fields, credential: credential)
+        try await transport.decoded(path: path, fields: fields, credential: credential, retryTLS: true)
     }
     @concurrent func playlists(userID: Int64, credential: NeteaseCredential) async throws -> [NeteaseMusicPlaylist] {
         struct Response: Decodable { let playlist: [Playlist]; let more: Bool }

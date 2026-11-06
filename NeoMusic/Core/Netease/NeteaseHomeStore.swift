@@ -545,12 +545,14 @@ import Observation
     private func refreshFollowed(credential: NeteaseCredential?, revision: UUID) async {
         guard let credential else { return }
         do {
-            let value = try await client.followedArtistReleases(credential: credential)
+            let value = try await client.followedArtistReleases(credential: credential, cached: followedReleases)
             try Task.checkCancellation()
             guard generation == revision else { return }
             followedReleases = value; followedReleasesError = nil; save(value, key: "home-followed"); onChange?()
         } catch is CancellationError {} catch {
-            if generation == revision, !Task.isCancelled { followedReleasesError = error.localizedDescription; onChange?() }
+            if generation == revision, !Task.isCancelled {
+                followedReleasesError = error.localizedDescription; onChange?()
+            }
         }
     }
 

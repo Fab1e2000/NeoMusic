@@ -65,6 +65,26 @@ final class NeteaseMusicClientTests: XCTestCase, @unchecked Sendable {
         }
     }
 
+    @MainActor func testPageReadRecoversOneTLSFailure() async throws {
+        let client = makeClient(["tls", #"{"code":200,"album":{"id":2,"name":"Album","picUrl":"https://example.com/cover.jpg"},"songs":[]}"#])
+        let detail = try await client.albumDetail(id: 2, credential: credential())
+        XCTAssertEqual(detail.album.id, 2)
+        XCTAssertEqual(MusicFixtureProtocol.requests.withLock { $0.count }, 2)
+    }
+
+    @MainActor func testPageReadStopsAfterOneRetryAndDoesNotRetryOtherFailures() async throws {
+        for (fixture, code, count) in [("tls", URLError.secureConnectionFailed, 2),
+                                       ("certificate", .serverCertificateUntrusted, 1),
+                                       ("cancelled", .cancelled, 1)] {
+            let client = makeClient([fixture, fixture])
+            do {
+                _ = try await client.albumDetail(id: 2, credential: credential())
+                XCTFail("Expected failure")
+            } catch { XCTAssertEqual((error as? URLError)?.code, code) }
+            XCTAssertEqual(MusicFixtureProtocol.requests.withLock { $0.count }, count)
+        }
+    }
+
     @MainActor func testAccountWriteDoesNotRetryTLSFailure() async throws {
         let client = makeClient(["tls", #"{"code":200}"#])
         do {
