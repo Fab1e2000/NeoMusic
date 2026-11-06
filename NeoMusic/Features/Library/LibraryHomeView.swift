@@ -11,6 +11,8 @@ struct LibraryShelfItem: Identifiable, Equatable {
     var isPinned = false
     /// 排序用：数值越大越晚加入资料库；专辑的发行年份。
     var addedOrder = 0
+    /// 单曲卡片只代表这一首歌，不进入专辑。
+    var songID: String? = nil
     var year: Int?
     var sourceOwnerID: String?
 }
@@ -33,6 +35,7 @@ struct LibraryHomeView: View {
     let playlistLibrary: PlaylistLibrary
     var isContentReady = true
     var reorderPinned: ([LibraryRoute]) -> Bool = { _ in false }
+    var playSong: (String) -> Void = { _ in }
     @State private var isCreatingPlaylist = false
     @Environment(\.collectionMenuActions) private var actions
     @State private var isEditingPinned = false
@@ -62,7 +65,7 @@ struct LibraryHomeView: View {
             }
             .listSectionSeparator(.hidden, edges: .top)
             Section {
-                RecentlyAddedGrid(items: recentlyAdded)
+                RecentlyAddedGrid(items: recentlyAdded, playSong: playSong)
                     .padding(.top, 17)
                     .padding(.bottom, 16)
                     .frame(maxHeight: .infinity, alignment: .top)
@@ -159,10 +162,12 @@ private struct LibraryCategoryRows: View {
     }
 }
 
-/// 最近添加：两列网格。
+/// 最近添加：两列，最多三行。
 private struct RecentlyAddedGrid: View {
     let items: [LibraryShelfItem]
+    var playSong: (String) -> Void = { _ in }
     private let columns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
+    private var visibleItems: [LibraryShelfItem] { Array(items.prefix(6)) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 13) {
@@ -170,8 +175,13 @@ private struct RecentlyAddedGrid: View {
                 .font(.title2.weight(.semibold))
                 .accessibilityAddTraits(.isHeader)
             LazyVGrid(columns: columns, alignment: .leading, spacing: 20) {
-                ForEach(items) { item in
-                    CollectionCardLink(item: item) { AlbumCard(item: item) }
+                ForEach(visibleItems) { item in
+                    if let songID = item.songID {
+                        Button { playSong(songID) } label: { AlbumCard(item: item) }
+                            .buttonStyle(.plain)
+                    } else {
+                        CollectionCardLink(item: item) { AlbumCard(item: item) }
+                    }
                 }
             }
         }

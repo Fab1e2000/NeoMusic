@@ -14,6 +14,7 @@ final class NeteaseArtistStore {
     private(set) var albums: [Int64: NeteaseArtistAlbumDetail] = [:]
     private(set) var subscribedArtists: [NeteaseArtistReference] = []
     private(set) var subscribedAlbums: [NeteaseArtistAlbum] = []
+    private var albumAdditions = AlbumLibraryAdditions()
     private(set) var errors: [String: String] = [:]
     @ObservationIgnored var onChange: (() -> Void)?
     @ObservationIgnored var onLibraryChange: (() -> Void)?
@@ -78,9 +79,11 @@ final class NeteaseArtistStore {
             guard token == revision, !Task.isCancelled else { return }
             if let subscriptions {
                 subscribedArtists = subscriptions.artists; subscribedAlbums = subscriptions.albums
+                albumAdditions = subscriptions.albumAdditions ?? AlbumLibraryAdditions(baselineRecorded: true)
                 refreshedAt.merge(subscriptions.refreshedAt) { _, new in new }
             } else if let legacy {
                 subscribedArtists = legacy.artists; subscribedAlbums = legacy.collected
+                albumAdditions = AlbumLibraryAdditions(baselineRecorded: !subscribedAlbums.isEmpty)
             }
             isReady = true
             publish(.reset)
@@ -107,7 +110,7 @@ final class NeteaseArtistStore {
         let pending = Array(tasks.values) + Array(artworkTasks.values) + Array(saveTasks.values) + Array(restoringPages.values)
         tasks.removeAll(); artworkTasks.removeAll(); saveTasks.removeAll(); restoringPages.removeAll(); restoredPages.removeAll()
         resolvedSongs = [:]; songSources = [:]; songOwners = [:]; biographies = [:]; refreshedAt = [:]; legacyArtwork = [:]
-        details = [:]; releases = [:]; similar = [:]; albums = [:]; subscribedArtists = []; subscribedAlbums = []; errors = [:]
+        details = [:]; releases = [:]; similar = [:]; albums = [:]; subscribedArtists = []; subscribedAlbums = []; albumAdditions = AlbumLibraryAdditions(); errors = [:]
         publish(.reset)
         pending.forEach { $0.cancel() }
         for task in pending { await task.value }
@@ -180,6 +183,8 @@ final class NeteaseArtistStore {
             let value = try await client.subscribedAlbums(credential: credential)
             try check(token)
             let ids = Self.changedAlbumIDs(subscribedAlbums, value)
+            let previous = subscribedAlbums.map(\.id)
+            albumAdditions.observe(previous: previous, current: value.map(\.id), now: Date())
             let changed = !Self.sameAlbums(subscribedAlbums, value)
             if changed { subscribedAlbums = value; onLibraryChange?() }
             cacheArtwork(value.prefix(6).compactMap(\.artworkURL), token: token)
@@ -369,8 +374,11 @@ final class NeteaseArtistStore {
                 subscribedArtists = value; confirmed = value.contains { $0.id == id } == subscribed
                 change = .subscribedArtists(ids)
             } else {
+                let previous = subscribedAlbums.map(\.id)
+                if subscribed { albumAdditions.stamp(id, at: Date()) }
                 let value = try await client.subscribedAlbums(credential: credential)
                 try check(token)
+                albumAdditions.observe(previous: previous, current: value.map(\.id), now: Date())
                 let ids = Self.changedAlbumIDs(subscribedAlbums, value)
                 subscribedAlbums = value; confirmed = value.contains { $0.id == id } == subscribed
                 change = .subscribedAlbums(ids)
@@ -428,8 +436,11 @@ final class NeteaseArtistStore {
         let refreshedAt: [String: Date]
     }
     fileprivate struct AlbumPage: Codable, Sendable { let detail: NeteaseArtistAlbumDetail; let refreshedAt: Date? }
+    func albumAddedDate(_ id: Int64) -> Date? { albumAdditions.date(id) }
+
     private struct Subscriptions: Codable, Sendable {
         let artists: [NeteaseArtistReference]; let albums: [NeteaseArtistAlbum]; let refreshedAt: [String: Date]
+        var albumAdditions: AlbumLibraryAdditions? = nil
     }
     private func save(_ resource: String) {
         let parts = resource.split(separator: ":")
@@ -441,7 +452,7 @@ final class NeteaseArtistStore {
             save(AlbumPage(detail: detail, refreshedAt: refreshedAt[resource]), key: resource)
         } else if resource.hasPrefix("subscriptions") || resource.hasPrefix("write:") {
             save(Subscriptions(artists: subscribedArtists, albums: subscribedAlbums,
-                               refreshedAt: refreshedAt.filter { $0.key.hasPrefix("subscriptions:") }), key: "subscriptions")
+                               refreshedAt: refreshedAt.filter { $0.key.hasPrefix("subscriptions:") }, albumAdditions: albumAdditions), key: "subscriptions")
         }
     }
     private func save<Value: Encodable & Sendable>(_ value: Value, key: String) {

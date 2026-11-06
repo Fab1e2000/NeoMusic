@@ -199,6 +199,24 @@ final class PlaylistLibraryTests: XCTestCase {
         XCTAssertEqual(library.playlist("favorites")?.title, "喜爱歌曲")
     }
 
+    func testAddingASongRecordsWhenItJoinedAndRestoresThatTime() throws {
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("playlists.json")
+        let original = library()
+        XCTAssertTrue(original.configurePersistence(url: url, songs: []))
+        let before = Date()
+        original.addSongs([song("a")], to: "one")
+        original.addSongs([song("a")], to: "one")
+        let added = try XCTUnwrap(original.playlistSongAddedDates()["a"])
+        XCTAssertGreaterThanOrEqual(added, before)
+        let restored = library()
+        XCTAssertTrue(restored.configurePersistence(url: url, songs: [song("a")]))
+        XCTAssertEqual(restored.playlistSongAddedDates()["a"], added)
+        restored.removeSong("a", from: "one")
+        XCTAssertNil(restored.playlistSongAddedDates()["a"])
+    }
+
     func testAddDeduplicatesAndPreservesOrderWithoutChangingOtherPlaylist() {
         let library = library()
         library.addSongs([song("a")], to: "two")

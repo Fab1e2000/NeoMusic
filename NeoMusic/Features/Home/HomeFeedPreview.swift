@@ -80,6 +80,7 @@ struct HomeFeedPreview: View {
         }
         .contentMargins(.horizontal, HomeMetrics.margin, for: .scrollContent)
         .scrollTargetBehavior(.viewAligned).scrollIndicators(.hidden)
+        .scrollClipDisabled()
         .scrollPosition(id: $heroScrollID, anchor: .leading)
     }
     private var quickActions: [HomeQuickActionItem] {
@@ -115,6 +116,7 @@ struct HomeFeedPreview: View {
             }
             .contentMargins(.horizontal, HomeMetrics.margin, for: .scrollContent)
             .scrollIndicators(.hidden)
+            .scrollClipDisabled()
             if snapping { shelf.scrollTargetBehavior(.viewAligned) }
             else { shelf }
         }

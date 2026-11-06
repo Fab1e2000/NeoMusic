@@ -44,6 +44,7 @@ struct HomeFeedView: View {
                     .contentMargins(.horizontal, HomeMetrics.margin, for: .scrollContent)
                     .scrollTargetBehavior(.viewAligned)
                     .scrollIndicators(.hidden)
+                    .scrollClipDisabled()
                     .scrollPosition(id: $quickActionScrollID, anchor: .leading)
                     .accessibilityIdentifier("home.quick-actions")
                 }
@@ -81,7 +82,6 @@ struct HomeFeedView: View {
         }
         .accessibilityIdentifier("home.feed")
         .background(.white)
-        .scrollEdgeEffectStyle(.soft, for: .top)
         .libraryNavigationTitle("主页")
         .libraryHomeNavigation(title: "主页")
         .toolbar { AccountToolbar() }
@@ -236,6 +236,7 @@ private struct HomeContentShelf: View {
             }
             .contentMargins(.horizontal, HomeMetrics.margin, for: .scrollContent)
             .scrollIndicators(.hidden)
+            .scrollClipDisabled()
             .accessibilityIdentifier("home.shelf.\(section.id)")
     }
 

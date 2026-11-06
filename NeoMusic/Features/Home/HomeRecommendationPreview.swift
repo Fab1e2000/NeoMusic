@@ -57,7 +57,6 @@ struct HomeRecommendationPreview: View {
                 .padding(.bottom, 24)
             }
             .background(.white)
-            .scrollEdgeEffectStyle(.soft, for: .top)
             .navigationTitle("主页")
             .toolbarTitleDisplayMode(.inlineLarge)
             .toolbar { AccountToolbar() }

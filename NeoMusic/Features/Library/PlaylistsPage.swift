@@ -49,6 +49,8 @@ final class PlaylistLibrary {
     fileprivate var placement: [String: String] = [:]
     private var nextOrder = 1000
     private var contents: [String: [LibrarySongItem]] = [:]
+    /// 歌曲加入某个自建播放列表的时间。已在列表中的旧歌没有这项记录。
+    private var songAddedAt: [String: Date] = [:]
     private(set) var downloadedSnapshotItems: [LibraryPlaylistItem] = []
     private var downloadedContents: [String: [LibrarySongItem]] = [:]
     private var downloadedOnlineAliases: [String: String] = [:]
@@ -423,6 +425,7 @@ final class PlaylistLibrary {
         let placement: [String: String]
         let nextOrder: Int
         var onlineSongs: [String: PlaybackSongSnapshot]? = nil
+        var songAddedAt: [String: Date]? = nil
     }
 
     /// Restore stable identities immediately; the verified scan resolves missing metadata.
@@ -456,6 +459,7 @@ final class PlaylistLibrary {
                     folders = saved.folders
                     placement = saved.placement
                     nextOrder = saved.nextOrder
+                    songAddedAt = saved.songAddedAt ?? [:]
                     let referencedIDs = Set(saved.playlists.flatMap(\.songs))
                     savedOnlineSongs = (saved.onlineSongs ?? [:]).filter {
                         referencedIDs.contains($0.key) && $0.key == $0.value.id && $0.value.onlineOwnerID != nil
@@ -530,7 +534,8 @@ final class PlaylistLibrary {
                     isSystem: item.isSystem, addedOrder: item.addedOrder, lastPlayedOrder: item.lastPlayedOrder,
                     updatedOrder: item.updatedOrder, artworkData: data, addedAt: item.addedAt, lastPlayedAt: item.lastPlayedAt, updatedAt: item.updatedAt, songs: contents[item.id, default: []].map(\.id))
             }
-            let data = try JSONEncoder().encode(Snapshot(playlists: items, folders: folders, placement: placement.filter { key, _ in playlists.contains { $0.id == key && !$0.isReadOnly } }, nextOrder: nextOrder, onlineSongs: savedOnlineSongs))
+            let presentSongs = Set(items.flatMap(\.songs))
+            let data = try JSONEncoder().encode(Snapshot(playlists: items, folders: folders, placement: placement.filter { key, _ in playlists.contains { $0.id == key && !$0.isReadOnly } }, nextOrder: nextOrder, onlineSongs: savedOnlineSongs, songAddedAt: songAddedAt.filter { presentSongs.contains($0.key) }))
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try data.write(to: url, options: .atomic)
             savedArtwork = nextArtwork
@@ -544,6 +549,30 @@ final class PlaylistLibrary {
     }
     func songs(in id: String) -> [LibrarySongItem] { contents[id] ?? [] }
 
+    /// 仍在某个自建播放列表中的歌曲，及其最近一次被加入的时间。
+    func playlistSongAddedDates() -> [String: Date] {
+        let present = Set(playlists.filter { !$0.isSystem }.flatMap { contents[$0.id, default: []].map(\.id) })
+        return songAddedAt.filter { present.contains($0.key) }
+    }
+
+    func songsAddedToPlaylists() -> [LibrarySongItem] {
+        let dates = playlistSongAddedDates()
+        var songs: [String: LibrarySongItem] = [:]
+        for playlist in playlists where !playlist.isSystem {
+            for song in contents[playlist.id, default: []] where dates[song.id] != nil {
+                songs[song.id] = song
+            }
+        }
+        return Array(songs.values)
+    }
+
+    func containedSong(_ id: String) -> LibrarySongItem? {
+        for songs in contents.values {
+            if let song = songs.first(where: { $0.id == id }) { return song }
+        }
+        return nil
+    }
+
     /// 单次选择确认后才提交，保留选择顺序；已有歌曲不重复加入。
     /// 按顺序加到播放列表末尾，已在列表中的歌曲跳过；返回实际加入的数量。
     @discardableResult
@@ -552,7 +581,11 @@ final class PlaylistLibrary {
         guard canDelete(id) else { return 0 }
         var current = contents[id] ?? []
         var known = Set(current.map(\.id))
-        for song in songs where known.insert(song.id).inserted { current.append(song) }
+        let addedAt = Date()
+        for song in songs where known.insert(song.id).inserted {
+            current.append(song)
+            songAddedAt[song.id] = addedAt
+        }
         let added = current.count - contents[id, default: []].count
         guard added > 0 else { return 0 }
         contents[id] = current

@@ -237,7 +237,7 @@ import Observation
         .init(id: "catalog:artist:\(value.id)", name: value.name, artwork: artwork(value.artworkURL), isFavorite: subscribedArtistIDs.contains(value.id))
     }
     private func albumItem(_ value: NeteaseArtistAlbum) -> LibraryShelfItem {
-        .init(id: "catalog:album:\(value.id)", title: value.title, subtitle: value.artist, artwork: artwork(value.artworkURL), route: .album("catalog:album:\(value.id)"), isFavorite: subscribedAlbumIDs.contains(value.id), year: value.publishTime.map { Calendar.current.component(.year, from: $0) }, sourceOwnerID: owner.map(String.init))
+        .init(id: "catalog:album:\(value.id)", title: value.title, subtitle: value.artist, artwork: artwork(value.artworkURL), route: .album("catalog:album:\(value.id)"), isFavorite: subscribedAlbumIDs.contains(value.id), addedOrder: store?.albumAddedDate(value.id).map { Int($0.timeIntervalSince1970) } ?? 0, year: value.publishTime.map { Calendar.current.component(.year, from: $0) }, sourceOwnerID: owner.map(String.init))
     }
     private func releaseItem(_ value: NeteaseArtistAlbum) -> LibraryShelfItem {
         var item = albumItem(value); item.subtitle = item.year.map { "\($0)年" }; return item

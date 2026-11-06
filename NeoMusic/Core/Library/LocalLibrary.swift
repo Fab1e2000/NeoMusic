@@ -50,16 +50,33 @@ enum LocalLibrary {
         return album
     }
 
-    /// 最近添加：先是用户自己的播放列表（副标题为作者），后接专辑，对照 Apple Music。
+    /// 最近添加：播放列表、专辑，以及喜爱或加入播放列表的单曲。按加入时间从新到旧。
     static var recentlyAdded: [LibraryShelfItem] {
-        let playlists = playlistLibrary.playlists.filter { !$0.isSystem }.sorted { $0.addedOrder > $1.addedOrder }.map { playlist in
+        let playlists = playlistLibrary.playlists.filter { !$0.isSystem }.map { playlist in
             var shown = playlist
             shown.artwork = playlistLibrary.displayArtwork(of: playlist)
             var item = shown.shelfItem
             if !playlist.isReadOnly { item.subtitle = "我" }
-            return item
+            return (item, playlist.addedAt)
         }
-        return playlists + albums.sorted { $0.addedOrder > $1.addedOrder }.prefix(6).map(withPinState)
+        let albumItems = albums.map { album in
+            let shown = withPinState(album)
+            return (shown, LibraryRecentAdditions.date(forAddedOrder: shown.addedOrder))
+        }
+        let playlistDates = playlistLibrary.playlistSongAddedDates()
+        var songs: [String: LibrarySongItem] = [:]
+        for song in playlistLibrary.songsAddedToPlaylists() { songs[song.id] = song }
+        for song in allSongs { songs[song.id] = song }
+        let songItems = songs.values.compactMap { song -> (LibrarySongItem, Date?)? in
+            guard song.isFavorite || playlistDates[song.id] != nil else { return nil }
+            return (song, [song.favoriteAddedAt, playlistDates[song.id]].compactMap { $0 }.max())
+        }
+        return Array(LibraryRecentAdditions.ordered(collections: playlists + albumItems, songs: songItems).prefix(6))
+    }
+
+    static func playLibrarySong(_ id: String) {
+        if let song = song(id: id) { playSongs([song], shuffled: false); return }
+        if let song = playlistLibrary.containedSong(id) { playSongs([song], shuffled: false) }
     }
 
     static var pinned: [LibraryShelfItem] {
@@ -445,7 +462,8 @@ struct LocalLibraryHome: View {
         LibraryHomeView(pinned: ready ? LocalLibrary.pinned : [], recentlyAdded: ready ? LocalLibrary.recentlyAdded : [],
                         playlistLibrary: LocalLibrary.playlistLibrary,
                         isContentReady: ready,
-                        reorderPinned: LocalLibrary.reorderPinned)
+                        reorderPinned: LocalLibrary.reorderPinned,
+                        playSong: LocalLibrary.playLibrarySong)
             .safeAreaInset(edge: .bottom) {
                 if ready, !LocalLibrary.runtime.isScanning, LocalLibrary.songs.isEmpty {
                     VStack(spacing: 8) {

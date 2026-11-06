@@ -197,6 +197,7 @@ final class OnlineMusicIntegration {
                 var item = LibraryPlaylistItem(id: "netease-playlist:\(owner):\(value.id)", title: value.title,
                     artwork: artwork(value.artworkURL, music: music, placeholder: .playlist), addedOrder: music.playlists.count - index,
                     sourceOwnerID: ownerID, subtitle: value.creator)
+                item.addedAt = value.createTime
                 item.updatedAt = value.updateTime
                 return item
             }
