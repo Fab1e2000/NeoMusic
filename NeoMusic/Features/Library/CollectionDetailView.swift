@@ -738,7 +738,6 @@ private final class AlbumSongsController: UICollectionViewController {
         let downloaded = downloads?.state(of: id) == .downloaded
         var sections = environment.songMenuActions.albumTrackSections(for: song, isDownloaded: downloaded,
             download: { downloads?.download([song]) }, removeDownload: { downloads?.requestRemoval([song]) },
-            requestDelete: { [weak self] in self?.confirmDeletion(song, fromSwipe: false) },
             notify: environment.collectionMenuActions.notify)
         if !song.artistReferences.isEmpty {
             let open = environment.openLibraryRoute
@@ -778,13 +777,16 @@ private final class AlbumSongsController: UICollectionViewController {
     }
     private func trailingActions(at indexPath: IndexPath) -> UISwipeActionsConfiguration? {
         guard let song = song(at: indexPath) else { return nil }
-        let remove = UIContextualAction(style: .normal, title: nil) { [weak self] _, _, done in
-            done(true)
-            self?.confirmDeletion(song, fromSwipe: true)
+        var items: [UIContextualAction] = []
+        if song.isOnline {
+            let remove = UIContextualAction(style: .normal, title: nil) { [weak self] _, _, done in
+                done(true)
+                self?.confirmDeletion(song, fromSwipe: true)
+            }
+            remove.image = UIImage(systemName: "trash"); remove.backgroundColor = .systemRed
+            remove.image?.accessibilityLabel = "删除"
+            items.append(remove)
         }
-        remove.image = UIImage(systemName: "trash"); remove.backgroundColor = .systemRed
-        remove.image?.accessibilityLabel = "删除"
-        var items = [remove]
         if environment.libraryDownloads?.isDownloadable(song) == true, environment.libraryDownloads?.state(of: song.id) != .downloaded {
             let active = environment.libraryDownloads?.state(of: song.id)?.isActive == true
             let download = UIContextualAction(style: .normal, title: nil) { [weak self] _, _, done in
@@ -796,6 +798,7 @@ private final class AlbumSongsController: UICollectionViewController {
             download.image?.accessibilityLabel = active ? "停止下载" : "下载"
             items.insert(download, at: 0)
         }
+        guard !items.isEmpty else { return nil }
         return UISwipeActionsConfiguration(actions: items)
     }
 

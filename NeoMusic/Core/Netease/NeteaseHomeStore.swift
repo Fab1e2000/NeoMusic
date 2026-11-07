@@ -188,7 +188,8 @@ import Observation
                 guard revision == generation, !Task.isCancelled else { return }
             }
             onChange?()
-            requestArtwork(recommendations.prefix(6).compactMap(\.artworkURL) + (daily?.songs.prefix(8).compactMap(\.artworkURL) ?? []))
+            requestDisplayedArtwork()
+            requestArtwork(daily?.songs.prefix(8).compactMap(\.artworkURL) ?? [])
         }
         if refresh { await self.refresh(force: false) }
     }
@@ -290,7 +291,7 @@ import Observation
                                        resources: songs.filter { $0.id > 0 && !$0.unavailable }.map { .init(song: $0) })
                 let value = LikedCache(seedID: seed.id, block: block)
                 likedCache = value; likedRecommendations = block; likedRecommendationsError = nil
-                save(value, key: "home-liked"); rebuildSongCatalog(); onChange?()
+                save(value, key: "home-liked"); rebuildSongCatalog(); onChange?(); requestDisplayedArtwork()
             } catch is CancellationError {} catch {
                 if generation == revision, likedTaskID == id, !Task.isCancelled {
                     likedRecommendationsError = error.localizedDescription; onChange?()
@@ -329,7 +330,7 @@ import Observation
             try Task.checkCancellation()
             guard generation == revision else { return }
             let value = Self.block(code: "NEOMUSIC_NEW_SONGS", title: "新歌速递", resources: songs.filter { $0.id > 0 && !$0.unavailable }.map { .init(song: $0) })
-            newSongs = value; newSongsError = nil; save(value, key: "home-new-songs"); rebuildSongCatalog(); onChange?()
+            newSongs = value; newSongsError = nil; save(value, key: "home-new-songs"); rebuildSongCatalog(); onChange?(); requestDisplayedArtwork()
         } catch is CancellationError {} catch {
             if generation == revision, !Task.isCancelled { newSongsError = error.localizedDescription; onChange?() }
         }
@@ -390,7 +391,7 @@ import Observation
             try Task.checkCancellation()
             guard revision == generation else { return }
             onChange?()
-            requestArtwork([firstTrackArtwork(id)].compactMap { $0 })
+            requestDisplayedArtwork()
         } catch { /* Existing first-track artwork survives a failed refresh of the same playlist. */ }
     }
 
@@ -425,7 +426,7 @@ import Observation
                 save(value, key: "home-roaming")
                 rebuildSongCatalog()
                 quickActionStates[.privateRoaming] = nil; onChange?()
-                requestArtwork([valid.first?.artworkURL].compactMap { $0 })
+                requestDisplayedArtwork()
                 return value
             } catch {
                 if generation == revision {
@@ -537,7 +538,7 @@ import Observation
             let value = try await client.homeCharts(credential: credential)
             try Task.checkCancellation()
             guard generation == revision else { return }
-            charts = value; chartsError = nil; save(value, key: "home-charts"); onChange?()
+            charts = value; chartsError = nil; save(value, key: "home-charts"); onChange?(); requestDisplayedArtwork()
         } catch is CancellationError {} catch {
             if generation == revision, !Task.isCancelled { chartsError = error.localizedDescription; onChange?() }
         }
@@ -548,7 +549,7 @@ import Observation
             let value = try await client.followedArtistReleases(credential: credential, cached: followedReleases)
             try Task.checkCancellation()
             guard generation == revision else { return }
-            followedReleases = value; followedReleasesError = nil; save(value, key: "home-followed"); onChange?()
+            followedReleases = value; followedReleasesError = nil; save(value, key: "home-followed"); onChange?(); requestDisplayedArtwork()
         } catch is CancellationError {} catch {
             if generation == revision, !Task.isCancelled {
                 followedReleasesError = error.localizedDescription; onChange?()
@@ -577,6 +578,7 @@ import Observation
             rebuildSongCatalog()
             save(value, key: "feed")
             onChange?()
+            requestDisplayedArtwork()
         } catch is CancellationError {} catch {
             if generation == revision, !Task.isCancelled { feedError = error.localizedDescription; onChange?() }
         }
@@ -594,7 +596,7 @@ import Observation
             guard generation == revision else { return }
             recommendations = items; cache.recommendations = items; recommendationsError = nil; save(items, key: "recommendations")
             PerformanceDiagnostics.event("NetworkContentReady"); onChange?()
-            requestArtwork(items.prefix(6).compactMap(\.artworkURL))
+            requestDisplayedArtwork()
         } catch is CancellationError {} catch { if generation == revision, !Task.isCancelled { recommendationsError = error.localizedDescription; onChange?() } }
     }
     private func refreshDaily(credential: NeteaseCredential?, revision: UUID) async {
@@ -617,6 +619,7 @@ import Observation
             save(snapshot, key: "daily:" + snapshot.id)
             save(snapshot, key: "daily:" + date)
             PerformanceDiagnostics.event("NetworkContentReady"); onChange?()
+            requestDisplayedArtwork()
             requestArtwork(songs.prefix(8).compactMap(\.artworkURL))
         } catch is CancellationError {} catch { if generation == revision, !Task.isCancelled { dailyError = error.localizedDescription; onChange?() } }
     }
@@ -847,6 +850,13 @@ import Observation
         guard restored, generation == revision, scope == owner, !Task.isCancelled else { return nil }
         return file
     }
+    /// 首页会展示的封面在内容到达时全部请求，不等对应卡片进入屏幕。
+    private func requestDisplayedArtwork() {
+        let urls = displayFeedBlocks.flatMap { $0.resources.compactMap(\.artworkURL) }
+            + NeteaseHomeQuickAction.allCases.compactMap { quickActionArtwork($0) }
+        requestArtwork(urls)
+    }
+
     func requestArtwork(_ urls: [URL]) {
         guard restored, !Task.isCancelled else { return }
         let revision = generation

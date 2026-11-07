@@ -427,17 +427,15 @@ struct SongMenuActions {
     /// “随后播放”下方的当前播放来源；没有来源时菜单写“添加到队列”。
     var playbackSource: () -> String? = { nil }
 
-    /// 专辑详情页曲目的菜单，对照 Apple Music：未下载时首组为“下载 · 喜爱”横排，已下载时“喜爱”单独成行、末尾多“移除下载”。
-    /// 没有“前往专辑”和“查看完整歌词”。下载与删除由页面处理（删除需先确认）。
+    /// 专辑详情页曲目的菜单：未下载时首组为“下载 · 喜爱”横排，已下载时“喜爱”单独成行。
+    /// 已在专辑页，不再提供“前往专辑”。本地歌曲随文件夹保留，不从资料库删除。
     @MainActor func albumTrackSections(for song: LibrarySongItem, isDownloaded: Bool,
                                        download: @escaping () -> Void, removeDownload: @escaping () -> Void,
-                                       requestDelete: @escaping () -> Void,
                                        notify: @escaping (LibraryToast) -> Void) -> LibraryMenuSections {
         let feedback: (LibraryToast) -> Void = song.isOnline ? { _ in } : notify
         var groups = sections(for: song, notify: feedback, goToAlbum: {})
         if !song.isOnline {
             groups.removeAll { group in group.contains { $0.title == "前往专辑" } }
-            groups.append([LibraryMenuItem(title: "从资料库删除", systemImage: "trash", isDestructive: true, perform: requestDelete)])
         }
         return groups
     }
@@ -472,12 +470,26 @@ struct SongMenuActions {
         var groups: LibraryMenuSections = [quick, additions,
             libraryQueueMenuItems(playbackSource: playbackSource(), playNext: { playNext(song) }, playLater: { playLater(song) }, notify: notify)]
         if !song.isOnline {
-            groups.append([LibraryMenuItem(title: "前往专辑", subtitle: song.album, systemImage: "square", customImage: MenuIcons.album, perform: goToAlbum),
-                           LibraryMenuItem(title: "查看完整歌词", systemImage: "quote.bubble", isDisabled: true)])
+            groups.append([LibraryMenuItem(title: "前往专辑", subtitle: song.album, systemImage: "square", customImage: MenuIcons.album, perform: goToAlbum)])
         }
         if let downloads, downloads.canRemove(song) {
             groups.append([LibraryMenuItem(title: "移除下载", systemImage: "xmark.circle") { downloads.requestRemoval([song]) }])
         }
+        return groups
+    }
+
+    /// 歌曲行省略号与长按共用的完整菜单，包含在线歌曲的专辑和艺人入口。
+    @MainActor func rowMenuSections(for song: LibrarySongItem, open: @escaping (LibraryRoute) -> Void) -> LibraryMenuSections {
+        var groups = sections(for: song) { open(.album(song.albumID)) }
+        guard song.isOnline else { return groups }
+        var links: [LibraryMenuItem] = []
+        if song.onlineAlbumID != nil {
+            links.append(LibraryMenuItem(title: "前往专辑", systemImage: "music.note.square.stack") { open(.album(song.albumID)) })
+        }
+        links += song.artistReferences.map { artist in
+            LibraryMenuItem(title: artist.name, systemImage: "music.microphone") { open(.artist(artist.id)) }
+        }
+        if !links.isEmpty { groups.append(links) }
         return groups
     }
 
@@ -604,14 +616,6 @@ private struct SongNavigationMenu: View {
     @Environment(\.songMenuActions) private var actions
     @Environment(\.openLibraryRoute) private var open
     var body: some View {
-        LibraryMenuContents(sections: actions.sections(for: song) { open(.album(song.albumID)) })
-        if song.isOnline {
-            Section {
-                if song.onlineAlbumID != nil { Button("前往专辑", systemImage: "music.note.square.stack") { open(.album(song.albumID)) } }
-                ForEach(song.artistReferences, id: \.id) { artist in
-                    Button(artist.name, systemImage: "music.microphone") { open(.artist(artist.id)) }
-                }
-            }
-        }
+        LibraryMenuContents(sections: actions.rowMenuSections(for: song) { open($0) })
     }
 }

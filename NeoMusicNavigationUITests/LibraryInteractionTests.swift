@@ -128,11 +128,9 @@ final class LibraryInteractionTests: XCTestCase {
         let leading = XCTAttachment(screenshot: app.screenshot()); leading.name = "Native album leading swipe"; leading.lifetime = .keepAlways; add(leading)
         app.buttons["插播"].tap()
         title.swipeLeft()
-        XCTAssertTrue(app.buttons["删除"].waitForExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["删除"].waitForExistence(timeout: 1))
+        XCTAssertFalse(app.buttons["从资料库删除"].exists)
         let trailing = XCTAttachment(screenshot: app.screenshot()); trailing.name = "Native album trailing swipe"; trailing.lifetime = .keepAlways; add(trailing)
-        app.buttons["删除"].tap()
-        XCTAssertTrue(app.buttons["从资料库删除"].waitForExistence(timeout: 3))
-        // Relaunch dismisses the confirmation without deleting the fixture.
         app.terminate(); app.launch()
     }
 

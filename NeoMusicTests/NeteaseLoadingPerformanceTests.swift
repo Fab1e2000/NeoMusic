@@ -539,32 +539,27 @@ import Synchronization
         network.invalidateAndCancel()
     }
 
-    func testHomeRequestsFirstVisibleCoversThenDeduplicatesDemandForLaterCards() async throws {
+    func testHomeRequestsEveryDisplayedCoverAndDeduplicatesRepeatDemand() async throws {
         let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
-        let urls = (0..<10).map { URL(string: "https://fixture.test/cover\($0)")! }
-        let items = urls.enumerated().map { ["id": $0.offset, "name": "Card", "picUrl": $0.element.absoluteString] as [String: Any] }
+        let urls = (1...10).map { URL(string: "https://fixture.test/cover\($0)")! }
+        let items = urls.enumerated().map { ["id": $0.offset + 1, "name": "Card", "picUrl": $0.element.absoluteString] as [String: Any] }
         let body = String(decoding: try JSONSerialization.data(withJSONObject: ["code": 200, "result": items]), as: UTF8.self)
         var responses = Dictionary(uniqueKeysWithValues: urls.map { ($0.path, "image") })
         responses["/eapi/personalized/playlist"] = body
-        let firstImages = expectation(description: "First six covers")
-        firstImages.expectedFulfillmentCount = 6
-        let demandedImage = expectation(description: "Later visible card cover")
+        let firstImages = expectation(description: "All home covers")
+        firstImages.expectedFulfillmentCount = urls.count
         let network = network(responses)
         let store = NeteaseHomeStore(client: client(network), directory: root, artworkSession: network)
         store.onArtworkChange = { changed in
-            for url in changed {
-                if urls.prefix(6).contains(url) { firstImages.fulfill() }
-                if url == urls[9] { demandedImage.fulfill() }
-            }
+            for url in changed where urls.contains(url) { firstImages.fulfill() }
         }
         await store.activate(nil)
         await fulfillment(of: [firstImages], timeout: 3)
+        store.onArtworkChange = nil
         let initial = LoadingProtocol.state.withLock { $0.startedPaths }
-        XCTAssertFalse(initial.contains(urls[6].path))
-        XCTAssertFalse(initial.contains(urls[9].path))
+        XCTAssertTrue(urls.allSatisfy { initial.contains($0.path) })
         store.requestArtwork([urls[9], urls[9]])
-        await fulfillment(of: [demandedImage], timeout: 3)
         XCTAssertEqual(LoadingProtocol.state.withLock { $0.startedPaths.filter { $0 == urls[9].path }.count }, 1)
         await store.activate(try session(), refresh: false)
         network.invalidateAndCancel()

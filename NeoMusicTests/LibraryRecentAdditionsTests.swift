@@ -76,3 +76,32 @@ final class AlbumLibraryAdditionsTests: XCTestCase {
         XCTAssertNil(record.date(1))
     }
 }
+
+@MainActor final class SongRowMenuTests: XCTestCase {
+    func testLocalSongMenuMatchesTheRowEllipsis() {
+        var song = LibrarySongItem(id: "local", title: "歌", artist: "艺人", album: "专辑", albumArtist: "艺人", trackNumber: 1, artwork: .missing)
+        song.isFavorite = true
+        song.isPinned = true
+        var actions = SongMenuActions()
+        actions.playbackSource = { "喜爱歌曲" }
+        var opened: [LibraryRoute] = []
+        let items = actions.rowMenuSections(for: song) { opened.append($0) }.flatMap { $0 }
+        XCTAssertEqual(items.map(\.title), ["下载", "撤销", "取消置顶", "添加到播放列表", "插播", "随后播放", "前往专辑"])
+        XCTAssertEqual(items.first { $0.title == "随后播放" }?.subtitle, "喜爱歌曲")
+        XCTAssertTrue(items.first { $0.title == "下载" }?.isDisabled == true)
+        XCTAssertFalse(items.contains { $0.title == "查看完整歌词" || $0.title == "从资料库删除" })
+        items.first { $0.title == "前往专辑" }?.perform()
+        XCTAssertEqual(opened, [.album(song.albumID)])
+    }
+
+    func testOnlineSongMenuAddsAlbumAndArtists() {
+        let song = LibrarySongItem(id: "netease:7:9", title: "歌", artist: "甲", album: "辑", albumArtist: "甲", trackNumber: 1,
+                                    artwork: .missing, onlineAlbumID: 3,
+                                    artistReferences: [.init(id: "catalog:artist:1", name: "甲"), .init(id: "catalog:artist:2", name: "乙")])
+        var opened: [LibraryRoute] = []
+        let items = SongMenuActions().rowMenuSections(for: song) { opened.append($0) }.flatMap { $0 }
+        XCTAssertEqual(items.map(\.title), ["下载", "喜爱", "添加到播放列表", "插播", "添加到队列", "前往专辑", "甲", "乙"])
+        items.first { $0.title == "甲" }?.perform()
+        XCTAssertEqual(opened, [.artist("catalog:artist:1")])
+    }
+}

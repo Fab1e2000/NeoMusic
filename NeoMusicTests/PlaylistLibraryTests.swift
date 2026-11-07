@@ -344,7 +344,8 @@ final class AlbumMenuTests: XCTestCase {
             song.isFavorite = selected
             song.isPinned = selected
             let items = actions.albumTrackSections(for: song, isDownloaded: true,
-                download: {}, removeDownload: {}, requestDelete: {}, notify: { events.append($0.title) }).flatMap { $0 }
+                download: {}, removeDownload: {}, notify: { events.append($0.title) }).flatMap { $0 }
+            XCTAssertFalse(items.contains { $0.title == "从资料库删除" || $0.title == "查看完整歌词" })
             events.removeAll()
             try XCTUnwrap(items.first { $0.title == (selected ? "撤销" : "喜爱") }).perform()
             try XCTUnwrap(items.first { $0.title == (selected ? "取消置顶" : "置顶歌曲") }).perform()
@@ -362,7 +363,7 @@ final class AlbumMenuTests: XCTestCase {
         actions.playNext = { _ in events.append("next") }
         actions.playLater = { _ in events.append("later") }
         let items = actions.albumTrackSections(for: song, isDownloaded: false,
-            download: {}, removeDownload: {}, requestDelete: {}, notify: { events.append($0.title) }).flatMap { $0 }
+            download: {}, removeDownload: {}, notify: { events.append($0.title) }).flatMap { $0 }
         for title in ["喜爱", "插播", "添加到队列"] {
             try XCTUnwrap(items.first { $0.title == title }).perform()
         }
@@ -413,7 +414,7 @@ final class QueueMenuTests: XCTestCase {
             }
             for downloaded in [false, true] {
                 try check(songActions.albumTrackSections(for: song, isDownloaded: downloaded,
-                    download: {}, removeDownload: {}, requestDelete: {}, notify: notify), notifies: true)
+                    download: {}, removeDownload: {}, notify: notify), notifies: true)
             }
             // Ordinary song menus previously exposed only play-next; both actions must reach the same song.
             try check(songActions.sections(for: song, goToAlbum: {}), notifies: false)

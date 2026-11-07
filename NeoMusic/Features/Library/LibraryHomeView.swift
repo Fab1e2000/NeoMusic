@@ -36,6 +36,8 @@ struct LibraryHomeView: View {
     var isContentReady = true
     var reorderPinned: ([LibraryRoute]) -> Bool = { _ in false }
     var playSong: (String) -> Void = { _ in }
+    /// 最近添加单曲卡的长按菜单读取这一首的当前资料。
+    var songForMenu: (String) -> LibrarySongItem? = { _ in nil }
     @State private var isCreatingPlaylist = false
     @Environment(\.collectionMenuActions) private var actions
     @State private var isEditingPinned = false
@@ -65,7 +67,7 @@ struct LibraryHomeView: View {
             }
             .listSectionSeparator(.hidden, edges: .top)
             Section {
-                RecentlyAddedGrid(items: recentlyAdded, playSong: playSong)
+                RecentlyAddedGrid(items: recentlyAdded, playSong: playSong, songForMenu: songForMenu)
                     .padding(.top, 17)
                     .padding(.bottom, 16)
                     .frame(maxHeight: .infinity, alignment: .top)
@@ -166,6 +168,7 @@ private struct LibraryCategoryRows: View {
 private struct RecentlyAddedGrid: View {
     let items: [LibraryShelfItem]
     var playSong: (String) -> Void = { _ in }
+    var songForMenu: (String) -> LibrarySongItem? = { _ in nil }
     private let columns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
     private var visibleItems: [LibraryShelfItem] { Array(items.prefix(6)) }
 
@@ -177,14 +180,43 @@ private struct RecentlyAddedGrid: View {
             LazyVGrid(columns: columns, alignment: .leading, spacing: 20) {
                 ForEach(visibleItems) { item in
                     if let songID = item.songID {
-                        Button { playSong(songID) } label: { AlbumCard(item: item) }
-                            .buttonStyle(.plain)
+                        RecentSongCard(item: item, songID: songID, play: { playSong(songID) }, songForMenu: songForMenu)
                     } else {
                         CollectionCardLink(item: item) { AlbumCard(item: item) }
                     }
                 }
             }
         }
+    }
+}
+
+/// 单曲卡点按只播放这一首；长按菜单与歌曲行右侧省略号相同。
+private struct RecentSongCard: View {
+    let item: LibraryShelfItem
+    let songID: String
+    var play: () -> Void
+    var songForMenu: (String) -> LibrarySongItem?
+    @Environment(\.songMenuActions) private var actions
+    @Environment(\.openLibraryRoute) private var open
+
+    var body: some View {
+        let song = songForMenu(songID)
+        let lines = song.map { [$0.title, $0.artist, $0.album] } ?? [item.title] + (item.subtitle.map { [$0] } ?? [])
+        AlbumCard(item: item)
+            .padding(8)
+            .contentShape(.rect)
+            .nativeContextMenu(
+                identity: item.id,
+                menu: {
+                    guard let song = songForMenu(songID) else { return UIMenu() }
+                    return actions.rowMenuSections(for: song) { open($0) }.nativeMenu(firstSectionIsRow: true)
+                },
+                preview: { AnyView(MenuPreviewCard(artwork: song?.artwork ?? item.artwork, lines: lines)) },
+                previewSize: MenuPreviewCard.size(for: lines),
+                commit: { _ in play() },
+                tap: play
+            )
+            .padding(-8)
     }
 }
 

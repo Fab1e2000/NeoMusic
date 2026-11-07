@@ -75,8 +75,13 @@ enum LocalLibrary {
     }
 
     static func playLibrarySong(_ id: String) {
-        if let song = song(id: id) { playSongs([song], shuffled: false); return }
-        if let song = playlistLibrary.containedSong(id) { playSongs([song], shuffled: false) }
+        guard let song = songForMenu(id) else { return }
+        playSongs([song], shuffled: false)
+    }
+
+    /// 最近添加单曲卡的菜单使用与播放相同的歌曲查找。
+    static func songForMenu(_ id: String) -> LibrarySongItem? {
+        song(id: id) ?? playlistLibrary.containedSong(id)
     }
 
     static var pinned: [LibraryShelfItem] {
@@ -463,7 +468,8 @@ struct LocalLibraryHome: View {
                         playlistLibrary: LocalLibrary.playlistLibrary,
                         isContentReady: ready,
                         reorderPinned: LocalLibrary.reorderPinned,
-                        playSong: LocalLibrary.playLibrarySong)
+                        playSong: LocalLibrary.playLibrarySong,
+                        songForMenu: LocalLibrary.songForMenu)
             .safeAreaInset(edge: .bottom) {
                 if ready, !LocalLibrary.runtime.isScanning, LocalLibrary.songs.isEmpty {
                     VStack(spacing: 8) {
