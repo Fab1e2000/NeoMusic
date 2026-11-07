@@ -749,8 +749,9 @@ final class SongLibrary {
 
     func setFavorite(_ id: String, _ value: Bool) {
         if let song = song(id: id), downloadedFavoriteAction?(song, value) == true { return }
-        if let song = song(id: id), song.isOnline {
-            if song.isFavorite != value { onlineFavoriteAction?(id, value) }
+        let parts = id.split(separator: ":")
+        if parts.count == 3, parts[0] == "netease" {
+            if song(id: id)?.isFavorite != value { onlineFavoriteAction?(id, value) }
             return
         }
         guard let index = songs.firstIndex(where: { $0.id == id }), songs[index].isFavorite != value else { return }

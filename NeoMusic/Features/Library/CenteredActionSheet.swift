@@ -19,7 +19,28 @@ enum CenteredActionSheet {
             })
         }
         alert.addAction(UIAlertAction(title: "取消", style: .cancel))
-        topController?.present(alert, animated: true)
+        // 菜单或侧滑还在收起时立刻 present 会被系统丢掉，等这一轮交互结束再弹出。
+        DispatchQueue.main.async { topController?.present(alert, animated: true) }
+    }
+
+    /// 从喜欢歌曲移除。确认后才执行，并给出触感。
+    static func confirmRemoveFromLiked(_ perform: @escaping () -> Void) {
+        present(message: "确定要从喜欢歌曲中移除这首歌吗？", actions: [
+            .init(title: "从喜欢歌曲移除", isDestructive: true) {
+                LibraryHaptics.impact()
+                perform()
+            }
+        ])
+    }
+
+    /// 从自己的播放列表移除。确认后才执行，并给出触感。
+    static func confirmRemoveFromPlaylist(_ perform: @escaping () -> Void) {
+        present(message: "确定要从该播放列表中移除这首歌吗？", actions: [
+            .init(title: "移除", isDestructive: true) {
+                LibraryHaptics.impact()
+                perform()
+            }
+        ])
     }
 
     private static var topController: UIViewController? {

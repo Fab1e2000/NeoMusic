@@ -265,6 +265,41 @@ import Synchronization
         await store.invalidate()
     }
 
+    func testLikingASongWithoutCachedMetadataDoesNotMarkItUnavailable() async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let network = network(try playlistFixtures(count: 3, favorites: true))
+        defer { network.invalidateAndCancel() }
+        let store = NeteaseMusicStore(client: client(network), directory: root, artworkSession: network)
+        await store.activate(try session())
+        try await store.setLiked(songID: 99, liked: true)
+        XCTAssertTrue(store.likedIDs.contains(99))
+        XCTAssertNotEqual(store.songs[99]?.unavailable, true)
+        XCTAssertFalse(store.playlistTracks[7]?.contains { store.songs[$0]?.unavailable == true } == true)
+        await store.invalidate()
+    }
+
+    func testUnlikeDropsTheFavoritesSongBeforeTheRequestAndRestoresItWhenTheWriteFails() async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = "/eapi/radio/like"
+        let started = expectation(description: "Unlike request started")
+        let network = network(try playlistFixtures(count: 3, favorites: true), blocked: [path], statuses: [path: 500],
+                              started: { if $0 == path { started.fulfill() } })
+        defer { network.invalidateAndCancel() }
+        let store = NeteaseMusicStore(client: client(network), directory: root, artworkSession: network)
+        await store.activate(try session())
+        let write = Task { try await store.setLiked(songID: 1, liked: false) }
+        await fulfillment(of: [started], timeout: 3)
+        XCTAssertFalse(store.likedIDs.contains(1))
+        XCTAssertFalse(store.playlistTracks[7]?.contains(1) == true)
+        LoadingProtocol.release(path)
+        do { try await write.value; XCTFail("Failed unlike must not stay removed") } catch {}
+        XCTAssertTrue(store.likedIDs.contains(1))
+        XCTAssertEqual(store.playlistTracks[7]?.first, 1)
+        await store.invalidate()
+    }
+
     func testAccountSwitchCancelsPlaylistCompletionAndRetainsNoOldPage() async throws {
         let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

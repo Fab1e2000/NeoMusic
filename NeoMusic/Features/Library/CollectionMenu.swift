@@ -180,6 +180,7 @@ struct CollectionMenuActions {
     }
 
     private func toggleFavoriteAndNotify(_ item: LibraryShelfItem, _ route: LibraryRoute) {
+        LibraryHaptics.impact()
         toggleFavorite(route)
         if !item.id.hasPrefix("catalog:") { notify(item.isFavorite ? .unfavorited : .favorited) }
     }
@@ -456,8 +457,16 @@ struct SongMenuActions {
     @MainActor func sections(for song: LibrarySongItem, notify: @escaping (LibraryToast) -> Void = { _ in },
                             goToAlbum: @escaping () -> Void) -> LibraryMenuSections {
         var quick = [favoriteItem(isFavorite: song.isFavorite) {
-            toggleFavorite(song)
-            notify(song.isFavorite ? .unfavorited : .favorited)
+            if song.isFavorite {
+                CenteredActionSheet.confirmRemoveFromLiked {
+                    toggleFavorite(song)
+                    notify(.unfavorited)
+                }
+            } else {
+                LibraryHaptics.impact()
+                toggleFavorite(song)
+                notify(.favorited)
+            }
         }]
         if let item = downloadItem(for: song) { quick.insert(item, at: 0) }
         var additions = [LibraryMenuItem(title: "添加到播放列表", systemImage: "text.badge.plus") { addToPlaylist(song) }]
@@ -493,6 +502,22 @@ struct SongMenuActions {
         return groups
     }
 
+}
+
+/// 网易云歌单、专辑曲目的左滑。未喜欢时只有爱心；喜欢成功后才是下载和从喜欢歌曲移除。
+enum OnlineSongTrailingSwipe: Equatable {
+    case like
+    case download
+    case stopDownload
+    case removeFromLiked
+
+    /// 数组第一项贴着屏幕右缘，和系统侧滑的露出顺序一致。
+    static func actions(isFavorite: Bool, downloadState: LibraryDownloads.SongState?, canDownload: Bool) -> [OnlineSongTrailingSwipe] {
+        guard isFavorite else { return [.like] }
+        if downloadState?.isActive == true { return [.stopDownload, .removeFromLiked] }
+        if canDownload, downloadState != .downloaded { return [.download, .removeFromLiked] }
+        return [.removeFromLiked]
+    }
 }
 
 extension EnvironmentValues {

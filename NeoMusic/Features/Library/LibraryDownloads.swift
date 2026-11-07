@@ -94,7 +94,13 @@ final class LibraryDownloads {
     }
     func requestRemoval(_ songs: [LibrarySongItem]) { pendingRemoval = songs.filter(canRemove) }
     func cancelRemoval() { pendingRemoval = [] }
-    func confirmRemoval() { let songs = pendingRemoval; pendingRemoval = []; remove(songs) }
+    func confirmRemoval() {
+        let songs = pendingRemoval
+        pendingRemoval = []
+        guard !songs.isEmpty else { return }
+        LibraryHaptics.impact()
+        remove(songs)
+    }
 }
 
 extension View {

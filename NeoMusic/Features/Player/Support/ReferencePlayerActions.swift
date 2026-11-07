@@ -92,7 +92,10 @@ extension SongMenuConfiguration {
     func openArtist(_ name: String, track: ReferenceTrack) {
         if let namedArtistAction { namedArtistAction(track.id, name) } else { artistAction(track.id) }
     }
-    func toggleFavorite(_ track: ReferenceTrack) { favoriteAction(track.id) }
+    func toggleFavorite(_ track: ReferenceTrack) {
+        LibraryHaptics.impact()
+        favoriteAction(track.id)
+    }
 }
 
 @MainActor struct SongRowAction: Identifiable {

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// 资料库首页展示用的一项专辑或播放列表。
 struct LibraryShelfItem: Identifiable, Equatable {
@@ -164,12 +165,12 @@ private struct LibraryCategoryRows: View {
     }
 }
 
-/// 最近添加：两列，最多三行。
+/// 最近添加：两列，最多三行。卡片放在不滚动的集合视图里，增删时由系统补位。
+/// 外层列表更新这一行时会关掉 SwiftUI 动画，所以这里按卡片身份自己播放差异动画。
 private struct RecentlyAddedGrid: View {
     let items: [LibraryShelfItem]
     var playSong: (String) -> Void = { _ in }
     var songForMenu: (String) -> LibrarySongItem? = { _ in nil }
-    private let columns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
     private var visibleItems: [LibraryShelfItem] { Array(items.prefix(6)) }
 
     var body: some View {
@@ -177,15 +178,172 @@ private struct RecentlyAddedGrid: View {
             Text("最近添加")
                 .font(.title2.weight(.semibold))
                 .accessibilityAddTraits(.isHeader)
-            LazyVGrid(columns: columns, alignment: .leading, spacing: 20) {
-                ForEach(visibleItems) { item in
+            RecentlyAddedCollection(items: visibleItems, playSong: playSong, songForMenu: songForMenu)
+        }
+    }
+}
+
+private struct RecentlyAddedCollection: UIViewRepresentable {
+    let items: [LibraryShelfItem]
+    let playSong: (String) -> Void
+    let songForMenu: (String) -> LibrarySongItem?
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> UICollectionView {
+        let layout = UICollectionViewFlowLayout()
+        layout.minimumInteritemSpacing = Metrics.spacing
+        layout.minimumLineSpacing = Metrics.rowSpacing
+        let view = UICollectionView(frame: .zero, collectionViewLayout: layout)
+        view.backgroundColor = .clear
+        view.isScrollEnabled = false
+        view.allowsSelection = false
+        view.clipsToBounds = false
+        view.contentInsetAdjustmentBehavior = .never
+        view.delegate = context.coordinator
+        context.coordinator.attach(to: view, initial: self, environment: context.environment)
+        return view
+    }
+
+    func updateUIView(_ view: UICollectionView, context: Context) {
+        let animated = !context.environment.accessibilityReduceMotion
+        let animationsWereEnabled = UIView.areAnimationsEnabled
+        UIView.setAnimationsEnabled(animated)
+        defer { UIView.setAnimationsEnabled(animationsWereEnabled) }
+        context.coordinator.update(with: self, environment: context.environment, animated: animated)
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UICollectionView, context: Context) -> CGSize? {
+        guard let width = proposal.width, width.isFinite, width > 0 else { return nil }
+        return CGSize(width: width, height: Metrics.height(for: items, width: width, traits: uiView.traitCollection))
+    }
+
+    private enum Metrics {
+        static let columns = 2
+        static let spacing: CGFloat = 12
+        static let rowSpacing: CGFloat = 20
+        static let titleSpacing: CGFloat = 7
+
+        static func itemWidth(_ width: CGFloat) -> CGFloat {
+            max(0, (width - spacing) / CGFloat(columns))
+        }
+
+        static func itemHeight(hasSubtitle: Bool, width: CGFloat, traits: UITraitCollection) -> CGFloat {
+            let font = UIFont.preferredFont(forTextStyle: .footnote, compatibleWith: traits)
+            let lines: CGFloat = hasSubtitle ? 2 : 1
+            let text = ceil(font.lineHeight) * lines + (hasSubtitle ? 1 : 0)
+            return itemWidth(width) + titleSpacing + text
+        }
+
+        static func height(for items: [LibraryShelfItem], width: CGFloat, traits: UITraitCollection) -> CGFloat {
+            guard !items.isEmpty else { return 0 }
+            var total: CGFloat = 0
+            var rows = 0
+            var index = 0
+            while index < items.count {
+                let left = items[index].subtitle != nil
+                let right = index + 1 < items.count && items[index + 1].subtitle != nil
+                total += max(itemHeight(hasSubtitle: left, width: width, traits: traits),
+                             itemHeight(hasSubtitle: right, width: width, traits: traits))
+                rows += 1
+                index += columns
+            }
+            if rows > 1 { total += CGFloat(rows - 1) * rowSpacing }
+            return total
+        }
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, UICollectionViewDelegateFlowLayout {
+        private weak var collectionView: UICollectionView?
+        private var dataSource: UICollectionViewDiffableDataSource<Int, String>?
+        private var latest: RecentlyAddedCollection?
+        private var environment = EnvironmentValues()
+        private var itemsByID: [String: LibraryShelfItem] = [:]
+        private var hasApplied = false
+        private var configuredColorScheme: ColorScheme?
+        private var configuredDynamicTypeSize: DynamicTypeSize?
+        private var configuredLocale: Locale?
+
+        func attach(to view: UICollectionView, initial: RecentlyAddedCollection, environment: EnvironmentValues) {
+            collectionView = view
+            let registration = UICollectionView.CellRegistration<UICollectionViewCell, String> { [weak self] cell, _, id in
+                self?.configure(cell, id: id)
+            }
+            dataSource = UICollectionViewDiffableDataSource(collectionView: view) { collectionView, indexPath, id in
+                collectionView.dequeueConfiguredReusableCell(using: registration, for: indexPath, item: id)
+            }
+            update(with: initial, environment: environment, animated: false)
+        }
+
+        func update(with view: RecentlyAddedCollection, environment: EnvironmentValues, animated: Bool) {
+            latest = view
+            self.environment = environment
+            guard let source = dataSource else { return }
+            let identifiers = view.items.map(\.id)
+            guard Set(identifiers).count == identifiers.count else { return }
+            let previous = itemsByID
+            let updated = Dictionary(uniqueKeysWithValues: zip(identifiers, view.items))
+            let previousIdentifiers = source.snapshot().itemIdentifiers
+            let appearanceChanged = configuredColorScheme != environment.colorScheme
+                || configuredDynamicTypeSize != environment.dynamicTypeSize
+                || configuredLocale != environment.locale
+            let existing = Set(previousIdentifiers)
+            let changed = identifiers.filter { existing.contains($0) && (previous[$0] != updated[$0] || appearanceChanged) }
+            guard !hasApplied || previousIdentifiers != identifiers || !changed.isEmpty else { return }
+            let needsLayout = previousIdentifiers.count != identifiers.count
+                || configuredDynamicTypeSize != environment.dynamicTypeSize
+            itemsByID = updated
+            configuredColorScheme = environment.colorScheme
+            configuredDynamicTypeSize = environment.dynamicTypeSize
+            configuredLocale = environment.locale
+            var snapshot = NSDiffableDataSourceSnapshot<Int, String>()
+            snapshot.appendSections([0])
+            snapshot.appendItems(identifiers)
+            snapshot.reconfigureItems(changed)
+            let fills = hasApplied && !previousIdentifiers.isEmpty && previousIdentifiers != identifiers
+            let shouldAnimate = fills && animated
+            let animationsWereEnabled = UIView.areAnimationsEnabled
+            CATransaction.begin()
+            CATransaction.setDisableActions(false)
+            UIView.setAnimationsEnabled(shouldAnimate)
+            source.apply(snapshot, animatingDifferences: shouldAnimate) { [weak self] in
+                if needsLayout { self?.collectionView?.collectionViewLayout.invalidateLayout() }
+            }
+            CATransaction.commit()
+            UIView.setAnimationsEnabled(animationsWereEnabled)
+            hasApplied = true
+        }
+
+        private func configure(_ cell: UICollectionViewCell, id: String) {
+            guard let item = itemsByID[id], let latest else { return }
+            let environment = environment
+            let playSong = latest.playSong
+            let songForMenu = latest.songForMenu
+            cell.backgroundColor = .clear
+            cell.contentConfiguration = UIHostingConfiguration {
+                Group {
                     if let songID = item.songID {
                         RecentSongCard(item: item, songID: songID, play: { playSong(songID) }, songForMenu: songForMenu)
                     } else {
                         CollectionCardLink(item: item) { AlbumCard(item: item) }
                     }
                 }
+                .libraryHostedAppearance(environment)
+                .environment(\.openLibraryRoute, environment.openLibraryRoute)
+                .environment(\.collectionMenuActions, environment.collectionMenuActions)
+                .environment(\.songMenuActions, environment.songMenuActions)
+                .environment(\.libraryZoomNamespace, environment.libraryZoomNamespace)
+                .environment(\.nativeArtworkSurfaceEnabled, false)
             }
+            .margins(.all, 0)
+        }
+
+        func collectionView(_ collectionView: UICollectionView, layout collectionViewLayout: UICollectionViewLayout,
+                            sizeForItemAt indexPath: IndexPath) -> CGSize {
+            let width = Metrics.itemWidth(collectionView.bounds.width)
+            let hasSubtitle = dataSource?.itemIdentifier(for: indexPath).flatMap { itemsByID[$0]?.subtitle != nil } ?? true
+            return CGSize(width: width, height: Metrics.itemHeight(hasSubtitle: hasSubtitle, width: collectionView.bounds.width, traits: collectionView.traitCollection))
         }
     }
 }

@@ -2,6 +2,64 @@ import SwiftUI
 import PhotosUI
 import UniformTypeIdentifiers
 
+/// 网易云曲目按喜欢状态切换左滑；本地播放列表仍用移除。
+private struct PlaylistTrailingSwipe: ViewModifier {
+    let song: LibrarySongItem
+    let canRemove: Bool
+    let remove: () -> Void
+    @Environment(\.songMenuActions) private var songActions
+    @Environment(\.libraryDownloads) private var downloads
+
+    func body(content: Content) -> some View {
+        let usesOnlineActions = song.isOnline && !canRemove
+        let items = usesOnlineActions
+            ? OnlineSongTrailingSwipe.actions(isFavorite: song.isFavorite, downloadState: downloads?.state(of: song.id),
+                                              canDownload: downloads?.isDownloadable(song) == true)
+            : []
+        content.swipeActions(edge: .trailing, allowsFullSwipe: items.first != .removeFromLiked) {
+            if usesOnlineActions {
+                if let edge = items.first, edge != .removeFromLiked { edgeButton(edge) }
+                if items.contains(.removeFromLiked) {
+                    // 不用 destructive。系统列表会把这个角色当成删掉当前行，歌还在歌单里也会从界面消失。
+                    Button("从喜欢歌曲移除", systemImage: "trash") {
+                        CenteredActionSheet.confirmRemoveFromLiked { songActions.removeFromFavorites(song) }
+                    }
+                    .labelStyle(.iconOnly)
+                    .tint(.red)
+                }
+            } else if canRemove {
+                Button("移除", systemImage: "minus.circle.fill") {
+                    CenteredActionSheet.confirmRemoveFromPlaylist(remove)
+                }
+                .labelStyle(.iconOnly)
+                .tint(.red)
+            }
+        }
+    }
+
+    @ViewBuilder private func edgeButton(_ action: OnlineSongTrailingSwipe) -> some View {
+        switch action {
+        case .like:
+            Button("喜欢", systemImage: "heart.fill") {
+                LibraryHaptics.impact()
+                songActions.toggleFavorite(song)
+            }
+                .labelStyle(.iconOnly)
+                .tint(.pink)
+        case .download:
+            Button("下载", systemImage: "arrow.down") { downloads?.download([song]) }
+                .labelStyle(.iconOnly)
+                .tint(.blue)
+        case .stopDownload:
+            Button("停止下载", systemImage: "stop.fill") { downloads?.stop([song]) }
+                .labelStyle(.iconOnly)
+                .tint(.blue)
+        case .removeFromLiked:
+            EmptyView()
+        }
+    }
+}
+
 /// 用户播放列表的原生效果稿。所有编辑只作用于注入的内存资料库。
 struct PlaylistDetailView: View {
     let playlistID: String
@@ -141,17 +199,9 @@ struct PlaylistDetailView: View {
                                 .labelStyle(.iconOnly)
                                 .tint(.indigo)
                         }
-                        .swipeActions(edge: .trailing) {
-                            if !playlist.isReadOnly {
-                            Button(role: .destructive) {
-                                withAnimation { library.removeSong(song.id, from: playlistID) }
-                            } label: {
-                                Image(systemName: "minus.circle.fill")
-                            }
-                            .accessibilityLabel("移除")
-                            .tint(.red)
-                            }
-                        }
+                        .modifier(PlaylistTrailingSwipe(song: song, canRemove: !playlist.isReadOnly) {
+                            withAnimation { library.removeSong(song.id, from: playlistID) }
+                        })
                 }
                 if query.isEmpty && !playlist.isReadOnly {
                     addMusicRow
@@ -372,7 +422,10 @@ struct PlaylistDetailView: View {
     @ViewBuilder private func externalMenu(_ playlist: LibraryPlaylistItem, actions: ExternalPlaylistActions) -> some View {
         collectionDownloadMenuAction()
         if let toggleFavorite = actions.toggleFavorite {
-            Button(playlist.isFavorite ? "撤销喜爱" : "喜爱", systemImage: playlist.isFavorite ? "star.slash.fill" : "star.fill", action: toggleFavorite)
+            Button(playlist.isFavorite ? "撤销喜爱" : "喜爱", systemImage: playlist.isFavorite ? "star.slash.fill" : "star.fill") {
+                LibraryHaptics.impact()
+                toggleFavorite()
+            }
         }
         if let togglePin = actions.togglePin {
             Button(playlist.isPinned ? "取消置顶播放列表" : "置顶播放列表", systemImage: playlist.isPinned ? "pin.slash" : "pin", action: togglePin)
@@ -402,6 +455,7 @@ struct PlaylistDetailView: View {
         ControlGroup {
             collectionDownloadMenuAction()
             Button(playlist.isFavorite ? "撤销" : "喜爱", systemImage: playlist.isFavorite ? "star.slash.fill" : "star.fill") {
+                LibraryHaptics.impact()
                 library.toggleFavorite(playlistID)
             }
             Button("共享", systemImage: "square.and.arrow.up.fill") {}.disabled(true)

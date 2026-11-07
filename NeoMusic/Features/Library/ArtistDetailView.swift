@@ -100,7 +100,10 @@ struct ArtistDetailView: View {
             NavigationStack { ScrollView { Text(detail.biography).frame(maxWidth: .infinity, alignment: .leading).padding(20) }.navigationTitle(detail.name).toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { biography = false } } } }.presentationDetents([.large])
         }
     }
-    private func favorite() { if let toggleFavorite { toggleFavorite() } else { actions.toggleFavorite(.artist(identity)) } }
+    private func favorite() {
+        LibraryHaptics.impact()
+        if let toggleFavorite { toggleFavorite() } else { actions.toggleFavorite(.artist(identity)) }
+    }
     private func heading(_ section: ArtistSection) -> some View {
         LibraryRouteLink(value: .artistSection(identity, section)) { HStack(spacing: 6) { Text(section.title).font(.system(size: 20, weight: .bold)); Image(systemName: "chevron.right").font(.system(size: 16, weight: .semibold)) } }.buttonStyle(.plain)
     }

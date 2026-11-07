@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// 操作完成后在迷你播放条上方短暂显示的提示，对照 Apple Music。
 enum LibraryToast {
@@ -78,8 +79,30 @@ extension View {
     }
 
     /// 提示出现时的触感反馈；每个提示只反馈一次，挂在根部。
+    /// 喜爱和取消喜爱由操作本身反馈，避免和这里再震一次。
     func libraryToastFeedback(_ center: LibraryToastCenter) -> some View {
-        sensoryFeedback(.success, trigger: center.current?.id) { _, new in new != nil }
+        sensoryFeedback(.success, trigger: center.current?.id) { _, new in
+            guard new != nil else { return false }
+            switch center.current?.toast {
+            case .favorited, .unfavorited: return false
+            default: return true
+            }
+        }
+    }
+}
+
+/// 与播放、下载按钮相同的轻触感。可从菜单操作直接调用。
+enum LibraryHaptics {
+    static func impact() {
+        let play: @MainActor () -> Void = {
+            let generator = UIImpactFeedbackGenerator(style: .soft)
+            generator.impactOccurred(intensity: 0.6)
+        }
+        if Thread.isMainThread {
+            MainActor.assumeIsolated(play)
+        } else {
+            Task { @MainActor in play() }
+        }
     }
 }
 

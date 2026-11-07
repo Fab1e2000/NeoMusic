@@ -111,6 +111,15 @@ import Observation
         }
         publish()
         syncCollectedPlaylists()
+        refreshOpenCollectionFavorites()
+    }
+
+    /// 喜欢状态变了之后，正在看的歌单曲目要换成爱心或删除、下载。
+    private func refreshOpenCollectionFavorites() {
+        guard owner != nil, account.music?.userID.map(String.init) == owner else { return }
+        for (id, value) in loaded {
+            updateDetail(id, item: value.0, songs: value.1)
+        }
     }
     private func observeCurrentSong() {
         withObservationTracking {
@@ -692,25 +701,28 @@ import Observation
         songs.playNext = { [weak self] song in guard self?.owner != nil else { self?.showsLogin = true; return }; self?.player.insertNext([song]) }
         songs.playLater = { [weak self] song in guard self?.owner != nil else { self?.showsLogin = true; return }; self?.player.appendLater([song]) }
         songs.addToPlaylist = { [weak self] song in guard self?.owner != nil else { self?.showsLogin = true; return }; LocalLibrary.playlistLibrary.pendingAddition = .init(songs: [song]) }
-        songs.toggleFavorite = { [weak self] song in
-            guard let self else { return }
-            guard let owner = self.owner, let number = Int64(song.id.split(separator: ":").last ?? "") else { self.showsLogin = true; return }
-            Task {
-                guard self.owner == owner, self.account.profile.map({ String($0.userID) }) == owner,
-                      let music = self.account.music, music.userID.map(String.init) == owner,
-                      song.id.hasPrefix("netease:\(owner):") else { return }
-                do { try await music.setLiked(songID: number, liked: !song.isFavorite) }
-                catch is CancellationError {} catch {
-                    guard self.owner == owner, self.account.profile.map({ String($0.userID) }) == owner else { return }
-                    LocalLibrary.toasts.show(.error(error.localizedDescription))
-                }
-            }
-        }
+        songs.toggleFavorite = { [weak self] song in self?.setOnlineLiked(song, liked: !song.isFavorite) }
+        songs.removeFromFavorites = { [weak self] song in self?.setOnlineLiked(song, liked: false) }
         return AnyView(HomeCollectionDetailView(playlistID: id, library: detailLibrary, actions: actions,
             onAppear: { [weak self] in self?.detailAppeared(id) },
             onDisappear: { [weak self] in self?.detailDisappeared(id) })
             .environment(\.collectionMenuActions, collection).environment(\.songMenuActions, songs))
     }
+
+    private func setOnlineLiked(_ song: LibrarySongItem, liked: Bool) {
+        guard let owner, let number = Int64(song.id.split(separator: ":").last ?? "") else { showsLogin = true; return }
+        Task { [weak self] in
+            guard let self, self.owner == owner, self.account.profile.map({ String($0.userID) }) == owner,
+                  let music = self.account.music, music.userID.map(String.init) == owner,
+                  song.id.hasPrefix("netease:\(owner):") else { return }
+            do { try await music.setLiked(songID: number, liked: liked) }
+            catch is CancellationError {} catch {
+                guard self.owner == owner, self.account.profile.map({ String($0.userID) }) == owner else { return }
+                LocalLibrary.toasts.show(.error(error.localizedDescription))
+            }
+        }
+    }
+
     private func withCompleteCollection(_ id: String, action: @escaping @MainActor ([LibrarySongItem]) -> Void) {
         guard let owner else { showsLogin = true; return }
         Task { [weak self] in

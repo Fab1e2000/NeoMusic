@@ -89,7 +89,8 @@ struct CollectionDetailView: View {
             .alert("", isPresented: $isConfirmingAlbumDeletion) {
                 Button("从资料库删除", role: .destructive) {
                     guard let route = detail.route else { return }
-                    closeDetail(); collectionActions.delete(route)
+                    closeDetail()
+                    withAnimation { collectionActions.delete(route) }
                 }
                 Button("取消", role: .cancel) {}
             } message: {
@@ -273,10 +274,12 @@ private struct FavoritesSwipeActions: ViewModifier {
                         .tint(.indigo)
                 }
                 .swipeActions(edge: .trailing) {
-                    Button(role: .destructive) { actions.removeFromFavorites(song) } label: {
-                        Image(systemName: "trash")
+                    Button("从喜欢歌曲移除", systemImage: "trash") {
+                        CenteredActionSheet.confirmRemoveFromLiked {
+                            withAnimation { actions.removeFromFavorites(song) }
+                        }
                     }
-                    .accessibilityLabel("取消喜爱")
+                    .labelStyle(.iconOnly)
                     .tint(.red)
                 }
         } else {
@@ -776,19 +779,30 @@ private final class AlbumSongsController: UICollectionViewController {
         return UISwipeActionsConfiguration(actions: [later, next])
     }
     private func trailingActions(at indexPath: IndexPath) -> UISwipeActionsConfiguration? {
-        guard let song = song(at: indexPath) else { return nil }
-        var items: [UIContextualAction] = []
-        if song.isOnline {
-            let remove = UIContextualAction(style: .normal, title: nil) { [weak self] _, _, done in
+        guard let song = song(at: indexPath), song.isOnline else { return nil }
+        let chosen = OnlineSongTrailingSwipe.actions(isFavorite: song.isFavorite,
+                                                     downloadState: environment.libraryDownloads?.state(of: song.id),
+                                                     canDownload: environment.libraryDownloads?.isDownloadable(song) == true)
+        let items = chosen.map { swipeAction($0, song: song) }
+        guard !items.isEmpty else { return nil }
+        let configuration = UISwipeActionsConfiguration(actions: items)
+        configuration.performsFirstActionWithFullSwipe = chosen.first != .removeFromLiked
+        return configuration
+    }
+
+    private func swipeAction(_ action: OnlineSongTrailingSwipe, song: LibrarySongItem) -> UIContextualAction {
+        switch action {
+        case .like:
+            let like = UIContextualAction(style: .normal, title: nil) { [weak self] _, _, done in
                 done(true)
-                self?.confirmDeletion(song, fromSwipe: true)
+                LibraryHaptics.impact()
+                self?.environment.songMenuActions.toggleFavorite(song)
             }
-            remove.image = UIImage(systemName: "trash"); remove.backgroundColor = .systemRed
-            remove.image?.accessibilityLabel = "删除"
-            items.append(remove)
-        }
-        if environment.libraryDownloads?.isDownloadable(song) == true, environment.libraryDownloads?.state(of: song.id) != .downloaded {
-            let active = environment.libraryDownloads?.state(of: song.id)?.isActive == true
+            like.image = UIImage(systemName: "heart.fill"); like.backgroundColor = .systemPink
+            like.image?.accessibilityLabel = "喜欢"
+            return like
+        case .download, .stopDownload:
+            let active = action == .stopDownload
             let download = UIContextualAction(style: .normal, title: nil) { [weak self] _, _, done in
                 if active { self?.environment.libraryDownloads?.stop([song]) }
                 else { self?.environment.libraryDownloads?.download([song]) }
@@ -796,21 +810,24 @@ private final class AlbumSongsController: UICollectionViewController {
             }
             download.image = UIImage(systemName: active ? "stop.fill" : "arrow.down"); download.backgroundColor = .systemBlue
             download.image?.accessibilityLabel = active ? "停止下载" : "下载"
-            items.insert(download, at: 0)
+            return download
+        case .removeFromLiked:
+            let remove = UIContextualAction(style: .normal, title: nil) { [weak self] _, _, done in
+                done(true)
+                self?.confirmRemoveFromLiked(song)
+            }
+            remove.image = UIImage(systemName: "trash"); remove.backgroundColor = .systemRed
+            remove.image?.accessibilityLabel = "从喜欢歌曲移除"
+            return remove
         }
-        guard !items.isEmpty else { return nil }
-        return UISwipeActionsConfiguration(actions: items)
     }
 
-    private func confirmDeletion(_ song: LibrarySongItem, fromSwipe: Bool) {
-        let remove: () -> Void = { [weak self] in
-            self?.environment.songMenuActions.delete(song)
+    private func confirmRemoveFromLiked(_ song: LibrarySongItem) {
+        CenteredActionSheet.confirmRemoveFromLiked { [weak self] in
+            self?.environment.songMenuActions.removeFromFavorites(song)
         }
-        let message = fromSwipe && environment.libraryDownloads?.state(of: song.id) == .downloaded
-            ? "从资料库移除这首歌？音乐文件仍保留在“音乐”文件夹，相关播放列表记录会移除。"
-            : "确定要从资料库删除这首歌吗？这也会将其从你制作的所有播放列表移除。"
-        CenteredActionSheet.present(message: message, actions: [.init(title: "从资料库删除", isDestructive: true, handler: remove)])
     }
+
 }
 
 private struct NativeAlbumRowContent: View {

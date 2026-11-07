@@ -349,8 +349,10 @@ final class AlbumMenuTests: XCTestCase {
             events.removeAll()
             try XCTUnwrap(items.first { $0.title == (selected ? "撤销" : "喜爱") }).perform()
             try XCTUnwrap(items.first { $0.title == (selected ? "取消置顶" : "置顶歌曲") }).perform()
-            XCTAssertEqual(events, ["favorite", (selected ? LibraryToast.unfavorited : .favorited).title,
-                                    "pin", (selected ? LibraryToast.unpinned : .pinned).title])
+            // 已经喜欢时，「撤销」先确认，确认前不改喜爱状态。
+            XCTAssertEqual(events, selected
+                ? ["pin", LibraryToast.unpinned.title]
+                : ["favorite", LibraryToast.favorited.title, "pin", LibraryToast.pinned.title])
         }
     }
 
@@ -431,5 +433,23 @@ final class QueueMenuTests: XCTestCase {
         XCTAssertTrue(items.allSatisfy(\.isDisabled))
         for item in items { item.perform() }
         XCTAssertEqual(calls, 0)
+    }
+}
+
+final class OnlineSongTrailingSwipeTests: XCTestCase {
+    func testNewSongShowsOnlyTheHeart() {
+        XCTAssertEqual(OnlineSongTrailingSwipe.actions(isFavorite: false, downloadState: .downloaded, canDownload: true), [.like])
+        XCTAssertEqual(OnlineSongTrailingSwipe.actions(isFavorite: false, downloadState: .downloading(0.4), canDownload: true), [.like])
+    }
+
+    func testLikedSongShowsDownloadThenRemoval() {
+        XCTAssertEqual(OnlineSongTrailingSwipe.actions(isFavorite: true, downloadState: nil, canDownload: true), [.download, .removeFromLiked])
+        XCTAssertEqual(OnlineSongTrailingSwipe.actions(isFavorite: true, downloadState: .failed("失败"), canDownload: true), [.download, .removeFromLiked])
+    }
+
+    func testLikedSongShowsStopWhileDownloadingAndOnlyRemovalWhenFinishedOrUnavailable() {
+        XCTAssertEqual(OnlineSongTrailingSwipe.actions(isFavorite: true, downloadState: .queued, canDownload: true), [.stopDownload, .removeFromLiked])
+        XCTAssertEqual(OnlineSongTrailingSwipe.actions(isFavorite: true, downloadState: .downloaded, canDownload: true), [.removeFromLiked])
+        XCTAssertEqual(OnlineSongTrailingSwipe.actions(isFavorite: true, downloadState: nil, canDownload: false), [.removeFromLiked])
     }
 }

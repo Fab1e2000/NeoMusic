@@ -360,7 +360,11 @@ final class NeteaseMusicStore {
         }
         details[id] = detail
         playlistTracks[id] = trackIDs
-        for song in detail.songs { songs[song.id] = song }
+        for song in detail.songs {
+            // 喜欢操作不知道曲目详情时，不能用「不可用」占位盖住正在播放的歌曲。
+            if song.unavailable, songs[song.id]?.unavailable == false { continue }
+            songs[song.id] = song
+        }
         if likedContentChanged { likedSongRevision &+= 1 }
         if detail.isComplete { morePlaylistIDs.remove(id) } else { morePlaylistIDs.insert(id) }
         if detail.playlist.isFavorites, detail.playlist.creatorID == userID {
@@ -395,27 +399,30 @@ final class NeteaseMusicStore {
     func setLiked(songID: Int64, liked: Bool) async throws {
         guard let userID else { throw NeteaseAccountError.authenticationRequired }
         let revision = generation
-        if let favorites = playlists.first(where: \.isFavorites) { try await restorePlaylist(id: favorites.id) }
+        let previous = LikedMembership(ids: likedIDs, times: likedAt, detail: playlists.first(where: \.isFavorites).flatMap { details[$0.id] })
+        // 和 MeloX 的 setLocalSong 一样：先改喜欢列表，请求失败再放回去。
+        reviseLiked(songID, liked: liked, persist: false)
+        onChange?()
         do {
+            if let favorites = playlists.first(where: \.isFavorites) { try await restorePlaylist(id: favorites.id) }
+            guard revision == generation, !Task.isCancelled else { throw CancellationError() }
+            reviseLiked(songID, liked: liked, persist: false)
             try await run { [client] in try await client.setLiked(id: songID, liked: liked, credential: $0) }
+            guard revision == generation, !Task.isCancelled else { throw CancellationError() }
         } catch {
-            if error is CancellationError { throw error }
             guard generation == revision else { throw CancellationError() }
-            let original = error
-            let ids = try await run { [client] in try await client.likedIDs(userID: userID, credential: $0) }
-            likedIDs = ids; saveSummary(); onChange?()
-            guard likedIDs.contains(songID) == liked else { throw original }
+            if await confirmedLiked(songID, liked: liked, userID: userID, revision: revision) { return }
+            restoreLiked(previous)
+            onChange?()
+            throw error
         }
-        if liked { likedIDs.insert(songID); likedAt[songID] = Date() }
-        else { likedIDs.remove(songID); likedAt.removeValue(forKey: songID) }
-        saveSummary(); onChange?(); onLibraryChange?()
-        guard let favorites = playlists.first(where: \.isFavorites) else { return }
-        if liked, songs[songID] == nil {
+        guard let favorites = playlists.first(where: \.isFavorites) else { saveSummary(); onLibraryChange?(); return }
+        if liked, songs[songID]?.unavailable != false {
             let single = NeteasePlaylistDetail(playlist: favorites, songs: [], addedTimes: [:], trackIDs: [songID], loadedTrackCount: 0)
             if let resolved = try? await run({ [client] in try await client.complete(single, credential: $0) }),
                revision == generation {
                 var changed = false
-                for song in resolved.songs where songs[song.id] != song {
+                for song in resolved.songs where !song.unavailable && songs[song.id] != song {
                     songs[song.id] = song
                     changed = true
                 }
@@ -423,15 +430,61 @@ final class NeteaseMusicStore {
             }
         }
         guard revision == generation, !Task.isCancelled else { return }
-        if let existing = details[favorites.id] {
-            var ids = existing.orderedTrackIDs
-            var offset = existing.nextOffset
-            if let index = ids.firstIndex(of: songID) { ids.remove(at: index); if index < offset { offset -= 1 } }
-            if liked { ids.insert(songID, at: 0); offset += 1 }
-            let loaded = ids.prefix(offset).map { songs[$0] ?? NeteaseMusicSong(id: $0, title: "歌曲不可用", artist: "", album: "", artworkURL: nil, duration: 0, unavailable: true) }
-            apply(.init(playlist: favorites, songs: loaded, addedTimes: likedAt, trackIDs: ids, loadedTrackCount: offset))
-        }
+        reviseLiked(songID, liked: liked, persist: true)
+        onLibraryChange?()
         onChange?()
+    }
+
+    private struct LikedMembership {
+        let ids: Set<Int64>
+        let times: [Int64: Date]
+        let detail: NeteasePlaylistDetail?
+    }
+
+    /// 喜欢歌曲的名单和「我喜欢的音乐」曲目一起改。已在目标状态时不改加入时间。
+    private func reviseLiked(_ songID: Int64, liked: Bool, persist: Bool) {
+        if liked {
+            if likedIDs.insert(songID).inserted { likedAt[songID] = Date() }
+        } else {
+            likedIDs.remove(songID)
+            likedAt.removeValue(forKey: songID)
+        }
+        guard let favorites = playlists.first(where: \.isFavorites), let existing = details[favorites.id] else {
+            if persist { saveSummary() }
+            return
+        }
+        var ids = existing.orderedTrackIDs
+        var loadedIDs = Array(ids.prefix(existing.nextOffset))
+        if let index = ids.firstIndex(of: songID) {
+            ids.remove(at: index)
+            loadedIDs.removeAll { $0 == songID }
+        }
+        if liked {
+            ids.insert(songID, at: 0)
+            // 只有已经拿到曲目时才放进喜欢列表。缺详情不能记成「暂无完整音源」。
+            if songs[songID] != nil { loadedIDs.insert(songID, at: 0) }
+        }
+        let loaded = loadedIDs.compactMap { songs[$0] }
+        apply(.init(playlist: favorites, songs: loaded, addedTimes: likedAt, trackIDs: ids, loadedTrackCount: loaded.count), persist: persist)
+    }
+
+    private func restoreLiked(_ previous: LikedMembership) {
+        likedIDs = previous.ids
+        likedAt = previous.times
+        if let detail = previous.detail { apply(detail, persist: false) }
+        likedIDs = previous.ids
+        likedAt = previous.times
+    }
+
+    /// 写请求失败时，以服务器上的喜欢名单为准。已经达到目标就不再报失败。
+    private func confirmedLiked(_ songID: Int64, liked: Bool, userID: Int64, revision: UUID) async -> Bool {
+        guard let ids = try? await run({ [client] in try await client.likedIDs(userID: userID, credential: $0) }),
+              revision == generation, ids.contains(songID) == liked else { return false }
+        likedIDs = ids
+        reviseLiked(songID, liked: liked, persist: true)
+        onLibraryChange?()
+        onChange?()
+        return true
     }
 
     func stream(songID: Int64) async throws -> NeteaseMusicStream {
