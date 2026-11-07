@@ -39,9 +39,11 @@ struct AddPlaylistMusicView: View {
         .presentationDragIndicator(.hidden)
         .tint(.blue)
         .interactiveDismissDisabled(!selectedIDs.isEmpty)
-        .alert("确定要放弃所选内容吗？", isPresented: $confirmsDiscard) {
-            Button("保留所选内容", role: .cancel) {}
+        .alert("", isPresented: $confirmsDiscard) {
             Button("放弃所选内容", role: .destructive) { dismiss() }
+            Button("保留所选内容", role: .cancel) {}
+        } message: {
+            Text("确定要放弃所选内容吗？")
         }
     }
 

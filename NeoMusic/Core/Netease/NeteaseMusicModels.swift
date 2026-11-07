@@ -19,6 +19,8 @@ struct NeteaseMusicPlaylist: Codable, Sendable, Equatable, Identifiable {
     let artworkURL: URL?
     let trackCount: Int
     let isFavorites: Bool
+    /// 网易云账号收藏的歌单。旧缓存没有这个字段时视为未收藏。
+    var isSubscribed: Bool? = nil
     var createTime: Date? = nil
     var updateTime: Date? = nil
 }

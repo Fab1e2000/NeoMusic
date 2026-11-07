@@ -23,7 +23,11 @@ struct LibraryPlaylistItem: Identifiable, Equatable {
     var subtitle: String? = nil
     var isReadOnlyContent = false
     var isDownloadedSnapshot = false
+    /// 已在网易云收藏。播放列表页面据此提供取消收藏。
+    var isSubscribed = false
     var isReadOnly: Bool { sourceOwnerID != nil || isReadOnlyContent || isDownloadedSnapshot }
+    /// 尚未收藏的网易云歌单页显示收藏，收藏后改为下载。
+    var offersCollection: Bool { id.hasPrefix("home:playlist:") && sourceOwnerID != nil && !isSubscribed }
 
     /// 菜单与预览卡片共用的展示数据。
     var shelfItem: LibraryShelfItem {
@@ -116,6 +120,8 @@ final class PlaylistLibrary {
     @ObservationIgnored var loadOnlinePlaylist: (@MainActor (String) async -> Void)?
     @ObservationIgnored var loadMoreOnlinePlaylist: (@MainActor (String) async -> Void)?
     @ObservationIgnored var completeOnlinePlaylist: (@MainActor (String) async -> Bool)?
+    /// 取消网易云收藏。成功后由账号歌单名单决定这张卡片是否还在。
+    @ObservationIgnored var unsubscribeOnlinePlaylist: (@MainActor (String) -> Void)?
     private(set) var onlineHasMore: Set<String> = []
     private(set) var onlineTrackCounts: [String: Int] = [:]
     private(set) var loadedOnlinePlaylistIDs: Set<String> = []
@@ -722,10 +728,29 @@ final class PlaylistLibrary {
         playlists.contains { $0.id == playlistID && !$0.isSystem && !$0.isReadOnly }
     }
 
-    /// 从资料库删除播放列表，只删记录，不碰音乐文件。
+    /// 网易云收藏的歌单可以取消收藏。
+    func canUnsubscribe(_ playlistID: String) -> Bool {
+        playlists.contains { $0.id == playlistID && $0.isSubscribed }
+    }
+
+    /// 从资料库删除播放列表，只删记录，不碰音乐文件。收藏歌单改为请求网易云取消收藏。
     func deletePlaylist(_ id: String) {
+        if playlist(id)?.isSubscribed == true {
+            unsubscribeOnlinePlaylist?(id)
+            return
+        }
         defer { persist() }
         guard canDelete(id) else { return }
+        playlists.removeAll { $0.id == id }
+        placement[id] = nil
+        contents[id] = nil
+    }
+
+    /// 取消收藏后丢掉本地留下的引用，避免卡片在下次同步时又出现。
+    func releaseRetainedOnlinePlaylist(_ id: String) {
+        let hadPreference = onlinePreferences.removeValue(forKey: id) != nil
+        if hadPreference { saveOnlinePreferences(force: true) }
+        guard playlist(id)?.isReadOnly == true else { return }
         playlists.removeAll { $0.id == id }
         placement[id] = nil
         contents[id] = nil
@@ -1139,7 +1164,7 @@ private struct MovedToFolderToast: View {
 }
 
 extension View {
-    /// 删除播放列表前的确认，挂在应用根部，任何入口请求删除都在这里确认。
+    /// 删除播放列表前的确认。用居中提示框，避免确认框从挂载的页面边缘冒出来。
     func playlistDeletionConfirmation(_ library: PlaylistLibrary, enabled: Bool = true) -> some View {
         modifier(PlaylistDeletionConfirmation(library: library, enabled: enabled))
     }
@@ -1152,13 +1177,15 @@ private struct PlaylistDeletionConfirmation: ViewModifier {
     private var isActive: Bool { enabled && (chrome?.isActive ?? true) }
 
     func body(content: Content) -> some View {
-        content.confirmationDialog(
-            "确定要删除此播放列表吗？这会将播放列表从资料库删除。",
+        content.alert(
+            "",
             isPresented: Binding(get: { isActive && library.pendingDeletion != nil }, set: { if !$0 && isActive { library.pendingDeletion = nil } }),
-            titleVisibility: .visible, presenting: library.pendingDeletion
+            presenting: library.pendingDeletion
         ) { playlist in
             Button("删除播放列表", role: .destructive) { withAnimation { library.deletePlaylist(playlist.id) } }
             Button("取消", role: .cancel) {}
+        } message: { _ in
+            Text("确定要删除此播放列表吗？这会将播放列表从资料库删除。")
         }
     }
 }

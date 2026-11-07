@@ -290,7 +290,7 @@ enum LocalLibrary {
             canDelete: { route in
                 if catalog.handles(route) { return false }
                 return switch route {
-                case .playlist(let id): playlistLibrary.canDelete(id)
+                case .playlist(let id): playlistLibrary.canDelete(id) || playlistLibrary.canUnsubscribe(id)
                 case .album: true
                 default: false
                 }

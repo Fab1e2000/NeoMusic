@@ -6,7 +6,7 @@ enum MusicSearchKind: Int, CaseIterable, Identifiable {
     var id: Self { self }
     var title: String { switch self { case .combined: "综合"; case .song: "歌曲"; case .artist: "艺人"; case .album: "专辑"; case .playlist: "歌单" } }
 }
-struct MusicSearchItem: Identifiable {
+struct MusicSearchItem: Identifiable, Equatable {
     let id: String
     let kind: MusicSearchKind
     let title: String
@@ -15,13 +15,13 @@ struct MusicSearchItem: Identifiable {
     var song: LibrarySongItem?
     var route: LibraryRoute?
 }
-struct MusicSearchGroup: Identifiable {
+struct MusicSearchGroup: Identifiable, Equatable {
     let kind: MusicSearchKind
     var items: [MusicSearchItem]
     var hasMore = false
     var id: MusicSearchKind { kind }
 }
-struct MusicSearchCategory: Identifiable {
+struct MusicSearchCategory: Identifiable, Equatable {
     let id: String
     let title: String
     var colorIndex = 0

@@ -1,8 +1,8 @@
 import SwiftUI
 import UIKit
 
-/// 页面中间弹出的选择框：说明文字左对齐、按钮纵向排列并带“取消”。
-/// SwiftUI 的确认框在 iPhone 上会从挂载的视图以气泡弹出，这里改用不指定来源的 UIKit 操作表，与 Apple Music 一致。
+/// 屏幕正中的确认框：没有标题，说明在正文，带取消。
+/// 不用操作表，避免提示从按钮或列表行边上冒出来。
 @MainActor
 enum CenteredActionSheet {
     struct Action {
@@ -12,14 +12,14 @@ enum CenteredActionSheet {
     }
 
     static func present(message: String, actions: [Action]) {
-        let sheet = UIAlertController(title: nil, message: message, preferredStyle: .actionSheet)
+        let alert = UIAlertController(title: nil, message: message, preferredStyle: .alert)
         for action in actions {
-            sheet.addAction(UIAlertAction(title: action.title, style: action.isDestructive ? .destructive : .default) { _ in
+            alert.addAction(UIAlertAction(title: action.title, style: action.isDestructive ? .destructive : .default) { _ in
                 action.handler()
             })
         }
-        sheet.addAction(UIAlertAction(title: "取消", style: .cancel))
-        topController?.present(sheet, animated: true)
+        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
+        topController?.present(alert, animated: true)
     }
 
     private static var topController: UIViewController? {

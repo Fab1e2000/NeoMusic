@@ -8,6 +8,9 @@ final class NeteaseMusicStore {
     private(set) var playlists: [NeteaseMusicPlaylist] = []
     private(set) var songs: [Int64: NeteaseMusicSong] = [:]
     private(set) var playlistTracks: [Int64: [Int64]] = [:]
+    /// Changes only when a favorites playlist or an already-liked song record changes.
+    /// Home observes this instead of the whole song table, so loading another playlist does not republish the feed.
+    private(set) var likedSongRevision = 0
     private(set) var likedIDs: Set<Int64> = []
     private(set) var likedAt: [Int64: Date] = [:]
     private(set) var error: String?
@@ -350,9 +353,15 @@ final class NeteaseMusicStore {
 
     private func apply(_ detail: NeteasePlaylistDetail, persist: Bool = true) {
         let id = detail.playlist.id
+        let trackIDs = detail.songs.map(\.id)
+        let favorites = detail.playlist.isFavorites && detail.playlist.creatorID == userID
+        let likedContentChanged = (favorites && playlistTracks[id] != trackIDs) || detail.songs.contains { song in
+            (favorites || likedIDs.contains(song.id)) && songs[song.id] != song
+        }
         details[id] = detail
-        playlistTracks[id] = detail.songs.map(\.id)
+        playlistTracks[id] = trackIDs
         for song in detail.songs { songs[song.id] = song }
+        if likedContentChanged { likedSongRevision &+= 1 }
         if detail.isComplete { morePlaylistIDs.remove(id) } else { morePlaylistIDs.insert(id) }
         if detail.playlist.isFavorites, detail.playlist.creatorID == userID {
             for (id, date) in detail.addedTimes { likedAt[id] = date }
@@ -362,6 +371,25 @@ final class NeteaseMusicStore {
             save(detail, key: "playlist:\(id)")
             if detail.playlist.isFavorites { saveSummary() }
         }
+    }
+
+    func setPlaylistSubscribed(id: Int64, subscribed: Bool) async throws {
+        guard let userID else { throw NeteaseAccountError.authenticationRequired }
+        let revision = generation
+        var failure: Error?
+        do {
+            try await run { [client] in try await client.setPlaylistSubscribed(id: id, subscribed: subscribed, credential: $0) }
+        } catch is CancellationError { throw CancellationError() }
+        catch {
+            guard generation == revision else { throw CancellationError() }
+            failure = error
+        }
+        let value = try await run { [client] in try await client.playlists(userID: userID, credential: $0) }
+        guard generation == revision, !Task.isCancelled else { throw CancellationError() }
+        playlists = value
+        saveSummary(); onChange?(); onLibraryChange?()
+        let collected = value.contains { $0.id == id && $0.isSubscribed == true }
+        guard collected == subscribed else { throw failure ?? NeteaseAccountError.invalidResponse }
     }
 
     func setLiked(songID: Int64, liked: Bool) async throws {
@@ -385,7 +413,14 @@ final class NeteaseMusicStore {
         if liked, songs[songID] == nil {
             let single = NeteasePlaylistDetail(playlist: favorites, songs: [], addedTimes: [:], trackIDs: [songID], loadedTrackCount: 0)
             if let resolved = try? await run({ [client] in try await client.complete(single, credential: $0) }),
-               revision == generation { for song in resolved.songs { songs[song.id] = song } }
+               revision == generation {
+                var changed = false
+                for song in resolved.songs where songs[song.id] != song {
+                    songs[song.id] = song
+                    changed = true
+                }
+                if changed { likedSongRevision &+= 1 }
+            }
         }
         guard revision == generation, !Task.isCancelled else { return }
         if let existing = details[favorites.id] {

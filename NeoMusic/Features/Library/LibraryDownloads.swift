@@ -103,10 +103,11 @@ extension View {
 private struct DownloadRemovalConfirmation: ViewModifier {
     @Environment(\.libraryDownloads) private var downloads
     func body(content: Content) -> some View {
-        content.confirmationDialog("移除下载", isPresented: Binding(
+        content.alert("", isPresented: Binding(
             get: { downloads?.pendingRemoval.isEmpty == false },
             set: { if !$0 { downloads?.cancelRemoval() } })) {
                 Button("移除下载", role: .destructive) { downloads?.confirmRemoval() }
+                Button("取消", role: .cancel) {}
             } message: {
                 Text("将移除所选歌曲的本机文件。使用同一文件的其他播放列表也需要联网播放，收藏和播放列表会保留。")
             }

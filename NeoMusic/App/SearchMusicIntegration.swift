@@ -18,6 +18,7 @@ final class SearchMusicIntegration {
     @ObservationIgnored private var publishedSongs: [String: LibrarySongItem] = [:]
     @ObservationIgnored private var lastPublished: [LibrarySongItem] = []
     @ObservationIgnored private var displayedQuery = ""
+    @ObservationIgnored private var indexedRevision: Int?
     @ObservationIgnored var prepareNavigation: ((LibraryNavigationPreview) -> Void)?
     @ObservationIgnored var onPublication: (() -> Void)?
 
@@ -85,25 +86,48 @@ final class SearchMusicIntegration {
     }
 
     private func observeLibrary() {
+        observeLibraryIndex()
+        observeLibraryPresentation()
+    }
+
+    /// Sync progress only updates the status line. Requery when the index revision changes.
+    private func observeLibraryIndex() {
         withObservationTracking {
             _ = account.librarySearch?.revision; _ = account.librarySearch?.isSyncing
             _ = account.librarySearch?.completed; _ = account.librarySearch?.total
             _ = account.librarySearch?.failedCollections; _ = account.librarySearch?.error
-            _ = LocalLibrary.songLibrary.songs; _ = LocalLibrary.playlistLibrary.playlists
-            _ = account.downloads?.records; _ = account.music?.likedIDs
-        } onChange: { [weak self] in Task { @MainActor in self?.observeLibrary() } }
+        } onChange: { [weak self] in Task { @MainActor in self?.observeLibraryIndex() } }
         publishSync()
+        let revision = account.librarySearch?.revision
+        guard revision != indexedRevision else { return }
+        indexedRevision = revision
+        if model.scope == .library, !model.query.isEmpty { runQuery() }
+    }
+
+    /// The full local catalog is read only while library results are on screen.
+    private func observeLibraryPresentation() {
+        withObservationTracking {
+            _ = model.scope
+            if model.scope == .library {
+                _ = LocalLibrary.songLibrary.songs
+                _ = LocalLibrary.playlistLibrary.playlists
+            }
+            _ = account.downloads?.records
+            _ = account.music?.likedIDs
+        } onChange: { [weak self] in Task { @MainActor in self?.observeLibraryPresentation() } }
         if model.scope == .library, !model.query.isEmpty { runQuery() }
         else { publish() }
     }
 
     private func publishSync() {
         guard let index = account.librarySearch else { return }
-        model.syncFailed = !index.failedCollections.isEmpty || index.error != nil
-        if index.isSyncing { model.syncStatus = "正在同步资料库 · \(index.completed)/\(index.total) 个集合" }
-        else if let error = index.error { model.syncStatus = error }
-        else if !index.failedCollections.isEmpty { model.syncStatus = "\(index.failedCollections.count) 个集合尚未同步" }
-        else { model.syncStatus = nil }
+        assign(\.syncFailed, !index.failedCollections.isEmpty || index.error != nil)
+        let status: String?
+        if index.isSyncing { status = "正在同步资料库 · \(index.completed)/\(index.total) 个集合" }
+        else if let error = index.error { status = error }
+        else if !index.failedCollections.isEmpty { status = "\(index.failedCollections.count) 个集合尚未同步" }
+        else { status = nil }
+        assign(\.syncStatus, status)
     }
 
     private func runQuery(force: Bool = false) {
@@ -152,33 +176,40 @@ final class SearchMusicIntegration {
 
     private func publish() {
         guard let store else { return }
-        model.ownerID = account.profile.map { String($0.userID) }
-        model.categories = store.categories.enumerated().map { .init(id: $0.element.id, title: $0.element.name, colorIndex: $0.offset) }
-        model.history = store.recent(scope: scopeKey)
-        if !model.isSearching && !model.submitted { model.isLoading = store.isLoadingCategories; model.error = store.categoriesError }
+        assign(\.ownerID, account.profile.map { String($0.userID) })
+        assign(\.categories, store.categories.enumerated().map { .init(id: $0.element.id, title: $0.element.name, colorIndex: $0.offset) })
+        assign(\.history, store.recent(scope: scopeKey))
+        if !model.isSearching && !model.submitted { assign(\.isLoading, store.isLoadingCategories); assign(\.error, store.categoriesError) }
         else if model.scope == .online {
             if model.submitted {
                 let matches = store.request?.query == model.query && store.request?.kind.rawValue == model.kind.rawValue
-                model.groups = matches ? (store.page?.groups.map(mapGroup) ?? []) : []
-                model.isLoading = matches ? store.isLoading : model.isLoading
-                model.error = matches ? store.error : nil; model.moreError = matches ? store.moreError : nil
-                model.hasMore = matches && store.page?.hasMore == true && model.kind != .combined
-                model.isLoadingMore = store.isLoadingMore
-                model.cachedGroups[model.kind] = model.groups
+                let groups = matches ? (store.page?.groups.map(mapGroup) ?? []) : []
+                assign(\.groups, groups)
+                assign(\.isLoading, matches ? store.isLoading : model.isLoading)
+                assign(\.error, matches ? store.error : nil)
+                assign(\.moreError, matches ? store.moreError : nil)
+                assign(\.hasMore, matches && store.page?.hasMore == true && model.kind != .combined)
+                assign(\.isLoadingMore, store.isLoadingMore)
+                if model.cachedGroups[model.kind] != groups { model.cachedGroups[model.kind] = groups }
             } else {
-                model.keywords = store.suggestions.keywords
-                model.suggestions = store.suggestions.resources.map(mapItem)
-                model.error = store.suggestionError
+                assign(\.keywords, store.suggestions.keywords)
+                assign(\.suggestions, store.suggestions.resources.map(mapItem))
+                assign(\.error, store.suggestionError)
             }
         } else { publishLibrary() }
         if store.category == model.category {
-            model.categoryItems = store.categoryPage?.groups.flatMap(\.items).map(mapItem) ?? []
-            model.categoryLoading = store.isLoadingCategory
-            model.categoryMoreLoading = store.isLoadingMoreCategory
-            model.categoryHasMore = store.categoryPage?.hasMore == true
-            model.categoryError = store.categoryError; model.categoryMoreError = store.categoryMoreError
+            assign(\.categoryItems, store.categoryPage?.groups.flatMap(\.items).map(mapItem) ?? [])
+            assign(\.categoryLoading, store.isLoadingCategory)
+            assign(\.categoryMoreLoading, store.isLoadingMoreCategory)
+            assign(\.categoryHasMore, store.categoryPage?.hasMore == true)
+            assign(\.categoryError, store.categoryError)
+            assign(\.categoryMoreError, store.categoryMoreError)
         }
         publishSongs()
+    }
+
+    private func assign<Value: Equatable>(_ keyPath: ReferenceWritableKeyPath<SearchPageModel, Value>, _ value: Value) {
+        if model[keyPath: keyPath] != value { model[keyPath: keyPath] = value }
     }
 
     private func mapGroup(_ group: NeteaseSearchGroup) -> MusicSearchGroup {
@@ -274,13 +305,14 @@ final class SearchMusicIntegration {
         }
         let matched = Self.matchLibrary(items, query: model.query)
         if model.submitted {
-            model.groups = MusicSearchKind.allCases.filter { $0 != .combined && (model.kind == .combined || model.kind == $0) }.compactMap { kind in
+            let groups: [MusicSearchGroup] = MusicSearchKind.allCases.filter { $0 != .combined && (model.kind == .combined || model.kind == $0) }.compactMap { kind in
                 let values = matched.filter { $0.kind == kind }
                 return values.isEmpty ? nil : .init(kind: kind, items: values, hasMore: values.count > 3)
             }
-            model.cachedGroups[model.kind] = model.groups
-        } else { model.keywords = []; model.suggestions = matched }
-        model.hasMore = false; model.isLoadingMore = false; model.moreError = nil
+            assign(\.groups, groups)
+            if model.cachedGroups[model.kind] != groups { model.cachedGroups[model.kind] = groups }
+        } else { assign(\.keywords, []); assign(\.suggestions, matched) }
+        assign(\.hasMore, false); assign(\.isLoadingMore, false); assign(\.moreError, nil)
     }
 
     static func matchLibrary(_ items: [MusicSearchItem], query: String) -> [MusicSearchItem] {

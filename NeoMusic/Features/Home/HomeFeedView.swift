@@ -118,7 +118,11 @@ struct HomeQuickActionCard: View {
             cover
                 .frame(width: HomeMetrics.heroWidth, height: HomeMetrics.heroHeight)
                 .clipShape(.rect(cornerRadius: 16))
-                .shadow(color: .black.opacity(0.18), radius: 16, x: 0, y: 12)
+                .background {
+                    RoundedRectangle(cornerRadius: 16)
+                        .fill(.white)
+                        .shadow(color: .black.opacity(0.18), radius: 16, x: 0, y: 12)
+                }
                 .contentShape(.rect(cornerRadius: 16))
         }
         .buttonStyle(.plain)
@@ -298,7 +302,13 @@ private struct HomeContentCard: View {
                            height: large ? HomeMetrics.heroHeight : HomeMetrics.artworkSize)
                     .clipShape(.rect(cornerRadius: large ? 16 : 8))
                     .overlay { if !large { RoundedRectangle(cornerRadius: 8).strokeBorder(.black.opacity(0.10), lineWidth: 1 / displayScale) } }
-                    .shadow(color: .black.opacity(large ? 0.18 : 0), radius: 16, x: 0, y: 12)
+                    .background {
+                        if large {
+                            RoundedRectangle(cornerRadius: 16)
+                                .fill(.white)
+                                .shadow(color: .black.opacity(0.18), radius: 16, x: 0, y: 12)
+                        }
+                    }
                 if !large {
                     VStack(alignment: .leading, spacing: 5) {
                         Text(item.title).font(.subheadline).foregroundStyle(.primary).lineLimit(2)

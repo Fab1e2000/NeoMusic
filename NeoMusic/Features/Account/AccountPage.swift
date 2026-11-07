@@ -147,7 +147,7 @@ private struct AccountSettingsPage: View {
         .listSectionSpacing(16)
         .navigationTitle("账户设置")
         .navigationBarTitleDisplayMode(.inline)
-        .confirmationDialog("退出网易云音乐？", isPresented: $confirmsLogout, titleVisibility: .visible) {
+        .alert("", isPresented: $confirmsLogout) {
             Button("退出登录", role: .destructive) {
                 Task {
                     do { try await account.logout() }
@@ -155,8 +155,9 @@ private struct AccountSettingsPage: View {
                     catch { logoutError = error.localizedDescription }
                 }
             }
+            Button("取消", role: .cancel) {}
         } message: {
-            Text("退出后仍可使用本地音乐。")
+            Text("退出网易云音乐？退出后仍可使用本地音乐。")
         }
         .alert("退出未完成", isPresented: Binding(get: { logoutError != nil }, set: {
             if !$0 { logoutError = nil }

@@ -16,6 +16,25 @@ final class PlaylistLibraryTests: XCTestCase {
                         trackNumber: 1, artwork: .missing)
     }
 
+    func testCollectedPlaylistDeletionAsksTheAccountAndCanThenDropTheCard() {
+        var item = LibraryPlaylistItem(id: "netease-playlist:1:9", title: "Collected", artwork: .playlist, sourceOwnerID: "1")
+        item.isSubscribed = true
+        let page = PlaylistLibrary(playlists: [])
+        page.replaceOnlinePlaylists(items: [item], songs: [:], ownerID: "1")
+        page.retainOnlinePlaylist(item, songs: [])
+        var requested: String?
+        page.unsubscribeOnlinePlaylist = { requested = $0 }
+        XCTAssertTrue(page.canUnsubscribe(item.id))
+        XCTAssertFalse(page.canDelete(item.id))
+        page.deletePlaylist(item.id)
+        XCTAssertEqual(requested, item.id)
+        XCTAssertNotNil(page.playlist(item.id))
+        page.releaseRetainedOnlinePlaylist(item.id)
+        XCTAssertNil(page.playlist(item.id))
+        page.replaceOnlinePlaylists(items: [], songs: [:], ownerID: "1")
+        XCTAssertNil(page.playlist(item.id))
+    }
+
     func testMixedPlaylistRestoresSavedOnlineMetadataOnlyAfterMatchingIdentity() throws {
         let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

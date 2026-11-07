@@ -122,11 +122,12 @@ private struct DownloadSongsPreview: View {
         }
         .listStyle(.plain)
         .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.6), trigger: feedback)
-        .confirmationDialog("移除下载", isPresented: Binding(get: { confirmation != nil }, set: { if !$0 { confirmation = nil } })) {
+        .alert("", isPresented: Binding(get: { confirmation != nil }, set: { if !$0 { confirmation = nil } })) {
             Button("移除下载", role: .destructive) {
                 if let index = confirmation { update(index, to: .idle) }
                 confirmation = nil
             }
+            Button("取消", role: .cancel) {}
         } message: {
             Text("这首歌将从本机移除。使用同一文件的其他播放列表也需要联网播放，收藏和播放列表会保留。")
         }
@@ -189,8 +190,9 @@ private struct DownloadActionsPreview: View {
             .padding(20)
         }
         .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.6), trigger: feedback)
-        .confirmationDialog("移除下载", isPresented: $showRemoval) {
+        .alert("", isPresented: $showRemoval) {
             Button("移除下载", role: .destructive) { removed = true }
+            Button("取消", role: .cancel) {}
         } message: {
             Text("将移除这张专辑的本机文件。使用这些歌曲的其他播放列表也需要联网播放，收藏和播放列表会保留。")
         }

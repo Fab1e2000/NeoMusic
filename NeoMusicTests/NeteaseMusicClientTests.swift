@@ -320,6 +320,38 @@ final class NeteaseMusicClientTests: XCTestCase, @unchecked Sendable {
         XCTAssertFalse(store.loadingPlaylists.contains(2))
         await store.invalidate()
     }
+    @MainActor func testUserPlaylistsMarkOnlyCollectedListsFromOtherPeople() async throws {
+        let client = makeClient([#"{"code":200,"playlist":[{"id":3,"name":"Mine","creator":{"userId":1,"nickname":"User"},"trackCount":0,"subscribed":false},{"id":9,"name":"Collected","creator":{"userId":7,"nickname":"Other"},"trackCount":1,"subscribed":true},{"id":2,"name":"Favorites","creator":{"userId":1,"nickname":"User"},"trackCount":0,"specialType":5,"subscribed":true}],"more":false}"#])
+        let lists = try await client.playlists(userID: 1, credential: credential())
+        XCTAssertEqual(lists.map(\.isSubscribed), [false, true, false])
+        XCTAssertTrue(lists[2].isFavorites)
+    }
+
+    @MainActor func testPlaylistSubscriptionUsesWebAPI() async throws {
+        let client = makeClient([#"{"code":200}"#, #"{"code":200}"#])
+        try await client.setPlaylistSubscribed(id: 9, subscribed: true, credential: credential())
+        try await client.setPlaylistSubscribed(id: 9, subscribed: false, credential: credential())
+        XCTAssertEqual(MusicFixtureProtocol.paths.withLock { $0 }, ["/weapi/playlist/subscribe", "/weapi/playlist/unsubscribe"])
+    }
+
+    @MainActor func testSubscriptionRefreshesTheCollectedListAndRejectsAnUnconfirmedWrite() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let collected = #"{"code":200,"playlist":[{"id":9,"name":"Collected","creator":{"userId":7,"nickname":"Other"},"trackCount":1,"subscribed":true}],"more":false}"#
+        let client = makeClient([#"{"code":200}"#, collected, #"{"code":301,"msg":"暂时无法收藏"}"#, collected])
+        let store = NeteaseMusicStore(client: client, directory: folder)
+        await store.activate(try .init(profile: .init(userID: 1, nickname: "User", avatarURL: nil), credential: credential()), refresh: false)
+        try await store.setPlaylistSubscribed(id: 9, subscribed: true)
+        XCTAssertEqual(store.playlists.map(\.id), [9])
+        XCTAssertEqual(store.playlists.first?.isSubscribed, true)
+        do {
+            try await store.setPlaylistSubscribed(id: 9, subscribed: false)
+            XCTFail("Unconfirmed cancellation accepted")
+        } catch { XCTAssertEqual(error as? NeteaseWebResponseError, .init(code: 301, message: "暂时无法收藏")) }
+        XCTAssertEqual(store.playlists.map(\.id), [9])
+        await store.invalidate()
+    }
+
     @MainActor func testPlaylistPaginationUsesLimitRatherThanExtraSystemRowCount() async throws {
         func item(_ id: Int) -> [String: Any] { ["id": id, "name": "List", "creator": ["userId": 1, "nickname": "User"], "trackCount": 0] }
         let first = try JSONSerialization.data(withJSONObject: ["code": 200, "playlist": (0...200).map(item), "more": true])

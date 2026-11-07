@@ -5,7 +5,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct ReferenceNowPlayingView: View {
-    private static let portraitHorizontalPadding: CGFloat = 32
+    fileprivate static let portraitHorizontalPadding: CGFloat = 32
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var accessibilityVoiceOverEnabled
@@ -16,7 +16,7 @@ struct ReferenceNowPlayingView: View {
     @State private var showsLyricsControls = true
     @State private var appleMusicControlsActivityGeneration = 0
     @State private var isQueueSongHeaderHidden = false
-    @State private var queueSongHeaderOffset: CGFloat = 0
+    @State private var queueHeaderOffset = QueueHeaderOffset()
     @State private var geometryState: NowPlayingGeometry
     @State private var backdropAnchor = NowPlayingBackdropAnchor()
     @State private var backdropImage: UIImage?
@@ -214,19 +214,22 @@ struct ReferenceNowPlayingView: View {
             residentAppleMusicLyricsPage(for: song)
 
             if page != .artwork {
-                sharedPortraitSongHeader(for: song)
-                    .padding(.top, NowPlayingSongHeader.topInset)
-                    .offset(y: sharedPortraitSongHeaderOffset)
-                    .opacity(
-                        NowPlayingSongHeader.scrollFadeOpacity(
-                            scrolled: -sharedPortraitSongHeaderOffset
-                        )
+                QueueLinkedSongHeader(
+                    song: song,
+                    page: page,
+                    offset: queueHeaderOffset,
+                    artworkNamespace: pageArtworkNamespace,
+                    onImportLyrics: {
+                        importTrackID = song.id
+                        importingLyrics = true
+                    }
+                )
+                .padding(.top, NowPlayingSongHeader.topInset)
+                .transition(
+                    NowPlayingPageTransition.songHeader(
+                        reducesMotion: accessibilityReduceMotion
                     )
-                    .transition(
-                        NowPlayingPageTransition.songHeader(
-                            reducesMotion: accessibilityReduceMotion
-                        )
-                    )
+                )
             }
 
         }
@@ -236,49 +239,12 @@ struct ReferenceNowPlayingView: View {
             }
         }
         .overlay {
-            GeometryReader { _ in
-                if portraitArtworkFrame.width > 0 {
-                    NowPlayingPortraitArtwork(
-                        song: song,
-                        isArtworkPage: page == .artwork
-                    )
-                    .frame(
-                        width: portraitArtworkFrame.width,
-                        height: portraitArtworkFrame.height
-                    )
-                    .popupTransitionTarget()
-                    .position(
-                        x:
-                            portraitArtworkFrame.midX
-                            + Self.portraitHorizontalPadding,
-                        y: portraitArtworkFrame.midY
-                    )
-                    .animation(
-                        accessibilityReduceMotion
-                            ? nil
-                            : NowPlayingPageTransition
-                                .motion
-                                .artworkResize
-                                .animation,
-                        value: isPortraitArtworkExpanded
-                    )
-                    .allowsHitTesting(false)
-                }
-            }
-            .mask {
-                GeometryReader { geometry in
-                    // The queue cover follows the list behind its top edge.
-                    // Keep the artwork page's shadow uncut beneath the handle.
-                    VStack(spacing: 0) {
-                        NowPlayingQueueTopFade(height: queueHeaderFadeHeight)
-                        Rectangle()
-                    }
-                        .padding(page == .queue ? 0 : -max(geometry.size.width, geometry.size.height))
-                }
-            }
-            .padding(
-                .horizontal,
-                -Self.portraitHorizontalPadding
+            QueueLinkedArtwork(
+                song: song,
+                page: page,
+                offset: queueHeaderOffset,
+                artworkPageFrame: artworkPageFrame,
+                reducesMotion: accessibilityReduceMotion
             )
         }
         .coordinateSpace(
@@ -352,8 +318,8 @@ struct ReferenceNowPlayingView: View {
             onSongHeaderHiddenChange: {
                 isQueueSongHeaderHidden = $0
             },
-            onSongHeaderOffsetChange: {
-                queueSongHeaderOffset = $0
+            onSongHeaderOffsetChange: { offset in
+                if queueHeaderOffset.points != offset { queueHeaderOffset.points = offset }
             }
         )
         // 列表通栏，超出外层水平内边距；先放宽再裁剪，再收回，裁剪范围才是整屏宽度。
@@ -445,65 +411,6 @@ struct ReferenceNowPlayingView: View {
             selectedPage: page,
             transition: pageTransition.transition
         )
-    }
-
-    private func sharedPortraitSongHeader(
-        for song: ReferenceTrack
-    ) -> some View {
-        NowPlayingSongHeader(
-            song: song,
-            artworkNamespace: pageArtworkNamespace,
-            usesReferenceLayout: true,
-            usesArtworkTransition: false,
-            showsArtwork: false,
-            onImportLyrics: {
-                importTrackID = song.id
-                importingLyrics = true
-            }
-        )
-    }
-
-    private var portraitArtworkFrame: CGRect {
-        if page == .artwork {
-            return displayedArtworkPageFrame
-        }
-
-        return CGRect(
-            x: 0,
-            y: NowPlayingSongHeader.topInset + sharedPortraitSongHeaderOffset,
-            width: NowPlayingSongHeader.referenceHeight,
-            height: NowPlayingSongHeader.referenceHeight
-        )
-    }
-
-    private var displayedArtworkPageFrame: CGRect {
-        guard !isPortraitArtworkExpanded else {
-            return artworkPageFrame
-        }
-        let horizontalInset =
-            artworkPageFrame.width
-            * (1 - NowPlayingArtworkPage.pausedArtworkScale)
-            / 2
-        let verticalInset =
-            artworkPageFrame.height
-            * (1 - NowPlayingArtworkPage.pausedArtworkScale)
-            / 2
-        return artworkPageFrame.insetBy(
-            dx: horizontalInset,
-            dy: verticalInset
-        )
-    }
-
-    private var isPortraitArtworkExpanded: Bool {
-        player.isPlaying
-    }
-
-    private var sharedPortraitSongHeaderOffset: CGFloat {
-        page == .queue ? queueSongHeaderOffset : 0
-    }
-
-    private var queueHeaderFadeHeight: CGFloat {
-        page == .queue ? min(24, max(0, -queueSongHeaderOffset)) : 0
     }
 
     private func pageContentTransition(
@@ -722,4 +629,92 @@ private struct NowPlayingLyricsEntranceTaskID: Equatable {
     let songID: ReferenceTrack.ID?
     let preparedSongID: ReferenceTrack.ID?
     let isContentPrepared: Bool
+}
+
+/// Queue scroll writes here. Only the header and floating artwork read it, so the rest of the player stays put.
+@MainActor @Observable
+private final class QueueHeaderOffset {
+    var points: CGFloat = 0
+}
+
+private struct QueueLinkedSongHeader: View {
+    let song: ReferenceTrack
+    let page: NowPlayingPage
+    let offset: QueueHeaderOffset
+    let artworkNamespace: Namespace.ID
+    let onImportLyrics: () -> Void
+
+    private var translation: CGFloat { page == .queue ? offset.points : 0 }
+
+    var body: some View {
+        NowPlayingSongHeader(
+            song: song,
+            artworkNamespace: artworkNamespace,
+            usesReferenceLayout: true,
+            usesArtworkTransition: false,
+            showsArtwork: false,
+            onImportLyrics: onImportLyrics
+        )
+        .offset(y: translation)
+        .opacity(NowPlayingSongHeader.scrollFadeOpacity(scrolled: -translation))
+    }
+}
+
+private struct QueueLinkedArtwork: View {
+    @Environment(ReferencePlayerState.self) private var player
+    let song: ReferenceTrack
+    let page: NowPlayingPage
+    let offset: QueueHeaderOffset
+    let artworkPageFrame: CGRect
+    let reducesMotion: Bool
+
+    private var headerOffset: CGFloat { page == .queue ? offset.points : 0 }
+    private var fadeHeight: CGFloat { page == .queue ? min(24, max(0, -offset.points)) : 0 }
+    private var expanded: Bool { player.isPlaying }
+    private var frame: CGRect {
+        if page == .artwork { return displayedFrame }
+        return CGRect(
+            x: 0,
+            y: NowPlayingSongHeader.topInset + headerOffset,
+            width: NowPlayingSongHeader.referenceHeight,
+            height: NowPlayingSongHeader.referenceHeight
+        )
+    }
+    private var displayedFrame: CGRect {
+        guard !expanded else { return artworkPageFrame }
+        let horizontalInset = artworkPageFrame.width * (1 - NowPlayingArtworkPage.pausedArtworkScale) / 2
+        let verticalInset = artworkPageFrame.height * (1 - NowPlayingArtworkPage.pausedArtworkScale) / 2
+        return artworkPageFrame.insetBy(dx: horizontalInset, dy: verticalInset)
+    }
+
+    var body: some View {
+        GeometryReader { _ in
+            if frame.width > 0 {
+                NowPlayingPortraitArtwork(song: song, isArtworkPage: page == .artwork)
+                    .frame(width: frame.width, height: frame.height)
+                    .popupTransitionTarget()
+                    .position(
+                        x: frame.midX + ReferenceNowPlayingView.portraitHorizontalPadding,
+                        y: frame.midY
+                    )
+                    .animation(
+                        reducesMotion ? nil : NowPlayingPageTransition.motion.artworkResize.animation,
+                        value: expanded
+                    )
+                    .allowsHitTesting(false)
+            }
+        }
+        .mask {
+            GeometryReader { geometry in
+                // The queue cover follows the list behind its top edge.
+                // Keep the artwork page's shadow uncut beneath the handle.
+                VStack(spacing: 0) {
+                    NowPlayingQueueTopFade(height: fadeHeight)
+                    Rectangle()
+                }
+                .padding(page == .queue ? 0 : -max(geometry.size.width, geometry.size.height))
+            }
+        }
+        .padding(.horizontal, -ReferenceNowPlayingView.portraitHorizontalPadding)
+    }
 }

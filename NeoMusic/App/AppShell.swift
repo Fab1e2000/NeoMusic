@@ -135,17 +135,19 @@ struct PlaceholderTab: View {
     }
 }
 
-/// 整组播放会清除手动加入的队列时的确认，对照 Apple Music：只有一句说明，取消与红色“清除队列”并排。
+/// 整组播放会清除手动加入的队列时的确认。居中提示，只有一句说明。
 private struct ClearQueueConfirmation: ViewModifier {
     let player: NowPlayingModel?
 
     func body(content: Content) -> some View {
-        content.alert("播放此项目将清除队列。", isPresented: Binding(
+        content.alert("", isPresented: Binding(
             get: { player?.pendingPlay != nil },
             set: { if !$0 { player?.pendingPlay = nil } }
         )) {
-            Button("取消", role: .cancel) {}
             Button("清除队列", role: .destructive) { player?.confirmPendingPlay() }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("播放此项目将清除队列。")
         }
     }
 }

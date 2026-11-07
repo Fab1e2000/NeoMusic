@@ -99,19 +99,52 @@ struct SearchPageView: View {
             }
             ZStack {
                 ForEach(MusicSearchKind.allCases) { kind in
-                    resultList(kind: kind)
-                        .opacity(kind == model.kind ? 1 : 0)
-                        .allowsHitTesting(kind == model.kind)
-                        .accessibilityHidden(kind != model.kind)
+                    let active = kind == model.kind
+                    SearchResultList(
+                        kind: kind,
+                        groups: active ? model.groups : (model.cachedGroups[kind] ?? []),
+                        active: active,
+                        error: active ? model.error : nil,
+                        moreError: active ? model.moreError : nil,
+                        hasMore: active && model.hasMore,
+                        isLoading: active && model.isLoading,
+                        query: active ? model.query : "",
+                        submitted: active && model.submitted,
+                        model: model
+                    )
+                    .equatable()
+                    .opacity(active ? 1 : 0)
+                    .allowsHitTesting(active)
+                    .accessibilityHidden(!active)
                 }
             }
         }
     }
 
-    private func resultList(kind: MusicSearchKind) -> some View {
-        let active = kind == model.kind
-        let groups = active ? model.groups : model.cachedGroups[kind, default: []]
-        return List {
+    @ViewBuilder private var availability: some View {
+        if model.isLoading { ProgressView() }
+        else if let error = model.error {
+            ContentUnavailableView { Label("暂时无法加载", systemImage: "wifi.exclamationmark") }
+                description: { Text(error) } actions: { Button("重试") { model.onRetry?() } }
+        } else if model.submitted { ContentUnavailableView.search(text: model.query) }
+    }
+}
+
+/// One list per search kind. Equality skips rebuilding the hidden lists when only the selected kind changes.
+private struct SearchResultList: View {
+    let kind: MusicSearchKind
+    let groups: [MusicSearchGroup]
+    let active: Bool
+    let error: String?
+    let moreError: String?
+    let hasMore: Bool
+    let isLoading: Bool
+    let query: String
+    let submitted: Bool
+    let model: SearchPageModel
+
+    var body: some View {
+        List {
             ForEach(groups) { group in
                 if kind == .combined {
                     Section {
@@ -127,9 +160,9 @@ struct SearchPageView: View {
                     }
                 } else { ForEach(group.items) { item in row(item) } }
             }
-            if active, let error = model.error, !groups.isEmpty { SearchInlineError(message: error) { model.onRetry?() } }
-            if active, let error = model.moreError { SearchInlineError(message: error) { model.onMore?() } }
-            else if active, model.hasMore {
+            if active, let error, !groups.isEmpty { SearchInlineError(message: error) { model.onRetry?() } }
+            if active, let moreError { SearchInlineError(message: moreError) { model.onMore?() } }
+            else if active, hasMore {
                 HStack { Spacer(); ProgressView(); Spacer() }.listRowSeparator(.hidden)
                     .onAppear { model.onMore?() }
             }
@@ -145,12 +178,21 @@ struct SearchPageView: View {
             .listRowInsets(EdgeInsets(top: 6, leading: 20, bottom: 6, trailing: 20))
             .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] + 68 }
     }
+
     @ViewBuilder private var availability: some View {
-        if model.isLoading { ProgressView() }
-        else if let error = model.error {
+        if isLoading { ProgressView() }
+        else if let error {
             ContentUnavailableView { Label("暂时无法加载", systemImage: "wifi.exclamationmark") }
                 description: { Text(error) } actions: { Button("重试") { model.onRetry?() } }
-        } else if model.submitted { ContentUnavailableView.search(text: model.query) }
+        } else if submitted { ContentUnavailableView.search(text: query) }
+    }
+}
+
+extension SearchResultList: @MainActor Equatable {
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.kind == rhs.kind && lhs.groups == rhs.groups && lhs.active == rhs.active
+            && lhs.error == rhs.error && lhs.moreError == rhs.moreError && lhs.hasMore == rhs.hasMore
+            && lhs.isLoading == rhs.isLoading && lhs.query == rhs.query && lhs.submitted == rhs.submitted
     }
 }
 

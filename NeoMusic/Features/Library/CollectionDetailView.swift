@@ -27,7 +27,6 @@ struct CollectionDetail {
 struct CollectionDetailView: View {
     let detail: CollectionDetail
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.accessibilityReduceMotion) private var reducesMotion
     @Environment(\.songMenuActions) private var songActions
     @Environment(\.collectionMenuActions) private var collectionActions
     @Environment(\.libraryDownloads) private var downloads
@@ -37,8 +36,6 @@ struct CollectionDetailView: View {
     @Environment(\.libraryNavigationPreview) private var navigationPreview
     @State private var query = ""
     @State private var isConfirmingAlbumDeletion = false
-    /// 原生滚动距离：上滑为正、下拉为负，驱动星标缩放、视差与虚化。
-    @State private var scrollDistance: CGFloat = 0
 
     private var isFavorites: Bool {
         if case .favorites = detail.artwork { return true }
@@ -89,11 +86,14 @@ struct CollectionDetailView: View {
                 }
             }
             .menuOrder(.fixed)
-            .confirmationDialog(detail.route?.deletionMessage ?? "", isPresented: $isConfirmingAlbumDeletion, titleVisibility: .visible) {
+            .alert("", isPresented: $isConfirmingAlbumDeletion) {
                 Button("从资料库删除", role: .destructive) {
                     guard let route = detail.route else { return }
                     closeDetail(); collectionActions.delete(route)
                 }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text(detail.route?.deletionMessage ?? "")
             }
         }
     }
@@ -147,9 +147,6 @@ struct CollectionDetailView: View {
         .listSectionSpacing(0)
         .environment(\.defaultMinListRowHeight, 0)
         .scrollContentBackground(.hidden)
-        .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, distance in
-            scrollDistance = distance
-        }
         .scrollEdgeEffectHidden(true, for: .top)
     }
 
@@ -201,21 +198,7 @@ struct CollectionDetailView: View {
     /// “喜爱歌曲”的星标直接画在底色上，不显示封面边框与阴影。
     @ViewBuilder private var headerArtwork: some View {
         if case .favorites = detail.artwork {
-            // 按 Apple Music 录屏实测：星标宽 237pt，顶端比封面区域高 33pt；
-            // 上滑时只随内容移动约 76%，滚过约 110pt 后逐渐虚化、变淡。
-            let distance = max(scrollDistance, 0)
-            Color.clear.overlay(alignment: .top) {
-                Image(systemName: "star.fill")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 241)
-                    .foregroundStyle(Artwork.favoritesRed)
-                    .scaleEffect(reducesMotion ? 1 : 1 + max(-scrollDistance, 0) / 266, anchor: .bottom)
-                    .blur(radius: max(distance - 110, 0) * 0.15)
-                    .opacity(1 - min(max(distance - 130, 0) / 360, 1))
-                    .offset(y: -33 + distance * 0.24)
-                    .accessibilityHidden(true)
-            }
+            FavoritesHeaderStar()
         } else {
             ArtworkView(artwork: displayedArtwork,
                         contentID: matchingPreview?.contentID ?? detail.route.map { String(describing: $0) },
@@ -245,6 +228,33 @@ struct CollectionDetailView: View {
     private var summary: String {
         let minutes = detail.songs.reduce(0) { $0 + $1.duration } / 60
         return "\(detail.songs.count)首歌，\(minutes)分钟"
+    }
+}
+
+/// 滚动距离只留在星标上。播放列表其余行不因每个像素重算。
+private struct FavoritesHeaderStar: View {
+    @Environment(\.accessibilityReduceMotion) private var reducesMotion
+    @State private var scrollDistance: CGFloat = 0
+
+    var body: some View {
+        // 按 Apple Music 录屏实测：星标宽 237pt，顶端比封面区域高 33pt；
+        // 上滑时只随内容移动约 76%，滚过约 110pt 后逐渐虚化、变淡。
+        let distance = max(scrollDistance, 0)
+        Color.clear.overlay(alignment: .top) {
+            Image(systemName: "star.fill")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 241)
+                .foregroundStyle(Artwork.favoritesRed)
+                .scaleEffect(reducesMotion ? 1 : 1 + max(-scrollDistance, 0) / 266, anchor: .bottom)
+                .blur(radius: max(distance - 110, 0) * 0.15)
+                .opacity(1 - min(max(distance - 130, 0) / 360, 1))
+                .offset(y: -33 + distance * 0.24)
+                .accessibilityHidden(true)
+        }
+        .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, distance in
+            scrollDistance = distance
+        }
     }
 }
 
@@ -793,19 +803,10 @@ private final class AlbumSongsController: UICollectionViewController {
         let remove: () -> Void = { [weak self] in
             self?.environment.songMenuActions.delete(song)
         }
-        if fromSwipe, environment.libraryDownloads?.state(of: song.id) == .downloaded {
-            CenteredActionSheet.present(message: "从资料库移除这首歌？音乐文件仍保留在“音乐”文件夹，相关播放列表记录会移除。",
-                actions: [.init(title: "从资料库删除", isDestructive: true, handler: remove)])
-        } else {
-            let alert = UIAlertController(title: nil, message: "确定要从资料库删除这首歌吗？这也会将其从你制作的所有播放列表移除。", preferredStyle: .actionSheet)
-            alert.addAction(UIAlertAction(title: "从资料库删除", style: .destructive) { _ in remove() })
-            alert.addAction(UIAlertAction(title: "取消", style: .cancel))
-            if let path = source.indexPath(for: .song(song.id)), let cell = collectionView.cellForItem(at: path) {
-                alert.popoverPresentationController?.sourceView = cell
-                alert.popoverPresentationController?.sourceRect = cell.bounds
-            }
-            present(alert, animated: true)
-        }
+        let message = fromSwipe && environment.libraryDownloads?.state(of: song.id) == .downloaded
+            ? "从资料库移除这首歌？音乐文件仍保留在“音乐”文件夹，相关播放列表记录会移除。"
+            : "确定要从资料库删除这首歌吗？这也会将其从你制作的所有播放列表移除。"
+        CenteredActionSheet.present(message: message, actions: [.init(title: "从资料库删除", isDestructive: true, handler: remove)])
     }
 }
 

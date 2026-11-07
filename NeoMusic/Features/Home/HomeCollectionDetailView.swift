@@ -6,6 +6,7 @@ struct ExternalPlaylistActions {
     var togglePin: (() -> Void)? = nil
     var addSongs: () -> Void
     var moveToFolder: (() -> Void)? = nil
+    var collect: (() -> Void)? = nil
 }
 
 struct HomeCollectionDetailView: View {

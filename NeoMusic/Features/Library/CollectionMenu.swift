@@ -337,7 +337,6 @@ struct CollectionCardLink<Label: View>: View {
                 .contentShape(.rect)
                 .nativeContextMenu(identity: item.id,
                                    menu: {
-                                       // 删除请求交给本卡片：确认框从卡片弹出，与 Apple Music 一致。
                                        var local = actions
                                        local.requestDelete = { _ in isConfirmingDeletion = true }
                                        return (menuSections?(local) ?? local.sections(for: item, route: route))
@@ -348,9 +347,11 @@ struct CollectionCardLink<Label: View>: View {
                                    commit: { NavigationDiagnostics.event("Card.commit", page: route.diagnosticPage); openLibraryRoute(item, sourceProvider: $0) }, tap: tap,
                                    drag: drag, drop: drop)
                 .padding(-8)
-                .confirmationDialog(route.deletionMessage, isPresented: $isConfirmingDeletion, titleVisibility: .visible) {
+                .alert("", isPresented: $isConfirmingDeletion) {
                     Button("从资料库删除", role: .destructive) { withAnimation { actions.delete(route) } }
                     Button("取消", role: .cancel) {}
+                } message: {
+                    Text(route.deletionMessage)
                 }
                 // 专辑与播放列表共用 SwiftUI 原生卡片 zoom 转场。
                 .modifier(ZoomSource(route: route, namespace: zoomNamespace))

@@ -71,14 +71,10 @@ struct NowPlayingLyricsPage: View {
             accessibilityReduceMotion ? nil : .smooth(duration: 0.3),
             value: presentation
         )
-        .onChange(of: activeLineID, initial: true) { _, id in
-            if isActive { lastActiveLineID = id }
+        .background {
+            // Progress ticks five times a second. Publish a new line only when the focused row changes.
+            LyricLineObserver(lyrics: lyrics, isActive: isActive, fallback: lastActiveLineID, lineID: $lastActiveLineID)
         }
-    }
-
-    private var activeLineID: Int? {
-        guard isActive, let lyrics else { return lastActiveLineID }
-        return lyrics.activeLine(at: player.progress)
     }
 
     private var songHeader: some View {
@@ -100,7 +96,7 @@ struct NowPlayingLyricsPage: View {
                     ContentUnavailableView("暂无歌词", systemImage: "quote.bubble")
                 } else if lyrics.isTimed {
                     AppleMusicLocalLyricsView(
-                        lyrics: lyrics, playerFrame: playerFrame, activeID: activeLineID,
+                        lyrics: lyrics, playerFrame: playerFrame, activeID: lastActiveLineID,
                         bottomOverlayHeight: appleMusicBottomOverlayHeight, isActive: isActive,
                         isInterfaceHidden: Binding(get: { isInterfaceHidden }, set: { onInterfaceVisibilityChange?(!$0) }),
                         onSeek: { player.seek(to: $0) },
@@ -155,4 +151,27 @@ struct NowPlayingLyricsPage: View {
             + lyricsContentSpacing
     }
 
+}
+
+/// Reads playback progress without invalidating the lyric rows until the active line changes.
+private struct LyricLineObserver: View {
+    let lyrics: ReferenceLyrics?
+    let isActive: Bool
+    let fallback: Int?
+    @Binding var lineID: Int?
+    @Environment(ReferencePlayerState.self) private var player
+
+    private var line: Int? {
+        guard isActive, let lyrics else { return fallback }
+        return lyrics.activeLine(at: player.progress)
+    }
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
+            .onChange(of: line, initial: true) { _, value in
+                if lineID != value { lineID = value }
+            }
+    }
 }

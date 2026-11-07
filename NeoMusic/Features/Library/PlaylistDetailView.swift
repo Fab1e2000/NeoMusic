@@ -219,13 +219,14 @@ struct PlaylistDetailView: View {
             if externalActions == nil {
                 Text("刚刚更新").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary).padding(.top, 4 + 1.0 / 3)
             }
-            if !tracks.isEmpty {
+            if !tracks.isEmpty || playlist.offersCollection {
                 HStack(spacing: 14) {
                     Button {
                         guard !tracks.isEmpty else { return }
                         actionFeedback &+= 1
                         collectionActions.play(.playlist(playlistID), true)
                     } label: { actionCircle("随机播放", image: "shuffle") }
+                    .disabled(tracks.isEmpty)
                     Button {
                         guard !tracks.isEmpty else { return }
                         actionFeedback &+= 1
@@ -240,12 +241,27 @@ struct PlaylistDetailView: View {
                             .frame(width: 160, height: 48)
                             .background(Color.primary, in: .capsule)
                     }
-                    CollectionDownloadButton(route: .playlist(playlistID), songs: tracks)
+                    .disabled(tracks.isEmpty)
+                    if playlist.offersCollection {
+                        Button {
+                            actionFeedback &+= 1
+                            externalActions?.collect?()
+                        } label: {
+                            Image(systemName: "plus")
+                                .font(.system(size: 17, weight: .semibold))
+                                .foregroundStyle(.primary)
+                                .frame(width: 48, height: 48)
+                                .background(Color.primary.opacity(0.08), in: .circle)
+                        }
+                        .accessibilityLabel("收藏歌单")
+                    } else {
+                        CollectionDownloadButton(route: .playlist(playlistID), songs: tracks)
+                    }
                 }
                 .buttonStyle(.plain)
                 .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.6), trigger: actionFeedback)
                 .padding(.top, 15)
-                CollectionDownloadSummary(route: .playlist(playlistID))
+                if !playlist.offersCollection { CollectionDownloadSummary(route: .playlist(playlistID)) }
             }
         }
         .frame(maxWidth: .infinity)
@@ -377,6 +393,9 @@ struct PlaylistDetailView: View {
                 playNext: { collectionActions.playNext(.playlist(playlistID)) },
                 playLater: { collectionActions.playLater(.playlist(playlistID)) })
         ], firstSectionIsRow: false)
+        if playlist.isSubscribed { Section {
+            Button("从资料库删除", systemImage: "trash", role: .destructive) { library.pendingDeletion = playlist }
+        } }
     }
 
     @ViewBuilder private func libraryMenu(_ playlist: LibraryPlaylistItem) -> some View {
@@ -420,7 +439,7 @@ struct PlaylistDetailView: View {
                 playNext: { collectionActions.playNext(.playlist(playlistID)) },
                 playLater: { collectionActions.playLater(.playlist(playlistID)) })
         ], firstSectionIsRow: false)
-        if !playlist.isReadOnly { Section {
+        if !playlist.isReadOnly || playlist.isSubscribed { Section {
             Button("从资料库删除", systemImage: "trash", role: .destructive) { library.pendingDeletion = playlist }
         } }
     }
@@ -575,18 +594,6 @@ private struct PlaylistEditor: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消", systemImage: "xmark") { showsDiscard = true }.tint(.primary)
-                        .popover(isPresented: $showsDiscard) {
-                            VStack(alignment: .leading, spacing: 0) {
-                                Text(title).font(.headline).padding(.leading, 14).padding(.bottom, 8)
-                                Text("确定要放弃更改吗？").font(.subheadline).foregroundStyle(.secondary)
-                                    .padding(.leading, 14).padding(.bottom, 20)
-                                Button("放弃更改", role: .destructive) { showsDiscard = false; dismiss() }
-                                    .frame(maxWidth: .infinity, minHeight: 48)
-                                    .background(Color.primary.opacity(0.125), in: .capsule)
-                            }
-                            .padding(.horizontal, 16).padding(.top, 22).padding(.bottom, 16).frame(width: 240)
-                            .presentationCompactAdaptation(.popover)
-                        }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("完成", systemImage: "checkmark") {
@@ -615,8 +622,13 @@ private struct PlaylistEditor: View {
             }
             .modifier(PlaylistCoverPicker(selection: coverSelection))
             .interactiveDismissDisabled()
-            // 下拉时与点叉号一样，弹出锚定在叉号上的“放弃更改”确认。
             .onSheetDismissAttempt { showsDiscard = true }
+            .alert("", isPresented: $showsDiscard) {
+                Button("放弃更改", role: .destructive) { dismiss() }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text("确定要放弃更改吗？")
+            }
             .onAppear {
                 guard let playlist = library.playlist(playlistID) else { return }
                 title = playlist.title

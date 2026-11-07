@@ -72,6 +72,7 @@ import Observation
             guard let self else { return false }
             do { try await self.load(id, complete: true); return true } catch { return false }
         }
+        detailLibrary.unsubscribeOnlinePlaylist = { [weak self] id in self?.changeCollection(id, subscribed: false) }
         observe()
         observeCurrentSong()
         observeRecent()
@@ -103,12 +104,13 @@ import Observation
             _ = account.music?.likedIDs
             _ = account.music?.likedAt
             _ = account.music?.playlists
-            _ = account.music?.songs
-            _ = account.music?.playlistTracks
+            // likedSongRevision, not the song dictionary: another playlist's page must not rebuild this feed.
+            _ = account.music?.likedSongRevision
         } onChange: { [weak self] in
             Task { @MainActor in self?.observe() }
         }
         publish()
+        syncCollectedPlaylists()
     }
     private func observeCurrentSong() {
         withObservationTracking {
@@ -271,6 +273,18 @@ import Observation
         if model.recent != recent { model.recent = recent }
     }
 
+    /// Feed and quick-action covers are the only home images that replace the visible sections.
+    /// A song cover that is not on screen skips that rebuild.
+    private func artworkAffectsVisibleHome(_ urls: Set<URL>) -> Bool {
+        guard let home = account.home, home.userID == account.profile?.userID else { return false }
+        if home.displayFeedBlocks.contains(where: { block in
+            block.resources.contains { $0.artworkURL.map(urls.contains) == true }
+        }) { return true }
+        return NeteaseHomeQuickAction.allCases.contains { action in
+            home.quickActionArtwork(action).map(urls.contains) == true
+        }
+    }
+
     private func publishArtwork(_ urls: Set<URL>) {
         guard let home = account.home, home.userID == account.profile?.userID,
               owner == account.profile.map({ String($0.userID) }) else { return }
@@ -281,7 +295,7 @@ import Observation
                 if model.recommendations[index].artwork != cover { model.recommendations[index].artwork = cover }
             }
         }
-        publishFeed()
+        if artworkAffectsVisibleHome(urls) { publishFeed() }
         var songs: [String: LibrarySongItem] = [:]
         for remote in urls {
             for value in artworkSongs[remote] ?? [] {
@@ -325,6 +339,9 @@ import Observation
         var songImages = songs
         for item in library.playlists where item.sourceOwnerID == owner && item.id.hasPrefix(prefix) {
             guard let number = Int64(item.id.dropFirst(prefix.count)), let detail = home.cachedDetail(id: number) else { continue }
+            let playlistMatches = detail.playlist.artworkURL.map { urls?.contains($0) != false } == true
+            let songMatches = detail.songs.contains { $0.artworkURL.map { urls?.contains($0) != false } == true }
+            guard playlistMatches || songMatches else { continue }
             if let remote = detail.playlist.artworkURL, urls?.contains(remote) != false {
                 if let file = home.cachedArtworkURL(remote: remote) { covers[item.id] = .file(file) }
                 else if urls?.contains(remote) == true {
@@ -585,6 +602,7 @@ import Observation
             let retained = LocalLibrary.playlistLibrary.playlist("netease-playlist:\(owner):\(number)")
             item.isFavorite = retained?.isFavorite ?? false
             item.isPinned = retained?.isPinned ?? false
+            item.isSubscribed = collected(number)
         }
         detailLibrary.setExternalCollection(item: item, songs: songs.map(mapSong), error: clearError ? nil : detailLibrary.onlineErrors[id])
     }
@@ -645,6 +663,9 @@ import Observation
         guard case .playlist(let id) = route, id.hasPrefix("home:") else { return nil }
         var placeholder = LibraryPlaylistItem(id: id, title: id.hasPrefix("home:daily:") ? "每日推荐" : "播放列表", artwork: .playlist)
         placeholder.isReadOnlyContent = true
+        if id.hasPrefix("home:playlist:"), let number = id.split(separator: ":").last {
+            placeholder.isSubscribed = collected(number)
+        }
         if detailLibrary.playlist(id) == nil { detailLibrary.setExternalCollection(item: placeholder, songs: []) }
         restoreCachedDetail(id)
         var actions = ExternalPlaylistActions(addSongs: { [weak self] in
@@ -657,6 +678,7 @@ import Observation
             actions.toggleFavorite = { [weak self] in self?.retain(id, action: .favorite) }
             actions.togglePin = { [weak self] in self?.retain(id, action: .pin) }
             actions.moveToFolder = { [weak self] in self?.retain(id, action: .folder) }
+            actions.collect = { [weak self] in self?.changeCollection(id, subscribed: true) }
         }
         var collection = LocalLibrary.menuActions
         collection.play = { [weak self] _, shuffled in self?.requestPlayback(id, songID: nil, shuffled: shuffled) }
@@ -701,6 +723,45 @@ import Observation
             } catch is CancellationError {} catch { LocalLibrary.toasts.show(.error(error.localizedDescription)) }
         }
     }
+    private func collected(_ number: Substring) -> Bool {
+        guard let id = Int64(number), let owner, account.music?.userID.map(String.init) == owner else { return false }
+        return account.music?.playlists.contains { $0.id == id && $0.isSubscribed == true } == true
+    }
+
+    private func syncCollectedPlaylists() {
+        for (id, value) in loaded where id.hasPrefix("home:playlist:") {
+            guard let number = id.split(separator: ":").last else { continue }
+            var item = value.0
+            item.isSubscribed = collected(number)
+            guard item != value.0 else { continue }
+            loaded[id]?.0 = item
+            detailLibrary.setExternalCollection(item: item, songs: detailLibrary.songs(in: id), error: detailLibrary.onlineErrors[id])
+        }
+    }
+
+    private func changeCollection(_ id: String, subscribed: Bool) {
+        guard let owner, let number = Int64(id.split(separator: ":").last ?? ""),
+              id.hasPrefix("home:playlist:") || id.hasPrefix("netease-playlist:") else { showsLogin = true; return }
+        guard let music = account.music, music.userID.map(String.init) == owner,
+              account.profile.map({ String($0.userID) }) == owner else { showsLogin = true; return }
+        let revision = music.sessionRevision
+        Task { [weak self] in
+            do {
+                try await music.setPlaylistSubscribed(id: number, subscribed: subscribed)
+                guard let self, revision == music.sessionRevision, self.owner == owner,
+                      music.userID.map(String.init) == owner else { return }
+                if !subscribed, music.playlists.contains(where: { $0.id == number && $0.isSubscribed == true }) == false {
+                    LocalLibrary.playlistLibrary.releaseRetainedOnlinePlaylist("netease-playlist:\(owner):\(number)")
+                }
+                self.syncCollectedPlaylists()
+            } catch is CancellationError { }
+            catch {
+                guard revision == music.sessionRevision, self?.owner == owner else { return }
+                LocalLibrary.toasts.show(.error(error.localizedDescription))
+            }
+        }
+    }
+
     private enum RetainAction { case favorite, pin, folder }
     private func retain(_ id: String, action: RetainAction) {
         guard let owner, let number = id.split(separator: ":").last else { showsLogin = true; return }

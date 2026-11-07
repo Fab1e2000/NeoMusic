@@ -14,7 +14,7 @@ final class NeteaseMusicClient: Sendable {
             let page: Response = try await read("/api/user/playlist", ["uid": userID, "limit": 200, "offset": offset], credential)
             result += page.playlist.filter { seen.insert($0.id).inserted }.map { item in
                 let value = item.model
-                return NeteaseMusicPlaylist(id: value.id, title: value.title, creator: value.creator, creatorID: value.creatorID, artworkURL: value.artworkURL, trackCount: value.trackCount, isFavorites: value.isFavorites && value.creatorID == userID, createTime: value.createTime, updateTime: value.updateTime)
+                return NeteaseMusicPlaylist(id: value.id, title: value.title, creator: value.creator, creatorID: value.creatorID, artworkURL: value.artworkURL, trackCount: value.trackCount, isFavorites: value.isFavorites && value.creatorID == userID, isSubscribed: item.subscribed == true && item.creator.userId != userID && item.specialType != 5, createTime: value.createTime, updateTime: value.updateTime)
             }
             if !page.more { return result }
             offset += 200
@@ -111,6 +111,10 @@ final class NeteaseMusicClient: Sendable {
         let response: Response = try await read("/api/song/like/get", ["uid": userID], credential)
         return Set(response.ids)
     }
+    /// 收藏或取消收藏歌单。与网页一样分别请求 subscribe / unsubscribe，只带歌单编号。
+    @concurrent func setPlaylistSubscribed(id: Int64, subscribed: Bool, credential: NeteaseCredential) async throws {
+        _ = try await transport.requestWeb(path: subscribed ? "/api/playlist/subscribe" : "/api/playlist/unsubscribe", fields: ["id": id], credential: credential)
+    }
     @concurrent func setLiked(id: Int64, liked: Bool, credential: NeteaseCredential) async throws {
         _ = try await transport.request(path: "/api/radio/like", fields: ["alg": "itembased", "trackId": id, "like": liked, "time": "3"], credential: credential)
     }
@@ -142,7 +146,7 @@ final class NeteaseMusicClient: Sendable {
     private struct Playlist: Decodable {
         struct Creator: Decodable { let userId: Int64; let nickname: String }
         struct Track: Decodable { let id: Int64; let at: Double? }
-        let id: Int64; let name: String; let creator: Creator; let coverImgUrl: String?; let trackCount: Int; let specialType: Int?; let trackIds: [Track]?; let tracks: [Song]?; let createTime: Double?; let updateTime: Double?
+        let id: Int64; let name: String; let creator: Creator; let coverImgUrl: String?; let trackCount: Int; let specialType: Int?; let subscribed: Bool?; let trackIds: [Track]?; let tracks: [Song]?; let createTime: Double?; let updateTime: Double?
         var model: NeteaseMusicPlaylist { .init(id: id, title: name, creator: creator.nickname, creatorID: creator.userId, artworkURL: NeteaseMusicClient.url(coverImgUrl), trackCount: trackCount, isFavorites: specialType == 5, createTime: createTime.map { Date(timeIntervalSince1970: $0 / 1000) }, updateTime: updateTime.map { Date(timeIntervalSince1970: $0 / 1000) }) }
     }
     struct Song: Decodable {

@@ -500,7 +500,11 @@ private struct PinnedCellContent: View {
         VStack(spacing: 6) {
             PinnedArtworkSurface(artwork: item.artwork, contentID: item.id)
                 .aspectRatio(1, contentMode: .fit)
-                .shadow(color: .black.opacity(0.12), radius: 6, y: 3)
+                .background {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(.background)
+                        .shadow(color: .black.opacity(0.12), radius: 6, y: 3)
+                }
             Text(item.title)
                 .font(.caption.weight(.medium))
                 .lineLimit(1)

@@ -82,6 +82,7 @@ final class OnlineMusicIntegration {
             return complete
         }
         LocalLibrary.playlistLibrary.retryOnline = { [weak music] in await music?.refresh(force: true) }
+        LocalLibrary.playlistLibrary.unsubscribeOnlinePlaylist = { [weak self] id in self?.changePlaylistCollection(id, subscribed: false) }
         publish()
     }
 
@@ -149,6 +150,35 @@ final class OnlineMusicIntegration {
         }
     }
 
+    private func changePlaylistCollection(_ id: String, subscribed: Bool) {
+        guard let music = account.music, let owner = music.userID, account.profile?.userID == owner,
+              let playlistID = Self.playlistNumber(id), id.hasPrefix("netease-playlist:\(owner):") || id.hasPrefix("home:playlist:") else {
+            return
+        }
+        let revision = music.sessionRevision
+        Task { [weak self] in
+            do {
+                try await music.setPlaylistSubscribed(id: playlistID, subscribed: subscribed)
+                guard let self, revision == music.sessionRevision, music.userID == owner,
+                      self.account.profile?.userID == owner else { return }
+                if !subscribed, music.playlists.contains(where: { $0.id == playlistID && $0.isSubscribed == true }) == false {
+                    LocalLibrary.playlistLibrary.releaseRetainedOnlinePlaylist("netease-playlist:\(owner):\(playlistID)")
+                }
+            } catch is CancellationError { }
+            catch {
+                guard revision == music.sessionRevision, music.userID == owner else { return }
+                LocalLibrary.toasts.show(.error(error.localizedDescription))
+            }
+        }
+    }
+
+    private static func playlistNumber(_ id: String) -> Int64? {
+        let parts = id.split(separator: ":")
+        if id.hasPrefix("home:playlist:"), let number = parts.last { return Int64(number) }
+        guard parts.count == 3, parts[0] == "netease-playlist" else { return nil }
+        return Int64(parts[2])
+    }
+
     private static func playlistID(_ id: String, music: NeteaseMusicStore) -> Int64? {
         if id == "favorites" { return music.playlists.first(where: \.isFavorites)?.id }
         let parts = id.split(separator: ":")
@@ -199,6 +229,7 @@ final class OnlineMusicIntegration {
                     sourceOwnerID: ownerID, subtitle: value.creator)
                 item.addedAt = value.createTime
                 item.updatedAt = value.updateTime
+                item.isSubscribed = value.isSubscribed == true
                 return item
             }
             var contents: [String: [LibrarySongItem]] = [:]
