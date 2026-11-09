@@ -79,9 +79,9 @@ SwiftUI 与 UIKit 原生构建 · iOS 27 · AVFoundation 播放
 
 ## 获取应用
 
-项目尚未发布正式版本，没有 App Store 或 TestFlight 构建。当前两条途径：
+当前公开版本是 [v0.0.1](https://github.com/Fab1e2000/NeoMusic/releases/tag/v0.0.1)。没有 App Store 或 TestFlight 构建。
 
-1. **自行签名安装**：[Release 工作流](https://github.com/Fab1e2000/NeoMusic/actions/workflows/release.yml)可手动生成未签名 IPA 与校验文件；下载后用自己的开发者证书或 SideStore、AltStore、Sideloadly 等工具签名安装。
+1. **自行签名安装**：在该 Release 下载未签名 IPA 与 `SHA256SUMS.txt`，核对校验值后，用自己的开发者证书或 SideStore、AltStore、Sideloadly 等工具签名安装。
 2. **从源码构建**：见下一节，真机签名自行配置。
 
 ## 从源码构建
