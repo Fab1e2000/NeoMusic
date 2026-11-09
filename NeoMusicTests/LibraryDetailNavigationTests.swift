@@ -618,14 +618,20 @@ final class LibraryDetailNavigationTests: XCTestCase {
             }.min { $0.frame.minY < $1.frame.minY }
         }
         let initialCategoryY = try XCTUnwrap(firstCategoryCell()).frame.minY
+        // The recently-added grid hosts SwiftUI cards without a native artwork
+        // surface, matching the pinned shelf, so probe its widest visible card.
         func recentCoverFrame(presentation: Bool) -> CGRect? {
-            guard let cover = descendants(of: LibraryArtworkSurfaceView.self, in: page.view)
-                .first(where: { $0.bounds.width > 150 }),
-                  let row = list.visibleCells.first(where: { cover.isDescendant(of: $0) }) else { return nil }
-            if presentation, let coverLayer = cover.layer.presentation(), let rowLayer = row.layer.presentation() {
-                return coverLayer.convert(coverLayer.bounds, to: rowLayer)
+            let hostedGrids = descendants(of: UICollectionView.self, in: page.view).filter { grid in
+                grid !== list && !(grid.delegate is PinnedCollectionView.Coordinator)
+                    && list.visibleCells.contains { row in grid.isDescendant(of: row) }
             }
-            return cover.convert(cover.bounds, to: row)
+            guard let grid = hostedGrids.min(by: { $0.frame.minY < $1.frame.minY }),
+                  let card = grid.visibleCells.max(by: { $0.bounds.width < $1.bounds.width }),
+                  let row = list.visibleCells.first(where: { grid.isDescendant(of: $0) }) else { return nil }
+            if presentation, let cardLayer = card.layer.presentation(), let rowLayer = row.layer.presentation() {
+                return cardLayer.convert(cardLayer.bounds, to: rowLayer)
+            }
+            return card.convert(card.bounds, to: row)
         }
         let frame = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
             XCTAssertTrue(window.drawHierarchy(in: window.bounds, afterScreenUpdates: true))
