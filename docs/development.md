@@ -103,14 +103,23 @@ GitHub Actions 使用 `xcode-27` 托管 runner 与 Xcode 27.1，版本依据 [Gi
 
 CI 使用 iOS 27.0 的标准 iPhone 模拟器，不运行依赖外置音乐和基线应用的 UI 测试；Metal 和系统 zoom 用例按实际环境报告跳过，不能视为体验验收。
 
-本地运行同一套流程：
+推送到会触发上述 CI 的分支之前，先在本机跑完同一套流程。仓库里的 `pre-push` 钩子会做这件事：有代码、脚本或工程变更就运行 `scripts/ci.sh`；只含说明文档、`design/` 或许可证时跳过，与 Actions 的 `paths-ignore` 一致。钩子把已有的 `build/ci/TestResults.xcresult` 移到 `build/ci/TestResults.previous.xcresult`，再开始新的一轮。
+
+本机安装一次：
+
+```sh
+cp scripts/git-hooks/pre-push .git/hooks/pre-push
+chmod +x .git/hooks/pre-push scripts/pre-push.sh
+```
+
+也可以手动运行：
 
 ```sh
 bash scripts/ci.sh
 bash scripts/release.sh
 ```
 
-默认输出分别为 `build/ci/`、`build/release/` 和 `dist/`。可用 `NEOMUSIC_DERIVED_DATA` 指定已有构建目录；重复测试前另行保存或移走旧 `build/ci/TestResults.xcresult`，脚本不会覆盖已有测试证据。
+默认输出分别为 `build/ci/`、`build/release/` 和 `dist/`。可用 `NEOMUSIC_DERIVED_DATA` 指定已有构建目录。直接再跑 `scripts/ci.sh` 时，先移走旧的 `build/ci/TestResults.xcresult`，脚本不会覆盖已有测试证据。
 
 **Release** 的使用方式：
 

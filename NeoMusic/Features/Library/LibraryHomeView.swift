@@ -326,7 +326,9 @@ private struct RecentlyAddedCollection: UIViewRepresentable {
                     if let songID = item.songID {
                         RecentSongCard(item: item, songID: songID, play: { playSong(songID) }, songForMenu: songForMenu)
                     } else {
+                        // 与专辑页相同：系统缩放从这张封面起跳。
                         CollectionCardLink(item: item) { AlbumCard(item: item) }
+                            .environment(\.nativeArtworkSurfaceEnabled, true)
                     }
                 }
                 .libraryHostedAppearance(environment)

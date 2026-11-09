@@ -1212,6 +1212,58 @@ final class LibraryDetailNavigationTests: XCTestCase {
         try assertArtworkSurfaces()
     }
 
+    func testRecentlyAddedZoomSourceIsEachCover() async throws {
+        let scene = try await applicationWindowScene()
+        let window = UIWindow(windowScene: scene)
+        defer { window.isHidden = true }
+        let bridge = LibraryDetailNavigation()
+        let items: [LibraryShelfItem] = [
+            .init(id: "left", title: "左上封面", subtitle: "艺人", artwork: .missing, route: .album("left")),
+            .init(id: "right", title: "右上封面", subtitle: "艺人", artwork: .missing, route: .album("right")),
+            .init(id: "below", title: "下一行封面", subtitle: "艺人", artwork: .missing, route: .playlist("below")),
+            .init(id: "song", title: "单曲", subtitle: "艺人", artwork: .missing, songID: "song-1")
+        ]
+        window.rootViewController = UIHostingController(rootView: LibraryNavigationContainer(
+            navigation: bridge,
+            root: LibraryHomeView(pinned: [], recentlyAdded: items, playlistLibrary: PlaylistLibrary(playlists: [])),
+            destination: { _ in AnyView(EmptyView()) }).environment(account))
+        window.makeKeyAndVisible()
+        try await settle()
+        let page = try XCTUnwrap(bridge.navigationController?.topViewController?.view)
+        page.layoutIfNeeded()
+        if let list = descendants(of: UIScrollView.self, in: page).max(by: { $0.contentSize.height < $1.contentSize.height }) {
+            list.layoutIfNeeded()
+            list.setContentOffset(CGPoint(x: 0, y: max(0, list.contentSize.height - list.bounds.height)), animated: false)
+            list.layoutIfNeeded()
+        }
+        try await settle()
+        let collection = try XCTUnwrap(descendants(of: UICollectionView.self, in: page).first { $0.numberOfItems(inSection: 0) == 4 })
+        collection.layoutIfNeeded()
+        var origins: [CGPoint] = []
+        for index in 0..<3 {
+            let cell = try XCTUnwrap(collection.cellForItem(at: IndexPath(item: index, section: 0)),
+                                     "Recently added card \(index) must be on screen")
+            let surfaces = descendants(of: LibraryArtworkSurfaceView.self, in: cell)
+            XCTAssertEqual(surfaces.count, 1, "Each album or playlist card needs one cover zoom source")
+            let cover = try XCTUnwrap(surfaces.first)
+            XCTAssertTrue(cell.libraryArtworkSource() === cover)
+            let coverFrame = collection.convert(cover.bounds, from: cover)
+            let cellFrame = collection.convert(cell.contentView.bounds, from: cell.contentView)
+            XCTAssertEqual(coverFrame.midX, cellFrame.midX, accuracy: 1)
+            XCTAssertEqual(coverFrame.minY, cellFrame.minY, accuracy: 8)
+            XCTAssertEqual(coverFrame.width, coverFrame.height, accuracy: 0.5)
+            XCTAssertEqual(coverFrame.width, cellFrame.width, accuracy: 16)
+            XCTAssertGreaterThan(cellFrame.maxY, coverFrame.maxY + 12, "The title stays outside the zoom source")
+            origins.append(coverFrame.origin)
+        }
+        XCTAssertGreaterThan(origins[1].x, origins[0].x + 20)
+        XCTAssertEqual(origins[1].y, origins[0].y, accuracy: 1)
+        XCTAssertEqual(origins[2].x, origins[0].x, accuracy: 1)
+        XCTAssertGreaterThan(origins[2].y, origins[0].y + 20)
+        let song = try XCTUnwrap(collection.cellForItem(at: IndexPath(item: 3, section: 0)))
+        XCTAssertTrue(descendants(of: LibraryArtworkSurfaceView.self, in: song).isEmpty)
+    }
+
     func testPinnedEditingWobbleStopsAndRestartsWithCellLifecycle() async throws {
         let scene = try await applicationWindowScene()
         let window = UIWindow(windowScene: scene)

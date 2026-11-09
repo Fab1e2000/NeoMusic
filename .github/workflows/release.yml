@@ -36,15 +36,20 @@ jobs:
             dist/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 14
-      - name: Create release draft
+      - name: Create or replace release
         if: github.event_name == 'push' && github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.package.outputs.tag }}
         run: |
-          gh release create "$TAG" dist/*.ipa dist/SHA256SUMS.txt \
-            --draft --verify-tag --title "NeoMusic $TAG" \
-            --notes-file "docs/releases/$TAG.md"
+          notes=(--title "NeoMusic $TAG" --notes-file "docs/releases/$TAG.md")
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/*.ipa dist/SHA256SUMS.txt --clobber
+            gh release edit "$TAG" --latest "${notes[@]}"
+          else
+            gh release create "$TAG" dist/*.ipa dist/SHA256SUMS.txt \
+              --draft --verify-tag "${notes[@]}"
+          fi
       - name: Upload build log
         if: failure()
         uses: actions/upload-artifact@v7
