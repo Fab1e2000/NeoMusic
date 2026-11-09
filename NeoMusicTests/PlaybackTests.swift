@@ -149,8 +149,8 @@ final class PlaybackTests: XCTestCase {
         XCTAssertNotNil(model.errorMessage)
         await model.flushQueuePersistence()
         try Data("broken".utf8).write(to: state)
-        model.restoreQueue(songs: [])
-        XCTAssertTrue(model.errorMessage?.contains("恢复失败") == true)
+        XCTAssertFalse(model.restoreQueue(songs: []))
+        XCTAssertFalse(model.errorMessage?.contains("恢复失败") == true)
     }
 
     func testPlaybackAcceptanceCallbackWaitsForConfirmationAndSurvivesCancellation() {

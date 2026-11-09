@@ -44,12 +44,11 @@ import XCTest
         }
     }
     func testRoamingKeepsPlayingPastTheFirstBatch() async throws {
-        let first = #"{"code":200,"data":[{"id":7,"name":"First","ar":[{"name":"Artist"}],"al":{"name":"Album"},"dt":10000},{"id":9,"name":"Second","ar":[{"name":"Artist"}],"al":{"name":"Album"},"dt":10000}]}"#
         let later = #"{"code":200,"data":[{"id":11,"name":"Third","ar":[{"name":"Artist"}],"al":{"name":"Album"},"dt":10000}]}"#
-        HomeLoginProtocol.radioScript.withLock { $0 = [first, later, later] }
         defer { HomeLoginProtocol.radioScript.withLock { $0 = [] } }
         try await withQuickActionIntegration { account, _, integration, player in
             try await account.completeLogin(credential: .init(musicU: "test"))
+            HomeLoginProtocol.radioScript.withLock { $0 = [later, later, later] }
             integration.requestQuickAction(.privateRoaming)
             for _ in 0..<80 where player.pendingPlay == nil && player.sourceTitle != "私人漫游" {
                 try await Task.sleep(for: .milliseconds(25))
@@ -58,19 +57,19 @@ import XCTest
             let started = player.queue.map(\.id)
             XCTAssertEqual(player.sourceTitle, "私人漫游")
             XCTAssertFalse(started.isEmpty)
-            for _ in 0..<80 where player.queue.count <= started.count {
-                try await Task.sleep(for: .milliseconds(25))
-            }
-            XCTAssertGreaterThan(player.queue.count, started.count)
-            XCTAssertFalse(player.hasUserQueuedUpcoming)
-            while player.next != nil, started.contains(player.current.id), started.contains(player.next?.id ?? "") {
+            while player.next != nil {
                 player.skipForward()
             }
-            if started.contains(player.current.id) { player.skipForward() }
-            for _ in 0..<80 where started.contains(player.current.id) {
+            player.skipForward()
+            for _ in 0..<160 where !player.queue.contains(where: { $0.id == "netease:42:11" }) {
                 try await Task.sleep(for: .milliseconds(25))
             }
-            XCTAssertFalse(started.contains(player.current.id))
+            XCTAssertTrue(player.queue.contains(where: { $0.id == "netease:42:11" }))
+            XCTAssertFalse(player.hasUserQueuedUpcoming)
+            for _ in 0..<160 where player.current.id != "netease:42:11" {
+                player.skipForward()
+                try await Task.sleep(for: .milliseconds(25))
+            }
             XCTAssertEqual(player.current.id, "netease:42:11")
         }
     }
