@@ -8,21 +8,28 @@ final class AppStartupPerformanceTests: XCTestCase {
         let scene = try await applicationWindowScene()
         let window = UIWindow(windowScene: scene)
         var requested = Set<String>()
-        let first = expectation(description: "The visible artist album requests artwork")
         let albums = (0..<30).map { index in
             LibraryShelfItem(id: "album-\(index)", title: "Album \(index)", subtitle: "2026",
                 artwork: .deferred(id: "cover-\(index)", placeholder: .missing), route: .album("album-\(index)"))
         }
         let page = ArtistDetailView(detail: ArtistDetail(name: "Artist", albums: albums))
-            .environment(\.artworkLoadAction, ArtworkLoadAction { id in
-                if requested.insert(id).inserted, id == "cover-0" { first.fulfill() }
-            })
+            .environment(\.artworkLoadAction, ArtworkLoadAction { requested.insert($0) })
         let host = UIHostingController(rootView: page)
         window.rootViewController = host
         window.makeKeyAndVisible()
         defer { window.isHidden = true }
-        await fulfillment(of: [first], timeout: 3)
+        // 冷的模拟器可能要好几秒才给出窗口尺寸。持续把页面排出来，直到可见封面发出请求。
+        let deadline = ContinuousClock.now.advanced(by: .seconds(15))
+        while !requested.contains("cover-0"), ContinuousClock.now < deadline {
+            host.view.layoutIfNeeded()
+            if let scroll = verticalPageScroll(in: host.view), scroll.contentSize.height > scroll.bounds.height {
+                scroll.setContentOffset(CGPoint(x: 0, y: scroll.contentSize.height - scroll.bounds.height), animated: false)
+                scroll.layoutIfNeeded()
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
         host.view.layoutIfNeeded()
+        XCTAssertTrue(requested.contains("cover-0"), "The visible artist album requests artwork")
         // Inspect children too because the album strip is inside the vertical page.
         func horizontal(_ view: UIView) -> UIScrollView? {
             if let scroll = view as? UIScrollView, scroll.contentSize.width > scroll.bounds.width + 100 { return scroll }
@@ -39,6 +46,11 @@ final class AppStartupPerformanceTests: XCTestCase {
         screenshot.name = "Artist lazy shelf"
         screenshot.lifetime = .keepAlways
         add(screenshot)
+    }
+
+    private func verticalPageScroll(in view: UIView) -> UIScrollView? {
+        if let scroll = view as? UIScrollView, scroll.contentSize.height > scroll.bounds.height + 100 { return scroll }
+        return view.subviews.lazy.compactMap { self.verticalPageScroll(in: $0) }.first
     }
 
     func testSongThumbnailAvoidsNestedHostingWhileAlbumKeepsNativeZoomSurface() async throws {
