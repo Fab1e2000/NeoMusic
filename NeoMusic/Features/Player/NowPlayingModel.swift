@@ -36,6 +36,10 @@ final class NowPlayingModel {
     /// 等待确认的整组播放：队列里还有手动加入的歌曲时，替换前先确认，与 Apple Music 一致。
     var pendingPlay: PendingPlay?
     var onCollectionPlaybackStarted: ((PlaybackCollectionReference) -> Void)?
+    /// 当前来源还会继续供歌，队尾不要循环回第一首。
+    var queueContinues: (() -> Bool)?
+    /// 待播不多时补歌。`shouldAdvance` 表示用户或自然结束已经要听下一首。
+    var replenishQueue: ((_ shouldAdvance: Bool, _ playbackEnded: Bool) -> Void)?
     private var pendingCollection: PlaybackCollectionReference?
 
     struct PendingPlay: Identifiable {
@@ -76,8 +80,13 @@ final class NowPlayingModel {
     func togglePlayback() { guard hasCurrent else { return }; isPlaying.toggle(); if isPlaying { if loadedEntry == entryIDs[currentIndex], audio?.error == nil { audio?.play() } else { startCurrent(at: elapsed) } } else { audio?.pause(); saveQueue(); updateNowPlaying() } }
 
     func skipForward() {
-        guard next != nil else { if repeatMode == .all && hasCurrent { select(0) }; return }
+        guard next != nil else {
+            if queueContinues?() == true { replenishQueue?(true, false); return }
+            if repeatMode == .all && hasCurrent { select(0) }
+            return
+        }
         select(currentIndex + 1)
+        if queueContinues?() == true { replenishQueue?(false, false) }
     }
 
     /// 播放超过 3 秒时先回到开头，否则回到上一首。
@@ -101,6 +110,7 @@ final class NowPlayingModel {
         currentIndex = index
         updatingTime = true; elapsed = 0; updatingTime = false
         startCurrent()
+        if queueContinues?() == true { replenishQueue?(false, false) }
     }
 
     /// 在待播部分内移动；偏移以“当前曲目之后”为起点。
@@ -260,13 +270,22 @@ final class NowPlayingModel {
 
     /// 随后播放：放在队列末尾。
     func appendLater(_ songs: [LibrarySongItem]) {
+        appendToEnd(songs, userQueued: true)
+    }
+
+    /// 自动来源续上的歌曲，放在队尾，不算用户手动加入。
+    func appendContinuing(_ songs: [LibrarySongItem]) {
+        appendToEnd(songs, userQueued: false)
+    }
+
+    private func appendToEnd(_ songs: [LibrarySongItem], userQueued: Bool) {
         guard !songs.isEmpty else { return }
         queueRestorationFailed = false
         let ids = songs.map { _ in UUID() }
         queue.append(contentsOf: songs)
         entryIDs.append(contentsOf: ids)
         originalOrder.append(contentsOf: ids)
-        userQueuedIDs.formUnion(ids)
+        if userQueued { userQueuedIDs.formUnion(ids) }
         prepareNext()
         saveQueue()
     }
@@ -455,6 +474,12 @@ final class NowPlayingModel {
         if persist { saveQueue() }
     }
 
+    /// 详情还没到不能当成播放失败。登录不对、文件没了仍然要停。
+    private static func blocksPlayback(_ song: LibrarySongItem) -> Bool {
+        guard let reason = song.unavailabilityReason else { return false }
+        return reason != "暂无完整音源"
+    }
+
     private static func unavailableOnlineSong(_ id: String) -> LibrarySongItem {
         LibrarySongItem(id: id, title: "在线歌曲不可用", artist: "登录原账号后可用", album: "", albumArtist: "", trackNumber: 0,
                         artwork: .missing, unavailabilityReason: "请登录原账号后重试")
@@ -536,11 +561,19 @@ final class NowPlayingModel {
             self.syncTransport()
             self.prepareNext()
             self.saveQueue()
+            if self.queueContinues?() == true { self.replenishQueue?(false, false) }
         }
         engine.onFinished = { [weak self] in
             guard let self else { return }
             if self.repeatMode == .one { self.isPlaying = true; self.startCurrent() }
-            else if let index = self.nextPlaybackIndex { self.isPlaying = true; self.select(index) }
+            else if self.queue.indices.contains(self.currentIndex + 1) {
+                self.isPlaying = true
+                self.select(self.currentIndex + 1)
+                if self.queueContinues?() == true { self.replenishQueue?(false, false) }
+            } else if self.queueContinues?() == true {
+                self.isPlaying = true
+                self.replenishQueue?(true, true)
+            } else if let index = self.nextPlaybackIndex { self.isPlaying = true; self.select(index) }
             else { self.syncTransport() }
         }
         return engine
@@ -550,6 +583,7 @@ final class NowPlayingModel {
         guard hasCurrent else { return nil }
         if repeatMode == .one { return currentIndex }
         if queue.indices.contains(currentIndex + 1) { return currentIndex + 1 }
+        if queueContinues?() == true { return nil }
         return repeatMode == .all ? 0 : nil
     }
     private func prepareNext() {
@@ -626,7 +660,7 @@ final class NowPlayingModel {
                     self?.errorMessage = nil
                 }
             } catch {
-                self?.errorMessage = "播放状态保存失败：" + error.localizedDescription
+                PerformanceDiagnostics.restoration("queue.persist.failed")
             }
             if self?.queuePersistenceRevision == revision {
                 self?.queuePersistenceTask = nil
@@ -726,7 +760,6 @@ final class NowPlayingModel {
         } catch {
             queueRestorationFailed = true
             PerformanceDiagnostics.restoration("queue.restore.failed")
-            errorMessage = "播放状态恢复失败：" + error.localizedDescription
             return false
         }
     }
@@ -779,9 +812,9 @@ final class NowPlayingModel {
         // An authenticated stable online identity is playable without a loaded detail page.
         ids.formUnion(updated.filter { song in
             song.onlineOwnerID != nil && hasResolvedOnlineIdentity && song.onlineOwnerID == resolvedOnlineOwnerID
-                && song.unavailabilityReason == nil
+                && !Self.blocksPlayback(song)
         }.map(\.id))
-        let unavailable = Set(queue.map(\.id)).subtracting(ids).union(updated.filter { $0.unavailabilityReason != nil }.map(\.id))
+        let unavailable = Set(queue.map(\.id)).subtracting(ids).union(updated.filter(Self.blocksPlayback).map(\.id))
         let changed = updated != queue || unavailable != unavailableIDs
         if updated != queue { queue = updated }
         if hasCurrent, unavailableIDs.contains(current.id), !unavailable.contains(current.id) { errorMessage = nil }

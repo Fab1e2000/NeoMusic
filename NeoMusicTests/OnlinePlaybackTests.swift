@@ -252,6 +252,18 @@ final class OnlinePlaybackTests: XCTestCase {
         await model.flushQueuePersistence()
     }
 
+    func testMissingSourceDetailDoesNotStopPlaybackOrAlert() {
+        var track = song("netease:12:34")
+        track.unavailabilityReason = "暂无完整音源"
+        let model = NowPlayingModel(queue: [track], currentIndex: 0, isPlaying: true)
+        defer { model.shutdownPlayback() }
+        model.restoreOnlineIdentity(ownerID: "12")
+        model.reconcileAvailability(songs: [track])
+        XCTAssertNil(model.errorMessage)
+        XCTAssertTrue(model.isPlaying)
+        XCTAssertFalse(model.unavailableIDs.contains(track.id))
+    }
+
     func testReloadFailureKeepsLoadedItemAndProgress() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

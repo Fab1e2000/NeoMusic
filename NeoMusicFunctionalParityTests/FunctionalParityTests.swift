@@ -71,7 +71,7 @@ final class FunctionalParityTests: XCTestCase {
                 back(app)
                 XCTAssertTrue(app.navigationBars["资料库"].waitForExistence(timeout: 5))
             }
-            for tab in ["主页", "新发现", "广播", "搜索", "资料库"] {
+            for tab in ["主页", "搜索", "资料库"] {
                 app.tabBars.buttons[tab].tap()
                 try capture(app, "05-tab-\(tab)")
             }

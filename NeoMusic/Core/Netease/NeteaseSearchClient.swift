@@ -187,7 +187,7 @@ final class NeteaseSearchClient: Sendable {
     }
     private struct Artist: Decodable {
         let id: Int64; let name: String; let picUrl: String?; let img1v1Url: String?
-        var resource: NeteaseSearchResource { .init(kind: .artist, resourceID: id, title: name, subtitle: "艺人", artworkURL: NeteaseMusicClient.url(picUrl ?? img1v1Url)) }
+        var resource: NeteaseSearchResource { .init(kind: .artist, resourceID: id, title: name, subtitle: "艺人", artworkURL: NeteaseArtworkURL.artist(img1v1Url: img1v1Url, picUrl: picUrl)) }
     }
     private struct Album: Decodable {
         let id: Int64; let name: String; let picUrl: String?; let artist: Artist?; let artists: [Artist]?
@@ -205,7 +205,7 @@ final class NeteaseSearchClient: Sendable {
             let release = al ?? album
             let song = NeteaseMusicSong(id: id, title: name, artist: performers.map(\.name).joined(separator: " / "), album: release?.name ?? "",
                 artworkURL: NeteaseMusicClient.url(release?.picUrl), duration: (dt ?? duration ?? 0) / 1000,
-                artists: performers.map { .init(id: $0.id, name: $0.name, artworkURL: NeteaseMusicClient.url($0.picUrl ?? $0.img1v1Url)) }, albumID: release?.id)
+                artists: performers.map { .init(id: $0.id, name: $0.name, artworkURL: NeteaseArtworkURL.artist(img1v1Url: $0.img1v1Url, picUrl: $0.picUrl)) }, albumID: release?.id)
             return NeteaseSearchClient.resource(song)
         }
     }

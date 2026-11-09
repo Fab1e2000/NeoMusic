@@ -175,6 +175,35 @@ final class PlaybackTests: XCTestCase {
         XCTAssertEqual(starts, 2)
     }
 
+    func testContinuingSourceAppendsWithoutRepeatingOrManualQueue() {
+        let model = NowPlayingModel(queue: [song("a"), song("b")], currentIndex: 1, isPlaying: true)
+        defer { model.shutdownPlayback() }
+        model.repeatMode = .all
+        model.sourceTitle = "私人漫游"
+        model.queueContinues = { true }
+        var askedToAdvance = false
+        model.replenishQueue = { advance, ended in
+            askedToAdvance = advance
+            XCTAssertFalse(ended)
+        }
+        model.skipForward()
+        XCTAssertEqual(model.currentIndex, 1)
+        XCTAssertTrue(askedToAdvance)
+        model.appendContinuing([song("c")])
+        XCTAssertFalse(model.hasUserQueuedUpcoming)
+        XCTAssertEqual(model.queue.map(\.id), ["a", "b", "c"])
+        model.skipForward()
+        XCTAssertEqual(model.current.id, "c")
+    }
+
+    func testQueueEndStillRepeatsWhenTheSourceDoesNotContinue() {
+        let model = NowPlayingModel(queue: [song("a"), song("b")], currentIndex: 1, isPlaying: false)
+        defer { model.shutdownPlayback() }
+        model.repeatMode = .all
+        model.skipForward()
+        XCTAssertEqual(model.current.id, "a")
+    }
+
     func testSelectedSongWaitsForConfirmationAndKeepsIndex() {
         let model = NowPlayingModel(queue: [song("original")], currentIndex: 0)
         model.appendLater([song("manual")])

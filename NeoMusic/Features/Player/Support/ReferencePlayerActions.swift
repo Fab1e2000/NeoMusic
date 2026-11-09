@@ -74,12 +74,15 @@ extension SongMenuConfiguration {
     private let artistAction: (String) -> Void
     private let artistLookup: ((String) -> [String])?
     private let namedArtistAction: ((String, String) -> Void)?
+    private let notifyAction: (LibraryToast) -> Void
     init(isFavorite: @escaping (String) -> Bool, toggleFavorite: @escaping (String) -> Void,
          addToPlaylist: @escaping (String) -> Void, openAlbum: @escaping (String) -> Void,
          openArtist: @escaping (String) -> Void, artistNames: ((String) -> [String])? = nil,
-         openNamedArtist: ((String, String) -> Void)? = nil) {
+         openNamedArtist: ((String, String) -> Void)? = nil,
+         notify: @escaping (LibraryToast) -> Void = { _ in }) {
         artistLookup = artistNames; namedArtistAction = openNamedArtist
         favoriteLookup = isFavorite; favoriteAction = toggleFavorite; playlistAction = addToPlaylist; albumAction = openAlbum; artistAction = openArtist
+        notifyAction = notify
     }
     func isFavorite(_ track: ReferenceTrack) -> Bool { favoriteLookup(track.id) }
     func addToPlaylist(_ track: ReferenceTrack) { playlistAction(track.id) }
@@ -92,9 +95,12 @@ extension SongMenuConfiguration {
     func openArtist(_ name: String, track: ReferenceTrack) {
         if let namedArtistAction { namedArtistAction(track.id, name) } else { artistAction(track.id) }
     }
+    func notify(_ toast: LibraryToast) { notifyAction(toast) }
     func toggleFavorite(_ track: ReferenceTrack) {
         LibraryHaptics.impact()
+        let removing = isFavorite(track)
         favoriteAction(track.id)
+        notify(removing ? .unfavorited : .favorited)
     }
 }
 
@@ -128,8 +134,14 @@ struct SongMenuHost<Content: View>: View {
         primary.append(.init(id: "favorite", title: liked ? "取消喜欢" : "喜欢", systemImage: "star.fill") { actions.toggleFavorite(track) })
         primary.append(.init(id: "playlist", title: "加入", systemImage: "text.badge.plus") { actions.addToPlaylist(track) })
         let secondary: [SongRowAction] = [
-            .init(id: "playNext", title: "下一首播放", systemImage: "text.line.first.and.arrowtriangle.forward") { player.enqueue(track, next: true) },
-            .init(id: "playLast", title: "最后播放", systemImage: "text.line.last.and.arrowtriangle.forward") { player.enqueue(track, next: false) },
+            .init(id: "playNext", title: "下一首播放", systemImage: "text.line.first.and.arrowtriangle.forward") {
+                player.enqueue(track, next: true)
+                actions.notify(.playingNext)
+            },
+            .init(id: "playLast", title: "最后播放", systemImage: "text.line.last.and.arrowtriangle.forward") {
+                player.enqueue(track, next: false)
+                actions.notify(.addedToQueue)
+            },
             .init(id: "album", title: "查看专辑", systemImage: "music.note.square.stack") { actions.openAlbum(track) }
         ]
         let artists = actions.artistNames(for: track).enumerated().map { index, name in

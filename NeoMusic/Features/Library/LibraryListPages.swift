@@ -172,6 +172,7 @@ struct SongsListView: View {
         .libraryNavigationTitle("歌曲")
         .libraryTitleDisplayMode(.large)
         .librarySearchable(text: $query, prompt: "搜索歌曲")
+        .libraryRootAccountButton()
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 LibraryFilterMenu(filter: $filter, allTitle: "所有歌曲", allImage: "music.note")
@@ -213,17 +214,27 @@ struct SongRow: View {
         .songContextMenu(song)
         // 右滑插播，左滑下载；本地导入文件保留原有布局。
         .swipeActions(edge: .leading) {
-            Button("插播", systemImage: "text.line.first.and.arrowtriangle.forward") { actions.playNext(song) }
+            Button("插播", systemImage: "text.line.first.and.arrowtriangle.forward") {
+                actions.playNext(song)
+                actions.notify(.playingNext)
+            }
                 .labelStyle(.iconOnly)
                 .tint(.indigo)
         }
         .swipeActions(edge: .trailing) {
             if downloads?.state(of: song.id)?.isActive == true {
-                Button("停止下载", systemImage: "stop.fill") { downloads?.stop([song]) }.tint(.blue)
+                Button("停止下载", systemImage: "stop.fill") {
+                    LibraryHaptics.impact()
+                    downloads?.stop([song])
+                }.tint(.blue)
             } else if downloads?.canRemove(song) == true {
+                // 移除下载走确认框，确认时再震。
                 Button("移除下载", systemImage: "xmark.circle") { downloads?.requestRemoval([song]) }.tint(.red)
             } else {
-                Button("下载", systemImage: "arrow.down") { downloads?.download([song]) }
+                Button("下载", systemImage: "arrow.down") {
+                    LibraryHaptics.impact()
+                    downloads?.download([song])
+                }
                     .labelStyle(.iconOnly)
                     .tint(downloads?.isDownloadable(song) == true ? .blue : .gray)
                     .disabled(downloads?.isDownloadable(song) != true)
@@ -308,6 +319,7 @@ struct AlbumsGridView: View {
         }
         .libraryNavigationTitle("专辑")
         .libraryTitleDisplayMode(.large)
+        .libraryRootAccountButton()
         // Keep the search drawer independent of the library home’s whole-bar minimization during push/pop.
         .librarySearchable(text: $query, prompt: "搜索专辑")
         .toolbar {
@@ -361,7 +373,7 @@ struct ArtistsListView: View {
 
     var body: some View {
         List(filter == .favorites ? artists.filter(\.isFavorite) : artists) { artist in
-            LibraryRouteLink(value: LibraryRoute.artist(artist.id)) {
+            LibraryRouteLink(value: LibraryRoute.artist(artist.id), preview: artistPreview(artist)) {
                 HStack(spacing: 12) {
                     ArtistAvatar(artwork: artist.artwork)
                         .frame(width: 48, height: 48)
@@ -377,6 +389,7 @@ struct ArtistsListView: View {
         .listStyle(.plain)
         .libraryNavigationTitle("艺人")
         .libraryTitleDisplayMode(.large)
+        .libraryRootAccountButton()
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 LibraryFilterMenu(filter: $filter, allTitle: "所有艺人", allImage: "music.microphone")

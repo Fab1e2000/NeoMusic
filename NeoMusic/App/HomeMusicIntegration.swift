@@ -22,6 +22,10 @@ import Observation
     @ObservationIgnored private var artworkSongs: [URL: [NeteaseMusicSong]] = [:]
     @ObservationIgnored private var retainedArtworkIDs: Set<String> = []
     @ObservationIgnored private var retainedArtworkSession: UUID?
+    @ObservationIgnored private var roamingFill: Task<Void, Never>?
+    @ObservationIgnored private var roamingGeneration = UUID()
+    @ObservationIgnored private var roamingAdvance = false
+    @ObservationIgnored private var roamingPlaybackEnded = false
     struct Pending {
         let route: String
         let songID: Int64?
@@ -47,6 +51,12 @@ import Observation
         model.play = { [weak self] section, item in self?.playFeed(section: section, item: item) }
         model.performQuickAction = { [weak self] action in self?.requestQuickAction(action) }
         model.prepareNavigation = { [weak self] in self?.prepareNavigation($0) }
+        player.queueContinues = { [weak self] in
+            self?.player.sourceTitle == HomeQuickAction.privateRoaming.title
+        }
+        player.replenishQueue = { [weak self] advance, ended in
+            self?.replenishRoaming(shouldAdvance: advance, playbackEnded: ended)
+        }
         player.onCollectionPlaybackStarted = { [weak self] reference in
             self?.history.record(reference)
             if reference.kind == .localPlaylist { LocalLibrary.playlistLibrary.markPlayed(reference.id) }
@@ -569,9 +579,10 @@ import Observation
                     self.player.requestPlay(songs.map(self.mapSong), from: action.title, shuffled: false)
                 case .roaming(let id, let songs):
                     guard !songs.isEmpty, userID != nil else { return }
-                    self.player.requestPlay(songs.map(self.mapSong), from: action.title, shuffled: false, onStarted: { [weak selectedHome = home] in
-                        guard let selectedHome, selectedHome.sessionRevision == revision else { return }
+                    self.player.requestPlay(songs.map(self.mapSong), from: action.title, shuffled: false, onStarted: { [weak self, weak selectedHome = home] in
+                        guard let self, let selectedHome, selectedHome.sessionRevision == revision else { return }
                         selectedHome.consumeRoamingBatch(id: id)
+                        self.beginRoamingContinuation()
                     })
                 }
             } catch { /* The home store publishes each action's retry state. */ }
@@ -594,6 +605,79 @@ import Observation
         item.isReadOnlyContent = true
         detailLibrary.setExternalCollection(item: item, songs: detailLibrary.songs(in: id), error: detailLibrary.onlineErrors[id])
         if loaded[id] != nil { loaded[id]?.0 = item }
+    }
+
+    /// 私人漫游是持续的电台，不是一次返回的那几首。还剩一首时要下一批，队尾的下一首接着播。
+    private func beginRoamingContinuation() {
+        roamingGeneration = UUID()
+        roamingFill?.cancel()
+        roamingFill = nil
+        roamingAdvance = false
+        roamingPlaybackEnded = false
+        replenishRoaming(shouldAdvance: false, playbackEnded: false)
+    }
+
+    private func replenishRoaming(shouldAdvance: Bool, playbackEnded: Bool) {
+        guard player.sourceTitle == HomeQuickAction.privateRoaming.title, account.home != nil else { return }
+        let remaining = max(0, player.queue.count - player.currentIndex - 1)
+        guard remaining <= 1 else { return }
+        if shouldAdvance && remaining == 0 {
+            roamingAdvance = true
+            roamingPlaybackEnded = playbackEnded
+        }
+        guard roamingFill == nil else { return }
+        let generation = roamingGeneration
+        roamingFill = Task { [weak self] in await self?.fillRoaming(generation: generation) }
+    }
+
+    private func fillRoaming(generation: UUID) async {
+        var scheduleNext = false
+        defer {
+            if roamingGeneration == generation { roamingFill = nil }
+            if scheduleNext, roamingGeneration == generation {
+                roamingFill = Task { [weak self] in await self?.fillRoaming(generation: generation) }
+            }
+        }
+        guard let home = account.home else { roamingAdvance = false; return }
+        let source = HomeQuickAction.privateRoaming.title
+        let known = Set(player.queue.map(\.id))
+        let revision = home.sessionRevision
+        do {
+            let songs = try await home.nextRoamingSongs()
+            try Task.checkCancellation()
+            guard roamingGeneration == generation else { return }
+            guard player.sourceTitle == source, account.home === home, home.sessionRevision == revision,
+                  account.profile?.userID == home.userID else {
+                roamingAdvance = false
+                roamingPlaybackEnded = false
+                return
+            }
+            let mapped = songs.map(mapSong).filter { !known.contains($0.id) }
+            let advance = roamingAdvance && player.next == nil && player.sourceTitle == source
+            let ended = roamingPlaybackEnded
+            roamingAdvance = false
+            roamingPlaybackEnded = false
+            guard !mapped.isEmpty else {
+                if advance && ended { player.isPlaying = false }
+                return
+            }
+            let index = player.currentIndex
+            player.appendContinuing(mapped)
+            if advance, player.currentIndex == index, player.queue.indices.contains(index + 1) {
+                player.isPlaying = true
+                player.select(index + 1)
+            }
+            let remaining = player.queue.count - player.currentIndex - 1
+            scheduleNext = remaining <= 1 && player.sourceTitle == source
+        } catch {
+            let advance = roamingAdvance && player.next == nil && roamingGeneration == generation
+            let ended = roamingPlaybackEnded
+            if roamingGeneration == generation {
+                roamingAdvance = false
+                roamingPlaybackEnded = false
+            }
+            if advance && ended { player.isPlaying = false }
+        }
     }
 
     private func mapSong(_ song: NeteaseMusicSong) -> LibrarySongItem {
@@ -693,7 +777,7 @@ import Observation
         collection.play = { [weak self] _, shuffled in self?.requestPlayback(id, songID: nil, shuffled: shuffled) }
         collection.playNext = { [weak self] _ in self?.withCompleteCollection(id) { [weak self] in self?.player.insertNext($0) } }
         collection.playLater = { [weak self] _ in self?.withCompleteCollection(id) { [weak self] in self?.player.appendLater($0) } }
-        var songs = SongMenuActions(downloads: LocalLibrary.downloads)
+        var songs = SongMenuActions(downloads: LocalLibrary.downloads, notify: { LocalLibrary.toasts.show($0) })
         songs.play = { [weak self] list, index, _ in
             guard list.indices.contains(index), let songID = Int64(list[index].id.split(separator: ":").last ?? "") else { return }
             self?.requestPlayback(id, songID: songID, shuffled: false)

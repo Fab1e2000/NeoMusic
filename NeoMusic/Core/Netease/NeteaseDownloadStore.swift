@@ -314,7 +314,6 @@ final class NeteaseDownloadStore {
                     if let filename = job.stagedFilename {
                         try await self.finish(job, file: self.transport.spool.appending(path: filename), saved: saved, revision: revision)
                     } else {
-                        guard !job.metadata.song.unavailable else { throw NeteaseDownloadError.unavailable }
                         let source = try await self.client.downloadSource(id: job.metadata.song.id, quality: job.requestedQuality, credential: saved.credential)
                         try self.check(job.id, revision: revision)
                         self.jobs[job.id]?.actualQuality = source.quality; self.jobs[job.id]?.type = source.type

@@ -79,24 +79,30 @@ extension View {
     }
 
     /// 提示出现时的触感反馈；每个提示只反馈一次，挂在根部。
-    /// 喜爱和取消喜爱由操作本身反馈，避免和这里再震一次。
+    /// 喜爱和取消喜爱由操作本身反馈，避免和这里再震一次；错误提示用错误触感。
     func libraryToastFeedback(_ center: LibraryToastCenter) -> some View {
         sensoryFeedback(.success, trigger: center.current?.id) { _, new in
             guard new != nil else { return false }
             switch center.current?.toast {
-            case .favorited, .unfavorited: return false
+            case .favorited, .unfavorited, .error: return false
             default: return true
             }
+        }
+        .sensoryFeedback(.error, trigger: center.current?.id) { _, new in
+            guard new != nil, case .error = center.current?.toast else { return false }
+            return true
         }
     }
 }
 
 /// 与播放、下载按钮相同的轻触感。可从菜单操作直接调用。
+/// 常驻一个发生器并在触发后立即预热：几秒内的连续轻点（如连点喜欢）延迟更低。
 enum LibraryHaptics {
+    @MainActor private static let generator = UIImpactFeedbackGenerator(style: .soft)
     static func impact() {
         let play: @MainActor () -> Void = {
-            let generator = UIImpactFeedbackGenerator(style: .soft)
             generator.impactOccurred(intensity: 0.6)
+            generator.prepare()
         }
         if Thread.isMainThread {
             MainActor.assumeIsolated(play)

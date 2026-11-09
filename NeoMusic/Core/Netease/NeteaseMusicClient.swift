@@ -71,9 +71,8 @@ final class NeteaseMusicClient: Sendable {
             }
         }
         try Task.checkCancellation()
-        return .init(playlist: detail.playlist, songs: ids.map {
-            lookup[$0] ?? .init(id: $0, title: "歌曲不可用", artist: "网易云音乐", album: "", artworkURL: nil, duration: 0, unavailable: true)
-        }, addedTimes: detail.addedTimes, trackIDs: detail.orderedTrackIDs, loadedTrackCount: end)
+        // 详情接口没返回的编号先不放进曲目。不能写成「暂无完整音源」，否则正在播放的歌会被停掉。
+        return .init(playlist: detail.playlist, songs: ids.compactMap { lookup[$0] }, addedTimes: detail.addedTimes, trackIDs: detail.orderedTrackIDs, loadedTrackCount: end)
     }
 
     @concurrent func songs(ids: [Int64], credential: NeteaseCredential?) async throws -> [NeteaseMusicSong] {

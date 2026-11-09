@@ -72,8 +72,10 @@ struct CollectionDetailView: View {
         .toolbarColorScheme(albumColorScheme, for: .navigationBar)
         .onChange(of: albumColorScheme, initial: true) { _, scheme in navigationChrome?.setColorScheme(scheme) }
         .libraryTitleDisplayMode(.inline)
+        .modifier(FavoritesTitleHidden(isHidden: isFavorites))
         .librarySearchable(text: $query, prompt: "搜索", enabled: detail.kind != .album)
         .toolbar { detailToolbar }
+        .libraryRootAccountButton()
     }
 
     @ToolbarContentBuilder private var detailToolbar: some ToolbarContent {
@@ -169,17 +171,19 @@ struct CollectionDetailView: View {
                 .frame(width: 266, height: 266)
                 .padding(.top, 13)
                 .padding(.bottom, 23)
-            HStack(alignment: .firstTextBaseline, spacing: 3) {
-                Text(detail.title).font(.title2.weight(.bold))
-                if detail.isFavorite {
-                    Image(systemName: "star.fill")
-                        .font(.footnote)
-                        .baselineOffset(2)
-                        .foregroundStyle(.secondary)
-                        .accessibilityLabel("已喜爱")
+            if !isFavorites {
+                HStack(alignment: .firstTextBaseline, spacing: 3) {
+                    Text(detail.title).font(.title2.weight(.bold))
+                    if detail.isFavorite {
+                        Image(systemName: "star.fill")
+                            .font(.footnote)
+                            .baselineOffset(2)
+                            .foregroundStyle(.secondary)
+                            .accessibilityLabel("已喜爱")
+                    }
                 }
+                .multilineTextAlignment(.center)
             }
-            .multilineTextAlignment(.center)
             if let subtitle = detail.subtitle {
                 Text(subtitle).font(.title3)
                     .padding(.top, 4)
@@ -232,6 +236,14 @@ struct CollectionDetailView: View {
     }
 }
 
+/// 喜爱歌曲用星标表示这一页，导航栏和内容里都不再放标题。
+private struct FavoritesTitleHidden: ViewModifier {
+    let isHidden: Bool
+    @ViewBuilder func body(content: Content) -> some View {
+        if isHidden { content.libraryNavigationTitle("") } else { content }
+    }
+}
+
 /// 滚动距离只留在星标上。播放列表其余行不因每个像素重算。
 private struct FavoritesHeaderStar: View {
     @Environment(\.accessibilityReduceMotion) private var reducesMotion
@@ -253,6 +265,8 @@ private struct FavoritesHeaderStar: View {
                 .offset(y: -33 + distance * 0.24)
                 .accessibilityHidden(true)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("喜爱歌曲")
         .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, distance in
             scrollDistance = distance
         }
@@ -269,7 +283,10 @@ private struct FavoritesSwipeActions: ViewModifier {
         if enabled {
             content
                 .swipeActions(edge: .leading) {
-                    Button("插播", systemImage: "text.line.first.and.arrowtriangle.forward") { actions.playNext(song) }
+                    Button("插播", systemImage: "text.line.first.and.arrowtriangle.forward") {
+                        actions.playNext(song)
+                        actions.notify(.playingNext)
+                    }
                         .labelStyle(.iconOnly)
                         .tint(.indigo)
                 }
@@ -277,6 +294,7 @@ private struct FavoritesSwipeActions: ViewModifier {
                     Button("从喜欢歌曲移除", systemImage: "trash") {
                         CenteredActionSheet.confirmRemoveFromLiked {
                             withAnimation { actions.removeFromFavorites(song) }
+                            actions.notify(.unfavorited)
                         }
                     }
                     .labelStyle(.iconOnly)
@@ -304,13 +322,11 @@ private struct CollectionActions: View {
         HStack(spacing: 14) {
             circleButton("随机播放", systemImage: "shuffle") {
                 guard canPlay, let route = detail.route else { return }
-                actionFeedback &+= 1
                 actions.play(route, true)
             }
             .disabled(!canPlay)
             Button {
                 guard canPlay, let route = detail.route else { return }
-                actionFeedback &+= 1
                 actions.play(route, false)
             } label: {
                 // 实测 Apple Music：三角约 14×15pt，与文字间距约 7pt。
@@ -797,6 +813,7 @@ private final class AlbumSongsController: UICollectionViewController {
                 done(true)
                 LibraryHaptics.impact()
                 self?.environment.songMenuActions.toggleFavorite(song)
+                self?.environment.collectionMenuActions.notify(.favorited)
             }
             like.image = UIImage(systemName: "heart.fill"); like.backgroundColor = .systemPink
             like.image?.accessibilityLabel = "喜欢"
@@ -804,9 +821,10 @@ private final class AlbumSongsController: UICollectionViewController {
         case .download, .stopDownload:
             let active = action == .stopDownload
             let download = UIContextualAction(style: .normal, title: nil) { [weak self] _, _, done in
+                done(true)
+                LibraryHaptics.impact()
                 if active { self?.environment.libraryDownloads?.stop([song]) }
                 else { self?.environment.libraryDownloads?.download([song]) }
-                done(true)
             }
             download.image = UIImage(systemName: active ? "stop.fill" : "arrow.down"); download.backgroundColor = .systemBlue
             download.image?.accessibilityLabel = active ? "停止下载" : "下载"
@@ -825,6 +843,7 @@ private final class AlbumSongsController: UICollectionViewController {
     private func confirmRemoveFromLiked(_ song: LibrarySongItem) {
         CenteredActionSheet.confirmRemoveFromLiked { [weak self] in
             self?.environment.songMenuActions.removeFromFavorites(song)
+            self?.environment.collectionMenuActions.notify(.unfavorited)
         }
     }
 

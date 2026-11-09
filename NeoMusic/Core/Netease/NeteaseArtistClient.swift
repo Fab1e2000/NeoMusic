@@ -95,7 +95,7 @@ extension NeteaseMusicClient {
     }
     private struct ArtistDTO: Decodable {
         let id: Int64; let name: String; let picUrl: String?; let img1v1Url: String?; let briefDesc: String?
-        var model: NeteaseArtistReference { .init(id: id, name: name, artworkURL: NeteaseMusicClient.url(picUrl ?? img1v1Url)) }
+        var model: NeteaseArtistReference { .init(id: id, name: name, artworkURL: NeteaseArtworkURL.artist(img1v1Url: img1v1Url, picUrl: picUrl)) }
     }
     private struct AlbumDTO: Decodable {
         let id: Int64; let name: String; let picUrl: String?; let publishTime: Double?; let type: String?; let size: Int?; let artist: ArtistDTO?; let artists: [ArtistDTO]?

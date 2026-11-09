@@ -19,7 +19,7 @@ final class HomeFeedTests: XCTestCase {
         XCTAssertTrue(account.isHittable)
         let libraryFrame = account.frame
 
-        for title in ["主页", "新发现", "广播", "资料库", "搜索"] {
+        for title in ["主页", "资料库", "搜索"] {
             app.tabBars.buttons[title].tap()
             let navigationBar = app.navigationBars[title]
             XCTAssertTrue(navigationBar.waitForExistence(timeout: 5))

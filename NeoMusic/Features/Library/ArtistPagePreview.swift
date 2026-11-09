@@ -5,7 +5,7 @@ import UIKit
 /// Isolated layout study. All changes stay in memory and never call music services.
 struct ArtistPagePreview: View {
     @State private var path: [String] = []
-    @State private var selectedTab = 4
+    @State private var selectedTab = 2
     @State private var pageShade: CGFloat = 96
     @State private var showsBiography = false
     @State private var favorite = false
@@ -24,10 +24,8 @@ struct ArtistPagePreview: View {
     var body: some View {
         TabView(selection: $selectedTab) {
             Tab("主页", systemImage: "house.fill", value: 0) { previewNavigation }
-            Tab("新发现", systemImage: "square.grid.2x2.fill", value: 1) { previewNavigation }
-            Tab("广播", systemImage: "dot.radiowaves.left.and.right", value: 2) { previewNavigation }
-            Tab("资料库", systemImage: "square.stack.fill", value: 3) { previewNavigation }
-            Tab("搜索", systemImage: "magnifyingglass", value: 4) { previewNavigation }
+            Tab("资料库", systemImage: "square.stack.fill", value: 1) { previewNavigation }
+            Tab("搜索", systemImage: "magnifyingglass", value: 2) { previewNavigation }
         }
         .tabBarMinimizeBehavior(.onScrollDown)
         .tabViewBottomAccessory {

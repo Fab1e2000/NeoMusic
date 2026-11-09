@@ -257,6 +257,42 @@ import XCTest
         XCTAssertEqual(try Data(contentsOf: restored), Data("artwork".utf8))
         XCTAssertEqual(ArtworkCacheProtocol.state.withLock { $0.requests }, 3)
     }
+
+    func testArtistArtworkPrefersSquareImageAndReplacesTheNonSquareDefault() {
+        let square = NeteaseArtworkURL.artist(img1v1Url: "http://p1.music.126.net/square.jpg", picUrl: "https://p1.music.126.net/wide.jpg")
+        XCTAssertEqual(square?.absoluteString, "https://p1.music.126.net/square.jpg")
+        let replaced = NeteaseArtworkURL.artist(
+            img1v1Url: "https://p1.music.126.net/xxx/5639395138885805.jpg",
+            picUrl: "https://p1.music.126.net/wide.jpg")
+        XCTAssertEqual(replaced?.absoluteString, "https://p1.music.126.net/VnZiScyynLG7atLIZ2YPkw==/18686200114669622.jpg")
+        let wide = NeteaseArtworkURL.artist(img1v1Url: " ", picUrl: "http://p1.music.126.net/wide.jpg")
+        XCTAssertEqual(wide?.absoluteString, "https://p1.music.126.net/wide.jpg")
+        XCTAssertEqual(NeteaseArtworkURL.downloadURL(for: remote), remote)
+    }
+
+    func testNeteaseImageDownloadsAtFixedSizeAndFallsBackToTheOriginalAddress() async throws {
+        let canonical = URL(string: "https://p1.music.126.net/abc/cover.jpg?imageView=1&watermark=1")!
+        let sized = NeteaseArtworkURL.downloadURL(for: canonical)
+        XCTAssertEqual(sized.absoluteString, "https://p1.music.126.net/abc/cover.jpg?param=1024y1024")
+        let directory = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let session = network()
+        defer { session.invalidateAndCancel() }
+        ArtworkCacheProtocol.state.withLock {
+            $0.responses[sized.absoluteString] = (status: 503, data: Data("no".utf8))
+        }
+        let cache = NeteaseArtworkCache(directory: directory, session: session)
+        let file = try await cache.imageURL(for: canonical, scope: "42")
+        XCTAssertEqual(try Data(contentsOf: file), Data("artwork".utf8))
+        XCTAssertEqual(cache.cachedURL(for: canonical, scope: "42"), file)
+        let requested = ArtworkCacheProtocol.state.withLock { $0.urls.map(\.absoluteString) }
+        XCTAssertEqual(requested, [sized.absoluteString, canonical.absoluteString])
+
+        ArtworkCacheProtocol.state.withLock { $0.responses = [:]; $0.requests = 0; $0.urls = [] }
+        let reused = try await cache.imageURL(for: canonical, scope: "42")
+        XCTAssertEqual(reused, file)
+        XCTAssertEqual(ArtworkCacheProtocol.state.withLock { $0.requests }, 0)
+    }
 }
 
 private final class ArtworkCacheProtocol: URLProtocol, @unchecked Sendable {
@@ -267,6 +303,8 @@ private final class ArtworkCacheProtocol: URLProtocol, @unchecked Sendable {
         var started: @Sendable () -> Void = {}
         var stopped: @Sendable () -> Void = {}
         var requests = 0
+        var urls: [URL] = []
+        var responses: [String: (status: Int, data: Data)] = [:]
         var pending: [ArtworkCacheProtocol] = []
     }
     static let state = Mutex(State())
@@ -275,6 +313,7 @@ private final class ArtworkCacheProtocol: URLProtocol, @unchecked Sendable {
     override func startLoading() {
         let (blocked, started) = Self.state.withLock {
             $0.requests += 1
+            if let url = request.url { $0.urls.append(url) }
             if $0.blocked { $0.pending.append(self) }
             return ($0.blocked, $0.started)
         }
@@ -298,7 +337,12 @@ private final class ArtworkCacheProtocol: URLProtocol, @unchecked Sendable {
         pending.forEach { $0.finish() }
     }
     private func finish() {
-        let (status, data) = Self.state.withLock { ($0.status, $0.data) }
+        let (status, data) = Self.state.withLock { state in
+            if let url = request.url?.absoluteString, let special = state.responses[url] {
+                return (special.status, special.data)
+            }
+            return (state.status, state.data)
+        }
         let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: data)

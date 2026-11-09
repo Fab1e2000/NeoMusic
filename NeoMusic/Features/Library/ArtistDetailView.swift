@@ -1,5 +1,9 @@
 import SwiftUI
 
+func artistPreview(_ artist: LibraryArtistItem) -> LibraryNavigationPreview {
+    .init(route: .artist(artist.id), ownerID: nil, title: artist.name, artwork: artist.artwork ?? .missing)
+}
+
 enum ArtistSection: String, Hashable { case songs, albums, singles, similar
     var title: String { switch self { case .songs: "歌曲排行"; case .albums: "专辑"; case .singles: "单曲与 EP"; case .similar: "类似艺人" } }
 }
@@ -27,6 +31,7 @@ struct ArtistDetailView: View {
     var retry: ((String) -> Void)?
     @Environment(\.collectionMenuActions) private var actions
     @Environment(\.libraryNavigationChrome) private var chrome
+    @Environment(\.libraryNavigationPreview) private var navigationPreview
     @State private var biography = false
     private var identity: String { detail.id.isEmpty ? detail.name : detail.id }
     var body: some View {
@@ -74,7 +79,7 @@ struct ArtistDetailView: View {
                         ScrollView(.horizontal) {
                             LazyHStack(spacing: 12) {
                                 ForEach(detail.similar) { artist in
-                                    LibraryRouteLink(value: .artist(artist.id)) {
+                                    LibraryRouteLink(value: .artist(artist.id), preview: artistPreview(artist)) {
                                         VStack { ArtistAvatar(artwork: artist.artwork).frame(width: 120, height: 120); Text(artist.name).font(.system(size: 14)).lineLimit(1) }.frame(width: 120)
                                     }
                                 }
@@ -83,7 +88,7 @@ struct ArtistDetailView: View {
                             .contentMargins(.horizontal, 20).scrollTargetBehavior(.viewAligned).scrollIndicators(.hidden)
                     }.padding(.top, 24)
                 }
-            }.padding(.bottom, 24).background { ArtistDetailBackdrop(artwork: detail.artwork) }
+            }.padding(.bottom, 24).background { ArtistDetailBackdrop(artwork: detail.artwork, preview: matchingPreview?.artwork) }
         }
         .modifier(ArtistPageShade())
         .ignoresSafeArea(edges: .top).scrollEdgeEffectHidden(true, for: .top).foregroundStyle(.white)
@@ -100,9 +105,15 @@ struct ArtistDetailView: View {
             NavigationStack { ScrollView { Text(detail.biography).frame(maxWidth: .infinity, alignment: .leading).padding(20) }.navigationTitle(detail.name).toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { biography = false } } } }.presentationDetents([.large])
         }
     }
+    private var matchingPreview: LibraryNavigationPreview? {
+        guard let navigationPreview, navigationPreview.route == .artist(identity) else { return nil }
+        return navigationPreview
+    }
     private func favorite() {
         LibraryHaptics.impact()
+        let removing = detail.isFavorite
         if let toggleFavorite { toggleFavorite() } else { actions.toggleFavorite(.artist(identity)) }
+        actions.notify(removing ? .unfavorited : .favorited)
     }
     private func heading(_ section: ArtistSection) -> some View {
         LibraryRouteLink(value: .artistSection(identity, section)) { HStack(spacing: 6) { Text(section.title).font(.system(size: 20, weight: .bold)); Image(systemName: "chevron.right").font(.system(size: 16, weight: .semibold)) } }.buttonStyle(.plain)
@@ -145,7 +156,7 @@ struct ArtistSectionView: View {
             case .songs: List(detail.songs) { song in ArtistSongRow(song: song, songs: detail.songs, source: detail.name, dark: false, playSong: playSong).listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20)).listRowSeparator(.hidden) }.listStyle(.plain)
             case .similar:
                 List(detail.similar) { artist in
-                    LibraryRouteLink(value: .artist(artist.id)) {
+                    LibraryRouteLink(value: .artist(artist.id), preview: artistPreview(artist)) {
                         HStack(spacing: 12) {
                             ArtistAvatar(artwork: artist.artwork).frame(width: 64, height: 64)
                             Text(artist.name).font(.callout).frame(maxWidth: .infinity, alignment: .leading)

@@ -57,7 +57,8 @@ struct NowPlayingTrackSwipe<Content: View>: View {
                     var transaction = Transaction(animation: nil)
                     transaction.disablesAnimations = true
                     withTransaction(transaction) { offset = 0 }
-                }
+                },
+                onStart: { ReferenceTrackSwipeFeedback.prepare() }
             )
         ))
     }
@@ -127,6 +128,8 @@ private struct NowPlayingHorizontalPan: UIGestureRecognizerRepresentable {
     let onChange: (CGFloat) -> Void
     let onEnd: (_ translation: CGFloat, _ velocity: CGFloat) -> Void
     let onCancel: () -> Void
+    /// 手势开始时预热切歌触感，触发那一刻延迟更低。
+    var onStart: (() -> Void)? = nil
 
     func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
 
@@ -145,7 +148,10 @@ private struct NowPlayingHorizontalPan: UIGestureRecognizerRepresentable {
     func handle(_ recognizer: UIPanGestureRecognizer) {
         let translation = recognizer.translation(in: recognizer.view).x
         switch recognizer.state {
-        case .began, .changed:
+        case .began:
+            onStart?()
+            onChange(translation)
+        case .changed:
             onChange(translation)
         case .ended:
             onEnd(translation, recognizer.velocity(in: recognizer.view).x)
@@ -211,9 +217,16 @@ private struct TrackSwipeTouchSurface: UIViewRepresentable {
     }
 }
 
-/// Both player surfaces use the same generator lifecycle and unmodified soft impact.
+/// Both player surfaces share one selection generator: swiping between tracks is a
+/// value change, matching the system selection pattern. The gesture prepares it on
+/// start for low-latency firing, and firing re-prepares for back-to-back swipes.
 @MainActor enum ReferenceTrackSwipeFeedback {
-    static func selection() { UIImpactFeedbackGenerator(style: .soft).impactOccurred() }
+    private static let generator = UISelectionFeedbackGenerator()
+    static func prepare() { generator.prepare() }
+    static func selection() {
+        generator.selectionChanged()
+        generator.prepare()
+    }
 }
 
 nonisolated private struct ReferenceTrackSwipeEdgeFade: ViewModifier, Animatable {

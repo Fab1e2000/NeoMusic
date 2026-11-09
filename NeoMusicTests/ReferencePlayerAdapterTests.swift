@@ -106,9 +106,11 @@ import Nuke
     func testFavoriteAndNativeMenuGrouping() {
         var favorites: Set<String> = []
         var openedArtistID: String?
+        var notes: [String] = []
         let actions = ReferencePlayerActions(isFavorite: { favorites.contains($0) },
             toggleFavorite: { if favorites.contains($0) { favorites.remove($0) } else { favorites.insert($0) } },
-            addToPlaylist: { _ in }, openAlbum: { _ in }, openArtist: { openedArtistID = $0 })
+            addToPlaylist: { _ in }, openAlbum: { _ in }, openArtist: { openedArtistID = $0 },
+            notify: { notes.append($0.title) })
         let song = track("a")
         actions.toggleFavorite(song)
         XCTAssertTrue(actions.isFavorite(song))
@@ -116,6 +118,7 @@ import Nuke
         actions.toggleFavorite(song)
         XCTAssertFalse(actions.isFavorite(song))
         XCTAssertFalse(favorites.contains(song.id))
+        XCTAssertEqual(notes, [LibraryToast.favorited.title, LibraryToast.unfavorited.title])
         let configuration = SongMenuConfiguration(
             primary: [.init(id: "favorite", title: "喜欢", systemImage: "star.fill") {}],
             secondary: [.init(id: "album", title: "查看专辑", systemImage: "music.note.square.stack") {}],

@@ -213,9 +213,8 @@ final class NeteaseArtistStore {
             if let artwork = legacy?.1 { legacyArtwork.merge(artwork) { _, new in new } }
             publish(.artist(id))
             let urls = [page.detail?.artist.artworkURL].compactMap { $0 }
-                + (page.detail?.songs.prefix(8).compactMap(\.artworkURL) ?? [])
-                + (page.releases?.prefix(6).compactMap(\.artworkURL) ?? [])
-                + (page.similar?.prefix(6).compactMap(\.artworkURL) ?? [])
+                + (page.detail?.songs.prefix(NeteaseArtworkPrefetch.artistSongs).compactMap(\.artworkURL) ?? [])
+                + (page.releases?.prefix(NeteaseArtworkPrefetch.shelfCards).compactMap(\.artworkURL) ?? [])
             requestArtwork(urls)
         }
         restoringPages[key] = task
@@ -240,7 +239,7 @@ final class NeteaseArtistStore {
             mergeSongs(page.detail.songs, source: key)
             if let artwork = legacy?.1 { legacyArtwork.merge(artwork) { _, new in new } }
             publish(.album(id))
-            requestArtwork([page.detail.album.artworkURL].compactMap { $0 } + page.detail.songs.prefix(8).compactMap(\.artworkURL))
+            requestArtwork([page.detail.album.artworkURL].compactMap { $0 } + page.detail.songs.prefix(NeteaseArtworkPrefetch.detailSongs).compactMap(\.artworkURL))
         }
         restoringPages[key] = task
         await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
@@ -272,7 +271,7 @@ final class NeteaseArtistStore {
             let previous = details[id]
             let changed = previous?.artist != detail.artist || previous?.biography != detail.biography || previous?.songs != detail.songs
             if changed { details[id] = detail; mergeSongs(detail.songs, source: "artist:\(id)") }
-            cacheArtwork([detail.artist.artworkURL].compactMap { $0 } + detail.songs.prefix(8).compactMap(\.artworkURL), token: token)
+            cacheArtwork([detail.artist.artworkURL].compactMap { $0 } + detail.songs.prefix(NeteaseArtworkPrefetch.artistSongs).compactMap(\.artworkURL), token: token)
             return changed ? .artist(id) : nil
         }
     }
@@ -307,7 +306,7 @@ final class NeteaseArtistStore {
             try check(token)
             let changed = releases[id].map { !Self.sameAlbums($0, value) } ?? true
             if changed { releases[id] = value }
-            cacheArtwork(value.prefix(6).compactMap(\.artworkURL), token: token)
+            cacheArtwork(value.prefix(NeteaseArtworkPrefetch.shelfCards).compactMap(\.artworkURL), token: token)
             return changed ? .artist(id) : nil
         }
     }
@@ -320,7 +319,6 @@ final class NeteaseArtistStore {
             try check(token)
             let changed = similar[id] != value
             if changed { similar[id] = value }
-            cacheArtwork(value.prefix(6).compactMap(\.artworkURL), token: token)
             return changed ? .artist(id) : nil
         }
     }
@@ -348,7 +346,7 @@ final class NeteaseArtistStore {
             let previous = albums[id]
             let changed = previous.map { !Self.sameAlbums([$0.album], [value.album]) || $0.songs != value.songs } ?? true
             if changed { albums[id] = value; mergeSongs(value.songs, source: "album:\(id)") }
-            cacheArtwork([value.album.artworkURL].compactMap { $0 } + value.songs.prefix(8).compactMap(\.artworkURL), token: token)
+            cacheArtwork([value.album.artworkURL].compactMap { $0 } + value.songs.prefix(NeteaseArtworkPrefetch.detailSongs).compactMap(\.artworkURL), token: token)
             return changed ? .album(id) : nil
         }
     }

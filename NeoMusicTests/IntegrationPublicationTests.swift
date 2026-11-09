@@ -78,6 +78,7 @@ import XCTest
         }
         XCTAssertNil(HomeMusicIntegration.currentOnlineSongID(item("netease:42:9"), owner: nil))
         XCTAssertEqual(HomeQuickAction.allCases.map(\.rawValue), NeteaseHomeQuickAction.allCases.map(\.rawValue))
+        XCTAssertEqual(HomeQuickAction.allCases.filter(\.opensDetail), [.dailySongs, .hotSongs, .privateRadar])
     }
 
     func testUnchangedSongCatalogDoesNotInvalidateObservers() {

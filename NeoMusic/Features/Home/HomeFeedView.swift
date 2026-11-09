@@ -111,10 +111,15 @@ struct HomeQuickActionCard: View {
     }
 
     var body: some View {
-        Button {
-            captureSource { [sources = artworkSources, id = sourceIdentity] in sources.view(for: id) }
-            action()
-        } label: {
+        cardButton
+        .disabled(isLoading)
+        .accessibilityLabel(item.action.title)
+        .accessibilityValue(accessibilityStatus)
+        .accessibilityIdentifier("home.quick-action.\(item.action.rawValue)")
+    }
+
+    @ViewBuilder private var cardButton: some View {
+        let button = Button(action: activate) {
             cover
                 .frame(width: HomeMetrics.heroWidth, height: HomeMetrics.heroHeight)
                 .clipShape(.rect(cornerRadius: 16))
@@ -125,11 +130,17 @@ struct HomeQuickActionCard: View {
                 }
                 .contentShape(.rect(cornerRadius: 16))
         }
-        .buttonStyle(.plain)
-        .disabled(isLoading)
-        .accessibilityLabel(item.action.title)
-        .accessibilityValue(accessibilityStatus)
-        .accessibilityIdentifier("home.quick-action.\(item.action.rawValue)")
+        if item.action.opensDetail {
+            button.buttonStyle(.plain)
+        } else {
+            button.buttonStyle(HomePlaybackCardButtonStyle())
+        }
+    }
+
+    private func activate() {
+        if !item.action.opensDetail { LibraryHaptics.impact() }
+        captureSource { [sources = artworkSources, id = sourceIdentity] in sources.view(for: id) }
+        action()
     }
 
     private var cover: some View {
@@ -161,15 +172,12 @@ struct HomeQuickActionCard: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(width: HomeMetrics.heroWidth, height: HomeMetrics.heroHeight)
-        .overlay(alignment: .topTrailing) {
-            if isLoading {
-                ProgressView().tint(.white)
-                    .padding(10)
-                    .background(.black.opacity(0.3), in: .circle)
-                    .padding(14)
-            }
-        }
     }
+}
+
+/// 直接播放的首页卡不使用按钮按下时的变暗。
+private struct HomePlaybackCardButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View { configuration.label }
 }
 
 private struct HomeQuickActionArtwork: View {

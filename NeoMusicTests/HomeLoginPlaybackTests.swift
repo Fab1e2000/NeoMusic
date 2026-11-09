@@ -1,3 +1,4 @@
+import Synchronization
 import XCTest
 @testable import NeoMusic
 
@@ -42,6 +43,38 @@ import XCTest
             XCTAssertEqual(player.current.id, "local")
         }
     }
+    func testRoamingKeepsPlayingPastTheFirstBatch() async throws {
+        let first = #"{"code":200,"data":[{"id":7,"name":"First","ar":[{"name":"Artist"}],"al":{"name":"Album"},"dt":10000},{"id":9,"name":"Second","ar":[{"name":"Artist"}],"al":{"name":"Album"},"dt":10000}]}"#
+        let later = #"{"code":200,"data":[{"id":11,"name":"Third","ar":[{"name":"Artist"}],"al":{"name":"Album"},"dt":10000}]}"#
+        HomeLoginProtocol.radioScript.withLock { $0 = [first, later, later] }
+        defer { HomeLoginProtocol.radioScript.withLock { $0 = [] } }
+        try await withQuickActionIntegration { account, _, integration, player in
+            try await account.completeLogin(credential: .init(musicU: "test"))
+            integration.requestQuickAction(.privateRoaming)
+            for _ in 0..<80 where player.pendingPlay == nil && player.sourceTitle != "私人漫游" {
+                try await Task.sleep(for: .milliseconds(25))
+            }
+            if player.pendingPlay != nil { player.confirmPendingPlay() }
+            let started = player.queue.map(\.id)
+            XCTAssertEqual(player.sourceTitle, "私人漫游")
+            XCTAssertFalse(started.isEmpty)
+            for _ in 0..<80 where player.queue.count <= started.count {
+                try await Task.sleep(for: .milliseconds(25))
+            }
+            XCTAssertGreaterThan(player.queue.count, started.count)
+            XCTAssertFalse(player.hasUserQueuedUpcoming)
+            while player.next != nil, started.contains(player.current.id), started.contains(player.next?.id ?? "") {
+                player.skipForward()
+            }
+            if started.contains(player.current.id) { player.skipForward() }
+            for _ in 0..<80 where started.contains(player.current.id) {
+                try await Task.sleep(for: .milliseconds(25))
+            }
+            XCTAssertFalse(started.contains(player.current.id))
+            XCTAssertEqual(player.current.id, "netease:42:11")
+        }
+    }
+
     func testRoamingBatchSurvivesCancelledConfirmationAndIsConsumedOnAcceptance() async throws {
         try await withQuickActionIntegration { account, home, integration, player in
             try await account.completeLogin(credential: .init(musicU: "test"))
@@ -327,6 +360,7 @@ import XCTest
 }
 
 private final class HomeLoginProtocol: URLProtocol, @unchecked Sendable {
+    static let radioScript = Mutex<[String]>([])
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
@@ -342,7 +376,11 @@ private final class HomeLoginProtocol: URLProtocol, @unchecked Sendable {
         case "/eapi/v3/discovery/recommend/songs": body = #"{"code":200,"data":{"dailySongs":[{"id":9,"name":"Daily song","ar":[{"name":"Artist"}],"al":{"name":"Album","picUrl":"https://fixture.test/daily-cover"},"dt":10000}]}}"#
         case "/eapi/v1/radio/get":
             Thread.sleep(forTimeInterval: 0.15)
-            body = #"{"code":200,"data":[{"id":7,"name":"First","ar":[{"name":"Artist"}],"al":{"name":"Album"},"dt":10000},{"id":9,"name":"Second","ar":[{"name":"Artist"}],"al":{"name":"Album"},"dt":10000}]}"#
+            let scripted = Self.radioScript.withLock { bodies -> String? in
+                guard !bodies.isEmpty else { return nil }
+                return bodies.removeFirst()
+            }
+            body = scripted ?? #"{"code":200,"data":[{"id":7,"name":"First","ar":[{"name":"Artist"}],"al":{"name":"Album"},"dt":10000},{"id":9,"name":"Second","ar":[{"name":"Artist"}],"al":{"name":"Album"},"dt":10000}]}"#
         case "/eapi/toplist": body = #"{"code":200,"list":[{"id":12,"name":"热歌榜"}]}"#
         case "/eapi/homepage/block/page": body = #"{"code":200,"data":{"blocks":[{"blockCode":"HOMEPAGE_BLOCK_STYLE_RCMD","uiElement":{"subTitle":{"title":"根据《Seed》推荐"}},"creatives":[{"resources":[{"resourceType":"song","resourceId":"15","song":{"id":15,"title":"Feed song","artist":"Artist","album":"Album","duration":20,"unavailable":false}}]}]}],"hasMore":false}}"#
         case "/eapi/sub/artist/new/works/song/list": body = #"{"code":200,"data":{"newWorks":[]}}"#

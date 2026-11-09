@@ -1,18 +1,21 @@
 import SwiftUI
 
 enum AccountRoute: Hashable {
-    case settings, login, quality
+    case settings, login, quality, tabs
 }
 
 struct AccountPage: View {
     let account: NeteaseAccount
     private let authenticationEnabled: Bool
+    private let tabOrderDefaults: UserDefaults
     @Environment(\.dismiss) private var dismiss
     @State private var path: [AccountRoute]
 
-    init(account: NeteaseAccount, initialRoute: AccountRoute? = nil, authenticationEnabled: Bool = true) {
+    init(account: NeteaseAccount, initialRoute: AccountRoute? = nil, authenticationEnabled: Bool = true,
+         tabOrderDefaults: UserDefaults = .standard) {
         self.account = account
         self.authenticationEnabled = authenticationEnabled
+        self.tabOrderDefaults = tabOrderDefaults
         let route = initialRoute == .login && !authenticationEnabled ? nil : initialRoute
         _path = State(initialValue: route.map { [$0] } ?? [])
     }
@@ -50,6 +53,10 @@ struct AccountPage: View {
                             .accessibilityIdentifier("account.quality")
                     }
                 }
+                Section {
+                    NavigationLink("标签页", value: AccountRoute.tabs)
+                        .accessibilityIdentifier("account.tabs")
+                }
             }
             .listStyle(.insetGrouped)
             .navigationBarTitleDisplayMode(.inline)
@@ -74,6 +81,8 @@ struct AccountPage: View {
                     if let music = account.music { MusicQualitySettingsPage(music: music, downloads: account.downloads) }
                 case .settings:
                     AccountSettingsPage(account: account, authenticationEnabled: authenticationEnabled)
+                case .tabs:
+                    TabOrderPage(defaults: tabOrderDefaults)
                 case .login:
                     if authenticationEnabled {
                         NeteaseLoginPage(account: account) { path.removeAll() }
@@ -180,6 +189,126 @@ private struct AccountSettingsPage: View {
             Text(value).foregroundStyle(.secondary).multilineTextAlignment(.trailing)
         }
         .frame(minHeight: 62)
+    }
+}
+
+private struct TabOrderPage: View {
+    @AppStorage(AppTabOrder.storageKey) private var storedOrder = AppTabOrder.defaultRaw
+    @AppStorage(AppTabOrder.hiddenKey) private var storedHidden: String?
+    private var playlistIDs: [String] {
+        LocalLibrary.playlistLibrary.playlists.compactMap { item in
+            guard !item.isSystem, !item.isDownloadedSnapshot, !item.id.isEmpty, !item.id.contains(",") else { return nil }
+            return item.id
+        }
+    }
+    private var order: [AppTab] { AppTabOrder.resolve(storedOrder, playlists: playlistIDs) }
+    private var hidden: Set<AppTab> { AppTabOrder.effectiveHidden(order: storedOrder, hidden: storedHidden, playlists: playlistIDs) }
+    private var shown: [AppTab] { order.filter { !hidden.contains($0) } }
+    private var hiddenInOrder: [AppTab] { order.filter { hidden.contains($0) } }
+
+    init(defaults: UserDefaults = .standard) {
+        _storedOrder = AppStorage(wrappedValue: AppTabOrder.defaultRaw, AppTabOrder.storageKey, store: defaults)
+        _storedHidden = AppStorage(AppTabOrder.hiddenKey, store: defaults)
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                ForEach(shown) { tab in
+                    HStack {
+                        tabLabel(tab)
+                        Spacer()
+                        Button { setHidden(tab, true) } label: {
+                            Image(systemName: "minus.circle.fill").foregroundStyle(.red)
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(shown.count <= 1)
+                        .accessibilityLabel("移除\(title(for: tab))")
+                    }
+                    .accessibilityIdentifier("tab-order.\(tab.rawValue)")
+                }
+                .onMove(perform: moveShown)
+                tabLabel(.search)
+                    .foregroundStyle(.secondary)
+                    .moveDisabled(true)
+            } header: {
+                Text("显示的标签")
+            } footer: {
+                Text("拖动右侧的把手调整顺序，点红色按钮从标签栏移除。连同末尾的搜索，最多 \(AppTabOrder.maxVisible + 1) 个，不会出现「更多」。")
+            }
+
+            if !hiddenInOrder.isEmpty {
+                Section {
+                    ForEach(hiddenInOrder) { tab in
+                        HStack {
+                            tabLabel(tab).foregroundStyle(.secondary)
+                            Spacer()
+                            Button { setHidden(tab, false) } label: {
+                                Image(systemName: "plus.circle.fill").foregroundStyle(.green)
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(shown.count >= AppTabOrder.maxVisible)
+                            .accessibilityLabel("添加\(title(for: tab))")
+                        }
+                        .moveDisabled(true)
+                    }
+                } header: {
+                    Text("可添加的标签")
+                } footer: {
+                    if shown.count >= AppTabOrder.maxVisible {
+                        Text("显示的标签已满，先移除一个才能添加。")
+                    }
+                }
+            }
+
+            Section {
+                Button("恢复默认") {
+                    storedOrder = AppTabOrder.defaultRaw
+                    storedHidden = AppTabOrder.raw(AppTabOrder.defaultHidden)
+                }
+                .disabled(shown == [.home, .library] && hidden.subtracting(playlistIDs.map(AppTab.playlist)) == AppTabOrder.defaultHidden)
+            }
+        }
+        // 编辑模式一直开着时，后插入的行不会带上系统排序把手。按当前显示的标签重建列表，把手会马上出现。
+        .id(shown.map(\.rawValue).sorted().joined(separator: ","))
+        .environment(\.editMode, .constant(.active))
+        .contentMargins(.horizontal, 20, for: .scrollContent)
+        .navigationTitle("标签页")
+        .navigationBarTitleDisplayMode(.inline)
+        .accessibilityIdentifier("account.tab-order")
+    }
+
+    /// 只在显示的标签之间拖动；未显示的标签留在原来的相对位置。
+    private func moveShown(from source: IndexSet, to destination: Int) {
+        var reordered = shown
+        reordered.move(fromOffsets: source, toOffset: destination)
+        var iterator = reordered.makeIterator()
+        storedOrder = AppTabOrder.raw(order.map { hidden.contains($0) ? $0 : iterator.next()! })
+    }
+
+    private func setHidden(_ tab: AppTab, _ isHidden: Bool) {
+        var updated = hidden
+        if isHidden { updated.insert(tab) } else { updated.remove(tab) }
+        let current = order
+        if case .playlist = tab, !isHidden { storedOrder = AppTabOrder.raw(current) }
+        storedHidden = AppTabOrder.raw(current.filter(updated.contains))
+    }
+
+    private func title(for tab: AppTab) -> String {
+        if case .playlist(let id) = tab { return LocalLibrary.playlistLibrary.playlist(id)?.title ?? "播放列表" }
+        return tab.title
+    }
+
+    private func tabLabel(_ tab: AppTab) -> some View {
+        Label {
+            Text(title(for: tab))
+        } icon: {
+            if tab == .home {
+                Image("HomeTabIcon").resizable().scaledToFit()
+            } else {
+                Image(systemName: tab.systemImage)
+            }
+        }
     }
 }
 

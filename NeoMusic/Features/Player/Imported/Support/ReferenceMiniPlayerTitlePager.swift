@@ -151,6 +151,8 @@ struct ReferenceMiniPlayerTitlePager<Content: View>: UIViewRepresentable {
         func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
             moving = true
             didGiveSelectionFeedback = false
+            // Prepare the shared generator so the release-time trigger has low latency.
+            ReferenceTrackSwipeFeedback.prepare()
             for (index, host) in hosts.enumerated() { host.rootView = latest.content(displayed[index].track, false) }
         }
         func scrollViewWillEndDragging(_ scrollView: UIScrollView, withVelocity velocity: CGPoint,

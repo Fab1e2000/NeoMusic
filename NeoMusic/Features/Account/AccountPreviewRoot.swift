@@ -26,7 +26,8 @@ struct AccountPreviewRoot: View {
             .ignoresSafeArea()
             .sheet(isPresented: $isPresented) {
                 AccountPage(account: account, initialRoute: state == "settings" ? .settings : nil,
-                            authenticationEnabled: false)
+                            authenticationEnabled: false,
+                            tabOrderDefaults: UserDefaults(suiteName: "account-preview-tabs")!)
             }
             .task {
                 await account.restore()

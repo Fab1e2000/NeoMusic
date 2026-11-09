@@ -391,6 +391,39 @@ import Synchronization
         await store.activate(nil, refresh: false)
     }
 
+    func testNextRoamingSongsLeavesThePreparedBatchAndCardStateAlone() async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let network = try paginationNetwork(count: 1)
+        defer { network.invalidateAndCancel() }
+        let path = "/eapi/v1/radio/get"
+        HomePaginationProtocol.state.withLock { $0.responses[path] = songResponse([1], key: "data") }
+        let store = NeteaseHomeStore(client: NeteaseMusicClient(transport: NeteaseAccountClient(session: network)), directory: root)
+        await store.activate(try savedSession(), refresh: false)
+        guard case .roaming(let preparedID, let prepared) = try await store.performQuickAction(.privateRoaming) else {
+            return XCTFail("Missing prepared batch")
+        }
+        XCTAssertEqual(prepared.map(\.id), [1])
+        HomePaginationProtocol.state.withLock { $0.responses[path] = songResponse([4], key: "data") }
+        let more = try await store.nextRoamingSongs()
+        XCTAssertEqual(more.map(\.id), [4])
+        XCTAssertNil(store.quickActionStates[.privateRoaming])
+        guard case .roaming(let retainedID, let retained) = try await store.performQuickAction(.privateRoaming) else {
+            return XCTFail("Continuation replaced the prepared batch")
+        }
+        XCTAssertEqual(retainedID, preparedID)
+        XCTAssertEqual(retained.map(\.id), [1])
+        XCTAssertEqual(HomePaginationProtocol.count(path), 2)
+        store.consumeRoamingBatch(id: preparedID)
+        HomePaginationProtocol.state.withLock { $0.responses[path] = songResponse([5], key: "data") }
+        guard case .roaming(_, let next) = try await store.performQuickAction(.privateRoaming) else {
+            return XCTFail("Missing the batch after playback")
+        }
+        XCTAssertEqual(next.map(\.id), [5])
+        XCTAssertEqual(HomePaginationProtocol.count(path), 3)
+        await store.activate(nil, refresh: false)
+    }
+
     func testShortcutCoversRestoreExactFirstSongWithoutUsingOfficialOrLaterCover() async throws {
         let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

@@ -169,15 +169,16 @@ final class NeteaseMusicClientTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(result.quality, .high)
         XCTAssertGreaterThan(result.expiresAt.timeIntervalSinceNow, 560)
     }
-    @MainActor func testMissingSongsKeepTheirRequestedPositions() async throws {
+    @MainActor func testMissingSongsAreOmittedInsteadOfMarkedUnavailable() async throws {
         let client = makeClient([
             #"{"code":200,"playlist":{"id":2,"name":"Example","creator":{"userId":3,"nickname":"User"},"trackCount":2,"trackIds":[{"id":11,"at":1000},{"id":12}]}}"#,
             #"{"code":200,"songs":[{"id":12,"name":"Song","ar":[{"name":"Artist"}],"al":{"name":"Album"},"dt":90000}]}"#
         ])
         let result = try await client.detail(id: 2, credential: credential())
-        XCTAssertEqual(result.songs.map(\.id), [11, 12])
-        XCTAssertTrue(result.songs[0].unavailable)
-        XCTAssertEqual(result.songs[1].duration, 90)
+        XCTAssertEqual(result.songs.map(\.id), [12])
+        XCTAssertFalse(result.songs.contains { $0.unavailable })
+        XCTAssertEqual(result.songs[0].duration, 90)
+        XCTAssertEqual(result.orderedTrackIDs, [11, 12])
         XCTAssertEqual(result.addedTimes[11], Date(timeIntervalSince1970: 1))
         XCTAssertNil(result.addedTimes[12])
     }
@@ -230,7 +231,7 @@ final class NeteaseMusicClientTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(MusicFixtureProtocol.paths.withLock { $0.count }, 2)
     }
 
-    @MainActor func testPlaylistCompletionUsesHundredSongBatchesAndKeepsMissingPositions() async throws {
+    @MainActor func testPlaylistCompletionUsesHundredSongBatchesAndOmitsMissingSongs() async throws {
         let ids = (1...405).map(Int64.init)
         let response = try songsResponse(Array(ids.dropFirst(2)).filter { $0 != 250 }.reversed())
         let client = makeClient(Array(repeating: response, count: 5))
@@ -238,8 +239,9 @@ final class NeteaseMusicClientTests: XCTestCase, @unchecked Sendable {
         let partial = NeteasePlaylistDetail(playlist: .init(id: 2, title: "List", creator: "User", creatorID: 1, artworkURL: nil, trackCount: ids.count, isFavorites: false),
                                            songs: firstSongs, addedTimes: [:], trackIDs: ids, loadedTrackCount: 2)
         let result = try await client.complete(partial, credential: nil)
-        XCTAssertEqual(result.songs.map(\.id), ids)
-        XCTAssertTrue(result.songs[249].unavailable)
+        XCTAssertEqual(result.songs.map(\.id), ids.filter { $0 != 250 })
+        XCTAssertFalse(result.songs.contains { $0.unavailable })
+        XCTAssertEqual(result.orderedTrackIDs, ids)
         XCTAssertTrue(result.isComplete)
         let requested = try requestedSongIDs()
         XCTAssertEqual(requested.count, 5)

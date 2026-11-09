@@ -78,6 +78,18 @@ struct AccountButton: View {
     }
 }
 
+extension View {
+    /// 作为标签栏根页面时，右上角使用和其他主标签相同的账户按钮。
+    func libraryRootAccountButton() -> some View { modifier(LibraryRootAccountButton()) }
+}
+
+private struct LibraryRootAccountButton: ViewModifier {
+    @Environment(\.libraryNavigationChrome) private var chrome
+    func body(content: Content) -> some View {
+        content.toolbar { if chrome?.isRoot == true { AccountToolbar() } }
+    }
+}
+
 struct AccountToolbar: ToolbarContent {
     var body: some ToolbarContent {
         ToolbarSpacer(.fixed, placement: .topBarTrailing)

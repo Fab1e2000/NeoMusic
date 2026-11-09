@@ -22,7 +22,10 @@ private struct PlaylistTrailingSwipe: ViewModifier {
                 if items.contains(.removeFromLiked) {
                     // 不用 destructive。系统列表会把这个角色当成删掉当前行，歌还在歌单里也会从界面消失。
                     Button("从喜欢歌曲移除", systemImage: "trash") {
-                        CenteredActionSheet.confirmRemoveFromLiked { songActions.removeFromFavorites(song) }
+                        CenteredActionSheet.confirmRemoveFromLiked {
+                            songActions.removeFromFavorites(song)
+                            songActions.notify(.unfavorited)
+                        }
                     }
                     .labelStyle(.iconOnly)
                     .tint(.red)
@@ -43,20 +46,43 @@ private struct PlaylistTrailingSwipe: ViewModifier {
             Button("喜欢", systemImage: "heart.fill") {
                 LibraryHaptics.impact()
                 songActions.toggleFavorite(song)
+                songActions.notify(.favorited)
             }
                 .labelStyle(.iconOnly)
                 .tint(.pink)
         case .download:
-            Button("下载", systemImage: "arrow.down") { downloads?.download([song]) }
+            Button("下载", systemImage: "arrow.down") {
+                LibraryHaptics.impact()
+                downloads?.download([song])
+            }
                 .labelStyle(.iconOnly)
                 .tint(.blue)
         case .stopDownload:
-            Button("停止下载", systemImage: "stop.fill") { downloads?.stop([song]) }
+            Button("停止下载", systemImage: "stop.fill") {
+                LibraryHaptics.impact()
+                downloads?.stop([song])
+            }
                 .labelStyle(.iconOnly)
                 .tint(.blue)
         case .removeFromLiked:
             EmptyView()
         }
+    }
+}
+
+/// 作为标签根页面时不显示导航标题，和喜爱歌曲一样。
+private struct PlaylistRootChrome: ViewModifier {
+    let isRoot: Bool
+    @ViewBuilder func body(content: Content) -> some View {
+        if isRoot { content.libraryNavigationTitle("") } else { content }
+    }
+}
+
+private struct RootArtworkName: ViewModifier {
+    let title: String?
+    @ViewBuilder func body(content: Content) -> some View {
+        if let title { content.accessibilityElement(children: .ignore).accessibilityLabel(title) }
+        else { content }
     }
 }
 
@@ -77,6 +103,7 @@ struct PlaylistDetailView: View {
     @Environment(\.collectionMenuActions) private var collectionActions
     @Environment(\.libraryDownloads) private var downloads
     @Environment(\.libraryNavigationPreview) private var navigationPreview
+    @Environment(\.libraryNavigationChrome) private var chrome
     @State private var query = ""
     @State private var sort = DetailSort.order
     @State private var projection = LibraryListProjection<ProjectionInput, Projection>()
@@ -195,7 +222,10 @@ struct PlaylistDetailView: View {
                         }
                         .alignmentGuide(.listRowSeparatorTrailing) { $0.width }
                         .swipeActions(edge: .leading) {
-                            Button("插播", systemImage: "text.line.first.and.arrowtriangle.forward") { songActions.playNext(song) }
+                            Button("插播", systemImage: "text.line.first.and.arrowtriangle.forward") {
+                                songActions.playNext(song)
+                                songActions.notify(.playingNext)
+                            }
                                 .labelStyle(.iconOnly)
                                 .tint(.indigo)
                         }
@@ -233,6 +263,8 @@ struct PlaylistDetailView: View {
         .scrollContentBackground(.hidden)
         .background(Color(.systemBackground))
         .libraryTitleDisplayMode(.inline)
+        .modifier(PlaylistRootChrome(isRoot: chrome?.isRoot == true))
+        .libraryRootAccountButton()
         .modifier(PlaylistDetailSearch(query: $query, enabled: !tracks.isEmpty))
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
@@ -264,7 +296,10 @@ struct PlaylistDetailView: View {
                 .shadow(color: .black.opacity(0.06), radius: 12, y: 6)
                 .padding(.top, 14)
                 .padding(.bottom, 22)
-            Text(playlist.title).font(.title2.bold()).multilineTextAlignment(.center)
+                .modifier(RootArtworkName(title: chrome?.isRoot == true ? playlist.title : nil))
+            if chrome?.isRoot != true {
+                Text(playlist.title).font(.title2.bold()).multilineTextAlignment(.center)
+            }
             Text(playlist.subtitle ?? "我").font(.title3).padding(.top, 4)
             if externalActions == nil {
                 Text("刚刚更新").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary).padding(.top, 4 + 1.0 / 3)
@@ -273,13 +308,11 @@ struct PlaylistDetailView: View {
                 HStack(spacing: 14) {
                     Button {
                         guard !tracks.isEmpty else { return }
-                        actionFeedback &+= 1
                         collectionActions.play(.playlist(playlistID), true)
                     } label: { actionCircle("随机播放", image: "shuffle") }
                     .disabled(tracks.isEmpty)
                     Button {
                         guard !tracks.isEmpty else { return }
-                        actionFeedback &+= 1
                         collectionActions.play(.playlist(playlistID), false)
                     } label: {
                         HStack(spacing: 5) {
@@ -424,11 +457,17 @@ struct PlaylistDetailView: View {
         if let toggleFavorite = actions.toggleFavorite {
             Button(playlist.isFavorite ? "撤销喜爱" : "喜爱", systemImage: playlist.isFavorite ? "star.slash.fill" : "star.fill") {
                 LibraryHaptics.impact()
+                let removing = playlist.isFavorite
                 toggleFavorite()
+                collectionActions.notify(removing ? .unfavorited : .favorited)
             }
         }
         if let togglePin = actions.togglePin {
-            Button(playlist.isPinned ? "取消置顶播放列表" : "置顶播放列表", systemImage: playlist.isPinned ? "pin.slash" : "pin", action: togglePin)
+            Button(playlist.isPinned ? "取消置顶播放列表" : "置顶播放列表", systemImage: playlist.isPinned ? "pin.slash" : "pin") {
+                let removing = playlist.isPinned
+                togglePin()
+                collectionActions.notify(removing ? .unpinned : .pinned)
+            }
         }
         Button("添加到播放列表", systemImage: "text.badge.plus", action: actions.addSongs).disabled(tracks.isEmpty)
         if let moveToFolder = actions.moveToFolder {
@@ -444,7 +483,8 @@ struct PlaylistDetailView: View {
                 playbackSource: collectionActions.playbackSource(),
                 isDisabled: tracks.isEmpty,
                 playNext: { collectionActions.playNext(.playlist(playlistID)) },
-                playLater: { collectionActions.playLater(.playlist(playlistID)) })
+                playLater: { collectionActions.playLater(.playlist(playlistID)) },
+                notify: collectionActions.notify)
         ], firstSectionIsRow: false)
         if playlist.isSubscribed { Section {
             Button("从资料库删除", systemImage: "trash", role: .destructive) { library.pendingDeletion = playlist }
@@ -456,13 +496,17 @@ struct PlaylistDetailView: View {
             collectionDownloadMenuAction()
             Button(playlist.isFavorite ? "撤销" : "喜爱", systemImage: playlist.isFavorite ? "star.slash.fill" : "star.fill") {
                 LibraryHaptics.impact()
+                let removing = playlist.isFavorite
                 library.toggleFavorite(playlistID)
+                collectionActions.notify(removing ? .unfavorited : .favorited)
             }
             Button("共享", systemImage: "square.and.arrow.up.fill") {}.disabled(true)
         }
         Section {
             Button(playlist.isPinned ? "取消置顶播放列表" : "置顶播放列表", systemImage: playlist.isPinned ? "pin.slash" : "pin") {
+                let removing = playlist.isPinned
                 library.togglePin(playlistID)
+                collectionActions.notify(removing ? .unpinned : .pinned)
             }
             Button("添加到播放列表", systemImage: "text.badge.plus") { showsDestinations = true }.disabled(tracks.isEmpty)
         }
@@ -491,7 +535,8 @@ struct PlaylistDetailView: View {
                 playbackSource: collectionActions.playbackSource(),
                 isDisabled: tracks.isEmpty,
                 playNext: { collectionActions.playNext(.playlist(playlistID)) },
-                playLater: { collectionActions.playLater(.playlist(playlistID)) })
+                playLater: { collectionActions.playLater(.playlist(playlistID)) },
+                notify: collectionActions.notify)
         ], firstSectionIsRow: false)
         if !playlist.isReadOnly || playlist.isSubscribed { Section {
             Button("从资料库删除", systemImage: "trash", role: .destructive) { library.pendingDeletion = playlist }
@@ -635,8 +680,14 @@ private struct PlaylistEditor: View {
                                     }
                                 }.buttonStyle(.plain)
                                 Menu("调整顺序", systemImage: "line.3.horizontal") {
-                                    Button("上移") { move(song.id, by: -1) }
-                                    Button("下移") { move(song.id, by: 1) }
+                                    Button("上移") {
+                                        LibraryHaptics.impact()
+                                        move(song.id, by: -1)
+                                    }
+                                    Button("下移") {
+                                        LibraryHaptics.impact()
+                                        move(song.id, by: 1)
+                                    }
                                 }.labelStyle(.iconOnly)
                             }.padding(.vertical, 4)
                             Divider()

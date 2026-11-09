@@ -4,8 +4,10 @@ import CoreImage.CIFilterBuiltins
 
 struct ArtistDetailBackdrop: View {
     let artwork: Artwork?
-    @State private var preparedImage: UIImage?
-    @State private var preparedRequest: ArtistBackdropRequest?
+    var preview: Artwork? = nil
+    @State private var shownImage: UIImage?
+    @State private var shownRequest: ArtistBackdropRequest?
+    @State private var shownIsPrepared = false
     private static let preparer = ArtistBackdropPreparer()
     @Environment(\.displayScale) private var displayScale
     @Environment(\.artworkLoadAction) private var loadArtwork
@@ -23,9 +25,20 @@ struct ArtistDetailBackdrop: View {
             let magnification = 1 + pull / 500
 
             ZStack(alignment: .top) {
-                if let preparedImage, preparedRequest == request {
-                    Image(uiImage: preparedImage).resizable()
+                if let image = immediateImage {
+                    image.resizable().scaledToFill()
                         .frame(width: geometry.size.width, height: extent)
+                        .clipped()
+                }
+                if let shownImage, shownRequest == request {
+                    if shownIsPrepared {
+                        Image(uiImage: shownImage).resizable()
+                            .frame(width: geometry.size.width, height: extent)
+                    } else {
+                        Image(uiImage: shownImage).resizable().scaledToFill()
+                            .frame(width: geometry.size.width, height: extent)
+                            .clipped()
+                    }
                 }
             }
             .frame(width: geometry.size.width, height: extent, alignment: .top)
@@ -42,17 +55,28 @@ struct ArtistDetailBackdrop: View {
             .offset(y: upward * 0.6 - pull)
             .opacity(1 - imageProgress)
             .task(id: request) {
-                guard let url = request.url else { preparedImage = nil; return }
+                guard let url = request.url else { return }
                 let image = await LocalArtworkImages.load(url, pixels: LocalArtworkImages.pixelSize(max(geometry.size.width, 520) * displayScale))
                 guard !Task.isCancelled, let image else { return }
+                shownImage = image
+                shownRequest = request
+                shownIsPrepared = false
                 let prepared = await Self.preparer.prepare(image, request: request)
-                guard !Task.isCancelled else { return }
-                preparedImage = prepared
-                preparedRequest = request
+                guard !Task.isCancelled, let prepared else { return }
+                shownImage = prepared
+                shownRequest = request
+                shownIsPrepared = true
             }
         }
         .allowsHitTesting(false)
         .task(id: artwork?.loadID) { loadArtwork(artwork?.loadID) }
+        .task(id: preview?.loadID) { loadArtwork(preview?.loadID) }
+    }
+
+    private var immediateImage: Image? {
+        if case .image(let image) = preview { return image }
+        if artworkURL == nil, case .image(let image) = artwork { return image }
+        return nil
     }
 
 }

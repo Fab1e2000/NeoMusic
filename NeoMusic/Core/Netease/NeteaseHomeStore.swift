@@ -189,7 +189,7 @@ import Observation
             }
             onChange?()
             requestDisplayedArtwork()
-            requestArtwork(daily?.songs.prefix(8).compactMap(\.artworkURL) ?? [])
+            requestArtwork(daily?.songs.prefix(NeteaseArtworkPrefetch.detailSongs).compactMap(\.artworkURL) ?? [])
         }
         if refresh { await self.refresh(force: false) }
     }
@@ -442,6 +442,18 @@ import Observation
         return value
     }
 
+    /// 播放中的私人漫游再取一批。不改首页卡片状态，也不换掉还没开始播的预备批次。
+    func nextRoamingSongs() async throws -> [NeteaseMusicSong] {
+        try Task.checkCancellation()
+        guard let credential else { throw NeteaseHomeActionError.loginRequired }
+        let revision = generation
+        let songs = try await client.personalFM(credential: credential, mode: "EXPLORE", limit: 30)
+        try Task.checkCancellation()
+        guard generation == revision else { throw CancellationError() }
+        var seen = Set<Int64>()
+        return songs.filter { $0.id > 0 && !$0.unavailable && seen.insert($0.id).inserted }
+    }
+
     /// A cancelled queue-replacement confirmation leaves this batch available.
     func consumeRoamingBatch(id: UUID) {
         guard var value = roamingCache, value.id == id, !value.consumed else { return }
@@ -620,7 +632,7 @@ import Observation
             save(snapshot, key: "daily:" + date)
             PerformanceDiagnostics.event("NetworkContentReady"); onChange?()
             requestDisplayedArtwork()
-            requestArtwork(songs.prefix(8).compactMap(\.artworkURL))
+            requestArtwork(songs.prefix(NeteaseArtworkPrefetch.detailSongs).compactMap(\.artworkURL))
         } catch is CancellationError {} catch { if generation == revision, !Task.isCancelled { dailyError = error.localizedDescription; onChange?() } }
     }
     var cachedSongs: [NeteaseMusicSong] { userID == nil ? [] : songCatalog }
@@ -829,7 +841,7 @@ import Observation
             rebuildSongCatalog()
             save(value, key: "playlist:\(id)")
             onDetailChange?(id)
-            if preloadArtwork { requestArtwork([value.playlist.artworkURL].compactMap { $0 } + value.songs.prefix(8).compactMap(\.artworkURL)) }
+            if preloadArtwork { requestArtwork([value.playlist.artworkURL].compactMap { $0 } + value.songs.prefix(NeteaseArtworkPrefetch.detailSongs).compactMap(\.artworkURL)) }
             return value
         }
         detailTasks[id] = task

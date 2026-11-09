@@ -991,6 +991,7 @@ struct PlaylistsListView: View {
             .animation(.smooth(duration: 0.3), value: library.recentMove)
             .libraryNavigationTitle(title)
             .libraryTitleDisplayMode(.large)
+            .libraryRootAccountButton()
             .modifier(PlaylistSearch(query: $query, isEnabled: !entries.isEmpty || !query.isEmpty))
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -1182,7 +1183,10 @@ private struct PlaylistDeletionConfirmation: ViewModifier {
             isPresented: Binding(get: { isActive && library.pendingDeletion != nil }, set: { if !$0 && isActive { library.pendingDeletion = nil } }),
             presenting: library.pendingDeletion
         ) { playlist in
-            Button("删除播放列表", role: .destructive) { withAnimation { library.deletePlaylist(playlist.id) } }
+            Button("删除播放列表", role: .destructive) {
+                LibraryHaptics.impact()
+                withAnimation { library.deletePlaylist(playlist.id) }
+            }
             Button("取消", role: .cancel) {}
         } message: { _ in
             Text("确定要删除此播放列表吗？这会将播放列表从资料库删除。")

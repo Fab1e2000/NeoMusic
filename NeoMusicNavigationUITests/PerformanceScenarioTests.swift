@@ -149,7 +149,7 @@ final class PerformanceScenarioTests: XCTestCase {
 
     func testTabsAccountAndPlayer() throws {
         let app = launch()
-        for tab in ["主页", "新发现", "广播", "搜索", "资料库"] {
+        for tab in ["主页", "搜索", "资料库"] {
             app.tabBars.buttons[tab].tap()
             XCTAssertTrue(app.buttons["account.open"].waitForExistence(timeout: 5))
             app.buttons["account.open"].tap()

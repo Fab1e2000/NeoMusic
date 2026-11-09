@@ -115,7 +115,8 @@ final class NeteaseMusicStore {
                 var importedDetails: [NeteasePlaylistDetail] = []
                 for playlist in legacy.playlists {
                     guard let ids = legacy.tracks[playlist.id] else { continue }
-                    let detail = NeteasePlaylistDetail(playlist: playlist, songs: ids.map { legacy.songs[$0] ?? NeteaseMusicSong(id: $0, title: "歌曲不可用", artist: "", album: "", artworkURL: nil, duration: 0, unavailable: true) }, addedTimes: legacy.times,
+                    let resolved = ids.compactMap { legacy.songs[$0] }.filter { !$0.unavailable }
+                    let detail = NeteasePlaylistDetail(playlist: playlist, songs: resolved, addedTimes: legacy.times,
                         trackIDs: ids, loadedTrackCount: ids.count)
                     if playlist.isFavorites { apply(firstPage(detail), persist: false) }
                     importedDetails.append(detail)
@@ -323,7 +324,7 @@ final class NeteaseMusicStore {
             apply(detail)
             if mode == .refresh { detailDates[id] = Date() }
             PerformanceDiagnostics.event("NetworkContentReady"); onChange?()
-            requestArtwork(detail.songs.prefix(8).compactMap(\.artworkURL))
+            requestArtwork([detail.playlist.artworkURL].compactMap { $0 } + detail.songs.prefix(NeteaseArtworkPrefetch.detailSongs).compactMap(\.artworkURL))
             return true
         } catch is CancellationError { return false }
         catch { if generation == revision { playlistErrors[id] = error.localizedDescription; failedLoads[id] = mode; onChange?() }; return false }

@@ -427,14 +427,15 @@ struct SongMenuActions {
     var delete: (LibrarySongItem) -> Void = { _ in }
     /// “随后播放”下方的当前播放来源；没有来源时菜单写“添加到队列”。
     var playbackSource: () -> String? = { nil }
+    /// 菜单和侧滑共用的完成提示。调用方没另传时用这一份。
+    var notify: (LibraryToast) -> Void = { _ in }
 
     /// 专辑详情页曲目的菜单：未下载时首组为“下载 · 喜爱”横排，已下载时“喜爱”单独成行。
     /// 已在专辑页，不再提供“前往专辑”。本地歌曲随文件夹保留，不从资料库删除。
     @MainActor func albumTrackSections(for song: LibrarySongItem, isDownloaded: Bool,
                                        download: @escaping () -> Void, removeDownload: @escaping () -> Void,
                                        notify: @escaping (LibraryToast) -> Void) -> LibraryMenuSections {
-        let feedback: (LibraryToast) -> Void = song.isOnline ? { _ in } : notify
-        var groups = sections(for: song, notify: feedback, goToAlbum: {})
+        var groups = sections(for: song, notify: notify, goToAlbum: {})
         if !song.isOnline {
             groups.removeAll { group in group.contains { $0.title == "前往专辑" } }
         }
@@ -446,16 +447,26 @@ struct SongMenuActions {
         let state = downloads.state(of: song.id)
         if state == .downloaded { return nil }
         if state?.isActive == true {
-            return LibraryMenuItem(title: "停止下载", systemImage: "stop.circle.fill") { downloads.stop([song]) }
+            return LibraryMenuItem(title: "停止下载", systemImage: "stop.circle.fill") {
+                LibraryHaptics.impact()
+                downloads.stop([song])
+            }
         }
         if case .failed(let message) = state {
-            return LibraryMenuItem(title: "重试下载", subtitle: message, systemImage: "arrow.clockwise", isDisabled: !downloads.isDownloadable(song)) { downloads.download([song]) }
+            return LibraryMenuItem(title: "重试下载", subtitle: message, systemImage: "arrow.clockwise", isDisabled: !downloads.isDownloadable(song)) {
+                LibraryHaptics.impact()
+                downloads.download([song])
+            }
         }
-        return LibraryMenuItem(title: "下载", systemImage: "arrow.down.circle.fill", isDisabled: !downloads.isDownloadable(song)) { downloads.download([song]) }
+        return LibraryMenuItem(title: "下载", systemImage: "arrow.down.circle.fill", isDisabled: !downloads.isDownloadable(song)) {
+            LibraryHaptics.impact()
+            downloads.download([song])
+        }
     }
 
-    @MainActor func sections(for song: LibrarySongItem, notify: @escaping (LibraryToast) -> Void = { _ in },
+    @MainActor func sections(for song: LibrarySongItem, notify explicitNotify: ((LibraryToast) -> Void)? = nil,
                             goToAlbum: @escaping () -> Void) -> LibraryMenuSections {
+        let notify = explicitNotify ?? self.notify
         var quick = [favoriteItem(isFavorite: song.isFavorite) {
             if song.isFavorite {
                 CenteredActionSheet.confirmRemoveFromLiked {

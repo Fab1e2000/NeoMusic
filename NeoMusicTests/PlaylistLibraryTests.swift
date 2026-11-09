@@ -369,7 +369,7 @@ final class AlbumMenuTests: XCTestCase {
         for title in ["喜爱", "插播", "添加到队列"] {
             try XCTUnwrap(items.first { $0.title == title }).perform()
         }
-        XCTAssertEqual(events, ["favorite", "next", "later"])
+        XCTAssertEqual(events, ["favorite", LibraryToast.favorited.title, "next", "下个播放", "later", "已添加到队列"])
     }
 }
 
@@ -418,9 +418,12 @@ final class QueueMenuTests: XCTestCase {
                 try check(songActions.albumTrackSections(for: song, isDownloaded: downloaded,
                     download: {}, removeDownload: {}, notify: notify), notifies: true)
             }
-            // Ordinary song menus previously exposed only play-next; both actions must reach the same song.
+            // 没接提示时，歌曲菜单只执行动作。
             try check(songActions.sections(for: song, goToAlbum: {}), notifies: false)
         }
+        songActions.notify = notify
+        try check(songActions.sections(for: song, goToAlbum: {}), notifies: true)
+        try check(songActions.rowMenuSections(for: song) { _ in }, notifies: true)
     }
 
     func testDisabledQueueMenuKeepsBothItemsWithoutPerformingActionsOrNotifying() {

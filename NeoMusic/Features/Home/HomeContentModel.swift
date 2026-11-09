@@ -27,6 +27,13 @@ enum HomeQuickAction: String, CaseIterable, Identifiable {
         case .similarSongs: "从当前歌曲出发"
         }
     }
+    /// 每日推荐、热歌和私人雷达进入独立页面。其余三张直接播放。
+    var opensDetail: Bool {
+        switch self {
+        case .dailySongs, .hotSongs, .privateRadar: true
+        case .heartMode, .privateRoaming, .similarSongs: false
+        }
+    }
 }
 
 struct HomeQuickActionItem: Identifiable, Equatable {

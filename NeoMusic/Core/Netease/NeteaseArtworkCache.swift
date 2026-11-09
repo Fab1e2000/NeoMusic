@@ -2,6 +2,45 @@ import CryptoKit
 import Foundation
 import Nuke
 
+/// 网易云图片地址只在下载时改成固定尺寸。模型里仍保存接口返回的原始地址。
+enum NeteaseArtworkURL {
+    static let pixelSize = 1_024
+    /// 没有头像时网易云给出的 img1v1Url 不是正方形。
+    private static let nonSquareAvatar = "5639395138885805.jpg"
+    private static let squareAvatar = "https://p1.music.126.net/VnZiScyynLG7atLIZ2YPkw==/18686200114669622.jpg"
+
+    static func artist(img1v1Url: String?, picUrl: String?) -> URL? {
+        let square = img1v1Url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let chosen = square.isEmpty ? picUrl : (square.contains(nonSquareAvatar) ? squareAvatar : square)
+        return NeteaseMusicClient.url(chosen)
+    }
+
+    /// 清掉已有的 imageView、水印等参数后再请求 1024。直接追加 param 会被图片服务拒绝。
+    static func downloadURL(for canonical: URL) -> URL {
+        guard storesSizedVariant(canonical),
+              var components = URLComponents(url: canonical, resolvingAgainstBaseURL: false) else { return canonical }
+        components.query = nil
+        components.percentEncodedQuery = nil
+        components.queryItems = [URLQueryItem(name: "param", value: "\(pixelSize)y\(pixelSize)")]
+        return components.url ?? canonical
+    }
+
+    static func storesSizedVariant(_ url: URL) -> Bool {
+        guard url.scheme == "https", let host = url.host?.lowercased() else { return false }
+        return host == "music.126.net" || host.hasSuffix(".music.126.net")
+    }
+}
+
+/// 详情页在数据到达时提前请求的封面数量，其余等所在行出现。
+enum NeteaseArtworkPrefetch {
+    /// 专辑和歌单首屏：大封面之外大约十二行歌曲。
+    static let detailSongs = 12
+    /// 艺人页首屏只列出五首。
+    static let artistSongs = 5
+    /// 横向作品卡约三张，再准备邻接的一张。
+    static let shelfCards = 4
+}
+
 /// Shared original artwork files; Nuke owns network coalescing and subscriber cancellation.
 @MainActor
 final class NeteaseArtworkCache {
@@ -109,21 +148,16 @@ final class NeteaseArtworkCache {
             }
         }
 
+        let download = NeteaseArtworkURL.downloadURL(for: remote)
         let data: Data
-        let response: URLResponse?
-        do { (data, response) = try await pipeline.data(for: ImageRequest(url: remote)) }
-        catch {
-            try Task.checkCancellation()
-            switch error {
-            case .dataLoadingFailed(let underlying): throw underlying
-            case .dataIsEmpty: throw URLError(.badServerResponse)
-            case .cancelled: throw CancellationError()
-            default: throw error
-            }
+        do {
+            data = try await loadArtworkData(from: download, pipeline: pipeline)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            guard download != remote else { throw error }
+            data = try await loadArtworkData(from: remote, pipeline: pipeline)
         }
-        try Task.checkCancellation()
-        guard let response = response as? HTTPURLResponse,
-              (200..<300).contains(response.statusCode), !data.isEmpty else { throw URLError(.badServerResponse) }
         let key = key(remote, scope: scope)
         let snapshot = try await storage.store(data, key: key)
         try Task.checkCancellation()
@@ -150,8 +184,28 @@ final class NeteaseArtworkCache {
         }
     }
 
+    private func loadArtworkData(from url: URL, pipeline: ImagePipeline) async throws -> Data {
+        let data: Data
+        let response: URLResponse?
+        do { (data, response) = try await pipeline.data(for: ImageRequest(url: url)) }
+        catch {
+            try Task.checkCancellation()
+            switch error {
+            case .dataLoadingFailed(let underlying): throw underlying
+            case .dataIsEmpty: throw URLError(.badServerResponse)
+            case .cancelled: throw CancellationError()
+            default: throw error
+            }
+        }
+        try Task.checkCancellation()
+        guard let response = response as? HTTPURLResponse,
+              (200..<300).contains(response.statusCode), !data.isEmpty else { throw URLError(.badServerResponse) }
+        return data
+    }
+
     private func key(_ remote: URL, scope: String) -> String {
-        let identity = "\(scope):\(remote.absoluteString)" as NSString
+        let variant = NeteaseArtworkURL.storesSizedVariant(remote) ? ":\(NeteaseArtworkURL.pixelSize)" : ""
+        let identity = "\(scope):\(remote.absoluteString)\(variant)" as NSString
         if let cached = keys.object(forKey: identity) { return cached as String }
         func digest(_ value: String) -> String {
             let alphabet = Array("0123456789abcdef".utf8)

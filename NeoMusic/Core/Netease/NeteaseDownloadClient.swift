@@ -71,9 +71,6 @@ extension NeteaseMusicClient {
             if value.trackNumber == 0, let position = album.songs.firstIndex(where: { $0.id == id }) { value.trackNumber = position + 1 }
             songs[id] = value
         }
-        return ordered.map { id in
-            songs[id] ?? .init(song: .init(id: id, title: "歌曲不可用", artist: "", album: "", artworkURL: nil,
-                                         duration: 0, unavailable: true), albumArtist: "", trackNumber: 0, discNumber: 1)
-        }
+        return ordered.compactMap { songs[$0] }
     }
 }

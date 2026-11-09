@@ -5,6 +5,7 @@ import UIKit
 /// UIKit navigation controller and retain the system row, selection and accessibility.
 struct LibraryRouteLink<Label: View>: View {
     let value: LibraryRoute
+    var preview: LibraryNavigationPreview? = nil
     @ViewBuilder var label: Label
     @Environment(\.libraryRouteDestination) private var destination
     @Environment(\.openLibraryRoute) private var openRoute
@@ -26,8 +27,20 @@ struct LibraryRouteLink<Label: View>: View {
                     .environment(\.libraryDownloads, downloads)
                     .environment(\.nativeArtworkSurfaceEnabled, nativeArtwork)
                     .environment(\.artworkLoadAction, loadArtwork)
+                    .modifier(LibraryNavigationPreviewModifier(preview: preview))
             } label: { label }
         } else { NavigationLink(value: value) { label } }
+    }
+}
+
+private struct LibraryNavigationPreviewModifier: ViewModifier {
+    let preview: LibraryNavigationPreview?
+    func body(content: Content) -> some View {
+        if let preview {
+            content.environment(\.libraryNavigationPreview, preview)
+        } else {
+            content
+        }
     }
 }
 

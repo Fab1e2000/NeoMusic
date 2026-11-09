@@ -202,7 +202,7 @@ final class QueuePersistenceTests: XCTestCase {
         XCTAssertFalse(model.hasAudioEngine)
     }
 
-    func testWriteFailureReportsErrorAndNextSaveCanRecover() async throws {
+    func testWriteFailureStaysQuietAndNextSaveCanRecover() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -216,7 +216,7 @@ final class QueuePersistenceTests: XCTestCase {
 
         model.elapsed = 5
         await model.flushQueuePersistence()
-        XCTAssertTrue(model.errorMessage?.hasPrefix("播放状态保存失败：") == true)
+        XCTAssertNil(model.errorMessage)
         XCTAssertEqual(try Data(contentsOf: directory), sentinel)
 
         try FileManager.default.removeItem(at: directory)

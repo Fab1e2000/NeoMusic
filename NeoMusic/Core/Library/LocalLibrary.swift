@@ -183,7 +183,7 @@ enum LocalLibrary {
                 guard let song = song(id: id) else { return }
                 if song.isOnline { catalog.openSongArtist?(id, name, openRoute) }
                 else { openRoute(.artist(song.albumArtist)) }
-            })
+            }, notify: { toasts.show($0) })
     }
 
     /// 一个专辑或播放列表里的歌曲与名称。
@@ -361,7 +361,8 @@ enum LocalLibrary {
                 playlistLibrary.removeSongEverywhere(song.id)
             },
             // 对照 Apple Music：播放中显示“随后播放”与来源；暂停时为“添加到队列”。
-            playbackSource: { player.isPlaying ? player.sourceTitle : nil }
+            playbackSource: { player.isPlaying ? player.sourceTitle : nil },
+            notify: { toasts.show($0) }
         )
     }
 

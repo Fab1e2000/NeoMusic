@@ -93,11 +93,10 @@ final class NeteaseDownloadTests: XCTestCase, @unchecked Sendable {
         catch { XCTAssertTrue(error is NeteaseDownloadError) }
         XCTAssertEqual(DownloadFixtureProtocol.state.withLock { $0.paths.count }, 1)
     }
-    @MainActor func testSongPlanningReadsAllBatchesAndKeepsMissingIdentities() async throws {
+    @MainActor func testSongPlanningReadsAllBatchesAndOmitsMissingIdentities() async throws {
         let client = client(Array(repeating: #"{"code":200,"songs":[]}"#, count: 3))
         let result = try await client.downloadSongs(ids: Array(1...201) + [1], credential: saved().credential)
-        XCTAssertEqual(result.map(\.song.id), Array(1...201))
-        XCTAssertTrue(result.allSatisfy(\.song.unavailable))
+        XCTAssertTrue(result.isEmpty)
         XCTAssertEqual(DownloadFixtureProtocol.state.withLock { $0.paths.count }, 3)
     }
     @MainActor func testStagedBackgroundDownloadWaitsForAccountAndCommitsMetadata() async throws {

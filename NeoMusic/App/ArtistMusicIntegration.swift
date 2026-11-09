@@ -434,15 +434,34 @@ private struct ArtistCatalogDestination: View {
                 if case .album = route {
                     album(id)
                 } else if let detail = integration.artistDetail(id) {
-                    if case .artistSection(_, let section) = route { ArtistSectionView(detail: detail, section: section, playSong: { integration.play(route, song: $0) }) }
-                    else { ArtistDetailView(detail: detail, playSong: { integration.play(route, song: $0) }, toggleFavorite: { integration.toggle(route) }, collectRelease: { if let route = $0.route { integration.toggle(route) } }, retry: { _ in Task { await integration.load(route) } }) }
+                    artistPage(detail)
                 } else if let error = integration.error(route) {
                     ContentUnavailableView { Label("暂时无法读取", systemImage: "exclamationmark.circle") } description: { Text(error) } actions: { Button("重试") { Task { await integration.load(route) } } }
+                } else if case .artist = route, let placeholder = artistPlaceholder(id) {
+                    artistPage(placeholder)
                 } else { Color.clear }
             }
         }.environment(\.songMenuActions, integration.songActions(route))
         .task(id: "\(route):\(integration.sessionIdentity)") { await integration.load(route) }
         .onChange(of: scenePhase) { old, new in if old == .background, new == .active { Task { await integration.load(route) } } }
+    }
+
+    @ViewBuilder private func artistPage(_ detail: ArtistDetail) -> some View {
+        if case .artistSection(_, let section) = route {
+            ArtistSectionView(detail: detail, section: section, playSong: { integration.play(route, song: $0) })
+        } else {
+            ArtistDetailView(detail: detail, playSong: { integration.play(route, song: $0) }, toggleFavorite: { integration.toggle(route) }, collectRelease: { if let route = $0.route { integration.toggle(route) } }, retry: { _ in Task { await integration.load(route) } })
+        }
+    }
+
+    private func artistPlaceholder(_ id: Int64) -> ArtistDetail? {
+        guard case .artist(let routeID) = route else { return nil }
+        if let preview = navigationPreview, preview.route == route {
+            return ArtistDetail(name: preview.title, artwork: preview.artwork, albums: [], id: routeID)
+        }
+        let catalogID = "catalog:artist:\(id)"
+        guard let item = LocalLibrary.catalog.artists.first(where: { $0.id == catalogID || $0.id == routeID }) else { return nil }
+        return ArtistDetail(name: item.name, artwork: item.artwork, albums: [], id: routeID)
     }
 
     @ViewBuilder private func album(_ id: Int64) -> some View {

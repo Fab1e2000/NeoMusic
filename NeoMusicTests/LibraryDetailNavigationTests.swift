@@ -139,6 +139,24 @@ final class LibraryDetailNavigationTests: XCTestCase {
         return window
     }
 
+    func testFavoritesPageClearsItsTitle() async throws {
+        let bridge = LibraryDetailNavigation()
+        var environment = EnvironmentValues()
+        environment[NeteaseAccount.self] = account
+        bridge.configure(environment: environment, destination: { _ in AnyView(EmptyView()) })
+        let scene = try await applicationWindowScene()
+        let window = UIWindow(windowScene: scene)
+        let detail = CollectionDetail(kind: .playlist, title: "喜爱歌曲", artwork: .favorites,
+            tint: Color(.systemBackground), songs: [], route: .playlist("favorites"))
+        window.rootViewController = bridge.makeNavigationController(
+            root: AnyView(CollectionDetailView(detail: detail)), rootTitle: "喜爱歌曲")
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        try await settle()
+        let page = try XCTUnwrap(bridge.navigationController?.topViewController)
+        XCTAssertEqual(page.navigationItem.title, "")
+    }
+
     func testOwnsNativeStackAndRetainsOriginalToolbarGroups() async throws {
         let bridge = LibraryDetailNavigation()
         let window = try await mount(bridge)
@@ -605,7 +623,7 @@ final class LibraryDetailNavigationTests: XCTestCase {
         let tabs = try XCTUnwrap(nav.tabBarController)
         XCTAssertEqual(page.navigationItem.title, "资料库")
         try assertNativeToolbar(in: nav)
-        XCTAssertEqual(tabs.tabs.count, 5)
+        XCTAssertEqual(tabs.tabs.map(\.title), ["主页", "资料库", "搜索"])
         XCTAssertFalse(tabs.tabBar.isHidden)
         XCTAssertFalse(descendants(of: UICollectionView.self, in: page.view)
             .contains { $0.delegate is PinnedCollectionView.Coordinator },
