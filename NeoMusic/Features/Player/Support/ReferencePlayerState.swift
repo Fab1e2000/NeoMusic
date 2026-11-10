@@ -21,6 +21,7 @@ struct UpcomingQueueVersion: Equatable, Sendable {
     let revision: UInt64
     let index: Int
     let repeatMode: ReferencePlayerState.RepeatMode
+    var queueContinues = false
 }
 
 /// Presentation adapter for the live player. Queue and transport state have one owner.
@@ -51,24 +52,25 @@ struct UpcomingQueueVersion: Equatable, Sendable {
     var isShuffled: Bool { model.isShuffled }
     var repeatMode: RepeatMode { switch model.repeatMode { case .off: .off; case .all: .all; case .one: .one } }
     var queueModeBadgeSystemImage: String? { isShuffled ? "shuffle" : repeatMode == .off ? nil : repeatMode.systemImage }
-    var canPlayNext: Bool { nextInOrder != nil }
+    var canPlayNext: Bool { model.canSkipForward }
     var canPlayPrevious: Bool { previousInOrder != nil }
     private var count: Int { model.queue.count }
     var previousInOrder: ReferenceUpcomingTrack? { item(at: currentQueueIndex > 0 ? currentQueueIndex - 1 : repeatMode == .all ? count - 1 : -1) }
-    var nextInOrder: ReferenceUpcomingTrack? { item(at: currentQueueIndex + 1 < count ? currentQueueIndex + 1 : repeatMode == .all ? 0 : -1) }
+    var nextInOrder: ReferenceUpcomingTrack? { item(at: currentQueueIndex + 1 < count ? currentQueueIndex + 1 : repeatMode == .all && !model.queueContinues ? 0 : -1) }
     var adjacentArtworkURLs: [URL] {
         let urls = [previousInOrder?.track.coverURL, nextInOrder?.track.coverURL].compactMap { $0 }
         return urls.reduce(into: []) { if !$0.contains($1) { $0.append($1) } }
     }
     var upcoming: [ReferenceUpcomingTrack] {
         guard count > 0 else { return [] }
-        let indices = Array((currentQueueIndex + 1)..<count) + (repeatMode == .all ? Array(0..<currentQueueIndex) : [])
+        let indices = Array((currentQueueIndex + 1)..<count) + (repeatMode == .all && !model.queueContinues ? Array(0..<currentQueueIndex) : [])
         return indices.compactMap(item(at:))
     }
 
     /// Header motion and transport progress reuse the same queue projection.
     var upcomingQueueVersion: UpcomingQueueVersion {
-        UpcomingQueueVersion(revision: model.queueRevision, index: currentQueueIndex, repeatMode: repeatMode)
+        UpcomingQueueVersion(revision: model.queueRevision, index: currentQueueIndex, repeatMode: repeatMode,
+                             queueContinues: model.queueContinues)
     }
 
     var upcomingQueueEntries: [UpcomingQueueEntry] {
@@ -93,7 +95,7 @@ struct UpcomingQueueVersion: Equatable, Sendable {
     }
     func togglePlayback() { guard currentTrack != nil else { return }; isPlaying.toggle() }
     func seek(to value: Double) { guard value.isFinite else { return }; model.elapsed = min(duration, max(0, value)) }
-    func next() { if let nextInOrder { skip(toQueueIndex: nextInOrder.index) } }
+    func next() { model.skipForward() }
     func previous() { if progress > 3 { seek(to: 0) } else if let previousInOrder { skip(toQueueIndex: previousInOrder.index) } }
     func skip(toQueueIndex index: Int) { model.select(index) }
     func playFromQueue(at index: Int) { skip(toQueueIndex: index); isPlaying = currentTrack != nil }

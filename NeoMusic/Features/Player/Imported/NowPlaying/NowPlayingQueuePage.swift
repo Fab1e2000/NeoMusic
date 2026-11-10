@@ -5,6 +5,7 @@ import SwiftUI
 struct NowPlayingQueuePage: View {
     @Environment(ReferencePlayerState.self) private var player
     @Environment(\.nowPlayingLayout) private var layout
+    @Environment(\.nowPlayingControlsOverflow) private var controlsOverflow
 
     let song: ReferenceTrack
     let presentation: NowPlayingLyricsPresentation
@@ -91,7 +92,7 @@ struct NowPlayingQueuePage: View {
         // Leave a small gap above the progress track, halfway between the
         // original fixed inset and the track-aligned version.
         presentation == .portrait
-            ? max(0, layout.contentSize.height - 3 - layout.contentY(573))
+            ? max(0, layout.contentSize.height - 3 - layout.contentY(573)) + controlsOverflow
             : 12
     }
 
@@ -223,6 +224,7 @@ private struct NowPlayingQueueModeControls: View {
                 accessibilityLabel: "自动续播推荐音乐",
                 action: player.toggleAutomaticContinuation
             )
+            .accessibilityValue("当前版本暂未提供自动续播推荐音乐")
 
             modeButton(
                 systemImage: "circle.lefthalf.filled.righthalf.striped.horizontal",

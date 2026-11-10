@@ -174,7 +174,7 @@ struct AppShell<Library: View>: View {
     /// 全屏播放页；迷你播放条与业务只通过 `isPlayerPresented` 打开或关闭它，转场实现可单独替换。
     let referencePlayer: ReferencePlayerState
     let referenceLibrary: ReferenceLibrary
-    let makePlayerActions: (@escaping (LibraryRoute) -> Void) -> ReferencePlayerActions
+    let makePlayerActions: (@escaping (LibraryRoute) -> Void, (() -> Void)?) -> ReferencePlayerActions
     var isInitialContentReady = true
     var searchContent: AnyView? = nil
     var searchDestination: ((LibraryRoute) -> AnyView)? = nil
@@ -182,6 +182,7 @@ struct AppShell<Library: View>: View {
     @State var selection = AppTab.library
     @State var libraryPath: [LibraryRoute] = []
     @State var isPlayerPresented = false
+    @State private var showsAudioQualitySettings = false
     @State private var detailNavigation = LibraryDetailNavigation()
     @State private var homeNavigation = LibraryDetailNavigation()
     @State private var searchNavigation = LibraryDetailNavigation()
@@ -209,7 +210,7 @@ struct AppShell<Library: View>: View {
     }
     private var chromeColorScheme: ColorScheme? {
         switch selection {
-        case .home: homeNavigation.colorScheme ?? .light
+        case .home: homeNavigation.colorScheme
         case .library: detailNavigation.colorScheme
         case .search: searchNavigation.colorScheme
         case .favorites: favoritesNavigation.colorScheme
@@ -246,6 +247,21 @@ struct AppShell<Library: View>: View {
         .sheet(isPresented: Binding(get: { search?.showsLogin == true }, set: { search?.showsLogin = $0 })) {
             AccountPage(account: account, initialRoute: .login)
         }
+        .sheet(isPresented: $showsAudioQualitySettings) {
+            if let music = account.music {
+                NavigationStack {
+                    MusicQualitySettingsPage(music: music, downloads: account.downloads)
+                        .toolbar {
+                            ToolbarItem(placement: .topBarTrailing) {
+                                Button("关闭", systemImage: "xmark", role: .close) {
+                                    showsAudioQualitySettings = false
+                                }
+                            }
+                        }
+                }
+                .environment(\.songRowPlayback, nowPlaying)
+            }
+        }
         .onChange(of: account.profile?.userID) { _, id in
             if id != nil { home?.resumePendingPlayback() }
         }
@@ -260,14 +276,14 @@ struct AppShell<Library: View>: View {
                               onClose: finishPlayerNavigation, barColorScheme: chromeColorScheme))
         .environment(referencePlayer)
         .environment(referenceLibrary)
-        .environment(makePlayerActions { route in
+        .environment(makePlayerActions({ route in
             if isPlayerPresented {
                 pendingRoute = route
                 isPlayerPresented = false
             } else {
                 openInCurrentTab(route)
             }
-        })
+        }, account.music == nil ? nil : { showsAudioQualitySettings = true }))
         .onChange(of: playlistLibrary.pendingAddition != nil) { _, pending in
             if pending { isPlayerPresented = false }
         }

@@ -18,7 +18,6 @@ struct NowPlayingTrackSwipe<Content: View>: View {
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @State private var offset: CGFloat = 0
     @State private var measuredWidth: CGFloat = 0
-    @State private var isCommitting = false
 
     private static var spacing: CGFloat { 24 }
 
@@ -44,7 +43,6 @@ struct NowPlayingTrackSwipe<Content: View>: View {
             usesUIKitTouchSurface: usesUIKitTouchSurface,
             pan: NowPlayingHorizontalPan(
                 onChange: { translation in
-                    guard !isCommitting else { return }
                     let hasNeighbor = translation < 0 ? next != nil : previous != nil
                     // 没有相邻曲目的方向加阻尼。
                     offset = hasNeighbor ? translation : translation * 0.25
@@ -83,7 +81,30 @@ struct NowPlayingTrackSwipe<Content: View>: View {
         next: ReferenceUpcomingTrack?,
         distance: CGFloat
     ) {
-        guard !isCommitting else { return }
+        let rebasedOffset = Self.selectTarget(translation: translation, velocity: velocity,
+            previous: previous, next: next, distance: distance, select: player.skip(toQueueIndex:))
+        if let rebasedOffset {
+            ReferenceTrackSwipeFeedback.selection()
+            var transaction = Transaction(animation: nil)
+            transaction.disablesAnimations = true
+            // The selected title occupies the neighbor's current position.
+            withTransaction(transaction) { offset = rebasedOffset }
+        }
+        let animation: Animation = rebasedOffset == nil
+            ? .spring(duration: 0.35, bounce: 0.2)
+            : .spring(duration: 0.28, bounce: 0)
+        withAnimation(accessibilityReduceMotion ? nil : animation) { offset = 0 }
+    }
+
+    /// Commits at release. SwiftUI owns the interruptible settling animation.
+    static func selectTarget(
+        translation: CGFloat,
+        velocity: CGFloat,
+        previous: ReferenceUpcomingTrack?,
+        next: ReferenceUpcomingTrack?,
+        distance: CGFloat,
+        select: (Int) -> Void
+    ) -> CGFloat? {
         let threshold = distance * 0.3
         let target: (entry: ReferenceUpcomingTrack, direction: CGFloat)?
         if (translation < -threshold || velocity < -600), translation <= 0, let next {
@@ -94,32 +115,9 @@ struct NowPlayingTrackSwipe<Content: View>: View {
             target = nil
         }
 
-        guard let target else {
-            withAnimation(accessibilityReduceMotion ? nil : .spring(duration: 0.35, bounce: 0.2)) {
-                offset = 0
-            }
-            return
-        }
-
-        isCommitting = true
-        ReferenceTrackSwipeFeedback.selection()
-        let commit = {
-            player.skip(toQueueIndex: target.entry.index)
-            // 新的当前曲目就是刚滑过来的那一首，瞬间归位看不出跳动。
-            var transaction = Transaction()
-            transaction.disablesAnimations = true
-            withTransaction(transaction) { offset = 0 }
-            isCommitting = false
-        }
-        if accessibilityReduceMotion {
-            commit()
-        } else {
-            withAnimation(.spring(duration: 0.28, bounce: 0), completionCriteria: .logicallyComplete) {
-                offset = target.direction * distance
-            } completion: {
-                commit()
-            }
-        }
+        guard let target else { return nil }
+        select(target.entry.index)
+        return translation - target.direction * distance
     }
 }
 

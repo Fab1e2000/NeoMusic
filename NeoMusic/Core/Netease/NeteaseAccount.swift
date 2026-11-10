@@ -31,7 +31,10 @@ final class NeteaseAccount {
     private(set) var profile: NeteaseProfile?
     private(set) var avatarData: Data?
     private(set) var validationState = ValidationState.signedOut
-    private(set) var error: String?
+    private(set) var error: String? {
+        didSet { errorTechnicalDetails = nil }
+    }
+    private(set) var errorTechnicalDetails: String?
     private(set) var isAuthenticating = false
     private(set) var isLoggingOut = false
 
@@ -192,6 +195,7 @@ final class NeteaseAccount {
                         clearAvatarCache()
                     }
                     hasRestored = true
+                    error = nil
                     PerformanceDiagnostics.restoration("account.read.success signedIn=\(session != nil)")
                     previousState = session == nil ? .signedOut : .unverified
                     // Restore the saved identity and its image independently of
@@ -226,7 +230,7 @@ final class NeteaseAccount {
                 guard validationID == id, generation == revision else { return }
                 if let failure = error as? CredentialRollbackFailure {
                     validationState = .unverified
-                    self.error = failure.localizedDescription
+                    self.setError(failure)
                     return
                 }
                 guard !Task.isCancelled else { return }
@@ -247,7 +251,7 @@ final class NeteaseAccount {
                     guard validationID == id, generation == revision, !Task.isCancelled else { return }
                     session = nil
                     validationState = .requiresLogin
-                    self.error = error.localizedDescription
+                    self.setError(error)
                     let oldAvatar = avatarTask
                     avatarID = nil
                     oldAvatar?.cancel()
@@ -262,12 +266,12 @@ final class NeteaseAccount {
                     do { try await deleteSession() }
                     catch {
                         if validationID == id, generation == revision {
-                            self.error = "登录已失效，清除保存的凭据失败：\(error.localizedDescription)"
+                            self.setError(error, message: "登录已失效，清除保存的凭据失败。\(error.localizedDescription)")
                         }
                     }
                 } else {
                     validationState = .unverified
-                    self.error = error.localizedDescription
+                    self.setError(error)
                     guard refreshContent, !restoring || hasRestored else { return }
                     await activateContent(session)
                 }
@@ -281,26 +285,26 @@ final class NeteaseAccount {
     private func activateContent(_ session: NeteaseSavedSession?, refresh: Bool = true) async {
         guard !Task.isCancelled else { return }
         async let homeContent: Void? = home?.activate(session, refresh: refresh)
-        await activateLibraryContent(session, refresh: refresh)
+        await activateLibraryContent(session, refresh: refresh, synchronizeSearch: refresh)
         _ = await homeContent
     }
 
-    private func activateLibraryContent(_ session: NeteaseSavedSession?, refresh: Bool) async {
+    private func activateLibraryContent(_ session: NeteaseSavedSession?, refresh: Bool, synchronizeSearch: Bool = true) async {
         guard !Task.isCancelled else { return }
         await downloads?.activate(session)
-        await activateSearch(session)
+        await activateSearch(session, synchronize: synchronizeSearch)
         guard !Task.isCancelled else { return }
         async let artistContent: Void? = artists?.activate(session, refresh: refresh)
         if let session { await music?.activate(session, refresh: refresh) }
         _ = await artistContent
     }
 
-    private func activateSearch(_ session: NeteaseSavedSession?) async {
+    private func activateSearch(_ session: NeteaseSavedSession?, synchronize: Bool = true) async {
         await search?.setSession(owner: session?.profile.userID, credential: session?.credential)
         guard !Task.isCancelled else { return }
         await librarySearch?.setSession(owner: session?.profile.userID, credential: session?.credential)
         guard !Task.isCancelled else { return }
-        librarySearch?.scheduleSynchronization()
+        if synchronize { librarySearch?.scheduleSynchronization() }
     }
 
     func completeLogin(credential: NeteaseCredential) async throws {
@@ -373,7 +377,7 @@ final class NeteaseAccount {
                     if avatarID == nil { avatarTask = nil }
                     if validationState == .validating { validationState = .unverified }
                     if error is CredentialRollbackFailure || (!(error is CancellationError) && !Task.isCancelled) {
-                        self.error = error.localizedDescription
+                        self.setError(error)
                     }
                 }
                 throw error
@@ -415,7 +419,7 @@ final class NeteaseAccount {
             if validationID == nil { validationTask = nil }
             if avatarID == nil { avatarTask = nil }
             if validationState == .validating, validationID == nil { validationState = .unverified }
-            if case .failure(let failure as CredentialRollbackFailure) = result { error = failure.localizedDescription }
+            if case .failure(let failure as CredentialRollbackFailure) = result { setError(failure) }
         }
     }
 
@@ -466,14 +470,21 @@ final class NeteaseAccount {
                 validationState = .signedOut
                 error = nil
             } catch {
+                await activateContent(session, refresh: false)
                 if validationState == .validating { validationState = .unverified }
-                self.error = "退出未完成，请重试：\(error.localizedDescription)"
+                self.setError(error, message: "退出未完成，请重试。\(error.localizedDescription)")
                 throw error
             }
         }
         logoutTask = task
         // Once requested, leaving the page does not interrupt credential removal.
         try await task.value
+    }
+
+    private func setError(_ failure: Error, message: String? = nil) {
+        error = message ?? failure.localizedDescription
+        let cause = (failure as? CredentialRollbackFailure)?.cause ?? failure
+        errorTechnicalDetails = (cause as? NeteaseAccountError)?.technicalDetails
     }
 
     private struct CredentialRollbackFailure: LocalizedError {

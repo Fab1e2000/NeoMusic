@@ -32,14 +32,21 @@ struct ArtistDetailView: View {
     @Environment(\.collectionMenuActions) private var actions
     @Environment(\.libraryNavigationChrome) private var chrome
     @Environment(\.libraryNavigationPreview) private var navigationPreview
+    @Environment(\.dynamicTypeSize) private var textSize
+    @ScaledMetric(relativeTo: .largeTitle) private var nameSize = 34.0
+    @ScaledMetric(relativeTo: .subheadline) private var captionSize = 14.0
+    @ScaledMetric(relativeTo: .callout) private var releaseTitleSize = 16.0
+    @ScaledMetric(relativeTo: .title3) private var headingSize = 20.0
     @State private var biography = false
+    @State private var releaseFeedback = 0
     private var identity: String { detail.id.isEmpty ? detail.name : detail.id }
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
                 VStack(spacing: 0) {
                     Color.clear.frame(height: 398)
-                    Text(detail.name).font(.system(size: 34, weight: .bold)).multilineTextAlignment(.center).padding(.top, -43)
+                    Text(detail.name).font(.system(size: nameSize, weight: .bold))
+                        .multilineTextAlignment(.center).padding(.horizontal, 20).padding(.top, -43)
                     HStack(spacing: 24) {
                         Button { biography = true } label: { Image(systemName: "info").font(.system(size: 22, weight: .semibold)).frame(width: 48, height: 48).background(.white.opacity(0.1), in: Circle()) }.disabled(detail.biography.isEmpty).accessibilityLabel("艺人简介")
                         Button { if let first = detail.songs.first, let playSong { playSong(first) } else { actions.play(.artist(identity), false) } } label: { Image(systemName: "play.fill").font(.system(size: 36)).foregroundStyle(Color(white: 0.49)).frame(width: 72, height: 72).background(.white, in: Circle()) }.accessibilityLabel("播放")
@@ -47,17 +54,40 @@ struct ArtistDetailView: View {
                     }.buttonStyle(.plain).padding(.top, 34.0 / 3)
                 }
                 if let latest = detail.latest {
-                    HStack(spacing: 12) {
+                    let layout = textSize.isAccessibilitySize
+                        ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12))
+                        : AnyLayout(HStackLayout(spacing: 12))
+                    layout {
                         CollectionCardLink(item: latest) { ArtworkView(artwork: latest.artwork).frame(width: 96, height: 96) }
                         CollectionCardLink(item: latest) {
                             VStack(alignment: .leading, spacing: 2) {
-                                if let caption = detail.latestCaption { Text(caption).font(.system(size: 14)) }
-                                Text(latest.title).font(.system(size: 16, weight: .semibold)).lineLimit(1)
-                                if let subtitle = latest.subtitle { Text(subtitle).font(.system(size: 14)).lineLimit(1) }
+                                if let caption = detail.latestCaption { Text(caption).font(.system(size: captionSize)) }
+                                Text(latest.title).font(.system(size: releaseTitleSize, weight: .semibold))
+                                    .lineLimit(textSize.isAccessibilitySize ? nil : 1)
+                                if let subtitle = latest.subtitle {
+                                    Text(subtitle).font(.system(size: captionSize))
+                                        .lineLimit(textSize.isAccessibilitySize ? nil : 1)
+                                }
                             }.frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        if let collectRelease { Button { collectRelease(latest) } label: { Image(systemName: latest.isFavorite ? "arrow.down" : "plus").font(.system(size: 20, weight: .semibold)).frame(width: 32, height: 32).background(.white.opacity(0.2), in: Circle()) } }
+                        if latest.isFavorite, let route = latest.route {
+                            CollectionDownloadButton(route: route, songs: [], compact: true)
+                        } else if let collectRelease {
+                            Button {
+                                releaseFeedback &+= 1
+                                collectRelease(latest)
+                            } label: {
+                                Image(systemName: "plus")
+                                    .font(.system(size: 20, weight: .semibold))
+                                    .frame(width: 32, height: 32)
+                                    .background(.white.opacity(0.2), in: Circle())
+                                    .frame(width: 44, height: 44)
+                                    .contentShape(.rect)
+                            }
+                            .accessibilityLabel("将\(latest.title)加入资料库")
+                        }
                     }.padding(12).padding(.trailing, 8).background(.white.opacity(0.13), in: .rect(cornerRadius: 26)).overlay(RoundedRectangle(cornerRadius: 26).strokeBorder(.white.opacity(0.17), lineWidth: 0.7)).padding(.horizontal, 20).padding(.top, 24)
+                        .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.6), trigger: releaseFeedback)
                 }
                 if !detail.songs.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
@@ -80,7 +110,11 @@ struct ArtistDetailView: View {
                             LazyHStack(spacing: 12) {
                                 ForEach(detail.similar) { artist in
                                     LibraryRouteLink(value: .artist(artist.id), preview: artistPreview(artist)) {
-                                        VStack { ArtistAvatar(artwork: artist.artwork).frame(width: 120, height: 120); Text(artist.name).font(.system(size: 14)).lineLimit(1) }.frame(width: 120)
+                                        VStack {
+                                            ArtistAvatar(artwork: artist.artwork).frame(width: 120, height: 120)
+                                            Text(artist.name).font(.system(size: captionSize))
+                                                .lineLimit(textSize.isAccessibilitySize ? nil : 1)
+                                        }.frame(width: 120)
                                     }
                                 }
                             }.scrollTargetLayout()
@@ -111,12 +145,20 @@ struct ArtistDetailView: View {
     }
     private func favorite() {
         LibraryHaptics.impact()
-        let removing = detail.isFavorite
-        if let toggleFavorite { toggleFavorite() } else { actions.toggleFavorite(.artist(identity)) }
-        actions.notify(removing ? .unfavorited : .favorited)
+        if let toggleFavorite {
+            toggleFavorite()
+        } else {
+            actions.toggleFavorite(.artist(identity))
+            actions.notify(detail.isFavorite ? .unfavorited : .favorited)
+        }
     }
     private func heading(_ section: ArtistSection) -> some View {
-        LibraryRouteLink(value: .artistSection(identity, section)) { HStack(spacing: 6) { Text(section.title).font(.system(size: 20, weight: .bold)); Image(systemName: "chevron.right").font(.system(size: 16, weight: .semibold)) } }.buttonStyle(.plain)
+        LibraryRouteLink(value: .artistSection(identity, section)) {
+            HStack(spacing: 6) {
+                Text(section.title).font(.system(size: headingSize, weight: .bold))
+                Image(systemName: "chevron.right").font(.system(size: 16, weight: .semibold))
+            }
+        }.buttonStyle(.plain)
     }
     @ViewBuilder private func shelf(_ section: ArtistSection, items: [LibraryShelfItem]) -> some View {
         if !items.isEmpty {
@@ -150,6 +192,10 @@ struct ArtistSectionView: View {
     let section: ArtistSection
     var playSong: ((LibrarySongItem) -> Void)?
     @Environment(\.libraryNavigationChrome) private var chrome
+    @Environment(\.dynamicTypeSize) private var textSize
+    private var columns: [GridItem] {
+        Array(repeating: GridItem(.flexible(), spacing: 12), count: textSize.isAccessibilitySize ? 1 : 2)
+    }
     var body: some View {
         Group {
             switch section {
@@ -165,7 +211,7 @@ struct ArtistSectionView: View {
                     }.listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
                 }.listStyle(.plain)
             case .albums, .singles:
-                ScrollView { LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], alignment: .leading, spacing: 20) { ForEach(section == .albums ? detail.albums : detail.singles) { item in CollectionCardLink(item: item) { AlbumCard(item: item) } } }.padding(.horizontal, 20) }
+                ScrollView { LazyVGrid(columns: columns, alignment: .leading, spacing: 20) { ForEach(section == .albums ? detail.albums : detail.singles) { item in CollectionCardLink(item: item) { AlbumCard(item: item) } } }.padding(.horizontal, 20) }
             }
         }.navigationTitle(section.title).libraryTitleDisplayMode(.inline).onAppear { chrome?.setColorScheme(nil) }
     }
@@ -178,6 +224,9 @@ private struct ArtistSongRow: View {
     let dark: Bool
     var playSong: ((LibrarySongItem) -> Void)?
     @Environment(\.songMenuActions) private var actions
+    @Environment(\.dynamicTypeSize) private var textSize
+    @ScaledMetric(relativeTo: .body) private var titleSize = 17.0
+    @ScaledMetric(relativeTo: .footnote) private var albumSize = 13.0
     var body: some View {
         HStack(spacing: 12) {
             Button {
@@ -187,8 +236,11 @@ private struct ArtistSongRow: View {
                 HStack(spacing: 12) {
                     PlaylistSongArtwork(song: song).frame(width: 48, height: 48)
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(song.title).font(.system(size: 17)).lineLimit(1)
-                        Text(song.album).font(.system(size: 13)).foregroundStyle(dark ? Color.white.opacity(0.72) : Color.secondary).lineLimit(1)
+                        Text(song.title).font(.system(size: titleSize))
+                            .lineLimit(textSize.isAccessibilitySize ? nil : 1)
+                        Text(song.album).font(.system(size: albumSize))
+                            .foregroundStyle(dark ? Color.white.opacity(0.72) : Color.secondary)
+                            .lineLimit(textSize.isAccessibilitySize ? nil : 1)
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }.contentShape(.rect)
             }.buttonStyle(.automatic)

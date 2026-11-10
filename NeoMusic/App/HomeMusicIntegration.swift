@@ -48,14 +48,16 @@ import Observation
             await self.account.home?.refresh()
             self.model.isLoading = false
         }
+        model.retryIssue = { [weak self] id in
+            guard let self, let source = NeteaseHomeStore.RetrySource(rawValue: id),
+                  let home = self.account.home, home.userID == self.account.profile?.userID else { return }
+            await home.retry(source)
+        }
         model.play = { [weak self] section, item in self?.playFeed(section: section, item: item) }
         model.performQuickAction = { [weak self] action in self?.requestQuickAction(action) }
         model.prepareNavigation = { [weak self] in self?.prepareNavigation($0) }
-        player.queueContinues = { [weak self] in
-            self?.player.sourceTitle == HomeQuickAction.privateRoaming.title
-        }
-        player.replenishQueue = { [weak self] advance, ended in
-            self?.replenishRoaming(shouldAdvance: advance, playbackEnded: ended)
+        player.replenishQueue = { [weak self] continuation, advance, ended in
+            self?.replenishRoaming(continuation: continuation, shouldAdvance: advance, playbackEnded: ended)
         }
         player.onCollectionPlaybackStarted = { [weak self] reference in
             self?.history.record(reference)
@@ -185,6 +187,11 @@ import Observation
     private func publish() {
         let currentOwner = account.profile.map { String($0.userID) }
         if owner != currentOwner {
+            roamingGeneration = UUID()
+            roamingFill?.cancel()
+            roamingFill = nil
+            roamingAdvance = false
+            roamingPlaybackEnded = false
             if owner != nil {
                 cancelPendingPlayback(); pendingFeedPlayback = nil; pendingQuickAction = nil
             }
@@ -386,20 +393,31 @@ import Observation
         let home = account.home
         let matches = home?.userID == account.profile?.userID
         let displayFeed = home.map { NeteaseHomeFeed(blocks: $0.displayFeedBlocks, hasMore: nil, cursor: nil) }
-        let sections = Self.feedSections(matches ? displayFeed : nil, artwork: { self.artwork($0) })
+        let issues = matches ? Self.feedIssues(home) : []
+        let sections = Self.feedSections(matches ? displayFeed : nil, issues: issues, artwork: { self.artwork($0) })
         if model.sections != sections { model.sections = sections }
-        let failures = matches ? [home?.feedError.map { "推荐内容：" + $0 },
-                                  home?.recommendationsError.map { "推荐歌单：" + $0 },
-                                  home?.likedRecommendationsError.map { "喜欢歌曲推荐：" + $0 },
-                                  home?.chartsError.map { "排行榜：" + $0 },
-                                  home?.followedReleasesError.map { "艺人新动向：" + $0 },
-                                  home?.newSongsError.map { "新歌速递：" + $0 }].compactMap { $0 } : []
-        let error = failures.isEmpty ? nil : failures.joined(separator: "\n")
-        if model.feedError != error { model.feedError = error }
+        if model.feedIssues != issues { model.feedIssues = issues }
         publishQuickActions()
     }
 
-    static func feedSections(_ feed: NeteaseHomeFeed?, artwork: (URL?) -> Artwork) -> [HomeContentSection] {
+    static func feedIssues(_ home: NeteaseHomeStore?) -> [HomeFeedIssue] {
+        guard let home else { return [] }
+        let sources: [(NeteaseHomeStore.RetrySource, String, String?, String?)] = [
+            (.feed, "推荐内容", nil, home.feedError),
+            (.recommendations, "推荐歌单", NeteaseHomeCategory.recommendedPlaylists.rawValue, home.recommendationsError),
+            (.likedRecommendations, "喜欢歌曲推荐", NeteaseHomeCategory.likedSongs.rawValue, home.likedRecommendationsError),
+            (.charts, "排行榜", NeteaseHomeCategory.charts.rawValue, home.chartsError),
+            (.followedReleases, "艺人新动向", NeteaseHomeCategory.followedArtists.rawValue, home.followedReleasesError),
+            (.newSongs, "新歌速递", NeteaseHomeCategory.newSongs.rawValue, home.newSongsError)
+        ]
+        return sources.compactMap { source, title, sectionID, message in
+            guard let message else { return nil }
+            return HomeFeedIssue(id: source.rawValue, title: title, message: message, sectionID: sectionID,
+                                 isRetrying: home.refreshingSources.contains(source))
+        }
+    }
+
+    static func feedSections(_ feed: NeteaseHomeFeed?, issues: [HomeFeedIssue] = [], artwork: (URL?) -> Artwork) -> [HomeContentSection] {
         let sections: [HomeContentSection] = (feed?.blocks ?? []).compactMap { block in
             guard let category = block.category, !block.title.isEmpty else { return nil }
             var seen = Set<String>()
@@ -442,7 +460,9 @@ import Observation
                          kind: [.likedSongs, .songRecommendations].contains(category) ? .songs : .covers, items: items)
         }
         return NeteaseHomeCategory.allCases.compactMap { category in
-            sections.first { $0.id == category.rawValue }
+            if let section = sections.first(where: { $0.id == category.rawValue }) { return section }
+            guard let issue = issues.first(where: { $0.sectionID == category.rawValue }) else { return nil }
+            return .init(id: category.rawValue, title: issue.title, kind: .covers, items: [])
         }
     }
 
@@ -578,11 +598,12 @@ import Observation
                     guard !songs.isEmpty, userID != nil else { return }
                     self.player.requestPlay(songs.map(self.mapSong), from: action.title, shuffled: false)
                 case .roaming(let id, let songs):
-                    guard !songs.isEmpty, userID != nil else { return }
-                    self.player.requestPlay(songs.map(self.mapSong), from: action.title, shuffled: false, onStarted: { [weak self, weak selectedHome = home] in
+                    guard !songs.isEmpty, let userID else { return }
+                    let continuation = PlaybackQueueContinuation(ownerID: String(userID))
+                    self.player.requestPlay(songs.map(self.mapSong), from: action.title, shuffled: false, continuation: continuation, onStarted: { [weak self, weak selectedHome = home] in
                         guard let self, let selectedHome, selectedHome.sessionRevision == revision else { return }
                         selectedHome.consumeRoamingBatch(id: id)
-                        self.beginRoamingContinuation()
+                        self.beginRoamingContinuation(continuation)
                     })
                 }
             } catch { /* The home store publishes each action's retry state. */ }
@@ -608,52 +629,54 @@ import Observation
     }
 
     /// 私人漫游是持续的电台，不是一次返回的那几首。还剩一首时要下一批，队尾的下一首接着播。
-    private func beginRoamingContinuation() {
+    private func beginRoamingContinuation(_ continuation: PlaybackQueueContinuation) {
+        guard player.continuation == continuation else { return }
         roamingGeneration = UUID()
         roamingFill?.cancel()
         roamingFill = nil
         roamingAdvance = false
         roamingPlaybackEnded = false
-        replenishRoaming(shouldAdvance: false, playbackEnded: false)
+        replenishRoaming(continuation: continuation, shouldAdvance: false, playbackEnded: false)
     }
 
-    private func replenishRoaming(shouldAdvance: Bool, playbackEnded: Bool) {
-        guard player.sourceTitle == HomeQuickAction.privateRoaming.title, account.home != nil else { return }
+    private func replenishRoaming(continuation: PlaybackQueueContinuation, shouldAdvance: Bool, playbackEnded: Bool) {
+        guard player.continuation == continuation, continuation.ownerID == owner,
+              let home = account.home, home.userID.map(String.init) == continuation.ownerID else { return }
         let remaining = max(0, player.queue.count - player.currentIndex - 1)
         guard remaining <= 1 else { return }
         if shouldAdvance && remaining == 0 {
             roamingAdvance = true
-            roamingPlaybackEnded = playbackEnded
+            roamingPlaybackEnded = roamingPlaybackEnded || playbackEnded
         }
         guard roamingFill == nil else { return }
         let generation = roamingGeneration
-        roamingFill = Task { [weak self] in await self?.fillRoaming(generation: generation) }
+        roamingFill = Task { [weak self] in await self?.fillRoaming(continuation: continuation, generation: generation) }
     }
 
-    private func fillRoaming(generation: UUID) async {
+    private func fillRoaming(continuation: PlaybackQueueContinuation, generation: UUID) async {
         var scheduleNext = false
         defer {
             if roamingGeneration == generation { roamingFill = nil }
             if scheduleNext, roamingGeneration == generation {
-                roamingFill = Task { [weak self] in await self?.fillRoaming(generation: generation) }
+                roamingFill = Task { [weak self] in await self?.fillRoaming(continuation: continuation, generation: generation) }
             }
         }
-        guard let home = account.home else { roamingAdvance = false; return }
-        let source = HomeQuickAction.privateRoaming.title
+        guard let home = account.home, player.continuation == continuation,
+              continuation.ownerID == owner else { roamingAdvance = false; return }
         let known = Set(player.queue.map(\.id))
         let revision = home.sessionRevision
         do {
             let songs = try await home.nextRoamingSongs()
             try Task.checkCancellation()
             guard roamingGeneration == generation else { return }
-            guard player.sourceTitle == source, account.home === home, home.sessionRevision == revision,
+            guard player.continuation == continuation, account.home === home, home.sessionRevision == revision,
                   account.profile?.userID == home.userID else {
                 roamingAdvance = false
                 roamingPlaybackEnded = false
                 return
             }
             let mapped = songs.map(mapSong).filter { !known.contains($0.id) }
-            let advance = roamingAdvance && player.next == nil && player.sourceTitle == source
+            let advance = roamingAdvance && player.next == nil
             let ended = roamingPlaybackEnded
             roamingAdvance = false
             roamingPlaybackEnded = false
@@ -664,13 +687,13 @@ import Observation
             let index = player.currentIndex
             player.appendContinuing(mapped)
             if advance, player.currentIndex == index, player.queue.indices.contains(index + 1) {
-                player.isPlaying = true
                 player.select(index + 1)
             }
             let remaining = player.queue.count - player.currentIndex - 1
-            scheduleNext = remaining <= 1 && player.sourceTitle == source
+            scheduleNext = remaining <= 1 && player.continuation == continuation
         } catch {
             let advance = roamingAdvance && player.next == nil && roamingGeneration == generation
+                && player.continuation == continuation
             let ended = roamingPlaybackEnded
             if roamingGeneration == generation {
                 roamingAdvance = false

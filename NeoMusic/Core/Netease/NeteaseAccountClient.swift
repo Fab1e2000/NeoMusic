@@ -116,13 +116,16 @@ final class NeteaseAccountClient: Sendable {
 
     @concurrent func request(path: String, fields: [String: any Sendable] = [:], credential: NeteaseCredential?, profile: EAPIProfile = .account, retryTLS: Bool = false) async throws -> Data {
         let data = try await responseData(path: path, fields: fields, credential: credential, profile: profile, retryTLS: retryTLS)
-        _ = try JSONDecoder().decode(CheckedResponse<EmptyResponse>.self, from: data)
+        do { _ = try JSONDecoder().decode(CheckedResponse<EmptyResponse>.self, from: data) }
+        catch is DecodingError { throw NeteaseAccountError.invalidResponse }
         return data
     }
 
     @concurrent func decoded<Response: Decodable & Sendable>(path: String, fields: [String: any Sendable], credential: NeteaseCredential?, profile: EAPIProfile = .account, retryTLS: Bool = false) async throws -> Response {
         let data = try await responseData(path: path, fields: fields, credential: credential, profile: profile, retryTLS: retryTLS)
-        let response = try JSONDecoder().decode(CheckedResponse<Response>.self, from: data).value
+        let response: Response
+        do { response = try JSONDecoder().decode(CheckedResponse<Response>.self, from: data).value }
+        catch is DecodingError { throw NeteaseAccountError.invalidResponse }
         try Task.checkCancellation()
         return response
     }
@@ -232,9 +235,12 @@ final class NeteaseAccountClient: Sendable {
         let (data, response) = try await dataWithTLSRetry(for: makeWebRequest(path: path, fields: fields, credential: credential), enabled: retryTLS)
         try Task.checkCancellation()
         guard let http = response as? HTTPURLResponse else { throw NeteaseAccountError.invalidResponse }
+        if http.statusCode == 401 { throw NeteaseAccountError.authenticationRequired }
         guard (200..<300).contains(http.statusCode) else { throw NeteaseAccountError.http(http.statusCode) }
         struct Status: Decodable { let code: Int; let message: String?; let msg: String? }
-        let status = try JSONDecoder().decode(Status.self, from: data)
+        let status: Status
+        do { status = try JSONDecoder().decode(Status.self, from: data) }
+        catch is DecodingError { throw NeteaseAccountError.invalidResponse }
         guard status.code == 200 else { throw NeteaseWebResponseError(code: status.code, message: status.message ?? status.msg) }
         return data
     }

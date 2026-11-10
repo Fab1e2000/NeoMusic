@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 struct NeteaseProfile: Codable, Equatable, Sendable {
     let userID: Int64
@@ -64,12 +65,23 @@ enum NeteaseAccountError: Error, LocalizedError, Equatable, Sendable {
         switch self {
         case .authenticationRequired: "请登录网易云音乐。"
         case .requestEncoding: "无法生成网易云请求，请重试。"
-        case .invalidResponse: "网易云返回的账户资料无法读取，请重试。"
+        case .invalidResponse: "网易云音乐返回的数据无法读取，请重试。"
         case .network: "连接网易云音乐失败，请检查网络后重试。"
-        case .http(let code): "网易云音乐连接失败（HTTP \(code)），请稍后重试。"
-        case .server(let code): "网易云音乐请求失败（\(code)），请稍后重试。"
-        case .keychain(let status): "无法读取或保存登录凭据（\(status)），请重试。"
+        case .http: "网易云音乐连接失败，请稍后重试。"
+        case .server: "网易云音乐请求失败，请稍后重试。"
+        case .keychain(errSecMissingEntitlement): "当前应用缺少访问登录凭据的权限，请检查应用签名后重试。"
+        case .keychain: "登录凭据暂时无法读取或保存，请稍后重新验证。"
         case .invalidSavedSession: "保存的登录资料无法读取，请重新登录。"
+        }
+    }
+
+    var technicalDetails: String? {
+        switch self {
+        case .network(let code): "NSURLErrorDomain (\(code.rawValue))"
+        case .http(let code): "HTTP \(code)"
+        case .server(let code): "网易云音乐错误码 \(code)"
+        case .keychain(let status): "Keychain OSStatus \(status)"
+        default: nil
         }
     }
 }

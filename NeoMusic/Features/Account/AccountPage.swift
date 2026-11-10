@@ -326,12 +326,14 @@ private struct AccountValidationStatus: View {
                     }
                 }
                 if let error = account.error {
-                    Text(error)
+                    AccountErrorMessage(message: error, technicalDetails: account.errorTechnicalDetails)
                 }
                 if account.validationState == .unverified {
                     Button("重新验证") { Task { await account.revalidate() } }
+                        .foregroundStyle(.tint)
                 } else if account.validationState == .requiresLogin, let login {
                     Button("重新登录", action: login)
+                        .foregroundStyle(.tint)
                 }
             }
             .font(.footnote)
@@ -345,4 +347,41 @@ private struct AccountValidationStatus: View {
         account.validationState == .unverified ||
         (account.validationState == .requiresLogin && login != nil)
     }
+}
+
+struct AccountErrorMessage: View {
+    let message: String
+    let technicalDetails: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(message)
+            if let technicalDetails {
+                DisclosureGroup("技术详情") {
+                    Text(technicalDetails)
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+#Preview("账户验证错误") {
+    List {
+        Section {
+            Label("网易云账户", systemImage: "person.crop.circle")
+        } footer: {
+            VStack(alignment: .leading, spacing: 8) {
+                AccountErrorMessage(message: NeteaseAccountError.keychain(-34018).localizedDescription,
+                                    technicalDetails: NeteaseAccountError.keychain(-34018).technicalDetails)
+                Button("重新验证") {}.foregroundStyle(.tint)
+            }
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+        }
+    }
+    .listStyle(.insetGrouped)
 }

@@ -202,6 +202,70 @@ final class QueuePersistenceTests: XCTestCase {
         XCTAssertFalse(model.hasAudioEngine)
     }
 
+    func testContinuationPersistsAndLegacyTitleRestoresAsFiniteQueue() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("queue.json")
+        let original = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false)
+        let restored = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false)
+        defer { original.shutdownPlayback(); restored.shutdownPlayback() }
+        let continuation = PlaybackQueueContinuation(ownerID: "42")
+        original.play([song("netease:42:1"), song("netease:42:1")], from: "Radio", shuffled: false, continuation: continuation)
+        original.configurePlayback(resolveURL: { _ in nil }, persistenceURL: url)
+        original.saveQueue()
+        await original.flushQueuePersistence()
+        let saved = try JSONDecoder().decode(NowPlayingModel.SavedQueue.self, from: Data(contentsOf: url))
+        XCTAssertEqual(saved.continuation, continuation)
+        restored.configurePlayback(resolveURL: { _ in nil }, persistenceURL: url)
+        XCTAssertTrue(restored.restoreQueue(songs: [], restoredState: .success(saved)))
+        XCTAssertEqual(restored.continuation, continuation)
+        XCTAssertEqual(restored.entryIDs, original.entryIDs)
+        restored.restoreOnlineIdentity(ownerID: "42")
+        XCTAssertEqual(restored.continuation, continuation)
+        let legacy = Data(#"{"ids":["local","local"],"index":1,"elapsed":19,"repeatMode":"all","shuffled":false,"source":"私人漫游"}"#.utf8)
+        let oldState = try JSONDecoder().decode(NowPlayingModel.SavedQueue.self, from: legacy)
+        XCTAssertTrue(restored.restoreQueue(songs: [song("local")], restoredState: .success(oldState)))
+        XCTAssertNil(restored.continuation)
+        XCTAssertFalse(restored.queueContinues)
+        restored.skipForward()
+        XCTAssertEqual(restored.currentIndex, 0)
+    }
+
+    func testProgressSavesReuseQueueRevisionAndMetadataChangesPersist() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("queue.json")
+        let originalSong = song("a")
+        let model = NowPlayingModel(queue: [originalSong, originalSong, song("b")], currentIndex: 1, isPlaying: false)
+        defer { model.shutdownPlayback() }
+        model.configurePlayback(resolveURL: { _ in nil }, persistenceURL: url)
+        model.saveQueue()
+        let revision = model.queueRevision
+        for position in 1...10 { model.elapsed = Double(position) }
+        await model.flushQueuePersistence()
+        XCTAssertEqual(model.queueRevision, revision)
+        var saved = try JSONDecoder().decode(NowPlayingModel.SavedQueue.self, from: Data(contentsOf: url))
+        XCTAssertEqual(saved.elapsed, 10)
+        XCTAssertEqual(saved.ids, ["a", "a", "b"])
+        XCTAssertEqual(saved.songs?.count, 2)
+        XCTAssertEqual(saved.entryIDs, model.entryIDs)
+        var changed = originalSong
+        changed.isFavorite = true
+        changed.favoriteAddedAt = Date(timeIntervalSince1970: 42)
+        changed.artworkURL = root.appendingPathComponent("cover.jpg")
+        changed.artwork = .file(changed.artworkURL!)
+        model.reconcileAvailability(songs: [changed, song("b")])
+        XCTAssertGreaterThan(model.queueRevision, revision)
+        model.elapsed = 11
+        await model.flushQueuePersistence()
+        saved = try JSONDecoder().decode(NowPlayingModel.SavedQueue.self, from: Data(contentsOf: url))
+        let metadata = try XCTUnwrap(saved.songs?.first { $0.id == "a" })
+        XCTAssertTrue(metadata.isFavorite)
+        XCTAssertEqual(metadata.favoriteAddedAt, changed.favoriteAddedAt)
+        XCTAssertEqual(metadata.artworkURL, changed.artworkURL)
+        XCTAssertEqual(saved.entryIDs, model.entryIDs)
+    }
+
     func testWriteFailureStaysQuietAndNextSaveCanRecover() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

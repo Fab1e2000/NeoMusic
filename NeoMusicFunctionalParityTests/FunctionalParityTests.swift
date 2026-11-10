@@ -126,7 +126,7 @@ final class FunctionalParityTests: XCTestCase {
                 try capture(app, "09-search-\(category)")
                 field.typeText("ZZZ")
                 let results = category == "歌曲" ? app.collectionViews.staticTexts[term].firstMatch : app.staticTexts[term].firstMatch
-                if category == "播放列表" {
+                if category == "播放列表", name == "baseline" {
                     XCTExpectFailure("Existing in 8ab6e83: playlist query is stored but not applied to entries; tracked separately from navigation parity.") {
                         XCTAssertTrue(results.waitForNonExistence(timeout: 3))
                     }

@@ -40,6 +40,7 @@ private struct NowPlayingLayoutKey: EnvironmentKey {
 
 extension EnvironmentValues {
     @Entry var playerVisualsActive = true
+    @Entry var nowPlayingControlsOverflow: CGFloat = 0
 
     var nowPlayingLayout: ReferenceNowPlayingLayout {
         get { self[NowPlayingLayoutKey.self] }

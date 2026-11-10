@@ -2,6 +2,10 @@ import Foundation
 import Observation
 
 @MainActor @Observable final class NeteaseHomeStore {
+    enum RetrySource: String, CaseIterable, Hashable, Sendable {
+        case feed, recommendations, likedRecommendations, charts, followedReleases, newSongs
+    }
+
     private(set) var userID: Int64?
     private(set) var recommendations: [NeteaseMusicPlaylist] = []
     private(set) var feed: NeteaseHomeFeed?
@@ -14,6 +18,7 @@ import Observation
     private(set) var newSongs: NeteaseHomeFeed.Block?
     private(set) var likedRecommendationsError: String?
     private(set) var newSongsError: String?
+    private(set) var refreshingSources: Set<RetrySource> = []
     private(set) var quickActionStates: [NeteaseHomeQuickAction: NeteaseHomeQuickActionState] = [:]
     var displayFeedBlocks: [NeteaseHomeFeed.Block] {
         let playlistFallback = Self.block(code: "NEOMUSIC_RECOMMENDED_PLAYLISTS", title: "推荐歌单", resources: recommendations.map {
@@ -41,6 +46,8 @@ import Observation
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
     @ObservationIgnored private var refreshID: UUID?
     @ObservationIgnored private var refreshIsForced = false
+    @ObservationIgnored private var sourceTasks: [RetrySource: Task<Void, Never>] = [:]
+    @ObservationIgnored private var sourceTaskIDs: [RetrySource: UUID] = [:]
     @ObservationIgnored private var likedTask: Task<Void, Never>?
     @ObservationIgnored private var likedTaskID: UUID?
     @ObservationIgnored private var likedTaskSeedID: Int64?
@@ -134,6 +141,8 @@ import Observation
         if !restored || userID != session?.profile.userID || credential != session?.credential {
             generation = UUID()
             let oldRefresh = refreshTask; refreshTask = nil; refreshID = nil; oldRefresh?.cancel()
+            let oldSources = Array(sourceTasks.values); sourceTasks = [:]; sourceTaskIDs = [:]
+            oldSources.forEach { $0.cancel() }; refreshingSources = []
             let oldLiked = likedTask; likedTask = nil; likedTaskID = nil; likedTaskSeedID = nil; oldLiked?.cancel()
             let oldActions = Array(quickActionTasks.values); quickActionTasks = [:]
             oldActions.forEach { $0.cancel() }
@@ -155,6 +164,7 @@ import Observation
             recommendationsError = nil; dailyError = nil; onChange?()
             let revision = generation
             await oldRefresh?.value
+            for task in oldSources { await task.value }
             await oldLiked?.value
             for task in oldActions { _ = await task.result }
             _ = await oldRoaming?.result
@@ -213,7 +223,7 @@ import Observation
         refreshID = id; refreshIsForced = force
         let task = Task { [self] in
             async let daily: Void = refreshDaily(credential: credential, revision: revision)
-            async let feed: Void = refreshFeed(credential: credential, revision: revision, force: force)
+            async let feed: Void = refreshSource(.feed, credential: credential, revision: revision, force: force)
             async let supplemental: Void = refreshSupplemental(credential: credential, revision: revision)
             async let roaming: Void = refreshRoaming(force: force)
             _ = await (daily, feed, supplemental, roaming)
@@ -221,11 +231,10 @@ import Observation
                 if refreshID == id { refreshTask = nil; refreshID = nil }
                 return
             }
-            async let recommendations: Void = refreshRecommendations(credential: credential, revision: revision)
-            async let newSongs: Void = refreshNewSongs(credential: credential, revision: revision)
+            async let recommendations: Void = refreshSource(.recommendations, credential: credential, revision: revision, force: force)
+            async let newSongs: Void = refreshSource(.newSongs, credential: credential, revision: revision, force: force)
             async let covers: Void = refreshQuickActionCovers(force: force)
-            let liked = scheduleLikedRecommendations(force: true)
-            await withTaskCancellationHandler { await liked?.value } onCancel: { liked?.cancel() }
+            await refreshSource(.likedRecommendations, credential: credential, revision: revision, force: true)
             _ = await (newSongs, recommendations, covers)
             if revision == generation, refreshID == id {
                 refreshTask = nil; refreshID = nil
@@ -234,6 +243,50 @@ import Observation
             }
         }
         refreshTask = task
+        await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
+    }
+
+    func retry(_ source: RetrySource) async {
+        guard !Task.isCancelled else { return }
+        let revision = generation
+        if let refreshTask, !refreshTask.isCancelled {
+            await refreshTask.value
+            return
+        }
+        await refreshSource(source, credential: credential, revision: revision, force: true)
+    }
+
+    private func refreshSource(_ source: RetrySource, credential: NeteaseCredential?, revision: UUID, force: Bool) async {
+        while let pending = sourceTasks[source] {
+            await pending.value
+            if !pending.isCancelled || Task.isCancelled || generation != revision { return }
+        }
+        guard generation == revision, !Task.isCancelled else { return }
+        let id = UUID()
+        sourceTaskIDs[source] = id
+        refreshingSources.insert(source)
+        let task = Task { [self] in
+            defer {
+                if generation == revision, sourceTaskIDs[source] == id {
+                    sourceTasks[source] = nil; sourceTaskIDs[source] = nil
+                    refreshingSources.remove(source)
+                    onChange?()
+                }
+            }
+            guard generation == revision, !Task.isCancelled else { return }
+            switch source {
+            case .feed: await refreshFeed(credential: credential, revision: revision, force: force)
+            case .recommendations: await refreshRecommendations(credential: credential, revision: revision)
+            case .likedRecommendations:
+                let liked = scheduleLikedRecommendations(force: force)
+                await withTaskCancellationHandler { await liked?.value } onCancel: { liked?.cancel() }
+            case .charts: await refreshCharts(credential: credential, revision: revision)
+            case .followedReleases: await refreshFollowed(credential: credential, revision: revision)
+            case .newSongs: await refreshNewSongs(credential: credential, revision: revision)
+            }
+        }
+        sourceTasks[source] = task
+        onChange?()
         await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
     }
 
@@ -541,8 +594,8 @@ import Observation
     }
 
     private func refreshSupplemental(credential: NeteaseCredential?, revision: UUID) async {
-        async let charts: Void = refreshCharts(credential: credential, revision: revision)
-        async let followed: Void = refreshFollowed(credential: credential, revision: revision)
+        async let charts: Void = refreshSource(.charts, credential: credential, revision: revision, force: true)
+        async let followed: Void = refreshSource(.followedReleases, credential: credential, revision: revision, force: true)
         _ = await (charts, followed)
     }
     private func refreshCharts(credential: NeteaseCredential?, revision: UUID) async {

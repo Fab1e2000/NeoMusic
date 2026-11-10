@@ -17,7 +17,7 @@ struct AddPlaylistMusicView: View {
     @State private var path: [MusicPickerRoute] = []
 
     private var heading: String {
-        selectedIDs.isEmpty ? "添加到“\(title)”" : "已将\(selectedIDs.count)首歌曲添加到“\(title)”"
+        selectedIDs.isEmpty ? "添加到“\(title)”" : "已选择\(selectedIDs.count)首歌曲"
     }
 
     var body: some View {
@@ -39,6 +39,7 @@ struct AddPlaylistMusicView: View {
         .presentationDragIndicator(.hidden)
         .tint(.blue)
         .interactiveDismissDisabled(!selectedIDs.isEmpty)
+        .onSheetDismissAttempt { confirmsDiscard = true }
         .alert("", isPresented: $confirmsDiscard) {
             Button("放弃所选内容", role: .destructive) { dismiss() }
             Button("保留所选内容", role: .cancel) {}
@@ -55,7 +56,7 @@ struct AddPlaylistMusicView: View {
             .tint(.primary)
         }
         ToolbarItem(placement: .confirmationAction) {
-            Button("完成", systemImage: "checkmark") {
+            Button(selectedIDs.isEmpty ? "完成" : "添加\(selectedIDs.count)首", systemImage: "checkmark") {
                 let available = Dictionary(songs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
                 onCommit(selectedIDs.compactMap { available[$0] })
                 dismiss()

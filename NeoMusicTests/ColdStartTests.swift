@@ -109,17 +109,20 @@ import SwiftUI
         await model.flushQueuePersistence()
     }
 
-    func testPlaylistEditsPreserveUnresolvedReferencesAndUnchangedRefreshDoesNotWrite() throws {
+    func testPlaylistEditsPreserveUnresolvedReferencesAndUnchangedRefreshDoesNotWrite() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: url) }
         let songs = ["a", "b"].map { LibrarySongItem(id: $0, title: $0, artist: "", album: "", albumArtist: "", trackNumber: 1, artwork: .missing) }
         let original = PlaylistLibrary(playlists: [])
         original.configurePersistence(url: url, songs: songs)
         let playlist = try XCTUnwrap(original.createPlaylist(named: "Saved", artwork: .playlist, in: nil))
+        await original.flushPersistence()
         original.addSongs(songs, to: playlist.id)
+        await original.flushPersistence()
         let restored = PlaylistLibrary(playlists: [])
         XCTAssertTrue(restored.configurePersistence(url: url, songs: []))
         restored.renamePlaylist(playlist.id, to: "Renamed")
+        await restored.flushPersistence()
         let reopened = PlaylistLibrary(playlists: [])
         reopened.configurePersistence(url: url, songs: songs)
         XCTAssertEqual(reopened.songs(in: playlist.id).map(\.id), ["a", "b"])
@@ -127,6 +130,7 @@ import SwiftUI
         let timestamp = Date(timeIntervalSince1970: 1000)
         try FileManager.default.setAttributes([.modificationDate: timestamp], ofItemAtPath: url.path)
         restored.reconcileSongs(songs)
+        await restored.flushPersistence()
         let actual = try FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date
         XCTAssertEqual(actual, timestamp)
     }
@@ -164,12 +168,23 @@ import SwiftUI
         let source = PlaylistLibrary(playlists: [])
         source.configurePersistence(url: playlistURL, songs: [])
         let playlist = try XCTUnwrap(source.createPlaylist(named: "Saved", artwork: .playlist, in: nil))
+        await source.flushPersistence()
         source.addSongs([.unavailable("broken.mp3")], to: playlist.id)
+        await source.flushPersistence()
         let original = try Data(contentsOf: playlistURL)
         let restored = PlaylistLibrary(playlists: [])
         let player = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false)
         defer { player.shutdownPlayback() }
-        let runtime = LocalLibraryRuntime(documents: directory, store: store, playlistLibrary: restored, player: player)
+        let runtime = LocalLibraryRuntime(
+            documents: directory,
+            store: store,
+            songLibrary: LocalLibrary.songLibrary,
+            playlistLibrary: restored,
+            player: player,
+            favoriteAlbums: LocalLibrary.favoriteAlbums,
+            pinnedAlbums: LocalLibrary.pinnedAlbums,
+            deletedAlbums: LocalLibrary.deletedAlbums,
+            onLocalSongsApplied: { LocalLibrary.downloads.setLocalSongs($0) })
         await runtime.refresh()
         XCTAssertTrue(runtime.isInitialLibraryReady)
         XCTAssertNotNil(runtime.status)

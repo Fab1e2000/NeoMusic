@@ -5,53 +5,86 @@ import SwiftUI
 
 struct NowPlayingProgressControl: View {
     @Environment(ReferencePlayerState.self) private var player
+    @Environment(ReferencePlayerActions.self) private var actions
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .caption2) private var timeFontSize: CGFloat = 12.5
 
     @Environment(\.nowPlayingLayout) private var layout
     let song: ReferenceTrack
 
     var body: some View {
+        if dynamicTypeSize.isAccessibilitySize {
+            VStack(spacing: 8) {
+                progressSlider
+                timeLabels
+                progressStatus
+                    .frame(maxWidth: .infinity)
+            }
+            .fixedSize(horizontal: false, vertical: true)
+        } else {
+            referenceLayout
+        }
+    }
+
+    private var referenceLayout: some View {
         GeometryReader { proxy in
             ZStack {
-            Slider(
-                value: Binding(
-                    get: { min(player.progress, progressMaximum) },
-                    set: { player.seek(to: $0) }
-                ),
-                in: 0...progressMaximum
-            )
-            .sliderThumbVisibility(.hidden)
-            .tint(.white)
-            .frame(width: layout.width(338), height: 44)
+            progressSlider
+            .frame(width: layout.width(338))
             .position(x: proxy.size.width / 2, y: 26 - 10.5 * layout.verticalScale)
-            .accessibilityLabel("播放进度")
-            .accessibilityValue(
-                "\(formatTime(player.progress))，共 \(formatTime(progressMaximum))"
-            )
 
-            HStack {
-                Text(formatTime(player.progress))
-                    .modifier(PlayerEDRControlAvailable(shape: .time(formatTime(player.progress), false)))
-
-                Spacer()
-
-                Text("−\(formatTime(max(player.duration - player.progress, 0)))")
-                    .modifier(PlayerEDRControlAvailable(shape: .time("−\(formatTime(max(player.duration - player.progress, 0)))", true)))
-            }
-            .overlay {
-                if player.isPreview { Text("试听").foregroundStyle(.white.opacity(0.8)) }
-                else if player.issue != nil { Image(systemName: "exclamationmark.circle") }
-            }
-            .font(.system(size: 12.5, weight: .medium).monospacedDigit())
-            .foregroundStyle(.white.opacity(0.5))
-            .frame(width: layout.width(337.5), height: 18)
-            .position(x: proxy.size.width / 2, y: 26 + 10.5 * layout.verticalScale)
+            timeLabels
+            .overlay { progressStatus }
+            .frame(width: layout.width(337.5), height: timeLineHeight)
+            .position(x: proxy.size.width / 2, y: 26 + 10.5 * layout.verticalScale + (timeLineHeight - 18) / 2)
             }
         }
-        .frame(height: 52)
+        .frame(height: timeLineHeight + 34)
+    }
+
+    private var progressSlider: some View {
+        Slider(value: Binding(get: { min(player.progress, progressMaximum) },
+                              set: { player.seek(to: $0) }), in: 0...progressMaximum)
+            .sliderThumbVisibility(.hidden)
+            .tint(.white)
+            .frame(height: 44)
+            .accessibilityLabel("播放进度")
+            .accessibilityValue("\(formatTime(player.progress))，共 \(formatTime(progressMaximum))")
+    }
+
+    private var timeLabels: some View {
+        HStack {
+            Text(formatTime(player.progress))
+                .modifier(PlayerEDRControlAvailable(shape: .time(formatTime(player.progress), false, timeFontSize)))
+            Spacer()
+            Text("−\(formatTime(max(player.duration - player.progress, 0)))")
+                .modifier(PlayerEDRControlAvailable(shape: .time("−\(formatTime(max(player.duration - player.progress, 0)))", true, timeFontSize)))
+        }
+        .font(.system(size: timeFontSize, weight: .medium).monospacedDigit())
+        .foregroundStyle(.white.opacity(0.5))
+    }
+
+    private var timeLineHeight: CGFloat { max(18, timeFontSize * 1.3) }
+
+    private var progressStatus: some View {
+        Group {
+            if player.isPreview {
+                Text("试听").foregroundStyle(.white.opacity(0.8))
+            } else if player.issue != nil {
+                Image(systemName: "exclamationmark.circle")
+            } else if let quality = actions.audioQuality(for: song) {
+                NowPlayingAudioQualityControl(quality: quality,
+                    openAudioQualitySettings: actions.canOpenAudioQualitySettings
+                        ? { actions.openAudioQualitySettings() } : nil)
+                    .accessibilityIdentifier("player.audioQuality")
+            }
+        }
+        .font(.system(size: timeFontSize, weight: .medium).monospacedDigit())
+        .foregroundStyle(.white.opacity(0.5))
     }
 
     private var progressMaximum: TimeInterval {
-        max(player.duration, song.duration ?? 0, 1)
+        max(player.duration, song.duration, 1)
     }
 
     private func formatTime(_ value: TimeInterval) -> String {
@@ -161,6 +194,7 @@ struct NowPlayingTransportControls: View {
                 )
             )
             .accessibilityLabel("下一首")
+            .disabled(!player.canPlayNext)
             .position(x: layout.x(308.25), y: 41)
             }
         }
@@ -282,17 +316,14 @@ struct NowPlayingPageSelector: View {
     var body: some View {
         GeometryReader { proxy in
             ZStack {
-                // Screenshot visibility is sample data. Keep the lyrics feature
-                // available whenever the current track actually has lyrics.
-                // 没有歌词时按钮照常显示，只是变灰且不可点。
+                // A selected lyrics page remains dismissible while the next track loads.
                 pageButton(page: .lyrics, systemImage: "quote.bubble", accessibilityLabel: "歌词")
-                    .disabled(!hasLyrics)
-                    .opacity(hasLyrics ? 1 : 0.32)
+                    .disabled(!hasLyrics && page != .lyrics)
+                    .opacity(hasLyrics || page == .lyrics ? 1 : 0.32)
                     .position(x: layout.x(86.75), y: 25)
                 ReferenceAirPlayButton(opacity: 0.72)
                     .frame(width: 44, height: 44)
                     .scaleEffect(1.27)
-                    .accessibilityLabel("隔空播放")
                     .position(x: proxy.size.width / 2, y: 25)
                 pageButton(page: .queue, systemImage: "list.bullet", accessibilityLabel: "继续播放",
                            badgeSystemImage: page == .queue ? nil : player.queueModeBadgeSystemImage)

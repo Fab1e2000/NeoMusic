@@ -956,6 +956,42 @@ final class NeteaseAccountTests: XCTestCase {
         XCTAssertEqual(storage.cacheClears, oldCacheClears + 1)
     }
 
+    func testFailedLogoutRestoresAccountOwnedServices() async throws {
+        let directory = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let suite = "failed-logout-\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let storage = AccountTestStorage()
+        storage.saved = NeteaseSavedSession(profile: first, credential: try credential("first"))
+        let music = NeteaseMusicStore(directory: directory, defaults: defaults)
+        let search = NeteaseSearchStore(defaults: defaults)
+        let account = NeteaseAccount(readSession: { try await storage.read() },
+            saveSession: { try await storage.save($0) }, deleteSession: { try await storage.delete() },
+            validateCredential: { _ in self.first }, cachedAvatar: { _ in nil },
+            loadAvatar: { _ in Data() }, clearAvatarCache: {}, music: music, search: search)
+        await account.restoreCachedContent()
+        search.record("Account query", scope: "online")
+        storage.deleteError = NeteaseAccountError.keychain(-1)
+
+        do { try await account.logout(); XCTFail("Expected failed logout") }
+        catch { XCTAssertEqual(error as? NeteaseAccountError, .keychain(-1)) }
+
+        XCTAssertEqual(account.profile, first)
+        XCTAssertEqual(music.userID, first.userID)
+        XCTAssertEqual(account.restoredPlaybackIdentity, .signedIn(String(first.userID)))
+        XCTAssertEqual(search.history, ["Account query"])
+        XCTAssertNotNil(account.error)
+
+        storage.deleteError = nil
+        try await account.logout()
+        XCTAssertNil(music.userID)
+        XCTAssertTrue(search.history.isEmpty)
+        XCTAssertEqual(account.restoredPlaybackIdentity, .signedOut)
+    }
+
     func testNewLoginWaitsForCancelledSaveRollbackBeforePublishingNextAccount() async throws {
         let storage = AccountTestStorage()
         let firstCredential = try credential("first"), secondCredential = try credential("second")

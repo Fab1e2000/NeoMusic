@@ -1,12 +1,137 @@
 import XCTest
 import UIKit
 import Nuke
+import AVFoundation
 @testable import NeoMusic
 
 @MainActor final class ReferencePlayerAdapterTests: XCTestCase {
     private func track(_ id: String) -> ReferenceTrack {
         ReferenceTrack(id: id, title: id, artists: "Artist", albumTitle: "Album", coverURL: nil, duration: 210)
     }
+    func testAudioQualityLookupUsesCurrentTrackAndInjectedSettingsAction() {
+        var resourceTrackID = "a"
+        var resolvedQuality = PlayerAudioQuality(title: "无损", detail: "24 位 / 48 kHz", isLossless: true)
+        var settingsRequests = 0
+        let actions = ReferencePlayerActions(isFavorite: { _ in false }, toggleFavorite: { _ in },
+            addToPlaylist: { _ in }, openAlbum: { _ in }, openArtist: { _ in },
+            audioQuality: { $0 == resourceTrackID ? resolvedQuality : nil },
+            openAudioQualitySettings: { settingsRequests += 1 })
+        XCTAssertEqual(actions.audioQuality(for: track("a")), resolvedQuality)
+        XCTAssertNil(actions.audioQuality(for: track("b")))
+        resourceTrackID = "b"
+        resolvedQuality = PlayerAudioQuality(title: "高品质")
+        XCTAssertNil(actions.audioQuality(for: track("a")))
+        XCTAssertEqual(actions.audioQuality(for: track("b")), resolvedQuality)
+        XCTAssertTrue(actions.canOpenAudioQualitySettings)
+        actions.openAudioQualitySettings()
+        XCTAssertEqual(settingsRequests, 1)
+    }
+
+    func testExistingPlayerActionsDoNotInventQualityOrSettingsCapability() {
+        let actions = PlayerTestFixtures.actions()
+        XCTAssertNil(actions.audioQuality(for: track("a")))
+        XCTAssertFalse(actions.canOpenAudioQualitySettings)
+    }
+
+    func testFiniteForwardAdapterUsesOwnerCapabilityAndAcceptsConsecutiveActions() {
+        let owner = PlayerTestFixtures.owner(tracks: [track("a"), track("b"), track("a")])
+        let player = ReferencePlayerState(model: owner)
+        owner.repeatMode = .off
+        player.next()
+        XCTAssertEqual(owner.currentIndex, 1)
+        player.next()
+        XCTAssertEqual(owner.currentIndex, 2)
+        XCTAssertFalse(player.canPlayNext)
+        player.next()
+        XCTAssertEqual(owner.currentIndex, 2)
+        owner.repeatMode = .all
+        XCTAssertTrue(player.canPlayNext)
+        player.next()
+        XCTAssertEqual(owner.currentIndex, 0)
+        XCTAssertFalse(owner.isPlaying)
+    }
+
+    func testContinuingForwardAdapterRequestsNextBatchAndDoesNotWrapProjection() {
+        let owner = PlayerTestFixtures.owner(tracks: [track("a"), track("b")])
+        let player = ReferencePlayerState(model: owner)
+        owner.play(owner.queue, startingAt: 1, from: "Radio",
+                   continuation: PlaybackQueueContinuation(ownerID: "42"))
+        var advanceRequests = 0
+        owner.replenishQueue = { _, advance, _ in if advance { advanceRequests += 1 } }
+        XCTAssertTrue(player.canPlayNext)
+        XCTAssertNil(player.nextInOrder)
+        XCTAssertTrue(player.upcomingQueueEntries.isEmpty)
+        let continuingVersion = player.upcomingQueueVersion
+        player.next()
+        player.next()
+        XCTAssertEqual(advanceRequests, 2)
+        XCTAssertEqual(owner.currentIndex, 1)
+        owner.repeatMode = .off
+        XCTAssertTrue(player.canPlayNext)
+        player.next()
+        XCTAssertEqual(advanceRequests, 3)
+
+        owner.repeatMode = .all
+        owner.invalidateOnlinePlayback(ownerID: nil)
+        XCTAssertNotEqual(player.upcomingQueueVersion, continuingVersion)
+        XCTAssertEqual(player.nextInOrder?.index, 0)
+        XCTAssertEqual(player.upcomingQueueEntries.map(\.queueIndex), [0])
+    }
+
+    func testLyricsContentHidesPayloadDuringTrackMismatchAndLoading() async {
+        let model = NowPlayingLyricsModel()
+        await model.load(trackID: "old") { ReferenceLyrics.parse("[00:01]old") }
+        let content = NowPlayingLyricsContent(availability: model.availability(for: "new"),
+                                             lyrics: model.lyrics, error: "Old track error")
+        XCTAssertNil(content.lyrics)
+        XCTAssertNil(content.error)
+        let loaded = NowPlayingLyricsContent(availability: model.availability(for: "old"),
+                                            lyrics: model.lyrics, error: model.error)
+        XCTAssertEqual(loaded.lyrics?.lines.first?.text, "old")
+    }
+
+    func testLyricsContentPreservesEmptyAndFailedStates() async {
+        let model = NowPlayingLyricsModel()
+        await model.load(trackID: "empty") { ReferenceLyrics.parse("") }
+        let empty = NowPlayingLyricsContent(availability: model.availability(for: "empty"),
+                                           lyrics: model.lyrics, error: model.error)
+        XCTAssertTrue(empty.lyrics?.isEmpty == true)
+        XCTAssertNil(empty.error)
+        await model.load(trackID: "failed") { throw URLError(.notConnectedToInternet) }
+        let failed = NowPlayingLyricsContent(availability: model.availability(for: "failed"),
+                                            lyrics: model.lyrics, error: model.error)
+        XCTAssertNil(failed.lyrics)
+        XCTAssertNotNil(failed.error)
+    }
+
+    func testCancelledLyricsResultDoesNotPublishPayloadOrError() async {
+        let model = NowPlayingLyricsModel()
+        var continuation: CheckedContinuation<ReferenceLyrics, Never>?
+        let loading = Task {
+            await model.load(trackID: "cancelled") {
+                await withCheckedContinuation { continuation = $0 }
+            }
+        }
+        while continuation == nil { await Task.yield() }
+        loading.cancel()
+        continuation?.resume(returning: ReferenceLyrics.parse("[00:01]cancelled"))
+        await loading.value
+        XCTAssertNil(model.lyrics)
+        XCTAssertNil(model.error)
+    }
+
+    func testAudioOutputUsesPortNamesWithoutAssumingBluetoothDeviceModel() {
+        for port in [AVAudioSession.Port.bluetoothA2DP, .bluetoothLE, .bluetoothHFP] {
+            let output = ReferenceAudioOutput(outputs: [(port, "Living Room Speaker")])
+            XCTAssertEqual(output.name, "Living Room Speaker")
+            XCTAssertFalse(output.isAirPlay)
+        }
+        let airPlay = ReferenceAudioOutput(outputs: [(.airPlay, "Kitchen"), (.airPlay, "Bedroom")])
+        XCTAssertEqual(airPlay.name, "Kitchen，Bedroom")
+        XCTAssertTrue(airPlay.isAirPlay)
+        XCTAssertEqual(ReferenceAudioOutput(outputs: []).name, "")
+    }
+
     func testDuplicateQueueOccurrencesSelectAndEnqueueIndependently() {
         let a = track("a"), b = track("b")
         let owner = PlayerTestFixtures.owner(tracks: [a, b, a])

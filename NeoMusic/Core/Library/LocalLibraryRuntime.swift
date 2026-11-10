@@ -54,25 +54,47 @@ final class LocalLibraryRuntime {
     private let store: URL
     private let documents: URL
     private var failedIDs: Set<String> = []
+    private let songLibrary: SongLibrary
     private let playlistLibrary: PlaylistLibrary
     private let player: NowPlayingModel
+    private let favoriteAlbums: LibrarySelectionSet
+    private let pinnedAlbums: LibrarySelectionSet
+    private let deletedAlbums: LibrarySelectionSet
+    private let defaults: UserDefaults
+    @ObservationIgnored private let onLocalSongsApplied: @MainActor ([LibrarySongItem]) -> Void
     private var cachedTracks: [LocalTrack] = []
 
     init(documents: URL = .documentsDirectory,
          store: URL = URL.applicationSupportDirectory.appending(path: "LocalLibrary", directoryHint: .isDirectory),
-         playlistLibrary: PlaylistLibrary = LocalLibrary.playlistLibrary,
-         player: NowPlayingModel = LocalLibrary.player) {
+         songLibrary: SongLibrary, playlistLibrary: PlaylistLibrary, player: NowPlayingModel,
+         favoriteAlbums: LibrarySelectionSet, pinnedAlbums: LibrarySelectionSet,
+         deletedAlbums: LibrarySelectionSet, defaults: UserDefaults = .standard,
+         onLocalSongsApplied: @escaping @MainActor ([LibrarySongItem]) -> Void) {
+        self.songLibrary = songLibrary
         self.playlistLibrary = playlistLibrary
         self.player = player
+        self.favoriteAlbums = favoriteAlbums
+        self.pinnedAlbums = pinnedAlbums
+        self.deletedAlbums = deletedAlbums
+        self.defaults = defaults
+        self.onLocalSongsApplied = onLocalSongsApplied
         self.documents = documents
         self.root = documents.appending(path: "音乐", directoryHint: .isDirectory)
         self.store = store
     }
 
-    static func setFlag(_ id: String, value: Bool, key: String) {
-        var ids = Set(UserDefaults.standard.stringArray(forKey: key) ?? [])
+    var localSongs: [LibrarySongItem] {
+        songLibrary.songs.filter { !deletedAlbums.ids.contains($0.albumID) }
+    }
+
+    var allSongs: [LibrarySongItem] {
+        songLibrary.allSongs.filter { $0.isOnline || !deletedAlbums.ids.contains($0.albumID) }
+    }
+
+    static func setFlag(_ id: String, value: Bool, key: String, defaults: UserDefaults = .standard) {
+        var ids = Set(defaults.stringArray(forKey: key) ?? [])
         if value { ids.insert(id) } else { ids.remove(id) }
-        UserDefaults.standard.set(Array(ids), forKey: key)
+        defaults.set(Array(ids), forKey: key)
     }
 
     /// Restore persisted local metadata without waiting for the directory scan.
@@ -171,7 +193,7 @@ final class LocalLibraryRuntime {
         let result = try await scanner.scan(root: root, previousTracks: reusable)
         try Task.checkCancellation()
         if !hasRestoredPlayback {
-            try Self.repairLegacyIdentities(cached: cachedTracks, scanned: result.tracks, store: store)
+            try Self.repairLegacyIdentities(cached: cachedTracks, scanned: result.tracks, store: store, defaults: defaults)
         }
         let failed = Set(result.failures).union(result.tracks.filter { track in
             result.failedDirectoryPaths.contains { path in path.isEmpty || track.id.hasPrefix(path + "/") }
@@ -182,8 +204,8 @@ final class LocalLibraryRuntime {
         failedIDs = failed
         if tracks != cachedTracks { apply(tracks) }
         if !hasRestoredPlayback { try await restoreStores() }
-        playlistLibrary.reconcileSongs(LocalLibrary.songs, failedIDs: failed, failedDirectories: result.failedDirectoryPaths)
-        player.reconcileAvailability(songs: LocalLibrary.allSongs.filter { !failed.contains($0.id) })
+        playlistLibrary.reconcileSongs(localSongs, failedIDs: failed, failedDirectories: result.failedDirectoryPaths)
+        player.reconcileAvailability(songs: allSongs.filter { !failed.contains($0.id) })
         var messages = result.issues
         if result.unsupportedCount > 0 { messages.insert("跳过 \(result.unsupportedCount) 个不支持的音频文件。", at: 0) }
         status = messages.isEmpty ? cacheWarning : messages.joined(separator: "\n")
@@ -195,7 +217,7 @@ final class LocalLibraryRuntime {
         async let savedQueue = cache.restore(NowPlayingModel.SavedQueue.self, from: store.appending(path: "playback.json"))
         let (playlists, queue) = await (savedPlaylists, savedQueue)
         try Task.checkCancellation()
-        let songs = LocalLibrary.songs
+        let songs = localSongs
         playlistLibrary.configurePersistence(url: store.appending(path: "playlists.json"), songs: songs, restoredState: playlists)
         configurePlayer()
         // A chosen queue takes precedence over a delayed restoration. Transport
@@ -271,21 +293,21 @@ final class LocalLibraryRuntime {
                 guard let directory = track.albumDirectory, let previous = oldByID[track.id], previous.albumDirectory == nil else { continue }
                 let oldID = previous.albumArtist + "\u{001F}" + previous.album
                 let newID = "folder:" + directory
-                if LocalLibrary.favoriteAlbums.ids.contains(oldID) { LocalLibrary.favoriteAlbums.insert(newID) }
-                if LocalLibrary.pinnedAlbums.ids.contains(oldID) { LocalLibrary.pinnedAlbums.insert(newID) }
+                if favoriteAlbums.ids.contains(oldID) { favoriteAlbums.insert(newID) }
+                if pinnedAlbums.ids.contains(oldID) { pinnedAlbums.insert(newID) }
                 // Preserve deletion of these exact songs; do not hide unrelated tracks now sharing their folder.
-                if LocalLibrary.deletedAlbums.ids.contains(oldID) { Self.setFlag(track.id, value: true, key: "hiddenSongs") }
+                if deletedAlbums.ids.contains(oldID) { Self.setFlag(track.id, value: true, key: "hiddenSongs", defaults: defaults) }
             }
         }
     }
 
     private func apply(_ tracks: [LocalTrack]) {
         cachedTracks = tracks
-        let favorites = Set(UserDefaults.standard.stringArray(forKey: "favoriteSongs") ?? [])
-        let pins = Set(UserDefaults.standard.stringArray(forKey: "pinnedSongs") ?? [])
-        let hidden = Set(UserDefaults.standard.stringArray(forKey: "hiddenSongs") ?? [])
+        let favorites = Set(defaults.stringArray(forKey: "favoriteSongs") ?? [])
+        let pins = Set(defaults.stringArray(forKey: "pinnedSongs") ?? [])
+        let hidden = Set(defaults.stringArray(forKey: "hiddenSongs") ?? [])
         let artworkDirectory = store.appending(path: "tracks.json.startup", directoryHint: .isDirectory)
-        LocalLibrary.songLibrary.replace(tracks.filter { !hidden.contains($0.id) }.map { track in
+        songLibrary.replace(tracks.filter { !hidden.contains($0.id) }.map { track in
             let url = track.artworkKey.map { artworkDirectory.appending(path: $0 + ".image") }
             return LibrarySongItem(id: track.id, title: track.title, artist: track.artist, album: track.album,
                 albumArtist: track.albumArtist, trackNumber: track.trackNumber, artwork: url.map(Artwork.file) ?? .missing,
@@ -293,7 +315,7 @@ final class LocalLibraryRuntime {
                 artworkBackdrop: track.artworkBackdrop, duration: Int(track.duration), isPinned: pins.contains(track.id),
                 addedOrder: Int(track.addedDate.timeIntervalSince1970), isFavorite: favorites.contains(track.id))
         })
-        LocalLibrary.downloads.setLocalSongs(LocalLibrary.songs)
+        onLocalSongsApplied(localSongs)
         onLibraryPublished?()
     }
 }

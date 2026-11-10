@@ -9,7 +9,9 @@ struct NowPlayingArtworkPage: View {
     @Environment(\.displayScale) private var displayScale
     @Environment(ReferencePlayerState.self) private var player
     @Environment(\.nowPlayingLayout) private var layout
+    @Environment(\.nowPlayingControlsOverflow) private var controlsOverflow
     @Environment(\.playerVisualsActive) private var visualsActive
+    @ScaledMetric(relativeTo: .title3) private var informationFontSize: CGFloat = 20
 
     let song: ReferenceTrack
     let artworkNamespace: Namespace.ID
@@ -42,7 +44,9 @@ struct NowPlayingArtworkPage: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let artworkSize = layout.artworkSide
+            let textScale = informationFontSize / 20
+            let extraInformationHeight = 53 * (textScale - 1)
+            let artworkSize = Self.artworkSide(layout: layout, textScale: textScale, controlsOverflow: controlsOverflow)
             let displayedArtworkSize =
                 artworkSize
                 * (
@@ -129,19 +133,21 @@ struct NowPlayingArtworkPage: View {
                 NowPlayingTrackSwipe(song: song, pageDistance: layout.width(227) + 24) { track, interactive in
                     ZStack {
                         // 放不下时滚动显示（相邻曲目的预览不滚）。
-                        NowPlayingMarqueeText(text: track.title, isActive: interactive, edrFontSize: 20)
-                            .font(.system(size: 20, weight: .semibold))
+                        NowPlayingMarqueeText(text: track.title, isActive: interactive,
+                                              edrFontSize: informationFontSize, edrFontSizeIsScaled: true)
+                            .font(.system(size: informationFontSize, weight: .semibold))
                             .foregroundStyle(Color.white)
                             .lineLimit(1)
-                            .frame(width: layout.width(227), height: 27, alignment: .leading)
+                            .frame(width: layout.width(227), height: 27 * textScale, alignment: .leading)
                             .contentShape(.rect)
-                            .position(x: layout.x(145.5), y: layout.pageY(503.5))
+                            .position(x: layout.x(145.5), y: layout.pageY(503.5) - 39.5 * (textScale - 1) - controlsOverflow)
 
-                        NowPlayingArtistButton(track: track, interactive: interactive)
-                            .font(.system(size: 20))
+                        NowPlayingArtistButton(track: track, interactive: interactive, lineHeight: 26 * textScale,
+                                               fontSize: informationFontSize, fontSizeIsScaled: true)
+                            .font(.system(size: informationFontSize))
                             .lineLimit(1)
-                            .frame(width: layout.width(215), height: 26, alignment: .leading)
-                            .position(x: layout.x(139.5), y: layout.pageY(528.5))
+                            .frame(width: layout.width(215), height: 26 * textScale, alignment: .leading)
+                            .position(x: layout.x(139.5), y: layout.pageY(528.5) - 13 * (textScale - 1) - controlsOverflow)
                     }
                     .frame(width: proxy.size.width, height: proxy.size.height)
                 }
@@ -150,7 +156,7 @@ struct NowPlayingArtworkPage: View {
                     .fixedSize()
                     .frame(width: 92.25, height: 44, alignment: .trailing)
                     .contentShape(.rect)
-                    .position(x: layout.x(329.875), y: layout.pageY(517.25))
+                    .position(x: layout.x(329.875), y: layout.pageY(517.25) - extraInformationHeight / 2 - controlsOverflow)
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
             .task(id: ArtworkPrefetchKey(urls: visualsActive ? player.adjacentArtworkURLs : [], size: displayedArtworkSize, scale: displayScale)) {
@@ -162,6 +168,11 @@ struct NowPlayingArtworkPage: View {
                 await ArtworkImagePipeline.prefetch(requests)
             }
         }
+    }
+
+    /// Information grows upward from its approved lower edge, retaining the gap above playback controls.
+    static func artworkSide(layout: ReferenceNowPlayingLayout, textScale: CGFloat, controlsOverflow: CGFloat = 0) -> CGFloat {
+        max(0, layout.artworkSide - max(0, 53 * (textScale - 1)) - controlsOverflow)
     }
 
     private func animateArtworkBounce(
@@ -196,16 +207,20 @@ struct NowPlayingArtworkPage: View {
 /// Measures the cover without mounting controls, lyrics, image requests or timers.
 struct NowPlayingArtworkFrameMeasurement: View {
     @Environment(\.nowPlayingLayout) private var layout
+    @Environment(\.nowPlayingControlsOverflow) private var controlsOverflow
+    @ScaledMetric(relativeTo: .title3) private var informationFontSize: CGFloat = 20
     let onFrameChange: (CGRect) -> Void
 
     var body: some View {
         GeometryReader { proxy in
+            let artworkSize = NowPlayingArtworkPage.artworkSide(layout: layout, textScale: informationFontSize / 20,
+                                                              controlsOverflow: controlsOverflow)
             Color.clear
-                .frame(width: layout.artworkSide, height: layout.artworkSide)
+                .frame(width: artworkSize, height: artworkSize)
                 .onGeometryChange(for: CGRect.self) {
                     $0.frame(in: .named(NowPlayingPortraitCoordinateSpace.name))
                 } action: { onFrameChange($0) }
-                .position(x: proxy.size.width / 2, y: layout.pageY(112) + layout.artworkSide / 2)
+                .position(x: proxy.size.width / 2, y: layout.pageY(112) + artworkSize / 2)
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)

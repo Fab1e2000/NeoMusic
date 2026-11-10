@@ -129,11 +129,11 @@ final class LibraryDetailNavigationTests: XCTestCase {
         XCTAssertLessThan(requested.count, 100, "Off-screen rows must not start the entire artwork catalog")
     }
 
-    private func mount(_ bridge: LibraryDetailNavigation) async throws -> UIWindow {
+    private func mount(_ bridge: LibraryDetailNavigation, sourceContainer: UIView? = nil) async throws -> UIWindow {
         let scene = try await applicationWindowScene()
         let window = UIWindow(windowScene: scene)
         window.rootViewController = UIHostingController(rootView:
-            LibraryNavigationContainer(navigation: bridge, root: TestRoot(),
+            LibraryNavigationContainer(navigation: bridge, root: TestRoot(sourceContainer: sourceContainer),
                 destination: { route in AnyView(TestDetail(route: route)) }))
         window.makeKeyAndVisible()
         return window
@@ -230,7 +230,7 @@ final class LibraryDetailNavigationTests: XCTestCase {
             library: { TestRoot(showsArtwork: true) }, detailDestination: { AnyView(TestDetail(route: $0)) }, nowPlaying: nil,
             playlistLibrary: PlaylistLibrary(playlists: []), toasts: LibraryToastCenter(),
             referencePlayer: player, referenceLibrary: PlayerTestFixtures.library(),
-            makePlayerActions: { _ in PlayerTestFixtures.actions() }).environment(account))
+            makePlayerActions: { _, _ in PlayerTestFixtures.actions() }).environment(account))
         window.makeKeyAndVisible()
         try await settle()
         func tabs(in controller: UIViewController) -> UITabBarController? {
@@ -370,7 +370,7 @@ final class LibraryDetailNavigationTests: XCTestCase {
             library: { TestRoot() }, detailDestination: { AnyView(TestDetail(route: $0)) },
             nowPlaying: nil, playlistLibrary: PlaylistLibrary(playlists: []), toasts: LibraryToastCenter(),
             referencePlayer: player, referenceLibrary: PlayerTestFixtures.library(),
-            makePlayerActions: { _ in PlayerTestFixtures.actions() }).environment(account))
+            makePlayerActions: { _, _ in PlayerTestFixtures.actions() }).environment(account))
         window.makeKeyAndVisible()
         try await settle()
         func findTabs(in controller: UIViewController) -> UITabBarController? {
@@ -380,6 +380,8 @@ final class LibraryDetailNavigationTests: XCTestCase {
         let tabs = try XCTUnwrap(findTabs(in: window.rootViewController!))
         let content = try XCTUnwrap(tabs.popupContent)
         let item = try XCTUnwrap(tabs.popupBar.popupItem)
+        XCTAssertEqual(item.accessibilityLabel, "Track 0，Artist，迷你播放器")
+        XCTAssertEqual(item.accessibilityHint, "打开正在播放")
         let pager = try XCTUnwrap(descendants(of: UIScrollView.self, in: tabs.popupBar).first {
             $0.panGestureRecognizer.name == "NeoDizzy.NowPlayingTrackSwipe"
         })
@@ -395,6 +397,8 @@ final class LibraryDetailNavigationTests: XCTestCase {
                 try await Task.sleep(for: .milliseconds(350))
                 XCTAssertTrue(tabs.popupContent === content)
                 XCTAssertTrue(tabs.popupBar.popupItem === item)
+                XCTAssertEqual(item.accessibilityLabel, "Track 0，Artist，迷你播放器")
+                XCTAssertEqual(item.accessibilityHint, "打开正在播放")
                 XCTAssertEqual(pager.bounds.height, placement == .inline ? 18 : 36, accuracy: 1)
             }
         }
@@ -406,6 +410,10 @@ final class LibraryDetailNavigationTests: XCTestCase {
         XCTAssertEqual(itemUpdates, 0, "Bar placement must not resubmit artwork, controls and fullscreen content")
         XCTAssertEqual(tabs.tabBarMinimizeBehavior, .onScrollDown)
         XCTAssertTrue(tabs.popupBar.inheritsBottomBarMetrics)
+        player.next()
+        try await settle()
+        XCTAssertEqual(tabs.popupBar.popupItem?.accessibilityLabel, "Track 1，Artist，迷你播放器")
+        XCTAssertEqual(tabs.popupBar.popupItem?.accessibilityHint, "打开正在播放")
     }
 
     func testPlayerTransitionGlassRetainsAlbumAppearanceAcrossRepeatedCloses() async throws {
@@ -424,7 +432,7 @@ final class LibraryDetailNavigationTests: XCTestCase {
                                                        blue: dark ? 0 : 1), songs: [], route: route)))
             }, nowPlaying: nil, playlistLibrary: PlaylistLibrary(playlists: []), toasts: LibraryToastCenter(),
             referencePlayer: player, referenceLibrary: PlayerTestFixtures.library(),
-            makePlayerActions: { _ in PlayerTestFixtures.actions() }).environment(account))
+            makePlayerActions: { _, _ in PlayerTestFixtures.actions() }).environment(account))
         window.makeKeyAndVisible()
         try await settle()
         func findTabs(in controller: UIViewController) -> UITabBarController? {
@@ -500,7 +508,7 @@ final class LibraryDetailNavigationTests: XCTestCase {
                     albumBackdrop: light ? .init(red: 0.88, green: 0.92, blue: 0.98) : .init(red: 0.04, green: 0.07, blue: 0.12),
                     songs: songs, route: route)))
             }, nowPlaying: nil, playlistLibrary: PlaylistLibrary(playlists: []), toasts: LibraryToastCenter(),
-            referencePlayer: player, referenceLibrary: PlayerTestFixtures.library(), makePlayerActions: { _ in PlayerTestFixtures.actions() }).environment(account))
+            referencePlayer: player, referenceLibrary: PlayerTestFixtures.library(), makePlayerActions: { _, _ in PlayerTestFixtures.actions() }).environment(account))
         window.makeKeyAndVisible()
         try await settle()
         func findNavigation(in controller: UIViewController) -> UINavigationController? {
@@ -550,14 +558,16 @@ final class LibraryDetailNavigationTests: XCTestCase {
 
     func testRapidNativeZoomReturnAllowsOpeningAgain() async throws {
         let bridge = LibraryDetailNavigation()
-        let window = try await mount(bridge)
+        let sourceContainer = UIView()
+        let window = try await mount(bridge, sourceContainer: sourceContainer)
         defer { window.isHidden = true }
         try await settle()
         let nav = try XCTUnwrap(bridge.navigationController)
         let root = try XCTUnwrap(nav.topViewController)
         let source = UIView(frame: CGRect(x: 20, y: 160, width: 140, height: 140))
         source.backgroundColor = .systemBlue
-        root.view.addSubview(source)
+        sourceContainer.addSubview(source)
+        XCTAssertTrue(source.isDescendant(of: root.view))
         bridge.open(.album("first"), source: source)
         XCTAssertNotNil(nav.topViewController?.preferredTransition)
         try await Task.sleep(for: .milliseconds(100))
@@ -990,6 +1000,106 @@ final class LibraryDetailNavigationTests: XCTestCase {
         XCTAssertNil(second.navigationItem.searchController)
     }
 
+    func testSearchScopeUsesNativeActivationAndKeepsCurrentScopeInPrompt() throws {
+        let page = UIViewController()
+        let chrome = LibraryNavigationChrome(isRoot: true)
+        chrome.attach(page)
+        let model = SearchPageModel()
+        model.query = "Song"
+        model.isSearching = true
+        model.submitted = true
+        chrome.setSearchPage(model)
+        let search = try XCTUnwrap(page.navigationItem.searchController)
+        XCTAssertEqual(search.scopeBarActivation, .onSearchActivation)
+        XCTAssertEqual(search.searchBar.placeholder, "网易云音乐中的歌曲、艺人、专辑及歌单")
+        XCTAssertEqual(search.searchBar.text, "Song")
+        model.selectScope(.library)
+        chrome.setSearchPage(model)
+        XCTAssertEqual(search.searchBar.selectedScopeButtonIndex, 1)
+        XCTAssertEqual(search.searchBar.placeholder, "资料库中的歌曲、艺人、专辑及歌单")
+        XCTAssertEqual(search.searchBar.text, "Song")
+        XCTAssertTrue(model.submitted)
+    }
+
+    func testSearchDismissalRestoresBrowseBeforeCompletionAndIgnoresLateUpdates() throws {
+        let page = UIViewController()
+        let chrome = LibraryNavigationChrome(isRoot: true)
+        chrome.attach(page)
+        chrome.hasAppeared = true
+        let model = SearchPageModel()
+        model.query = "周杰伦"
+        model.isSearching = true
+        model.submitted = true
+        var queries = 0
+        model.onQuery = { queries += 1 }
+        chrome.setSearchPage(model)
+        let search = try XCTUnwrap(page.navigationItem.searchController)
+
+        chrome.willDismissSearchController(search)
+        XCTAssertFalse(model.isSearching)
+        XCTAssertFalse(model.submitted)
+        XCTAssertEqual(model.query, "")
+        XCTAssertEqual(queries, 1)
+        search.searchBar.text = "迟到的文本"
+        chrome.updateSearchResults(for: search)
+        chrome.searchBarTextDidBeginEditing(search.searchBar)
+        chrome.didPresentSearchController(search)
+        chrome.setSearchPage(model)
+        chrome.activateSearchPageIfNeeded()
+
+        XCTAssertEqual(model.query, "")
+        XCTAssertEqual(queries, 1)
+        XCTAssertFalse(search.isActive)
+        XCTAssertFalse(model.isSearching)
+    }
+
+    func testActiveSearchAcceptsFirstChineseInputAndResumesEditingSubmittedResults() throws {
+        let page = UIViewController()
+        let chrome = LibraryNavigationChrome(isRoot: true)
+        chrome.attach(page)
+        let model = SearchPageModel()
+        chrome.setSearchPage(model)
+        let search = try XCTUnwrap(page.navigationItem.searchController)
+        chrome.willPresentSearchController(search)
+
+        search.searchBar.text = "周"
+        chrome.updateSearchResults(for: search)
+        XCTAssertEqual(model.query, "周")
+        XCTAssertTrue(model.isSearching)
+        model.submit()
+        XCTAssertTrue(model.submitted)
+        chrome.searchBarTextDidBeginEditing(search.searchBar)
+        XCTAssertFalse(model.submitted)
+        search.searchBar.text = "周杰伦"
+        chrome.updateSearchResults(for: search)
+        XCTAssertEqual(model.query, "周杰伦")
+        XCTAssertTrue(model.isSearching)
+    }
+
+    func testSearchChromeRefreshKeepsKeyboardUntilSubmissionEvent() async throws {
+        let scene = try await applicationWindowScene()
+        let window = UIWindow(windowScene: scene)
+        let chrome = LibraryNavigationChrome(isRoot: true)
+        let page = LibraryDetailHostingController(chrome: chrome)
+        let model = SearchPageModel()
+        model.isSearching = true
+        chrome.setSearchPage(model)
+        window.rootViewController = UINavigationController(rootViewController: page)
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        try await settle()
+        let search = try XCTUnwrap(page.navigationItem.searchController)
+        search.searchBar.becomeFirstResponder()
+        XCTAssertTrue(search.searchBar.searchTextField.isFirstResponder)
+
+        model.submit("晨光")
+        chrome.setSearchPage(model)
+        XCTAssertTrue(search.searchBar.searchTextField.isFirstResponder)
+        chrome.completeSearchSubmission()
+        XCTAssertFalse(search.searchBar.searchTextField.isFirstResponder)
+        XCTAssertTrue(model.submitted)
+    }
+
     func testNativeSearchUpdatesBindingAndCanBeRemoved() {
         let chrome = LibraryNavigationChrome(isRoot: false)
         let page = LibraryDetailHostingController(chrome: chrome)
@@ -1055,11 +1165,12 @@ final class LibraryDetailNavigationTests: XCTestCase {
 
     func testActualAlbumHeaderExposesZoomAlignmentTarget() async throws {
         let bridge = LibraryDetailNavigation()
+        let sourceContainer = UIView()
         let scene = try await applicationWindowScene()
         let window = UIWindow(windowScene: scene)
         defer { window.isHidden = true }
         window.rootViewController = UIHostingController(rootView: LibraryNavigationContainer(
-            navigation: bridge, root: TestRoot(), destination: { route in
+            navigation: bridge, root: TestRoot(sourceContainer: sourceContainer), destination: { route in
                 AnyView(CollectionDetailView(detail: CollectionDetail(kind: .album, title: "Album",
                     artwork: .missing, tint: .blue, songs: [], route: route)))
             }))
@@ -1068,7 +1179,8 @@ final class LibraryDetailNavigationTests: XCTestCase {
         let nav = try XCTUnwrap(bridge.navigationController)
         let root = try XCTUnwrap(nav.topViewController)
         let source = UIView(frame: CGRect(x: 20, y: 160, width: 120, height: 120))
-        root.view.addSubview(source)
+        sourceContainer.addSubview(source)
+        XCTAssertTrue(source.isDescendant(of: root.view))
         bridge.open(.album("alignment"), source: source)
         try await settle()
         let page = try XCTUnwrap(nav.topViewController)
@@ -1084,12 +1196,13 @@ final class LibraryDetailNavigationTests: XCTestCase {
 
     func testHomeDailyDetailExposesNativePlaylistZoomTarget() async throws {
         let bridge = LibraryDetailNavigation()
+        let sourceContainer = UIView()
         let scene = try await applicationWindowScene()
         let window = UIWindow(windowScene: scene)
         defer { window.isHidden = true }
         let library = PlaylistLibrary(playlists: [.init(id: "daily", title: "每日推荐", artwork: .image(Image("AlbumSample01")))])
         window.rootViewController = UIHostingController(rootView: LibraryNavigationContainer(
-            navigation: bridge, root: TestRoot(), destination: { _ in
+            navigation: bridge, root: TestRoot(sourceContainer: sourceContainer), destination: { _ in
                 AnyView(PlaylistDetailView(playlistID: "daily", library: library, songs: []))
             }))
         window.makeKeyAndVisible()
@@ -1097,7 +1210,8 @@ final class LibraryDetailNavigationTests: XCTestCase {
         let nav = try XCTUnwrap(bridge.navigationController)
         let root = try XCTUnwrap(nav.topViewController)
         let source = UIView(frame: CGRect(x: 20, y: 160, width: 248, height: 330))
-        root.view.addSubview(source)
+        sourceContainer.addSubview(source)
+        XCTAssertTrue(source.isDescendant(of: root.view))
         bridge.open(.playlist("daily"), source: source)
         try await settle()
         let page = try XCTUnwrap(nav.topViewController)
@@ -1145,18 +1259,20 @@ final class LibraryDetailNavigationTests: XCTestCase {
 
     func testUnloadedHomeAlbumUsesPreviewHeaderAndRejectsAnotherAccountsPreview() async throws {
         let bridge = LibraryDetailNavigation()
+        let sourceContainer = UIView()
         let integration = ArtistMusicIntegration(account: account)
         let scene = try await applicationWindowScene()
         let window = UIWindow(windowScene: scene)
         defer { window.isHidden = true }
         window.rootViewController = UIHostingController(rootView: LibraryNavigationContainer(
-            navigation: bridge, root: TestRoot(), destination: { integration.destination($0) ?? AnyView(Color.clear) }))
+            navigation: bridge, root: TestRoot(sourceContainer: sourceContainer), destination: { integration.destination($0) ?? AnyView(Color.clear) }))
         window.makeKeyAndVisible()
         try await settle()
         let nav = try XCTUnwrap(bridge.navigationController)
         let root = try XCTUnwrap(nav.topViewController)
         let source = UIView(frame: CGRect(x: 20, y: 160, width: 161, height: 161))
-        root.view.addSubview(source)
+        sourceContainer.addSubview(source)
+        XCTAssertTrue(source.isDescendant(of: root.view))
         let route = LibraryRoute.album("catalog:album:88")
         let preview = LibraryNavigationPreview(route: route, ownerID: nil, title: "Visible album", subtitle: "Artist", artwork: .missing)
         bridge.open(route, source: source, animated: false, preview: preview)
@@ -1335,14 +1451,16 @@ final class LibraryDetailNavigationTests: XCTestCase {
             throw XCTSkip("Requires system zoom animations to exercise UIKit's source-provider callbacks")
         }
         let bridge = LibraryDetailNavigation()
-        let window = try await mount(bridge)
+        let sourceContainer = UIView()
+        let window = try await mount(bridge, sourceContainer: sourceContainer)
         defer { window.isHidden = true }
         try await settle()
         let nav = try XCTUnwrap(bridge.navigationController)
         let root = try XCTUnwrap(nav.topViewController)
         let first = UIView(frame: CGRect(x: 20, y: 160, width: 120, height: 120))
         first.backgroundColor = .systemBlue
-        root.view.addSubview(first)
+        sourceContainer.addSubview(first)
+        XCTAssertTrue(first.isDescendant(of: root.view))
         var currentSource: UIView = first
         var queriedSources: [ObjectIdentifier] = []
         let open = OpenLibraryRouteAction(
@@ -1361,7 +1479,8 @@ final class LibraryDetailNavigationTests: XCTestCase {
 
         let replacement = UIView(frame: CGRect(x: 170, y: 190, width: 100, height: 100))
         replacement.backgroundColor = .systemGreen
-        root.view.addSubview(replacement)
+        sourceContainer.addSubview(replacement)
+        XCTAssertTrue(replacement.isDescendant(of: root.view))
         currentSource = replacement
         first.removeFromSuperview()
         let queriesBeforeReturn = queriedSources.count
@@ -1606,8 +1725,15 @@ private struct TestPinnedShelf: View {
     }
 }
 
+private struct TestSourceContainer: UIViewRepresentable {
+    let view: UIView
+    func makeUIView(context: Context) -> UIView { view }
+    func updateUIView(_ view: UIView, context: Context) {}
+}
+
 private struct TestRoot: View {
     var showsArtwork = false
+    var sourceContainer: UIView? = nil
     var body: some View {
         List {
             if showsArtwork {
@@ -1616,6 +1742,11 @@ private struct TestRoot: View {
             }
             LibraryRouteLink(value: .category(.albums)) { Label("专辑", systemImage: "square.stack") }
         }
+            .overlay {
+                if let sourceContainer {
+                    TestSourceContainer(view: sourceContainer)
+                }
+            }
             .libraryHomeNavigation()
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) { Button("新建播放列表", systemImage: "text.badge.plus") {} }

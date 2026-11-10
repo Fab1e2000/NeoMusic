@@ -1,15 +1,16 @@
 #if DEBUG
 import SwiftUI
 
-/// Isolated public catalog preview. It never modifies the user's library or starts audio.
+/// Explicit pages use fixed display fixtures; the catalog preview can load public content.
 struct SearchPreviewRoot: View {
-    @State private var preview = SearchPreviewPresentation()
+    @State private var preview: SearchPreviewPresentation
     @State private var library = PlaylistLibrary(playlists: [], folders: [])
     @State private var toasts = LibraryToastCenter()
     @State private var player: NowPlayingModel
     private let lyrics: ReferenceLibrary
 
-    init() {
+    init(page: String? = nil) {
+        _preview = State(initialValue: SearchPreviewPresentation(page: page))
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("SearchPreview", isDirectory: true)
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let cover = root.appendingPathComponent("player-cover.jpg")
@@ -23,7 +24,7 @@ struct SearchPreviewRoot: View {
         AppShell(library: { Text("搜索效果稿") }, detailDestination: { _ in AnyView(EmptyView()) },
             nowPlaying: player, playlistLibrary: library, toasts: toasts,
             referencePlayer: ReferencePlayerState(model: player), referenceLibrary: lyrics,
-            makePlayerActions: { _ in .init(isFavorite: { _ in false }, toggleFavorite: { _ in }, addToPlaylist: { _ in }, openAlbum: { _ in }, openArtist: { _ in }) },
+            makePlayerActions: { _, _ in .init(isFavorite: { _ in false }, toggleFavorite: { _ in }, addToPlaylist: { _ in }, openAlbum: { _ in }, openArtist: { _ in }) },
             searchContent: AnyView(previewContent.toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
@@ -42,7 +43,17 @@ struct SearchPreviewRoot: View {
         if preview.isCategoryMode {
             SearchCategoryPage(model: preview.model, category: "流行")
                 .librarySearchable(text: .constant(""), prompt: "", enabled: false)
-        } else { SearchPageView(model: preview.model) }
+        } else {
+            SearchPageView(model: preview.model)
+                .safeAreaInset(edge: .bottom) {
+                    if preview.isDisplayFixture {
+                        Text("隔离预览 · 固定示例搜索结果")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity).padding(.vertical, 8)
+                            .background(.regularMaterial)
+                    }
+                }
+        }
     }
 }
 
@@ -57,6 +68,7 @@ private final class SearchPreviewPresentation {
         }
     }
     let model = SearchPageModel()
+    let isDisplayFixture: Bool
     private let client = NeteaseSearchClient()
     private var resources: [String: NeteaseSearchResource] = [:]
     private var allGroups: [MusicSearchGroup] = []
@@ -70,11 +82,13 @@ private final class SearchPreviewPresentation {
     private var snapshot: Snapshot?
     private let snapshotURL = FileManager.default.temporaryDirectory.appendingPathComponent("SearchPreview/catalog.json")
     var isCategoryMode: Bool { selectedMode == .category }
-    init() {
+    init(page: String? = nil) {
+        isDisplayFixture = page != nil
         let args = ProcessInfo.processInfo.arguments
         if let index = args.firstIndex(of: "-searchPreviewPage"), args.indices.contains(index + 1) {
             selectedMode = Mode(rawValue: args[index + 1]) ?? .browse
         }
+        if let page { selectedMode = Mode(rawValue: page) ?? .browse }
         model.onArtwork = { [weak self] in self?.artwork($0) }
         model.onKind = { [weak self] in self?.filter() }
         model.onSubmit = { [weak self] in self?.show(.results) }
@@ -82,13 +96,20 @@ private final class SearchPreviewPresentation {
             guard let self else { return }
             self.model.keywords = self.model.query.isEmpty ? [] : [self.model.query, "洛天依", "洛天依 热门歌曲"].reduce(into: []) { if !$0.contains($1) { $0.append($1) } }
         }
-        model.onScope = { [weak self] in self?.model.syncStatus = self?.model.scope == .library ? "正在同步资料库 · 12 / 18 个集合" : nil }
+        model.onScope = { [weak self] in
+            guard let self else { return }
+            self.model.syncStatus = !self.isDisplayFixture && self.model.scope == .library ? "正在同步资料库 · 12 / 18 个集合" : nil
+        }
         model.onRemoveHistory = { [weak self] word in self?.model.history.removeAll { word == nil || $0 == word } }
         model.onRetry = { [weak self] in self?.show(.syncing) }
         model.onRefresh = { [weak self] in await self?.load() }
         model.onCategory = { [weak self] category in
             guard let self else { return }
             self.model.category = category
+            if self.isDisplayFixture {
+                self.model.categoryItems = self.allGroups.first(where: { $0.kind == .playlist })?.items ?? []
+                return
+            }
             if category == "流行", let page = self.snapshot?.playlists {
                 self.model.categoryItems = page.groups.flatMap(\.items).map(self.item)
                 return
@@ -99,9 +120,11 @@ private final class SearchPreviewPresentation {
                 self.model.categoryItems = page.groups.flatMap(\.items).map(self.item)
             }
         }
+        if isDisplayFixture { loadDisplayFixture() }
         show(selectedMode)
     }
     func load() async {
+        guard !isDisplayFixture else { return }
         guard model.categories.isEmpty else { return }
         model.isLoading = true
         defer { model.isLoading = false }
@@ -118,7 +141,10 @@ private final class SearchPreviewPresentation {
             }
             guard let snapshot else { return }
             await NeteaseArtworkCache.shared.restore(scope: "search-preview")
-            model.categories = snapshot.categories.enumerated().map { .init(id: $0.element.id, title: $0.element.name, colorIndex: $0.offset) }
+            model.categories = snapshot.categories.enumerated().map {
+                .init(id: $0.element.id, title: $0.element.name, colorIndex: $0.offset,
+                      group: $0.element.group, isHot: $0.element.isHot)
+            }
             allGroups = snapshot.result.groups.map { .init(kind: MusicSearchKind(rawValue: $0.kind.rawValue)!, items: $0.items.map(item), hasMore: $0.hasMore) }
             model.categoryItems = snapshot.playlists.groups.flatMap(\.items).map(item)
             model.suggestions = allGroups.filter { $0.kind == .artist || $0.kind == .album }.compactMap { $0.items.first }
@@ -132,7 +158,7 @@ private final class SearchPreviewPresentation {
     func show(_ mode: Mode) {
         selectedMode = mode
         model.isSearching = mode != .browse && mode != .category
-        model.query = [.browse, .recent, .category].contains(mode) ? "" : "洛天依"
+        model.query = [.browse, .recent, .category].contains(mode) ? "" : (isDisplayFixture ? "晨光" : "洛天依")
         model.submitted = [.results, .songs, .syncing, .error].contains(mode)
         model.kind = mode == .songs ? .song : .combined
         model.scope = [.syncing, .error].contains(mode) ? .library : .online
@@ -141,6 +167,39 @@ private final class SearchPreviewPresentation {
         model.history = mode == .recent ? ["洛天依", "初音未来", "周杰伦"] : []
         model.keywords = ["洛天依", "洛天依 权御天下", "洛天依 普通DISCO"]
         filter()
+    }
+    private func loadDisplayFixture() {
+        allGroups = [
+            .init(kind: .song, items: [
+                displayItem(id: "song-1", kind: .song, title: "晨光", subtitle: "示例艺人", image: 1),
+                displayItem(id: "song-2", kind: .song, title: "晨光（现场版）", subtitle: "示例乐队", image: 2),
+                displayItem(id: "song-3", kind: .song, title: "晨光（钢琴版）", subtitle: "示例演奏者", image: 3),
+                displayItem(id: "song-4", kind: .song, title: "晨光与远山", subtitle: "示例艺人", image: 4)
+            ]),
+            .init(kind: .artist, items: [
+                displayItem(id: "artist-1", kind: .artist, title: "晨光乐队", subtitle: "示例艺人", image: 5),
+                displayItem(id: "artist-2", kind: .artist, title: "晨光音乐人", subtitle: "示例艺人", image: 6)
+            ]),
+            .init(kind: .album, items: [
+                displayItem(id: "album-1", kind: .album, title: "晨光集", subtitle: "示例乐队", image: 7),
+                displayItem(id: "album-2", kind: .album, title: "晨光之后", subtitle: "示例艺人", image: 8)
+            ]),
+            .init(kind: .playlist, items: [
+                displayItem(id: "playlist-1", kind: .playlist, title: "晨光通勤选集", subtitle: "示例作者", image: 9),
+                displayItem(id: "playlist-2", kind: .playlist, title: "晨光里的钢琴", subtitle: "示例作者", image: 10)
+            ])
+        ]
+        model.categories = ["流行", "摇滚", "轻音乐", "电子", "民谣", "古典"].enumerated().map {
+            .init(id: $0.element, title: $0.element, colorIndex: $0.offset)
+        }
+        model.categoryItems = allGroups.first(where: { $0.kind == .playlist })?.items ?? []
+        model.suggestions = allGroups.filter { $0.kind == .artist || $0.kind == .album }.compactMap { $0.items.first }
+    }
+    private func displayItem(id: String, kind: MusicSearchKind, title: String, subtitle: String, image: Int) -> MusicSearchItem {
+        let artwork = Artwork.image(Image(String(format: "AlbumSample%02d", image)))
+        let song = kind == .song ? LibrarySongItem(id: "preview-search:\(id)", title: title, artist: subtitle,
+            album: "示例专辑", albumArtist: subtitle, trackNumber: 0, artwork: artwork, duration: 240) : nil
+        return .init(id: "display:\(id)", kind: kind, title: title, subtitle: subtitle, artwork: artwork, song: song)
     }
     private func filter() {
         model.groups = model.kind == .combined ? allGroups : allGroups.filter { $0.kind == model.kind }

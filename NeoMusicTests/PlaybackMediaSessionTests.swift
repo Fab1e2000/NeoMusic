@@ -4,6 +4,20 @@ import XCTest
 @testable import NeoMusic
 
 @MainActor final class PlaybackMediaSessionTests: XCTestCase {
+    func testNextCommandAvailabilityIsExplicitAndClearedOnShutdown() {
+        let session = PlaybackMediaSession(play: {}, pause: {}, next: {}, previous: {}, seek: { _ in })
+        defer { session.shutdown() }
+        let command = MPRemoteCommandCenter.shared().nextTrackCommand
+        XCTAssertFalse(command.isEnabled)
+        session.setCanSkipForward(true)
+        XCTAssertTrue(command.isEnabled)
+        session.setCanSkipForward(false)
+        XCTAssertFalse(command.isEnabled)
+        session.setCanSkipForward(true)
+        session.shutdown()
+        XCTAssertFalse(command.isEnabled)
+    }
+
     func testSystemMetadataFollowsPlayingAndPausedTrack() throws {
         let session = PlaybackMediaSession(play: {}, pause: {}, next: {}, previous: {}, seek: { _ in })
         defer { session.shutdown() }

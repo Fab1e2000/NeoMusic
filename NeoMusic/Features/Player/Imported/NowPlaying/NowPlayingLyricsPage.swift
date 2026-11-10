@@ -7,8 +7,22 @@ enum NowPlayingLyricsPresentation: Equatable {
     case landscape
 }
 
+/// A track mismatch is reported as loading before its replacement task starts.
+struct NowPlayingLyricsContent {
+    let lyrics: ReferenceLyrics?
+    let error: String?
+
+    init(availability: NowPlayingLyricsModel.Availability, lyrics: ReferenceLyrics?, error: String?) {
+        self.lyrics = availability == .loading ? nil : lyrics
+        self.error = availability == .loading ? nil : error
+    }
+}
+
 struct NowPlayingLyricsPage: View {
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+    @Environment(\.nowPlayingControlsOverflow) private var controlsOverflow
+    @ScaledMetric(relativeTo: .title) private var plainLyricsFontSize = 36
+    @ScaledMetric(relativeTo: .title) private var plainLyricsLineSpacing = 14
 
     let song: ReferenceTrack
     let lyrics: ReferenceLyrics?
@@ -104,7 +118,7 @@ struct NowPlayingLyricsPage: View {
                     )
                 } else {
                     ScrollView {
-                        Text(lyrics.plainText).font(.system(size: 36, weight: .bold)).lineSpacing(14)
+                        Text(lyrics.plainText).font(.system(size: plainLyricsFontSize, weight: .bold)).lineSpacing(plainLyricsLineSpacing)
                             .frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
                     }
                     .padding(.bottom, appleMusicBottomOverlayHeight)
@@ -112,9 +126,10 @@ struct NowPlayingLyricsPage: View {
             } else { ContentSkeleton(layout: .lyrics).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading) }
         }
         .pageContentReveal(isReady: lyrics != nil || errorMessage != nil)
-        .task(id: lyrics != nil) {
+        .task(id: lyrics != nil || errorMessage != nil) {
             guard lyrics != nil || errorMessage != nil else { return }
             await Task.yield()
+            guard !Task.isCancelled else { return }
             onInitialFocusPrepared?()
         }
     }
@@ -122,7 +137,7 @@ struct NowPlayingLyricsPage: View {
     private var appleMusicBottomOverlayHeight: CGFloat {
         switch presentation {
         case .portrait:
-            NowPlayingBottomControls.overlayHeight
+            NowPlayingBottomControls.overlayHeight + controlsOverflow
         case .landscape:
             50
         }

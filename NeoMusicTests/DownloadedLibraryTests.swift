@@ -96,7 +96,7 @@ final class DownloadedLibraryTests: XCTestCase {
         XCTAssertEqual(library.songs(in: snapshot.id), [])
     }
 
-    func testDownloadedSnapshotsStayOutOfEditablePlaylistPersistence() throws {
+    func testDownloadedSnapshotsStayOutOfEditablePlaylistPersistence() async throws {
         let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let track = song("Downloads/one.flac")
@@ -106,14 +106,16 @@ final class DownloadedLibraryTests: XCTestCase {
         library.replaceDownloadedPlaylists(items: [snapshot], songs: [snapshot.id: [track]])
         XCTAssertTrue(library.configurePersistence(url: url, songs: [track]))
         XCTAssertEqual(library.addSongs([track], to: "local"), 1)
+        await library.flushPersistence()
         let saved = try JSONDecoder().decode(PlaylistLibrary.Snapshot.self, from: Data(contentsOf: url))
         XCTAssertEqual(saved.playlists.map(\.id), ["local"])
         XCTAssertFalse(library.canDelete(snapshot.id))
         XCTAssertEqual(library.addSongs([track], to: snapshot.id), 0)
+        await library.flushPersistence()
         XCTAssertNotNil(library.playlist(snapshot.id))
     }
 
-    func testOfflineOnlineReferencesRestoreWithoutAccountAndSurviveSwitch() throws {
+    func testOfflineOnlineReferencesRestoreWithoutAccountAndSurviveSwitch() async throws {
         let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let url = root.appendingPathComponent("playlists.json")
@@ -122,6 +124,7 @@ final class DownloadedLibraryTests: XCTestCase {
         XCTAssertTrue(original.configurePersistence(url: url, songs: []))
         original.restoreOnlineIdentity(ownerID: "1")
         original.addSongs([online], to: "local")
+        await original.flushPersistence()
         let restored = PlaylistLibrary(playlists: [])
         var available = true
         restored.configureOfflineSongs { $0 == online.id && available ? online : nil }
@@ -130,6 +133,7 @@ final class DownloadedLibraryTests: XCTestCase {
         restored.restoreOnlineIdentity(ownerID: "2")
         restored.reconcileOnlineSongs([])
         restored.reconcileSongs([])
+        await restored.flushPersistence()
         XCTAssertEqual(restored.songs(in: "local"), [online])
         available = false
         restored.reconcileOfflineAvailability()
@@ -139,7 +143,7 @@ final class DownloadedLibraryTests: XCTestCase {
         XCTAssertEqual(restored.songs(in: "local"), [online])
     }
 
-    func testRemovingFileRemapsReferencesAndPersistsOrderIncludingDuplicates() throws {
+    func testRemovingFileRemapsReferencesAndPersistsOrderIncludingDuplicates() async throws {
         let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let url = root.appendingPathComponent("playlists.json")
@@ -149,16 +153,20 @@ final class DownloadedLibraryTests: XCTestCase {
         XCTAssertTrue(library.configurePersistence(url: url, songs: [file, imported]))
         library.restoreOnlineIdentity(ownerID: "1")
         library.addSongs([file, imported, online], to: "local")
+        await library.flushPersistence()
         let downloaded = LibraryPlaylistItem(id: "downloaded:playlist:7", title: "Snapshot", artwork: .playlist)
         library.replaceDownloadedPlaylists(items: [downloaded], songs: [downloaded.id: [file, imported, file]])
 
         library.remapSongReferences([file.id: online])
+        await library.flushPersistence()
         let expected = [online, imported, online]
         XCTAssertEqual(library.songs(in: "local"), expected)
         XCTAssertEqual(library.songs(in: downloaded.id), expected)
         library.replaceOnlinePlaylists(items: [], songs: [:], ownerID: "1")
+        await library.flushPersistence()
         XCTAssertEqual(library.songs(in: downloaded.id), expected)
         library.reconcileSongs([imported])
+        await library.flushPersistence()
         XCTAssertEqual(library.songs(in: "local"), expected)
 
         let snapshot = try JSONDecoder().decode(PlaylistLibrary.Snapshot.self, from: Data(contentsOf: url))

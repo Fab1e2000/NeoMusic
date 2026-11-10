@@ -48,18 +48,17 @@ struct HomeFeedView: View {
                     .scrollPosition(id: $quickActionScrollID, anchor: .leading)
                     .accessibilityIdentifier("home.quick-actions")
                 }
-                ForEach(model.sections) { section in
-                    if !section.items.isEmpty {
-                        HomeContentShelf(section: section, ownerID: model.navigationOwnerID, sources: artworkSources,
-                                         prepareNavigation: model.prepareNavigation) { item in model.play(section.id, item.id) }
-                    }
+                ForEach(model.feedIssues.filter { $0.sectionID == nil }) { issue in
+                    HomeFeedIssueRow(issue: issue) { await model.retryIssue(issue.id) }
+                        .padding(.horizontal, HomeMetrics.margin)
                 }
-                if let error = model.feedError {
-                    HStack {
-                        Text(error).font(.subheadline).foregroundStyle(.secondary)
-                        Spacer()
-                        Button("重试") { Task { await model.refresh() } }
-                    }.padding(.horizontal, HomeMetrics.margin)
+                ForEach(model.sections) { section in
+                    let issue = model.feedIssues.first { $0.sectionID == section.id }
+                    HomeContentShelf(section: section, issue: issue, ownerID: model.navigationOwnerID, sources: artworkSources,
+                                     prepareNavigation: model.prepareNavigation,
+                                     retry: { if let issue { await model.retryIssue(issue.id) } }) { item in
+                        model.play(section.id, item.id)
+                    }
                 }
                 if model.isLoading && model.sections.isEmpty {
                     ProgressView().frame(maxWidth: .infinity).padding()
@@ -81,11 +80,10 @@ struct HomeFeedView: View {
             else { openRoute(route) }
         }
         .accessibilityIdentifier("home.feed")
-        .background(.white)
+        .background(Color(.systemBackground))
         .libraryNavigationTitle("主页")
         .libraryHomeNavigation(title: "主页")
         .toolbar { AccountToolbar() }
-        .environment(\.colorScheme, .light)
     }
 
 }
@@ -97,6 +95,9 @@ struct HomeQuickActionCard: View {
     var sourceID: String? = nil
     var captureSource: (@escaping () -> UIView?) -> Void = { _ in }
     let action: () -> Void
+    @Environment(\.dynamicTypeSize) private var textSize
+    @ScaledMetric(relativeTo: .caption) private var eyebrowSize: CGFloat = 12
+    @ScaledMetric(relativeTo: .footnote) private var subtitleSize: CGFloat = 13
     @State private var localSources = LibraryArtworkSources()
     private var artworkSources: LibraryArtworkSources { sources ?? localSources }
     private var sourceIdentity: String { sourceID ?? "quick:\(item.id)" }
@@ -105,9 +106,13 @@ struct HomeQuickActionCard: View {
     private var accessibilityStatus: String {
         switch state {
         case .idle: item.subtitle
-        case .loading: "正在载入"
+        case .loading: item.action.loadingMessage
         case .failed(let error): "\(error)，轻点重试"
         }
+    }
+    private var accessibilityHint: String {
+        if case .failed = state { return "重新尝试\(item.action.title)" }
+        return item.action.accessibilityHint
     }
 
     var body: some View {
@@ -115,17 +120,17 @@ struct HomeQuickActionCard: View {
         .disabled(isLoading)
         .accessibilityLabel(item.action.title)
         .accessibilityValue(accessibilityStatus)
+        .accessibilityHint(accessibilityHint)
         .accessibilityIdentifier("home.quick-action.\(item.action.rawValue)")
     }
 
     @ViewBuilder private var cardButton: some View {
         let button = Button(action: activate) {
             cover
-                .frame(width: HomeMetrics.heroWidth, height: HomeMetrics.heroHeight)
                 .clipShape(.rect(cornerRadius: 16))
                 .background {
                     RoundedRectangle(cornerRadius: 16)
-                        .fill(.white)
+                        .fill(Color(.systemBackground))
                         .shadow(color: .black.opacity(0.18), radius: 16, x: 0, y: 12)
                 }
                 .contentShape(.rect(cornerRadius: 16))
@@ -144,34 +149,61 @@ struct HomeQuickActionCard: View {
     }
 
     private var cover: some View {
-        ZStack(alignment: .bottomLeading) {
-            LibraryCardArtwork(content: AnyView(HomeQuickActionArtwork(item: item).id(sourceIdentity)), sources: artworkSources, sourceID: sourceIdentity, cornerRadius: 16)
-            LinearGradient(colors: [.clear, .black.opacity(0.6)], startPoint: .center, endPoint: .bottom)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(item.action.eyebrow)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.white.opacity(0.75))
-                    .lineLimit(1)
-                Text(item.action.title).font(.title2.bold()).lineLimit(2)
-                switch state {
-                case .idle, .loading:
-                    if !item.subtitle.isEmpty {
-                        Text(item.subtitle)
-                            .font(.system(size: 13))
-                            .foregroundStyle(.white.opacity(0.85))
-                            .lineLimit(2)
-                    }
-                case .failed(let error):
-                    Text(error).font(.system(size: 13)).lineLimit(3)
-                    Text("轻点重试").font(.system(size: 13, weight: .semibold))
+        VStack(alignment: .leading, spacing: 4) {
+            Spacer(minLength: textSize.isAccessibilitySize ? 90 : 0)
+            Text(item.action.eyebrow)
+                .font(.system(size: eyebrowSize))
+                .foregroundStyle(.white.opacity(0.75))
+                .lineLimit(textSize.isAccessibilitySize ? nil : 1)
+            Text(item.action.title).font(.title2.bold()).lineLimit(textSize.isAccessibilitySize ? nil : 2)
+            switch state {
+            case .idle:
+                if !item.subtitle.isEmpty {
+                    Text(item.subtitle)
+                        .font(.system(size: subtitleSize))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .lineLimit(textSize.isAccessibilitySize ? nil : 2)
                 }
+            case .loading:
+                Text(item.action.loadingMessage)
+                    .font(.system(size: subtitleSize))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .lineLimit(textSize.isAccessibilitySize ? nil : 2)
+            case .failed(let error):
+                Text(error).font(.system(size: subtitleSize)).lineLimit(textSize.isAccessibilitySize ? nil : 3)
+                Text("轻点重试").font(.system(size: subtitleSize, weight: .semibold))
             }
-            .foregroundStyle(.white)
-            .multilineTextAlignment(.leading)
-            .padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(width: HomeMetrics.heroWidth, height: HomeMetrics.heroHeight)
+        .foregroundStyle(.white)
+        .multilineTextAlignment(.leading)
+        .padding(16)
+        .frame(width: HomeMetrics.heroWidth)
+        .frame(minHeight: HomeMetrics.heroHeight, alignment: .bottomLeading)
+        .background {
+            LibraryCardArtwork(content: AnyView(HomeQuickActionArtwork(item: item).id(sourceIdentity)), sources: artworkSources, sourceID: sourceIdentity, cornerRadius: 16)
+                .overlay { LinearGradient(colors: [.clear, .black.opacity(0.6)], startPoint: .center, endPoint: .bottom) }
+        }
+    }
+}
+
+struct HomeFeedIssueRow: View {
+    let issue: HomeFeedIssue
+    let retry: () async -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(issue.isRetrying ? "正在重新载入\(issue.title)" : issue.message)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button(issue.isRetrying ? "正在重试" : "重试") { Task { await retry() } }
+                .font(.subheadline.weight(.semibold))
+                .disabled(issue.isRetrying)
+                .accessibilityLabel("重试\(issue.title)")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("home.issue.\(issue.id)")
     }
 }
 
@@ -196,10 +228,13 @@ private struct HomeQuickActionArtwork: View {
 
 private struct HomeContentShelf: View {
     let section: HomeContentSection
+    let issue: HomeFeedIssue?
     let ownerID: String?
     let sources: LibraryArtworkSources
     let prepareNavigation: (LibraryNavigationPreview) -> Void
+    let retry: () async -> Void
     let play: (HomeContentItem) -> Void
+    @ScaledMetric(relativeTo: .title3) private var headingSize: CGFloat = 20
     private var songGroups: [[HomeContentItem]] {
         var groups: [[HomeContentItem]] = []
         for item in section.items {
@@ -212,15 +247,21 @@ private struct HomeContentShelf: View {
     var body: some View {
         VStack(alignment: .leading, spacing: HomeMetrics.headingSpacing) {
             if !section.title.isEmpty {
-                Text(section.title).font(.system(size: 20, weight: .bold))
+                Text(section.title).font(.system(size: headingSize, weight: .bold))
                     .padding(.horizontal, HomeMetrics.margin)
                     .accessibilityAddTraits(.isHeader)
                     .accessibilityIdentifier("home.heading.\(section.id)")
             }
-            if section.kind == .songs || section.kind == .hero {
-                scrollContent.scrollTargetBehavior(.viewAligned)
-            } else {
-                scrollContent
+            if !section.items.isEmpty {
+                if section.kind == .songs || section.kind == .hero {
+                    scrollContent.scrollTargetBehavior(.viewAligned)
+                } else {
+                    scrollContent
+                }
+            }
+            if let issue {
+                HomeFeedIssueRow(issue: issue, retry: retry)
+                    .padding(.horizontal, HomeMetrics.margin)
             }
         }
     }
@@ -260,6 +301,7 @@ private struct HomeSongRecommendationRow: View {
     let prepareNavigation: (LibraryNavigationPreview) -> Void
     let play: () -> Void
     @Environment(\.openLibraryRoute) private var openRoute
+    @Environment(\.dynamicTypeSize) private var textSize
     var body: some View {
         Button {
             switch item.action {
@@ -273,11 +315,11 @@ private struct HomeSongRecommendationRow: View {
             HStack(spacing: 12) {
                 ArtworkView(artwork: item.artwork, contentID: "\(ownerID ?? "public"):\(item.id)", cornerRadius: 6).frame(width: 48, height: 48)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(item.title).font(.subheadline).foregroundStyle(.primary).lineLimit(1)
-                    Text(item.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Text(item.title).font(.subheadline).foregroundStyle(.primary).lineLimit(textSize.isAccessibilitySize ? nil : 1)
+                    Text(item.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(textSize.isAccessibilitySize ? nil : 1)
                 }
                 Spacer(minLength: 0)
-            }.frame(height: 64).contentShape(.rect)
+            }.frame(minHeight: 64).fixedSize(horizontal: false, vertical: true).contentShape(.rect)
         }.buttonStyle(.plain)
             .accessibilityIdentifier("home.item.\(item.id)")
     }
@@ -293,6 +335,9 @@ private struct HomeContentCard: View {
     let play: () -> Void
     @Environment(\.openLibraryRoute) private var openRoute
     @Environment(\.displayScale) private var displayScale
+    @Environment(\.dynamicTypeSize) private var textSize
+    @ScaledMetric(relativeTo: .caption) private var eyebrowSize: CGFloat = 12
+    @ScaledMetric(relativeTo: .footnote) private var subtitleSize: CGFloat = 13
 
     var body: some View {
         Button {
@@ -307,21 +352,21 @@ private struct HomeContentCard: View {
             VStack(alignment: .leading, spacing: 6) {
                 cover
                     .frame(width: large ? HomeMetrics.heroWidth : HomeMetrics.artworkSize,
-                           height: large ? HomeMetrics.heroHeight : HomeMetrics.artworkSize)
+                           height: large ? nil : HomeMetrics.artworkSize)
                     .clipShape(.rect(cornerRadius: large ? 16 : 8))
                     .overlay { if !large { RoundedRectangle(cornerRadius: 8).strokeBorder(.black.opacity(0.10), lineWidth: 1 / displayScale) } }
                     .background {
                         if large {
                             RoundedRectangle(cornerRadius: 16)
-                                .fill(.white)
+                                .fill(Color(.systemBackground))
                                 .shadow(color: .black.opacity(0.18), radius: 16, x: 0, y: 12)
                         }
                     }
                 if !large {
                     VStack(alignment: .leading, spacing: 5) {
-                        Text(item.title).font(.subheadline).foregroundStyle(.primary).lineLimit(2)
+                        Text(item.title).font(.subheadline).foregroundStyle(.primary).lineLimit(textSize.isAccessibilitySize ? nil : 2)
                         if !item.subtitle.isEmpty {
-                            Text(item.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            Text(item.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(textSize.isAccessibilitySize ? nil : 1)
                         }
                     }
                 }
@@ -333,10 +378,19 @@ private struct HomeContentCard: View {
         .accessibilityIdentifier("home.item.\(item.id)")
     }
 
-    private var cover: some View {
-        ZStack(alignment: .bottomLeading) {
+    @ViewBuilder private var cover: some View {
+        if large {
+            VStack(spacing: 0) {
+                Spacer(minLength: textSize.isAccessibilitySize ? 90 : 0)
+                caption
+            }
+            .frame(width: HomeMetrics.heroWidth)
+            .frame(minHeight: HomeMetrics.heroHeight, alignment: .bottomLeading)
+            .background {
+                LibraryCardArtwork(content: AnyView(artwork), sources: sources, sourceID: sourceID, cornerRadius: 16)
+            }
+        } else {
             LibraryCardArtwork(content: AnyView(artwork), sources: sources, sourceID: sourceID, cornerRadius: large ? 16 : 8)
-            if large { caption }
         }
     }
 
@@ -358,11 +412,11 @@ private struct HomeContentCard: View {
     private var caption: some View {
         VStack(alignment: .leading, spacing: 4) {
             if let eyebrow = item.eyebrow, !eyebrow.isEmpty {
-                Text(eyebrow).font(.system(size: 12)).foregroundStyle(.white.opacity(0.75)).lineLimit(1)
+                Text(eyebrow).font(.system(size: eyebrowSize)).foregroundStyle(.white.opacity(0.75)).lineLimit(textSize.isAccessibilitySize ? nil : 1)
             }
-            if item.style != .daily { Text(item.title).font(.title2.bold()).lineLimit(2) }
+            if item.style != .daily { Text(item.title).font(.title2.bold()).lineLimit(textSize.isAccessibilitySize ? nil : 2) }
             if !item.subtitle.isEmpty {
-                Text(item.subtitle).font(.system(size: 13)).foregroundStyle(.white.opacity(0.8)).lineLimit(1)
+                Text(item.subtitle).font(.system(size: subtitleSize)).foregroundStyle(.white.opacity(0.8)).lineLimit(textSize.isAccessibilitySize ? nil : 1)
             }
         }
         .multilineTextAlignment(.leading)

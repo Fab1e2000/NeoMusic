@@ -131,7 +131,9 @@ private struct PlayerPopupContent: View {
                         PerformanceDiagnostics.restoration("popup.content active=\(active) titleEmpty=\(track.title.isEmpty) cover=\(track.coverURL != nil)")
                     }
                     .popupItem {
-                        PopupItem(id: track.id, image: barImage, title: {
+                        PopupItem(id: track.id, image: barImage,
+                                  accessibilityLabel: [track.title, track.artists, "迷你播放器"].filter { !$0.isEmpty }.joined(separator: "，"),
+                                  accessibilityHint: "打开正在播放", title: {
                             MiniPlayerTitle(track: track, isActive: isBarActive)
                                 .environment(player)
                                 .environment(\.colorScheme, barColorScheme)
@@ -156,18 +158,22 @@ private struct MiniPlayerTitle: View {
     let isActive: Bool
     @Environment(ReferencePlayerState.self) private var player
     @Environment(\.popupBarPlacement) private var placement
+    @ScaledMetric(relativeTo: .footnote) private var titleSize = 13.0
+    @ScaledMetric(relativeTo: .caption) private var artistSize = 12.0
+    @ScaledMetric(relativeTo: .footnote) private var compactHeight = 18.0
+    @ScaledMetric(relativeTo: .footnote) private var regularHeight = 36.0
 
     var body: some View {
         let compact = placement == .inline
-        ReferenceMiniPlayerTitlePager(height: compact ? 18 : 36, song: track,
+        ReferenceMiniPlayerTitlePager(height: compact ? compactHeight : regularHeight, song: track,
             currentIndex: player.currentQueueIndex, previous: player.previousInOrder,
             next: player.nextInOrder, select: player.skip(toQueueIndex:)) { song, interactive in
                 VStack(alignment: .leading, spacing: 2) {
                     NowPlayingMarqueeText(text: song.title, isActive: isActive && interactive && !compact)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.system(size: titleSize, weight: .medium))
                         .foregroundStyle(.primary)
                     Text(song.artists)
-                        .font(.system(size: 12))
+                        .font(.system(size: artistSize))
                         .foregroundStyle(.primary)
                         .frame(height: compact ? 0 : nil)
                         .opacity(compact ? 0 : 1)
@@ -176,7 +182,7 @@ private struct MiniPlayerTitle: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(.rect)
             }
-            .frame(height: compact ? 18 : 36)
+            .frame(height: compact ? compactHeight : regularHeight)
             .clipped()
     }
 }

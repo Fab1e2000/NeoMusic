@@ -49,6 +49,72 @@ final class PlaybackTests: XCTestCase {
         model.moveUpcoming(from: 10, to: 0)
         XCTAssertEqual(model.queue.count, 1)
     }
+    func testForwardCapabilityMatchesFiniteAndContinuingQueueActions() {
+        let empty = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false)
+        XCTAssertFalse(empty.canSkipForward)
+
+        let model = NowPlayingModel(queue: [song("a"), song("b")], currentIndex: 0, isPlaying: false)
+        defer { model.shutdownPlayback() }
+        model.repeatMode = .off
+        XCTAssertTrue(model.canSkipForward)
+        model.skipForward()
+        XCTAssertEqual(model.current.id, "b")
+        XCTAssertFalse(model.canSkipForward)
+        model.skipForward()
+        XCTAssertEqual(model.current.id, "b")
+        model.repeatMode = .one
+        XCTAssertFalse(model.canSkipForward)
+        model.repeatMode = .all
+        XCTAssertTrue(model.canSkipForward)
+        model.skipForward()
+        XCTAssertEqual(model.current.id, "a")
+
+        let continuation = PlaybackQueueContinuation(ownerID: "42")
+        model.play([song("radio")], from: "Radio", shuffled: false, continuation: continuation)
+        model.repeatMode = .off
+        var advanceRequests = 0
+        model.replenishQueue = { identity, advance, ended in
+            XCTAssertEqual(identity, continuation)
+            XCTAssertFalse(ended)
+            if advance { advanceRequests += 1 }
+        }
+        XCTAssertTrue(model.canSkipForward)
+        model.skipForward()
+        XCTAssertEqual(advanceRequests, 1)
+        XCTAssertEqual(model.current.id, "radio")
+        model.invalidateOnlinePlayback(ownerID: nil)
+        XCTAssertFalse(model.canSkipForward)
+    }
+
+    func testSystemNextCommandFollowsQueueRepeatContinuationAndShutdown() async {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let model = NowPlayingModel(queue: [song("a"), song("b")], currentIndex: 0, isPlaying: false)
+        defer { model.shutdownPlayback(); try? FileManager.default.removeItem(at: root) }
+        model.configurePlayback(resolveURL: { _ in nil }, persistenceURL: root.appendingPathComponent("queue.json"))
+        let command = MPRemoteCommandCenter.shared().nextTrackCommand
+        XCTAssertTrue(command.isEnabled)
+        model.repeatMode = .off
+        model.select(1)
+        XCTAssertFalse(command.isEnabled)
+        model.appendLater([song("c")])
+        XCTAssertTrue(command.isEnabled)
+        model.removeQueueEntry(at: 2)
+        XCTAssertFalse(command.isEnabled)
+        model.repeatMode = .all
+        XCTAssertTrue(command.isEnabled)
+        model.repeatMode = .one
+        XCTAssertFalse(command.isEnabled)
+
+        model.play([song("radio")], from: "Radio", shuffled: false,
+                   continuation: PlaybackQueueContinuation(ownerID: "42"))
+        XCTAssertTrue(command.isEnabled)
+        model.invalidateOnlinePlayback(ownerID: nil)
+        XCTAssertFalse(command.isEnabled)
+        await model.flushQueuePersistence()
+        model.shutdownPlayback()
+        XCTAssertFalse(command.isEnabled)
+    }
+
     func testRepeatAndManualQueueConfirmation() {
         let model = NowPlayingModel(queue: [song("a"), song("b")], currentIndex: 1)
         model.skipForward()
@@ -179,10 +245,11 @@ final class PlaybackTests: XCTestCase {
         let model = NowPlayingModel(queue: [song("a"), song("b")], currentIndex: 1, isPlaying: true)
         defer { model.shutdownPlayback() }
         model.repeatMode = .all
-        model.sourceTitle = "私人漫游"
-        model.queueContinues = { true }
+        let continuation = PlaybackQueueContinuation(ownerID: "42")
+        model.play([song("a"), song("b")], startingAt: 1, from: "Radio", continuation: continuation)
         var askedToAdvance = false
-        model.replenishQueue = { advance, ended in
+        model.replenishQueue = { identity, advance, ended in
+            XCTAssertEqual(identity, continuation)
             askedToAdvance = advance
             XCTAssertFalse(ended)
         }
@@ -194,6 +261,39 @@ final class PlaybackTests: XCTestCase {
         XCTAssertEqual(model.queue.map(\.id), ["a", "b", "c"])
         model.skipForward()
         XCTAssertEqual(model.current.id, "c")
+    }
+
+    func testContinuationWaitsForConfirmationAndFiniteReplacementClearsIt() {
+        let model = NowPlayingModel(queue: [song("original")], currentIndex: 0, isPlaying: false)
+        defer { model.shutdownPlayback() }
+        let continuation = PlaybackQueueContinuation(ownerID: "42")
+        model.appendLater([song("manual")])
+        model.requestPlay([song("radio")], from: "私人漫游", shuffled: false, continuation: continuation)
+        XCTAssertEqual(model.pendingPlay?.continuation, continuation)
+        XCTAssertNil(model.continuation)
+        model.pendingPlay = nil
+        XCTAssertNil(model.continuation)
+        model.requestPlay([song("radio")], startingAt: 0, from: "私人漫游", continuation: continuation)
+        model.confirmPendingPlay()
+        XCTAssertEqual(model.continuation, continuation)
+        model.sourceTitle = "Renamed source"
+        XCTAssertTrue(model.queueContinues)
+        model.play([song("local")], from: "私人漫游", shuffled: false)
+        XCTAssertNil(model.continuation)
+        XCTAssertFalse(model.queueContinues)
+    }
+
+    func testAccountInvalidationClearsActiveAndPendingContinuations() {
+        let model = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false)
+        defer { model.shutdownPlayback() }
+        let continuation = PlaybackQueueContinuation(ownerID: "42")
+        model.play([song("netease:42:1")], from: "Radio", shuffled: false, continuation: continuation)
+        model.appendLater([song("manual")])
+        model.requestPlay([song("netease:42:2")], from: "Radio", shuffled: false, continuation: continuation)
+        XCTAssertNotNil(model.pendingPlay)
+        model.invalidateOnlinePlayback(ownerID: "43")
+        XCTAssertNil(model.continuation)
+        XCTAssertNil(model.pendingPlay)
     }
 
     func testQueueEndStillRepeatsWhenTheSourceDoesNotContinue() {
@@ -322,6 +422,36 @@ final class PlaybackTests: XCTestCase {
         XCTAssertTrue(player.currentItem === prepared)
         XCTAssertTrue(model.isPlaying)
         XCTAssertEqual(model.current.id, "b")
+        await model.flushQueuePersistence()
+    }
+
+    func testPreparedAdvanceCommitsItsOwnQualityAndClearsUnknownLocalQuality() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let url = try temporaryAudio(in: root)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let songs = [song("lossless-copy"), song("high-copy"), song("local-file")]
+        let qualities: [String?] = ["lossless", "exhigh", nil]
+        let model = NowPlayingModel(queue: songs, currentIndex: 0, isPlaying: false)
+        defer { model.shutdownPlayback() }
+        model.configurePlayback(resolveResource: { id in
+            let index = try XCTUnwrap(songs.firstIndex { $0.id == id })
+            return PlaybackResource(url: url, quality: qualities[index])
+        }, persistenceURL: root.appendingPathComponent("queue.json"))
+        model.startCurrent()
+        await model.waitForResourceResolution()
+        XCTAssertEqual(model.actualQuality, "lossless")
+        let player = try queuePlayer(in: model)
+        for index in 1...2 {
+            for _ in 0..<100 where player.items().count < 2 {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            let prepared = try XCTUnwrap(player.items().dropFirst().first)
+            model.select(index)
+            XCTAssertTrue(player.currentItem === prepared)
+            XCTAssertEqual(model.currentIndex, index)
+            XCTAssertEqual(model.actualQuality, qualities[index])
+            XCTAssertFalse(model.isPlaying)
+        }
         await model.flushQueuePersistence()
     }
 

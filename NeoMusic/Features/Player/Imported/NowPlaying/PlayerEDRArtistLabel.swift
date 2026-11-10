@@ -35,15 +35,19 @@ struct PlayerEDRArtistLabel: UIViewRepresentable {
     let brightness: Double
     var isWhite = false
     var fontWeight: UIFont.Weight = .regular
+    /// True when the caller has already applied its Dynamic Type scale.
+    var fontSizeIsScaled = false
     @Environment(\.playerVisualsActive) private var visualsActive
 
     func makeUIView(context: Context) -> PlayerEDRGlyphView { PlayerEDRGlyphView() }
     func updateUIView(_ view: PlayerEDRGlyphView, context: Context) {
         view.setRenderingActive(visualsActive)
-        view.update(text: text, fontSize: fontSize, image: image, anchor: anchor, brightness: brightness, isWhite: isWhite, fontWeight: fontWeight)
+        view.update(text: text, fontSize: fontSize, image: image, anchor: anchor, brightness: brightness,
+                    isWhite: isWhite, fontWeight: fontWeight, fontSizeIsScaled: fontSizeIsScaled)
     }
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: PlayerEDRGlyphView, context: Context) -> CGSize? {
-        let font = UIFont.systemFont(ofSize: fontSize)
+        let font = PlayerEDRGlyphView.textFont(fontSize: fontSize, weight: fontWeight, isWhite: isWhite,
+                                             fontSizeIsScaled: fontSizeIsScaled, traits: uiView.traitCollection)
         return CGSize(width: proposal.width ?? (text as NSString).size(withAttributes: [.font: font]).width,
                       height: font.lineHeight)
     }
@@ -53,7 +57,7 @@ struct PlayerEDRArtistLabel: UIViewRepresentable {
 enum PlayerEDRMask: Equatable {
     case symbol(String, CGFloat, CGFloat)
     case circle(CGFloat)
-    case time(String, Bool)
+    case time(String, Bool, CGFloat = 12.5)
 }
 
 /// Metal objects are immutable after preparation and Metal supports their use across threads.
@@ -106,6 +110,7 @@ final class PlayerEDRGlyphView: UIView {
     private var brightness: Float = 0.7
     private var isWhite = false
     private var fontWeight: UIFont.Weight = .regular
+    private var fontSizeIsScaled = false
     private var shape: PlayerEDRMask?
     private var image: UIImage?
     private weak var anchor: NowPlayingBackdropAnchor?
@@ -127,6 +132,7 @@ final class PlayerEDRGlyphView: UIView {
         let fontSize: CGFloat
         let fontWeight: UIFont.Weight
         let isWhite: Bool
+        let fontSizeIsScaled: Bool
         let shape: PlayerEDRMask?
         let bounds: CGRect
         let scale: CGFloat
@@ -157,13 +163,16 @@ final class PlayerEDRGlyphView: UIView {
     }
     required init?(coder: NSCoder) { nil }
 
-    func update(text: String, fontSize: CGFloat, image: UIImage?, anchor: NowPlayingBackdropAnchor?, brightness: Double, isWhite: Bool, fontWeight: UIFont.Weight) {
+    func update(text: String, fontSize: CGFloat, image: UIImage?, anchor: NowPlayingBackdropAnchor?, brightness: Double,
+                isWhite: Bool, fontWeight: UIFont.Weight, fontSizeIsScaled: Bool = false) {
         guard self.text != text || self.fontSize != fontSize || self.image !== image || self.anchor !== anchor
                 || self.brightness != Float(brightness) || self.isWhite != isWhite || self.fontWeight != fontWeight
+                || self.fontSizeIsScaled != fontSizeIsScaled
                 || shape != nil else { return }
         let wasWhite = self.isWhite
         dirty = true
         self.text = text; self.fontSize = fontSize; self.image = image; self.anchor = anchor; self.brightness = Float(brightness); self.isWhite = isWhite; self.fontWeight = fontWeight
+        self.fontSizeIsScaled = fontSizeIsScaled
         shape = nil
         if wasWhite != isWhite { updateDisplayLink() }
         setNeedsLayout()
@@ -259,7 +268,7 @@ final class PlayerEDRGlyphView: UIView {
     func preparedTextures(backdrop: CGImage, scale: CGFloat) -> (mask: MTLTexture, backdrop: MTLTexture)? {
         guard let resources, bounds.width > 0, bounds.height > 0 else { return nil }
         let input = MaskInput(text: text, fontSize: fontSize, fontWeight: fontWeight, isWhite: isWhite,
-                              shape: shape, bounds: bounds, scale: scale, traits: traitCollection,
+                              fontSizeIsScaled: fontSizeIsScaled, shape: shape, bounds: bounds, scale: scale, traits: traitCollection,
                               currentTraits: UITraitCollection.current)
         let maskTexture: MTLTexture
         if let cachedMask, cachedMask.input == input {
@@ -296,9 +305,9 @@ final class PlayerEDRGlyphView: UIView {
                 case let .circle(diameter):
                     UIColor.white.withAlphaComponent(0.68).setFill()
                     UIBezierPath(ovalIn: CGRect(x: (bounds.width - diameter) / 2, y: (bounds.height - diameter) / 2, width: diameter, height: diameter)).fill()
-                case let .time(value, rightAligned):
+                case let .time(value, rightAligned, fontSize):
                     let label = UILabel(frame: bounds)
-                    label.font = .monospacedDigitSystemFont(ofSize: 12.5, weight: .medium)
+                    label.font = .monospacedDigitSystemFont(ofSize: fontSize, weight: .medium)
                     label.text = value
                     label.textAlignment = rightAligned ? .right : .left
                     label.textColor = .white.withAlphaComponent(0.5)
@@ -307,13 +316,21 @@ final class PlayerEDRGlyphView: UIView {
             } else {
                 let label = UILabel(frame: bounds)
                 label.text = text
-                let base = UIFont.systemFont(ofSize: fontSize, weight: fontWeight)
-                label.font = fontSize == 20 ? base : UIFontMetrics(forTextStyle: isWhite ? .headline : (fontSize == 13 ? .footnote : .subheadline)).scaledFont(for: base, compatibleWith: traitCollection)
+                label.font = Self.textFont(fontSize: fontSize, weight: fontWeight, isWhite: isWhite,
+                                           fontSizeIsScaled: fontSizeIsScaled, traits: traitCollection)
                 label.textColor = .white
                 label.numberOfLines = 1
                 label.lineBreakMode = .byTruncatingTail
                 label.drawText(in: bounds)
             }
         }
+    }
+
+    static func textFont(fontSize: CGFloat, weight: UIFont.Weight, isWhite: Bool,
+                         fontSizeIsScaled: Bool, traits: UITraitCollection) -> UIFont {
+        let base = UIFont.systemFont(ofSize: fontSize, weight: weight)
+        guard !fontSizeIsScaled, fontSize != 20 else { return base }
+        let style: UIFont.TextStyle = isWhite ? .headline : (fontSize == 13 ? .footnote : .subheadline)
+        return UIFontMetrics(forTextStyle: style).scaledFont(for: base, compatibleWith: traits)
     }
 }

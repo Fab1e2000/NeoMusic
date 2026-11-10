@@ -9,7 +9,7 @@ enum LibraryToast {
     case playingNext, addedToQueue
     /// 加入播放列表：封面、加入数量与播放列表名称，点按打开该播放列表。
     case addedToPlaylist(count: Int, title: String, artwork: Artwork, playlistID: String)
-    /// 多选加入多个播放列表：只有图标与一行文字。
+    /// 多选加入多个播放列表：图标与数量摘要。
     case addedToPlaylists(count: Int, playlistCount: Int)
 
     var title: String {
@@ -38,6 +38,33 @@ enum LibraryToast {
         case .addedToPlaylist, .addedToPlaylists: "text.badge.plus"
         }
     }
+
+    func dismissalDelay(voiceOverEnabled: Bool) -> Duration? {
+        switch self {
+        case .addedToPlaylist, .error:
+            voiceOverEnabled ? nil : .seconds(5)
+        case .addedToPlaylists:
+            .seconds(5)
+        default:
+            .seconds(1.5)
+        }
+    }
+
+    var accessibilityAnnouncement: AttributedString {
+        let message: String
+        if case .addedToPlaylist(_, let playlistTitle, _, _) = self {
+            message = "\(title)，\(playlistTitle)"
+        } else {
+            message = title
+        }
+        var announcement = AttributedString(message)
+        if case .error = self {
+            announcement.accessibilitySpeechAnnouncementPriority = .default
+        } else {
+            announcement.accessibilitySpeechAnnouncementPriority = .low
+        }
+        return announcement
+    }
 }
 
 /// 当前显示的提示。由持有资料库的宿主创建，菜单操作通过 `CollectionMenuActions.notify` 发出提示。
@@ -51,23 +78,58 @@ final class LibraryToastCenter {
     }
 
     private(set) var current: Presentation?
-    private var dismissal: Task<Void, Never>?
+    @ObservationIgnored private var dismissal: Task<Void, Never>?
+    @ObservationIgnored private var voiceOverEnabled: Bool
+    @ObservationIgnored private var lastAnnouncedID: UUID?
+    private let sleep: @MainActor (Duration) async throws -> Void
 
-    /// 显示 1.5 秒后自动收起。计时放在这里而不是提示视图上：页面刷新可能重建视图并取消它的任务，
-    /// 提示会一出现就被收起。
+    init(voiceOverEnabled: Bool? = nil,
+         sleep: @escaping @MainActor (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) {
+        self.voiceOverEnabled = voiceOverEnabled ?? UIAccessibility.isVoiceOverRunning
+        self.sleep = sleep
+    }
+
+    /// 宿主持有计时，页面重建不会提前收起提示；新反馈替换旧反馈并重新计时。
     func show(_ toast: LibraryToast) {
         let presentation = Presentation(toast: toast)
         current = presentation
+        scheduleDismissal(for: presentation)
+    }
+
+    func updateVoiceOverEnabled(_ enabled: Bool) {
+        guard voiceOverEnabled != enabled else { return }
+        let previous = voiceOverEnabled
+        voiceOverEnabled = enabled
+        guard let presentation = current,
+              presentation.toast.dismissalDelay(voiceOverEnabled: previous)
+                != presentation.toast.dismissalDelay(voiceOverEnabled: enabled) else { return }
+        scheduleDismissal(for: presentation)
+    }
+
+    func takeAccessibilityAnnouncement() -> AttributedString? {
+        guard voiceOverEnabled, let presentation = current, lastAnnouncedID != presentation.id else { return nil }
+        lastAnnouncedID = presentation.id
+        return presentation.toast.accessibilityAnnouncement
+    }
+
+    private func scheduleDismissal(for presentation: Presentation) {
         dismissal?.cancel()
+        dismissal = nil
+        guard let delay = presentation.toast.dismissalDelay(voiceOverEnabled: voiceOverEnabled) else { return }
+        let sleep = sleep
         dismissal = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(1.5))
+            do { try await sleep(delay) }
+            catch { return }
             guard !Task.isCancelled else { return }
-            withAnimation(.smooth(duration: 0.3)) { self?.dismiss(presentation) }
+            self?.dismiss(presentation)
         }
     }
 
     func dismiss(_ presentation: Presentation) {
-        if current == presentation { current = nil }
+        guard current == presentation else { return }
+        dismissal?.cancel()
+        dismissal = nil
+        current = nil
     }
 }
 
@@ -81,7 +143,16 @@ extension View {
     /// 提示出现时的触感反馈；每个提示只反馈一次，挂在根部。
     /// 喜爱和取消喜爱由操作本身反馈，避免和这里再震一次；错误提示用错误触感。
     func libraryToastFeedback(_ center: LibraryToastCenter) -> some View {
-        sensoryFeedback(.success, trigger: center.current?.id) { _, new in
+        modifier(LibraryToastFeedback(center: center))
+    }
+}
+
+private struct LibraryToastFeedback: ViewModifier {
+    let center: LibraryToastCenter
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
+
+    func body(content: Content) -> some View {
+        content.sensoryFeedback(.success, trigger: center.current?.id) { _, new in
             guard new != nil else { return false }
             switch center.current?.toast {
             case .favorited, .unfavorited, .error: return false
@@ -92,6 +163,18 @@ extension View {
             guard new != nil, case .error = center.current?.toast else { return false }
             return true
         }
+        .onChange(of: voiceOverEnabled, initial: true) { _, enabled in
+            center.updateVoiceOverEnabled(enabled)
+            announceCurrentPresentation()
+        }
+        .onChange(of: center.current?.id, initial: true) { _, _ in
+            announceCurrentPresentation()
+        }
+    }
+
+    private func announceCurrentPresentation() {
+        guard voiceOverEnabled, let announcement = center.takeAccessibilityAnnouncement() else { return }
+        AccessibilityNotification.Announcement(announcement).post()
     }
 }
 
@@ -114,39 +197,51 @@ enum LibraryHaptics {
 
 private struct LibraryToastOverlay: ViewModifier {
     let center: LibraryToastCenter
+    @Environment(\.accessibilityReduceMotion) private var reducesMotion
+    @Environment(\.openLibraryRoute) private var openLibraryRoute
 
     func body(content: Content) -> some View {
         content
             .overlay(alignment: .bottom) {
                 if let presentation = center.current {
-                    LibraryToastView(toast: presentation.toast)
+                    LibraryToastView(toast: presentation.toast, dismiss: { center.dismiss(presentation) },
+                                     openRoute: openLibraryRoute)
+                        .padding(.horizontal, 12)
                         .padding(.bottom, 25)
-                        .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                        .transition(reducesMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.9)))
                         .id(presentation.id)
                 }
             }
-            .animation(.smooth(duration: 0.3), value: center.current)
+            .animation(reducesMotion ? .easeOut(duration: 0.15) : .smooth(duration: 0.3), value: center.current)
     }
 }
 
-/// 实测 Apple Music：不是玻璃，而是接近不透明的浅灰模糊底，高 53pt。
-private struct LibraryToastView: View {
+/// 短提示高 53pt，较大文字和长内容自适应增高。
+struct LibraryToastView: View {
     let toast: LibraryToast
-    @Environment(\.openLibraryRoute) private var openLibraryRoute
+    let dismiss: () -> Void
+    let openRoute: OpenLibraryRouteAction
 
     var body: some View {
         content
-            .frame(height: 53)
+            .frame(minHeight: 53)
             .background(.regularMaterial, in: .rect(cornerRadius: 18))
             .accessibilityElement(children: .combine)
+            .accessibilityAction(named: "关闭提示", dismiss)
+    }
+
+    func openPlaylist(_ playlistID: String) {
+        dismiss()
+        openRoute(.playlist(playlistID))
     }
 
     @ViewBuilder private var content: some View {
         if case .addedToPlaylist(_, let title, let artwork, let playlistID) = toast {
-            Button { openLibraryRoute(.playlist(playlistID)) } label: {
+            Button { openPlaylist(playlistID) } label: {
                 HStack(spacing: 10) {
                     ArtworkView(artwork: artwork, cornerRadius: 4)
-                        .frame(width: 33)
+                        .frame(width: 33, height: 33)
+                        .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 0) {
                         // 实测 Apple Music：说明 13pt、名称 15pt 半粗体，箭头更小、为次要色。
                         Text(toast.title).font(.footnote).foregroundStyle(.secondary)
@@ -155,12 +250,15 @@ private struct LibraryToastView: View {
                             Image(systemName: "chevron.right")
                                 .font(.system(size: 12, weight: .semibold))
                                 .foregroundStyle(.secondary)
+                                .accessibilityHidden(true)
                         }
                     }
-                    .lineLimit(1)
+                    .lineLimit(nil)
+                    .fixedSize(horizontal: false, vertical: true)
                 }
                 .padding(.leading, 10)
                 .padding(.trailing, 18)
+                .padding(.vertical, 10)
             }
             .buttonStyle(.plain)
         } else {
@@ -168,6 +266,7 @@ private struct LibraryToastView: View {
                 .labelStyle(ToastLabelStyle())
                 .font(.subheadline.weight(.semibold))
                 .padding(.horizontal, 18)
+                .padding(.vertical, 12)
         }
     }
 }
@@ -175,8 +274,8 @@ private struct LibraryToastView: View {
 private struct ToastLabelStyle: LabelStyle {
     func makeBody(configuration: Configuration) -> some View {
         HStack(spacing: 12) {
-            configuration.icon.font(.body.weight(.semibold))
-            configuration.title
+            configuration.icon.font(.body.weight(.semibold)).accessibilityHidden(true)
+            configuration.title.lineLimit(nil).fixedSize(horizontal: false, vertical: true)
         }
     }
 }

@@ -3,6 +3,13 @@
 import SwiftUI
 import UIKit
 
+/// Actual resolved playback quality, projected by the owning music or file service.
+struct PlayerAudioQuality: Equatable, Sendable {
+    let title: String
+    var detail: String? = nil
+    var isLossless = false
+}
+
 /// All entry points use the same actions; platforms supply capabilities, never menu layouts.
 @MainActor struct SongMenuConfiguration {
     var primary: [SongRowAction]
@@ -75,18 +82,27 @@ extension SongMenuConfiguration {
     private let artistLookup: ((String) -> [String])?
     private let namedArtistAction: ((String, String) -> Void)?
     private let notifyAction: (LibraryToast) -> Void
+    private let audioQualityLookup: ((String) -> PlayerAudioQuality?)?
+    private let audioQualitySettingsAction: (() -> Void)?
     init(isFavorite: @escaping (String) -> Bool, toggleFavorite: @escaping (String) -> Void,
          addToPlaylist: @escaping (String) -> Void, openAlbum: @escaping (String) -> Void,
          openArtist: @escaping (String) -> Void, artistNames: ((String) -> [String])? = nil,
          openNamedArtist: ((String, String) -> Void)? = nil,
-         notify: @escaping (LibraryToast) -> Void = { _ in }) {
+         notify: @escaping (LibraryToast) -> Void = { _ in },
+         audioQuality: ((String) -> PlayerAudioQuality?)? = nil,
+         openAudioQualitySettings: (() -> Void)? = nil) {
         artistLookup = artistNames; namedArtistAction = openNamedArtist
         favoriteLookup = isFavorite; favoriteAction = toggleFavorite; playlistAction = addToPlaylist; albumAction = openAlbum; artistAction = openArtist
         notifyAction = notify
+        audioQualityLookup = audioQuality
+        audioQualitySettingsAction = openAudioQualitySettings
     }
     func isFavorite(_ track: ReferenceTrack) -> Bool { favoriteLookup(track.id) }
     func addToPlaylist(_ track: ReferenceTrack) { playlistAction(track.id) }
     func openAlbum(_ track: ReferenceTrack) { albumAction(track.id) }
+    func audioQuality(for track: ReferenceTrack) -> PlayerAudioQuality? { audioQualityLookup?(track.id) }
+    var canOpenAudioQualitySettings: Bool { audioQualitySettingsAction != nil }
+    func openAudioQualitySettings() { audioQualitySettingsAction?() }
 
     func artistNames(for track: ReferenceTrack) -> [String] {
         if let names = artistLookup?(track.id), !names.isEmpty { return names }

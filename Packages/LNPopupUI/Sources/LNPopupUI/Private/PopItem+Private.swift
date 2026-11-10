@@ -118,7 +118,9 @@ fileprivate let userInfoKey = "_lnpopup_ui_identifier"
 internal
 extension PopupItem {
 	func eraseToAnyHashableIdentifier() -> TypeErasedPopupItem {
-        TypeErasedPopupItem(id: AnyHashable(id), titleContainer: titleContainer, image: image, buttonContainer: buttonContainer, progress: progress)
+        TypeErasedPopupItem(id: AnyHashable(id), titleContainer: titleContainer, image: image,
+                           buttonContainer: buttonContainer, progress: progress,
+                           accessibilityLabel: accessibilityLabel, accessibilityHint: accessibilityHint)
 	}
 
 	var anyId: AnyHashable {
@@ -127,6 +129,8 @@ extension PopupItem {
 
 	func update(_ popupItem: LNPopupItem, popupBar: LNPopupBar) {
 		popupItem.userInfo = [userInfoKey: id]
+		popupItem.accessibilityLabel = accessibilityLabel
+		popupItem.accessibilityHint = accessibilityHint
 
 		titleContainer.update(popupItem, popupBar: popupBar)
 

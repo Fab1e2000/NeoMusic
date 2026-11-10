@@ -11,6 +11,7 @@ struct NowPlayingBottomControls: View {
     private var accessibilityReduceMotion
 
     @Environment(\.nowPlayingLayout) private var layout
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     let song: ReferenceTrack
     @Binding var page: NowPlayingPage
@@ -21,6 +22,32 @@ struct NowPlayingBottomControls: View {
     let isInterfaceHidden: Bool
 
     var body: some View {
+        if dynamicTypeSize.isAccessibilitySize {
+            VStack(spacing: 12) {
+                interfaceLayer(.progress) {
+                    NowPlayingProgressControl(song: song)
+                }
+                interfaceLayer(.transport) {
+                    NowPlayingTransportControls()
+                }
+                .frame(height: 82)
+                interfaceLayer(.volume) {
+                    NowPlayingVolumeControl()
+                }
+                .frame(height: 52)
+                interfaceLayer(.pageSelector) {
+                    NowPlayingPageSelector(page: $page, hasLyrics: hasLyrics)
+                }
+                .frame(height: 62)
+            }
+            .padding(.top, max(0, layout.controlsY(587) - 26))
+            .fixedSize(horizontal: false, vertical: true)
+        } else {
+            referenceLayout
+        }
+    }
+
+    private var referenceLayout: some View {
         GeometryReader { proxy in
             ZStack {
                 interfaceLayer(.progress) {

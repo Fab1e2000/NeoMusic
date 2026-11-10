@@ -1,4 +1,5 @@
 import Synchronization
+import Observation
 import XCTest
 @testable import NeoMusic
 
@@ -28,6 +29,8 @@ import XCTest
             XCTAssertEqual(player.current.id, "local")
             XCTAssertEqual(player.pendingPlay?.songs.map(\.id), ["netease:42:7", "netease:42:9"])
             XCTAssertEqual(player.pendingPlay?.source, "私人漫游")
+            XCTAssertEqual(player.pendingPlay?.continuation?.ownerID, "42")
+            XCTAssertNil(player.continuation)
             XCTAssertNil(integration.model.quickActionRoute)
         }
     }
@@ -71,6 +74,57 @@ import XCTest
                 try await Task.sleep(for: .milliseconds(25))
             }
             XCTAssertEqual(player.current.id, "netease:42:11")
+        }
+    }
+
+    func testLocalPlaylistNamedRoamingKeepsFiniteQueueForGuestAndSignedIn() async throws {
+        for signedIn in [false, true] {
+            try await withQuickActionIntegration { account, _, _, player in
+                if signedIn { try await account.completeLogin(credential: .init(musicU: "test")) }
+                let first = player.current
+                let second = LibrarySongItem(id: "second-local", title: "Second", artist: "", album: "",
+                                            albumArtist: "", trackNumber: 0, artwork: .missing)
+                player.play([first, second], startingAt: 1, from: "私人漫游")
+                XCTAssertFalse(player.queueContinues)
+                player.skipForward()
+                XCTAssertEqual(player.currentIndex, 0)
+                XCTAssertEqual(player.queue.map(\.id), [first.id, second.id])
+                XCTAssertNil(player.continuation)
+            }
+        }
+    }
+
+    func testLateRoamingBatchDoesNotAppendToSameNamedLocalPlaylist() async throws {
+        let later = #"{"code":200,"data":[{"id":71,"name":"Late song","ar":[{"name":"Artist"}],"al":{"name":"Album"},"dt":10000}]}"#
+        defer { HomeLoginProtocol.radioScript.withLock { $0 = [] } }
+        try await withQuickActionIntegration { account, home, integration, player in
+            try await account.completeLogin(credential: .init(musicU: "test"))
+            _ = try await home.performQuickAction(.privateRoaming)
+            HomeLoginProtocol.radioScript.withLock { $0 = [later] }
+            let requests = HomeLoginProtocol.radioRequestCount.withLock { $0 }
+            let responses = HomeLoginProtocol.radioResponseCount.withLock { $0 }
+            integration.requestQuickAction(.privateRoaming)
+            for _ in 0..<60 where player.pendingPlay == nil { try await Task.sleep(for: .milliseconds(10)) }
+            player.confirmPendingPlay()
+            XCTAssertNotNil(player.continuation)
+            for _ in 0..<60 where HomeLoginProtocol.radioRequestCount.withLock({ $0 }) == requests {
+                try await Task.sleep(for: .milliseconds(5))
+            }
+            XCTAssertGreaterThan(HomeLoginProtocol.radioRequestCount.withLock { $0 }, requests)
+            let local = LibrarySongItem(id: "replacement-local", title: "Local", artist: "", album: "",
+                                       albumArtist: "", trackNumber: 0, artwork: .missing)
+            player.play([local], from: "私人漫游", shuffled: false)
+            let appended = expectation(description: "A late radio batch changes the replacement queue")
+            appended.isInverted = true
+            withObservationTracking { _ = player.queue } onChange: { appended.fulfill() }
+            for _ in 0..<120 where HomeLoginProtocol.radioResponseCount.withLock({ $0 }) == responses {
+                try await Task.sleep(for: .milliseconds(5))
+            }
+            XCTAssertGreaterThan(HomeLoginProtocol.radioResponseCount.withLock { $0 }, responses)
+            await fulfillment(of: [appended], timeout: 0.3)
+            XCTAssertEqual(player.queue.map(\.id), [local.id])
+            XCTAssertNil(player.continuation)
+            XCTAssertFalse(player.queueContinues)
         }
     }
 
@@ -255,6 +309,12 @@ import XCTest
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [HomeLoginProtocol.self]
         let session = URLSession(configuration: configuration)
+        addTeardownBlock {
+            session.invalidateAndCancel()
+            if FileManager.default.fileExists(atPath: root.path) {
+                try FileManager.default.removeItem(at: root)
+            }
+        }
         let client = NeteaseMusicClient(transport: NeteaseAccountClient(session: session))
         let home = NeteaseHomeStore(client: client, directory: root.appendingPathComponent("home"))
         let music = NeteaseMusicStore(client: client, directory: root.appendingPathComponent("music"))
@@ -271,56 +331,41 @@ import XCTest
         integration.connect()
         defer {
             integration.cancelPendingPlayback(); player.shutdownPlayback(); home.onChange = nil
-            session.invalidateAndCancel()
             LocalLibrary.playbackAccountID = priorOwner
             LocalLibrary.songLibrary.replaceExternalSongs(priorExternal)
-            try? FileManager.default.removeItem(at: root)
         }
-        try await body(account, home, integration, player)
+        do {
+            try await body(account, home, integration, player)
+        } catch {
+            integration.cancelPendingPlayback()
+            do { try await account.logout() }
+            catch { XCTFail("Fixture account cleanup failed: \(error)") }
+            throw error
+        }
+        integration.cancelPendingPlayback()
+        try await account.logout()
     }
     private func exerciseLogin(cancel: Bool) async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let priorOwner = LocalLibrary.playbackAccountID
-        let priorExternal = LocalLibrary.songLibrary.externalSongs
-        defer {
-            LocalLibrary.playbackAccountID = priorOwner
-            LocalLibrary.songLibrary.replaceExternalSongs(priorExternal)
-        }
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [HomeLoginProtocol.self]
-        let session = URLSession(configuration: configuration)
-        defer { session.invalidateAndCancel() }
-        let client = NeteaseMusicClient(transport: NeteaseAccountClient(session: session))
-        let home = NeteaseHomeStore(client: client, directory: root.appendingPathComponent("home"))
-        let music = NeteaseMusicStore(client: client, directory: root.appendingPathComponent("music"))
-        let account = NeteaseAccount(readSession: { nil }, saveSession: { _ in }, deleteSession: {},
-            validateCredential: { _ in .init(userID: 42, nickname: "Test", avatarURL: nil) },
-            cachedAvatar: { _ in nil }, loadAvatar: { _ in Data() }, clearAvatarCache: {}, music: music, home: home)
-        let song = LibrarySongItem(id: "local", title: "Local", artist: "", album: "", albumArtist: "", trackNumber: 0, artwork: .missing)
-        let player = NowPlayingModel(queue: [song], currentIndex: 0, isPlaying: false)
-        player.appendLater([song])
-        let integration = HomeMusicIntegration(account: account, player: player)
-        integration.connect()
-        defer { integration.cancelPendingPlayback(); player.shutdownPlayback(); home.onChange = nil }
-        let route = "home:playlist:12"
-        integration.detailAppeared(route)
-        integration.requestPlayback(route, songID: 9, shuffled: false)
-        integration.detailDisappeared(route)
-        if cancel { integration.showsLogin = false; integration.loginDismissed() }
-        try await account.completeLogin(credential: .init(musicU: "test"))
-        integration.resumePendingPlayback()
-        if !cancel {
-            XCTAssertFalse(integration.showsLogin)
-            integration.loginDismissed()
-            for _ in 0..<60 where player.pendingPlay == nil { try await Task.sleep(for: .milliseconds(25)) }
-            XCTAssertEqual(player.pendingPlay?.songs.map(\.id), ["netease:42:9"])
-            XCTAssertEqual(player.pendingPlay?.startingIndex, 0)
-            XCTAssertEqual(player.pendingPlay?.collection?.ownerID, "42")
-        } else {
-            try await Task.sleep(for: .milliseconds(250))
-            XCTAssertNil(player.pendingPlay)
-            XCTAssertEqual(player.current.id, "local")
+        try await withQuickActionIntegration { account, _, integration, player in
+            let route = "home:playlist:12"
+            integration.detailAppeared(route)
+            integration.requestPlayback(route, songID: 9, shuffled: false)
+            integration.detailDisappeared(route)
+            if cancel { integration.showsLogin = false; integration.loginDismissed() }
+            try await account.completeLogin(credential: .init(musicU: "test"))
+            integration.resumePendingPlayback()
+            if !cancel {
+                XCTAssertFalse(integration.showsLogin)
+                integration.loginDismissed()
+                for _ in 0..<60 where player.pendingPlay == nil { try await Task.sleep(for: .milliseconds(25)) }
+                XCTAssertEqual(player.pendingPlay?.songs.map(\.id), ["netease:42:9"])
+                XCTAssertEqual(player.pendingPlay?.startingIndex, 0)
+                XCTAssertEqual(player.pendingPlay?.collection?.ownerID, "42")
+            } else {
+                try await Task.sleep(for: .milliseconds(250))
+                XCTAssertNil(player.pendingPlay)
+                XCTAssertEqual(player.current.id, "local")
+            }
         }
     }
 
@@ -360,6 +405,8 @@ import XCTest
 
 private final class HomeLoginProtocol: URLProtocol, @unchecked Sendable {
     static let radioScript = Mutex<[String]>([])
+    static let radioRequestCount = Mutex(0)
+    static let radioResponseCount = Mutex(0)
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
@@ -374,6 +421,7 @@ private final class HomeLoginProtocol: URLProtocol, @unchecked Sendable {
         case "/eapi/song/like/get": body = #"{"code":200,"ids":[]}"#
         case "/eapi/v3/discovery/recommend/songs": body = #"{"code":200,"data":{"dailySongs":[{"id":9,"name":"Daily song","ar":[{"name":"Artist"}],"al":{"name":"Album","picUrl":"https://fixture.test/daily-cover"},"dt":10000}]}}"#
         case "/eapi/v1/radio/get":
+            Self.radioRequestCount.withLock { $0 += 1 }
             Thread.sleep(forTimeInterval: 0.15)
             let scripted = Self.radioScript.withLock { bodies -> String? in
                 guard !bodies.isEmpty else { return nil }
@@ -390,6 +438,7 @@ private final class HomeLoginProtocol: URLProtocol, @unchecked Sendable {
         client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Data(body.utf8))
         client?.urlProtocolDidFinishLoading(self)
+        if path == "/eapi/v1/radio/get" { Self.radioResponseCount.withLock { $0 += 1 } }
     }
     override func stopLoading() {}
 }

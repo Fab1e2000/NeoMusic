@@ -1,7 +1,7 @@
 import SwiftUI
 import AVKit
 
-/// 隔空播放按钮。输出是蓝牙时图标换成 AirPods，点按仍弹出系统的输出设备选择。
+/// 保留系统输出设备选择，当前设备名称由音频路由提供。
 struct ReferenceAirPlayButton: View {
     var opacity: Double = 0.72
     @State private var route = ReferenceAudioOutputRoute()
@@ -9,32 +9,36 @@ struct ReferenceAirPlayButton: View {
     @Environment(\.nowPlayingBackdropImage) private var backdrop
     @Environment(\.nowPlayingUndimmedBackdropImage) private var undimmed
     @Environment(\.nowPlayingBackdropAnchor) private var anchor
-    private var usesEDR: Bool { edrEnabled && (undimmed ?? backdrop) != nil && anchor != nil && !route.isAirPlay }
+    private var usesEDR: Bool { edrEnabled && (undimmed ?? backdrop) != nil && anchor != nil && !route.output.isAirPlay }
 
     var body: some View {
         ZStack {
-            ReferenceAirPlayRoutePicker(opacity: opacity, hidesGlyph: route.symbolName != nil || usesEDR)
+            ReferenceAirPlayRoutePicker(opacity: opacity, hidesGlyph: usesEDR)
             if usesEDR {
-                PlayerEDRControlLayer(shape: .symbol(route.symbolName ?? "airplayaudio", 18, 1), role: .buttons)
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
-            } else if let symbolName = route.symbolName {
-                Image(systemName: symbolName)
-                    .font(.system(size: 18, weight: .regular))
-                    .foregroundStyle(.white.opacity(opacity))
+                PlayerEDRControlLayer(shape: .symbol("airplayaudio", 18, 1), role: .buttons)
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
             }
         }
+        .accessibilityLabel("音频输出")
+        .accessibilityValue(route.output.name)
+        .accessibilityHint("选择播放设备")
     }
 }
 
-/// 当前音频输出是不是蓝牙。系统拿不到耳机型号（第三方耳机更是什么都没有），所以不区分型号，
-/// 蓝牙输出一律用 AirPods 图标。
+struct ReferenceAudioOutput {
+    let name: String
+    let isAirPlay: Bool
+
+    init(outputs: [(port: AVAudioSession.Port, name: String)]) {
+        name = outputs.map(\.name).filter { !$0.isEmpty }.joined(separator: "，")
+        isAirPlay = outputs.contains { $0.port == .airPlay }
+    }
+}
+
 @MainActor @Observable
 private final class ReferenceAudioOutputRoute {
-    private(set) var symbolName: String?
-    private(set) var isAirPlay = false
+    private(set) var output = ReferenceAudioOutput(outputs: [])
     @ObservationIgnored private var observer: NSObjectProtocol?
 
     init() {
@@ -53,18 +57,14 @@ private final class ReferenceAudioOutputRoute {
     }
 
     private func refresh() {
-        let bluetooth: Set<AVAudioSession.Port> = [.bluetoothA2DP, .bluetoothLE, .bluetoothHFP]
         let outputs = AVAudioSession.sharedInstance().currentRoute.outputs
-        let isBluetooth = outputs.contains { bluetooth.contains($0.portType) }
-        isAirPlay = outputs.contains { $0.portType == .airPlay }
-        let symbol = isBluetooth ? "airpods" : nil
-        if symbolName != symbol { symbolName = symbol }
+        output = ReferenceAudioOutput(outputs: outputs.map { ($0.portType, $0.portName) })
     }
 }
 
 private struct ReferenceAirPlayRoutePicker: UIViewRepresentable {
     let opacity: Double
-    /// 用自己画的 AirPods 图标时，把系统图标藏起来，只保留点按功能。
+    /// EDR 图层负责绘制时，保留系统按钮的原有动作。
     let hidesGlyph: Bool
 
     func makeUIView(context: Context) -> AVRoutePickerView {

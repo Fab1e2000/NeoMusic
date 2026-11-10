@@ -11,9 +11,13 @@ These copied portions retain GPL version 3 licensing. Full license text is
 included in GPL-3.0.txt. Original file attribution comments are retained.
 NeoMusic changes adapt source-neutral data, local playback actions and Swift
 concurrency; they do not imply that upstream code is original NeoMusic work.
+Title swipes commit playback selection on gesture release and use SwiftUI's
+interruptible spring animation to settle the selected title.
 
 LNPopupUI: https://github.com/LeoNatan/LNPopupUI
 Baseline 60853564423524c9ed15cc74c5969d3e1ca666f1, MIT.
+NeoMusic forwards optional custom-title accessibility metadata to LNPopupItem's
+public accessibilityLabel and accessibilityHint properties for the mini-player.
 LNPopupController: https://github.com/LeoNatan/LNPopupController
 Baseline 4.6.1 / 18847353e7cbec66e53a89edb1aec6d00967281c, MIT.
 Currently used artwork-host, binding synchronization and title gesture patches

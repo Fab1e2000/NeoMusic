@@ -359,11 +359,56 @@ import Observation
     func toggle(_ route: LibraryRoute) {
         guard owner != nil else { showsLogin = true; return }
         guard let id = Self.number(route), let store else { return }
-        Task {
-            do {
-                if route.isCatalogAlbum { try await store.setAlbumSubscribed(id: id, subscribed: !store.subscribedAlbums.contains { $0.id == id }) }
-                else { try await store.setArtistSubscribed(id: id, subscribed: !store.subscribedArtists.contains { $0.id == id }) }
-            } catch is CancellationError { } catch { LocalLibrary.toasts.show(.error(error.localizedDescription)) }
+        let current = route.isCatalogAlbum
+            ? store.subscribedAlbums.contains { $0.id == id }
+            : store.subscribedArtists.contains { $0.id == id }
+        subscriptionTask(route, subscribed: !current)
+    }
+
+    @discardableResult func collectRelease(_ item: LibraryShelfItem) -> Task<Void, Never>? {
+        guard let owner else { showsLogin = true; return nil }
+        guard item.sourceOwnerID == nil || item.sourceOwnerID == String(owner),
+              let route = item.route else { return nil }
+        return subscriptionTask(route, subscribed: true)
+    }
+
+    @discardableResult private func subscriptionTask(_ route: LibraryRoute, subscribed: Bool) -> Task<Void, Never>? {
+        guard let capturedOwner = owner, let store, !account.isLoggingOut else { return nil }
+        let revision = store.sessionRevision
+        return Task {
+            guard !Task.isCancelled, owner == capturedOwner, store.sessionRevision == revision,
+                  !account.isLoggingOut else { return }
+            await setSubscribed(route, subscribed: subscribed)
+        }
+    }
+
+    func setSubscribed(_ route: LibraryRoute, subscribed: Bool) async {
+        guard owner != nil else { showsLogin = true; return }
+        guard let id = Self.number(route), let store else { return }
+        guard store.isReady, store.userID == owner else {
+            LocalLibrary.toasts.show(.error("账户资料正在恢复，请稍后重试。"))
+            return
+        }
+        let capturedOwner = owner
+        let revision = store.sessionRevision
+        let current = route.isCatalogAlbum
+            ? store.subscribedAlbums.contains { $0.id == id }
+            : store.subscribedArtists.contains { $0.id == id }
+        guard current != subscribed else { return }
+        do {
+            try Task.checkCancellation()
+            if route.isCatalogAlbum { try await store.setAlbumSubscribed(id: id, subscribed: subscribed) }
+            else { try await store.setArtistSubscribed(id: id, subscribed: subscribed) }
+            guard !Task.isCancelled, capturedOwner == owner, revision == store.sessionRevision else { return }
+            let confirmed = route.isCatalogAlbum
+                ? store.subscribedAlbums.contains { $0.id == id }
+                : store.subscribedArtists.contains { $0.id == id }
+            guard confirmed == subscribed else { throw NeteaseAccountError.invalidResponse }
+            if !route.isCatalogAlbum { LocalLibrary.toasts.show(subscribed ? .favorited : .unfavorited) }
+        } catch is CancellationError {
+        } catch {
+            guard !Task.isCancelled, capturedOwner == owner, revision == store.sessionRevision else { return }
+            LocalLibrary.toasts.show(.error(error.localizedDescription))
         }
     }
     func songActions(_ route: LibraryRoute) -> SongMenuActions {
@@ -442,6 +487,7 @@ private struct ArtistCatalogDestination: View {
                 } else { Color.clear }
             }
         }.environment(\.songMenuActions, integration.songActions(route))
+        .environment(\.collectionMenuActions, integration.collectionActions)
         .task(id: "\(route):\(integration.sessionIdentity)") { await integration.load(route) }
         .onChange(of: scenePhase) { old, new in if old == .background, new == .active { Task { await integration.load(route) } } }
     }
@@ -450,7 +496,9 @@ private struct ArtistCatalogDestination: View {
         if case .artistSection(_, let section) = route {
             ArtistSectionView(detail: detail, section: section, playSong: { integration.play(route, song: $0) })
         } else {
-            ArtistDetailView(detail: detail, playSong: { integration.play(route, song: $0) }, toggleFavorite: { integration.toggle(route) }, collectRelease: { if let route = $0.route { integration.toggle(route) } }, retry: { _ in Task { await integration.load(route) } })
+            ArtistDetailView(detail: detail, playSong: { integration.play(route, song: $0) }, toggleFavorite: { integration.toggle(route) }, collectRelease: { item in
+                integration.collectRelease(item)
+            }, retry: { _ in Task { await integration.load(route) } })
         }
     }
 

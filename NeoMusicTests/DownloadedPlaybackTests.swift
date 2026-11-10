@@ -211,8 +211,16 @@ final class DownloadedPlaybackTests: XCTestCase {
             LocalLibrary.songLibrary.replace(previousSongs)
             LocalLibrary.downloads.setLocalSongs(previousSongs)
         }
-        let runtime = LocalLibraryRuntime(documents: directory, store: store,
-            playlistLibrary: PlaylistLibrary(playlists: []), player: model)
+        let runtime = LocalLibraryRuntime(
+            documents: directory,
+            store: store,
+            songLibrary: LocalLibrary.songLibrary,
+            playlistLibrary: PlaylistLibrary(playlists: []),
+            player: model,
+            favoriteAlbums: LocalLibrary.favoriteAlbums,
+            pinnedAlbums: LocalLibrary.pinnedAlbums,
+            deletedAlbums: LocalLibrary.deletedAlbums,
+            onLocalSongsApplied: { LocalLibrary.downloads.setLocalSongs($0) })
         var onlineCalls = 0, publications = 0
         runtime.onLibraryPublished = { publications += 1 }
         runtime.configureOnlineResolver { _ in

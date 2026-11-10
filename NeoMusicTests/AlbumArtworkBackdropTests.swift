@@ -28,6 +28,96 @@ final class AlbumArtworkBackdropTests: XCTestCase {
         XCTAssertNil(AlbumArtworkBackdrop.extract(from: Data("invalid".utf8)))
     }
 
+    func testMidGrayUsesReadableDarkForeground() throws {
+        let backdrop = AlbumArtworkBackdrop(red: 0.55, green: 0.55, blue: 0.55)
+        XCTAssertEqual(backdrop.colorScheme, .light)
+        let luminance = pow((0.55 + 0.055) / 1.055, 2.4)
+        XCTAssertGreaterThanOrEqual((luminance + 0.05) / 0.05, 4.5)
+        XCTAssertLessThan(1.05 / (luminance + 0.05), 4.5)
+
+        let restored = try JSONDecoder().decode(AlbumArtworkBackdrop.self,
+            from: Data(#"{"red":0.55,"green":0.55,"blue":0.55}"#.utf8))
+        XCTAssertEqual(restored, backdrop)
+        XCTAssertEqual(restored.colorScheme, .light)
+    }
+
+    func testForegroundContrastAcrossBoundaryAndSaturatedColors() {
+        let samples: [(AlbumArtworkBackdrop, ColorScheme)] = [
+            (.init(red: 0, green: 0, blue: 0), .dark),
+            (.init(red: 1, green: 1, blue: 1), .light),
+            (.init(red: 0.45, green: 0.45, blue: 0.45), .dark),
+            (.init(red: 0.46, green: 0.46, blue: 0.46), .dark),
+            (.init(red: 0.47, green: 0.47, blue: 0.47), .light),
+            (.init(red: 1, green: 0, blue: 0), .light),
+            (.init(red: 0, green: 1, blue: 0), .light),
+            (.init(red: 0, green: 0, blue: 1), .dark),
+        ]
+        func linear(_ value: Double) -> Double {
+            value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+        }
+        for (sample, expected) in samples {
+            XCTAssertEqual(sample.colorScheme, expected)
+            let luminance = 0.2126 * linear(sample.red) + 0.7152 * linear(sample.green) + 0.0722 * linear(sample.blue)
+            let contrast = sample.colorScheme == .dark ? 1.05 / (luminance + 0.05) : (luminance + 0.05) / 0.05
+            XCTAssertGreaterThanOrEqual(contrast, 4.5)
+        }
+    }
+
+    func testSelectedAlbumRowsImproveCompositedContrastAtGrayBoundary() async throws {
+        func luminance(_ value: Double) -> Double {
+            value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+        }
+        let scene = try await applicationWindowScene()
+        let window = UIWindow(windowScene: scene)
+        let controller = UIViewController()
+        window.overrideUserInterfaceStyle = .light
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+        for gray in [0.46, 0.47, 0.55] {
+            let backdrop = AlbumArtworkBackdrop(red: gray, green: gray, blue: gray)
+            let whiteForeground = backdrop.colorScheme == .dark
+            let style: UIUserInterfaceStyle = whiteForeground ? .dark : .light
+            controller.traitOverrides.userInterfaceStyle = style
+            controller.updateTraitsIfNeeded()
+            let cell = AlbumSelectionCell(frame: CGRect(x: 0, y: 0, width: 330, height: 60))
+            controller.view.addSubview(cell)
+            defer { cell.removeFromSuperview() }
+            controller.view.updateTraitsIfNeeded()
+            cell.updateTraitsIfNeeded()
+            controller.view.layoutIfNeeded()
+            XCTAssertTrue(cell.window === window)
+            XCTAssertEqual(controller.traitCollection.userInterfaceStyle, style)
+            XCTAssertEqual(cell.traitCollection.userInterfaceStyle, style)
+            cell.isSelected = true
+            cell.updateConfiguration(using: cell.configurationState)
+
+            let overlay = try XCTUnwrap(cell.backgroundConfiguration?.backgroundColor)
+            var red: CGFloat = 0
+            var green: CGFloat = 0
+            var blue: CGFloat = 0
+            var alpha: CGFloat = 0
+            XCTAssertTrue(overlay.getRed(&red, green: &green, blue: &blue, alpha: &alpha))
+            XCTAssertEqual(red, whiteForeground ? 0 : 1)
+            XCTAssertEqual(alpha, whiteForeground ? 0.10 : 0.06, accuracy: 0.0001)
+            let selectedGray = Double(red * alpha) + gray * Double(1 - alpha)
+            let originalLuminance = luminance(gray)
+            let selectedLuminance = luminance(selectedGray)
+            let originalContrast = whiteForeground ? 1.05 / (originalLuminance + 0.05) : (originalLuminance + 0.05) / 0.05
+            let selectedContrast = whiteForeground ? 1.05 / (selectedLuminance + 0.05) : (selectedLuminance + 0.05) / 0.05
+            XCTAssertGreaterThanOrEqual(selectedContrast, 4.5)
+            XCTAssertGreaterThan(selectedContrast, originalContrast)
+            XCTAssertEqual(cell.backgroundConfiguration?.cornerRadius, 0)
+
+            cell.isSelected = false
+            cell.updateConfiguration(using: cell.configurationState)
+            XCTAssertEqual(cell.backgroundConfiguration?.backgroundColor?.cgColor.alpha, 0)
+        }
+    }
+
     func testAlbumUsesPreparedBackdropOfDisplayedFirstTrack() async throws {
         let saved = LocalLibrary.songLibrary.songs
         defer { LocalLibrary.songLibrary.replace(saved) }
@@ -195,6 +285,50 @@ final class AlbumArtworkBackdropTests: XCTestCase {
         }
         let result = try await restored.prepare(["song": artwork])
         XCTAssertEqual(result, ["song": color])
+    }
+}
+
+@MainActor
+final class PlayerTextMetricsTests: XCTestCase {
+    func testScaledGlyphFontUsesTheProvidedSizeExactlyOnce() {
+        let traits = UITraitCollection(preferredContentSizeCategory: .accessibilityExtraExtraExtraLarge)
+        let white = PlayerEDRGlyphView.textFont(fontSize: 54, weight: .semibold, isWhite: true,
+                                              fontSizeIsScaled: true, traits: traits)
+        let artist = PlayerEDRGlyphView.textFont(fontSize: 54, weight: .regular, isWhite: false,
+                                               fontSizeIsScaled: true, traits: traits)
+        XCTAssertEqual(white.pointSize, 54)
+        XCTAssertEqual(artist.pointSize, 54)
+    }
+
+    func testBaseGlyphFontsRetainTheirExistingTextStyleScaling() {
+        let traits = UITraitCollection(preferredContentSizeCategory: .accessibilityExtraExtraExtraLarge)
+        let artist = PlayerEDRGlyphView.textFont(fontSize: 13, weight: .regular, isWhite: false,
+                                               fontSizeIsScaled: false, traits: traits)
+        let expectedArtist = UIFontMetrics(forTextStyle: .footnote)
+            .scaledFont(for: .systemFont(ofSize: 13), compatibleWith: traits)
+        XCTAssertEqual(artist.pointSize, expectedArtist.pointSize)
+
+        let title = PlayerEDRGlyphView.textFont(fontSize: 17, weight: .semibold, isWhite: true,
+                                              fontSizeIsScaled: false, traits: traits)
+        let expectedTitle = UIFontMetrics(forTextStyle: .headline)
+            .scaledFont(for: .systemFont(ofSize: 17, weight: .semibold), compatibleWith: traits)
+        XCTAssertEqual(title.pointSize, expectedTitle.pointSize)
+        let fixed = PlayerEDRGlyphView.textFont(fontSize: 20, weight: .regular, isWhite: false,
+                                              fontSizeIsScaled: false, traits: traits)
+        XCTAssertEqual(fixed.pointSize, 20)
+    }
+
+    func testArtworkReservesTheAdditionalInformationHeight() {
+        let layout = ReferenceNowPlayingLayout()
+        XCTAssertEqual(NowPlayingArtworkPage.artworkSide(layout: layout, textScale: 1), layout.artworkSide)
+        XCTAssertEqual(NowPlayingArtworkPage.artworkSide(layout: layout, textScale: 3), layout.artworkSide - 106)
+    }
+
+    func testArtworkReservesMeasuredAccessibilityControlsHeight() {
+        let layout = ReferenceNowPlayingLayout()
+        XCTAssertEqual(NowPlayingArtworkPage.artworkSide(layout: layout, textScale: 3, controlsOverflow: 140),
+                       layout.artworkSide - 106 - 140)
+        XCTAssertEqual(NowPlayingArtworkPage.artworkSide(layout: layout, textScale: 3, controlsOverflow: 400), 0)
     }
 }
 

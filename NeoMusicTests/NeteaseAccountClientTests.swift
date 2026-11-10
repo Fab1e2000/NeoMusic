@@ -130,6 +130,74 @@ final class NeteaseAccountClientTests: XCTestCase, @unchecked Sendable {
         }
     }
 
+    @MainActor func testRawEAPINormalizesMalformedResponses() async throws {
+        for body in ["", "<html>Unavailable</html>", "{}", #"{"code":"200"}"#] {
+            let (client, session) = makeClient(body: body)
+            defer { session.invalidateAndCancel() }
+            do {
+                _ = try await client.request(path: "/api/test", credential: credential())
+                XCTFail("Accepted malformed EAPI response")
+            } catch { XCTAssertEqual(error as? NeteaseAccountError, .invalidResponse) }
+        }
+    }
+
+    @MainActor func testTypedEAPINormalizesMalformedEnvelopeAndPayload() async throws {
+        struct Response: Decodable, Sendable { let value: Int }
+        for body in ["", "{}", #"{"code":"200"}"#, #"{"code":200}"#, #"{"code":200,"value":"invalid"}"#] {
+            let (client, session) = makeClient(body: body)
+            defer { session.invalidateAndCancel() }
+            do {
+                let _: Response = try await client.decoded(path: "/api/test", fields: [:], credential: credential())
+                XCTFail("Accepted malformed typed EAPI response")
+            } catch { XCTAssertEqual(error as? NeteaseAccountError, .invalidResponse) }
+        }
+    }
+
+    @MainActor func testRawEAPIPreservesAuthenticationAndServerErrors() async throws {
+        for (body, expected) in [(#"{"code":301}"#, NeteaseAccountError.authenticationRequired),
+                                 (#"{"code":460}"#, .server(460))] {
+            let (client, session) = makeClient(body: body)
+            defer { session.invalidateAndCancel() }
+            do {
+                _ = try await client.request(path: "/api/test", credential: credential())
+                XCTFail("Accepted rejected EAPI response")
+            } catch { XCTAssertEqual(error as? NeteaseAccountError, expected) }
+        }
+    }
+
+    @MainActor func testWEAPINormalizesMalformedResponses() async throws {
+        for body in ["", "<html>Unavailable</html>", "{}", #"{"code":"200"}"#] {
+            let (client, session) = makeClient(body: body)
+            defer { session.invalidateAndCancel() }
+            do {
+                _ = try await client.requestWeb(path: "/api/test", fields: [:], credential: credential())
+                XCTFail("Accepted malformed WEAPI response")
+            } catch { XCTAssertEqual(error as? NeteaseAccountError, .invalidResponse) }
+        }
+    }
+
+    @MainActor func testWEAPIClassifiesHTTPAuthenticationAndOtherStatusFailures() async throws {
+        for (status, expected) in [(401, NeteaseAccountError.authenticationRequired), (403, .http(403)), (503, .http(503))] {
+            let (client, session) = makeClient(status: status)
+            defer { session.invalidateAndCancel() }
+            do {
+                _ = try await client.requestWeb(path: "/api/test", fields: [:], credential: credential())
+                XCTFail("Accepted HTTP failure")
+            } catch { XCTAssertEqual(error as? NeteaseAccountError, expected) }
+        }
+    }
+
+    @MainActor func testWEAPIPreservesNetworkAndCancellationErrors() async throws {
+        for code in [URLError.Code.notConnectedToInternet, .cancelled] {
+            let (client, session) = makeClient(error: URLError(code))
+            defer { session.invalidateAndCancel() }
+            do {
+                _ = try await client.requestWeb(path: "/api/test", fields: [:], credential: credential())
+                XCTFail("Accepted URLSession failure")
+            } catch { XCTAssertEqual((error as? URLError)?.code, code) }
+        }
+    }
+
     @MainActor func testNetworkFailureRetainsURLFailureCode() async throws {
         let (client, session) = makeClient(error: URLError(.notConnectedToInternet))
         defer { session.invalidateAndCancel() }

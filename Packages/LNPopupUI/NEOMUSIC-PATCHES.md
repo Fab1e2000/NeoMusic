@@ -18,3 +18,9 @@ bar ordering for this immediate path.
 
 The local LNPopupController package uses upstream 4.6.1, LNSwiftUIUtils 1.1.5, and
 LNSystemMarqueeLabel 0.1.2; the checked-in Package.resolved records their revisions.
+
+Custom-title `PopupItem` values accept optional accessibility labels and hints.
+Type erasure preserves these values and each native update assigns them through
+`LNPopupItem.accessibilityLabel` and `accessibilityHint`, including clearing prior
+metadata when the new item supplies `nil`. Existing initializers default to `nil`.
+NeoMusic uses this public metadata path for Chinese mini-player announcements.

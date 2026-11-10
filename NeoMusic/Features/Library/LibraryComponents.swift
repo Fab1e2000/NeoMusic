@@ -4,9 +4,13 @@ import SwiftUI
 struct PlayShuffleButtons: View {
     let play: () -> Void
     let shuffle: () -> Void
+    @Environment(\.dynamicTypeSize) private var textSize
 
     var body: some View {
-        HStack(spacing: 16) {
+        let layout = textSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(spacing: 12))
+            : AnyLayout(HStackLayout(spacing: 16))
+        layout {
             button("播放", systemImage: "play.fill", action: play)
             button("随机播放", systemImage: "shuffle", action: shuffle)
         }
@@ -20,6 +24,7 @@ struct PlayShuffleButtons: View {
             }
                 .font(.headline)
                 .foregroundStyle(.primary)
+                .padding(.vertical, textSize.isAccessibilitySize ? 10 : 0)
                 .frame(maxWidth: .infinity, minHeight: 48)
                 .background(Color(.tertiarySystemFill), in: .capsule)
                 .contentShape(.capsule)
@@ -31,13 +36,14 @@ struct PlayShuffleButtons: View {
 /// 专辑网格中的一项：封面、标题与副标题。
 struct AlbumCard: View {
     let item: LibraryShelfItem
+    @Environment(\.dynamicTypeSize) private var textSize
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             ArtworkView(artwork: item.artwork, contentID: item.id, cornerRadius: 8)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text(item.title).lineLimit(1)
+                    Text(item.title).lineLimit(textSize.isAccessibilitySize ? nil : 1)
                     if item.isFavorite {
                         Image(systemName: "star.fill")
                             .imageScale(.small)
@@ -47,7 +53,8 @@ struct AlbumCard: View {
                 }
                 .font(.footnote.weight(.medium))
                 if let subtitle = item.subtitle {
-                    Text(subtitle).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                    Text(subtitle).font(.footnote).foregroundStyle(.secondary)
+                        .lineLimit(textSize.isAccessibilitySize ? nil : 1)
                 }
             }
         }

@@ -35,7 +35,7 @@ final class PlaylistLibraryTests: XCTestCase {
         XCTAssertNil(page.playlist(item.id))
     }
 
-    func testMixedPlaylistRestoresSavedOnlineMetadataOnlyAfterMatchingIdentity() throws {
+    func testMixedPlaylistRestoresSavedOnlineMetadataOnlyAfterMatchingIdentity() async throws {
         let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let url = root.appendingPathComponent("playlists.json")
@@ -48,6 +48,7 @@ final class PlaylistLibraryTests: XCTestCase {
         XCTAssertTrue(original.configurePersistence(url: url, songs: [local]))
         original.restoreOnlineIdentity(ownerID: "42")
         original.addSongs([online, local], to: "one")
+        await original.flushPersistence()
 
         let restored = PlaylistLibrary(playlists: [])
         XCTAssertTrue(restored.configurePersistence(url: url, songs: [local]))
@@ -69,19 +70,21 @@ final class PlaylistLibraryTests: XCTestCase {
         restored.updateArtwork(songs: [online.id: online])
         XCTAssertEqual(restored.songs(in: "one").first, .unavailable(online.id))
         restored.renamePlaylist("one", to: "Edited while another account is active")
+        await restored.flushPersistence()
 
         let reopened = PlaylistLibrary(playlists: [])
         XCTAssertTrue(reopened.configurePersistence(url: url, songs: [local]))
         reopened.restoreOnlineIdentity(ownerID: "42")
         XCTAssertEqual(reopened.songs(in: "one").first?.title, online.title)
         reopened.replaceOnlinePlaylists(items: [], songs: [:], ownerID: nil)
+        await reopened.flushPersistence()
         XCTAssertEqual(reopened.songs(in: "one").first, .unavailable(online.id))
         XCTAssertEqual(reopened.songs(in: "one").last, local)
         reopened.restoreOnlineIdentity(ownerID: "42")
         XCTAssertEqual(reopened.songs(in: "one").first?.title, online.title)
     }
 
-    func testMixedPlaylistSnapshotIncludesOnlyReferencedOnlineSongsAndFileArtwork() throws {
+    func testMixedPlaylistSnapshotIncludesOnlyReferencedOnlineSongsAndFileArtwork() async throws {
         let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let url = root.appendingPathComponent("playlists.json")
@@ -93,7 +96,9 @@ final class PlaylistLibraryTests: XCTestCase {
         let unrelated = song("netease:42:8")
         let external = LibraryPlaylistItem(id: "netease-playlist:42:1", title: "External", artwork: .playlist, sourceOwnerID: "42")
         library.replaceOnlinePlaylists(items: [external], songs: [external.id: [selected, unrelated]], ownerID: "42")
+        await library.flushPersistence()
         library.addSongs([selected, song("local.mp3")], to: "one")
+        await library.flushPersistence()
 
         let snapshot = try JSONDecoder().decode(PlaylistLibrary.Snapshot.self, from: Data(contentsOf: url))
         XCTAssertEqual(Set(snapshot.onlineSongs?.keys.map { $0 } ?? []), [selected.id])
@@ -104,12 +109,13 @@ final class PlaylistLibraryTests: XCTestCase {
         XCTAssertNil(metadata[selected.id]?["artworkData"])
 
         library.removeSong(selected.id, from: "one")
+        await library.flushPersistence()
         let removed = try JSONDecoder().decode(PlaylistLibrary.Snapshot.self, from: Data(contentsOf: url))
         XCTAssertTrue(removed.onlineSongs?.isEmpty == true)
         XCTAssertEqual(library.songs(in: external.id).count, 2)
     }
 
-    func testMixedPlaylistPersistsLaterOnlineMetadataAndArtworkWithoutCatalogRestore() throws {
+    func testMixedPlaylistPersistsLaterOnlineMetadataAndArtworkWithoutCatalogRestore() async throws {
         let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let url = root.appendingPathComponent("playlists.json")
@@ -117,6 +123,7 @@ final class PlaylistLibraryTests: XCTestCase {
         XCTAssertTrue(library.configurePersistence(url: url, songs: []))
         library.restoreOnlineIdentity(ownerID: "42")
         library.addSongs([song("netease:42:7")], to: "one")
+        await library.flushPersistence()
         let initialBytes = try Data(contentsOf: url)
         let updated = LibrarySongItem(id: "netease:42:7", title: "Updated", artist: "New artist", album: "Album", albumArtist: "New artist", trackNumber: 1, artwork: .missing)
         library.reconcileOnlineSongs([updated])
@@ -129,6 +136,7 @@ final class PlaylistLibraryTests: XCTestCase {
         XCTAssertEqual(library.songs(in: "one").first, .unavailable(artwork.id))
         XCTAssertEqual(try Data(contentsOf: url), initialBytes)
         library.persistRestoredMetadata()
+        await library.flushPersistence()
 
         let restored = PlaylistLibrary(playlists: [])
         restored.restoreOnlineIdentity(ownerID: "42")
@@ -137,16 +145,18 @@ final class PlaylistLibraryTests: XCTestCase {
         XCTAssertEqual(restored.songs(in: "one").first?.artist, "New artist")
         XCTAssertEqual(restored.songs(in: "one").first?.artwork, .file(cover))
         restored.reconcileSongs([])
+        await restored.flushPersistence()
         XCTAssertEqual(restored.songs(in: "one").first?.title, "Updated")
     }
 
-    func testLegacyMixedPlaylistWithoutMetadataKeepsReferencesAndAcceptsCurrentOwnerRefresh() throws {
+    func testLegacyMixedPlaylistWithoutMetadataKeepsReferencesAndAcceptsCurrentOwnerRefresh() async throws {
         let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let url = root.appendingPathComponent("playlists.json")
         let original = library()
         XCTAssertTrue(original.configurePersistence(url: url, songs: []))
         original.addSongs([song("netease:42:7")], to: "one")
+        await original.flushPersistence()
         var legacy = try JSONDecoder().decode(PlaylistLibrary.Snapshot.self, from: Data(contentsOf: url))
         legacy.onlineSongs = nil
         let data = try JSONEncoder().encode(legacy)
@@ -218,7 +228,7 @@ final class PlaylistLibraryTests: XCTestCase {
         XCTAssertEqual(library.playlist("favorites")?.title, "喜爱歌曲")
     }
 
-    func testAddingASongRecordsWhenItJoinedAndRestoresThatTime() throws {
+    func testAddingASongRecordsWhenItJoinedAndRestoresThatTime() async throws {
         let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let url = root.appendingPathComponent("playlists.json")
@@ -226,13 +236,16 @@ final class PlaylistLibraryTests: XCTestCase {
         XCTAssertTrue(original.configurePersistence(url: url, songs: []))
         let before = Date()
         original.addSongs([song("a")], to: "one")
+        await original.flushPersistence()
         original.addSongs([song("a")], to: "one")
+        await original.flushPersistence()
         let added = try XCTUnwrap(original.playlistSongAddedDates()["a"])
         XCTAssertGreaterThanOrEqual(added, before)
         let restored = library()
         XCTAssertTrue(restored.configurePersistence(url: url, songs: [song("a")]))
         XCTAssertEqual(restored.playlistSongAddedDates()["a"], added)
         restored.removeSong("a", from: "one")
+        await restored.flushPersistence()
         XCTAssertNil(restored.playlistSongAddedDates()["a"])
     }
 

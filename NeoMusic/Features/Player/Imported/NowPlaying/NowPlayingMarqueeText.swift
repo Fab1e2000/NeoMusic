@@ -7,6 +7,7 @@ struct NowPlayingMarqueeText: View {
     let text: String
     var isActive = true
     var edrFontSize: CGFloat? = nil
+    var edrFontSizeIsScaled = false
 
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @Environment(\.playerVisualsActive) private var visualsActive
@@ -31,7 +32,9 @@ struct NowPlayingMarqueeText: View {
     }
 
     @ViewBuilder private var titleText: some View {
-        if let edrFontSize { PlayerWhiteEDRText(text: text, fontSize: edrFontSize) }
+        if let edrFontSize {
+            PlayerWhiteEDRText(text: text, fontSize: edrFontSize, fontSizeIsScaled: edrFontSizeIsScaled)
+        }
         else { Text(text) }
     }
 

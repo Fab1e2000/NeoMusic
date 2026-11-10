@@ -9,8 +9,14 @@ struct AlbumArtworkBackdrop: Codable, Equatable, Sendable {
 
     var color: Color { Color(.sRGB, red: red, green: green, blue: blue) }
     var colorScheme: ColorScheme {
-        let brightness = 0.2126 * red + 0.7152 * green + 0.0722 * blue
-        return brightness < 0.58 ? .dark : .light
+        let luminance = 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
+        let whiteContrast = 1.05 / (luminance + 0.05)
+        let blackContrast = (luminance + 0.05) / 0.05
+        return whiteContrast >= blackContrast ? .dark : .light
+    }
+
+    private func linear(_ channel: Double) -> Double {
+        channel <= 0.04045 ? channel / 12.92 : pow((channel + 0.055) / 1.055, 2.4)
     }
 
     /// Runs away from the UI actor; the full artwork is passed to the system analyzer.

@@ -32,6 +32,11 @@ import UIKit
             return .success
         }
         targets.append((center.changePlaybackPositionCommand, target))
+        setCanSkipForward(false)
+    }
+
+    func setCanSkipForward(_ enabled: Bool) {
+        MPRemoteCommandCenter.shared().nextTrackCommand.isEnabled = enabled
     }
 
     func update(_ metadata: Metadata, elapsed: Double, duration: Double, playing: Bool) {
@@ -61,6 +66,7 @@ import UIKit
         MPNowPlayingInfoCenter.default().nowPlayingInfo = info
     }
     func shutdown() {
+        setCanSkipForward(false)
         artworkTask?.cancel(); artworkTask = nil; artworkURL = nil
         targets.forEach { $0.0.removeTarget($0.1) }; targets.removeAll()
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil

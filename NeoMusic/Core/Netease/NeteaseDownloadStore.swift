@@ -40,7 +40,7 @@ final class NeteaseDownloadStore {
     @ObservationIgnored private var hasActivated = false
     @ObservationIgnored private var restoreTask: Task<Void, Never>?
 
-    private struct Snapshot: Codable {
+    private struct Snapshot: Codable, Sendable {
         var records: [NeteaseDownloadRecord]
         var collections: [NeteaseDownloadCollection]
         var jobs: [NeteaseDownloadJob]
@@ -73,6 +73,13 @@ final class NeteaseDownloadStore {
         } catch { try? FileManager.default.removeItem(at: file); throw error }
     }
 
+    @concurrent private static func readSnapshot(from directory: URL) async throws -> Snapshot? {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let index = directory.appending(path: "index.json")
+        guard FileManager.default.fileExists(atPath: index.path) else { return nil }
+        return try JSONDecoder().decode(Snapshot.self, from: Data(contentsOf: index))
+    }
+
     func restore() async {
         if let restoreTask { await restoreTask.value; return }
         guard !isRestored else { return }
@@ -87,10 +94,7 @@ final class NeteaseDownloadStore {
 
     private func performRestore() async {
         do {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            let index = directory.appending(path: "index.json")
-            if FileManager.default.fileExists(atPath: index.path) {
-                let snapshot = try JSONDecoder().decode(Snapshot.self, from: Data(contentsOf: index))
+            if let snapshot = try await Self.readSnapshot(from: directory) {
                 records = Dictionary(snapshot.records.map { ($0.songID, $0) }, uniquingKeysWith: { _, last in last })
                 collections = Dictionary(snapshot.collections.map { ($0.key, $0) }, uniquingKeysWith: { _, last in last })
                 jobs = Dictionary(snapshot.jobs.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
@@ -116,21 +120,28 @@ final class NeteaseDownloadStore {
 
     func activate(_ saved: NeteaseSavedSession?) async {
         await restore()
-        guard isRestored else { return }
-        if hasActivated, session == saved { pump(); return }
+        guard isRestored, !Task.isCancelled else { return }
+        let sameIdentity = userID == saved?.profile.userID && session?.credential == saved?.credential
+        if hasActivated, !changingSession, sameIdentity {
+            session = saved
+            pump()
+            return
+        }
         changingSession = true
         sessionRevision = UUID()
-        let previousSession = session
+        let revision = sessionRevision
         session = saved; userID = saved?.profile.userID
         let obsolete = Set(jobs.values.filter {
-            $0.ownerID != saved?.profile.userID || (hasActivated && previousSession != saved)
+            $0.cancelled || $0.ownerID != saved?.profile.userID || (hasActivated && !sameIdentity)
         }.map(\.id))
         for id in obsolete { jobs[id]?.cancelled = true }
-        for plan in plans.values { plan.task.cancel() }
-        for task in workers.values { task.cancel() }
+        let previousPlans = Array(plans.values), previousWorkers = Array(workers.values)
+        for plan in previousPlans { plan.task.cancel() }
+        for task in previousWorkers { task.cancel() }
         await transport.cancel(ids: obsolete.union(transferring.filter { jobs[$0] == nil }))
-        for plan in plans.values { _ = await plan.task.result }
-        for task in workers.values { await task.value }
+        for plan in previousPlans { _ = await plan.task.result }
+        for task in previousWorkers { await task.value }
+        guard sessionRevision == revision else { return }
         plans = [:]; workers = [:]
         transferring.subtract(obsolete)
         for id in obsolete {

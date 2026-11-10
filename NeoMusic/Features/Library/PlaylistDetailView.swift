@@ -301,8 +301,9 @@ struct PlaylistDetailView: View {
                 Text(playlist.title).font(.title2.bold()).multilineTextAlignment(.center)
             }
             Text(playlist.subtitle ?? "我").font(.title3).padding(.top, 4)
-            if externalActions == nil {
-                Text("刚刚更新").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary).padding(.top, 4 + 1.0 / 3)
+            if externalActions == nil, let updatedAt = playlist.updatedAt {
+                Text("更新于 \(updatedAt, format: .relative(presentation: .named))")
+                    .font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary).padding(.top, 4 + 1.0 / 3)
             }
             if !tracks.isEmpty || playlist.offersCollection {
                 HStack(spacing: 14) {
@@ -622,8 +623,24 @@ private struct PlaylistAddMusicContent: View {
     }
 }
 
+struct PlaylistDraftSnapshot: Equatable {
+    let title: String
+    let description: String
+    let songIDs: [String]
+
+    init(title: String = "", description: String = "", songIDs: [String] = []) {
+        self.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.description = description
+        self.songIDs = songIDs
+    }
+
+    func hasChanges(title: String, description: String = "", songIDs: [String] = [], hasCoverChange: Bool = false) -> Bool {
+        hasCoverChange || self != Self(title: title, description: description, songIDs: songIDs)
+    }
+}
+
 /// 编辑草稿仅在完成时提交；取消或放弃不改变资料库。
-private struct PlaylistEditor: View {
+struct PlaylistEditor: View {
     let playlistID: String
     let library: PlaylistLibrary
     let availableSongs: [LibrarySongItem]
@@ -634,71 +651,57 @@ private struct PlaylistEditor: View {
     @State private var tracks: [LibrarySongItem] = []
     @State private var selectedTracks: Set<String> = []
     @State private var artwork: Artwork = .playlist
-    @State private var coverSelection = PlaylistCoverSelection()
+    @State private var coverSelection: PlaylistCoverSelection
     @State private var showsDiscard = false
     @State private var showsMusic = false
+    @State private var initialDraft: PlaylistDraftSnapshot?
+
+    init(playlistID: String, library: PlaylistLibrary, availableSongs: [LibrarySongItem],
+         coverSelection: PlaylistCoverSelection? = nil) {
+        self.playlistID = playlistID
+        self.library = library
+        self.availableSongs = availableSongs
+        _coverSelection = State(initialValue: coverSelection ?? PlaylistCoverSelection())
+    }
+
+    private var hasChanges: Bool {
+        initialDraft?.hasChanges(title: title, description: description, songIDs: tracks.map(\.id),
+                                 hasCoverChange: coverSelection.image != nil) ?? false
+    }
 
     var body: some View {
-        let displayedCover = coverSelection.image
-        let displayedArtwork = artwork
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 0) {
-                    ZStack {
-                        Color(.tertiarySystemFill)
-                        if let displayedCover { Image(uiImage: displayedCover).resizable().scaledToFill() }
-                        else if case .image = displayedArtwork { ArtworkView(artwork: displayedArtwork, cornerRadius: 6) }
-                        PlaylistCoverMenu(selection: coverSelection, accessibilityLabel: "编辑播放列表封面")
-                    }
-                    .frame(width: 180, height: 180).clipShape(.rect(cornerRadius: 6))
-                    .padding(.top, 20).padding(.bottom, 58 + 2.0 / 3)
-                    TextField("播放列表标题", text: $title)
-                        .font(.system(size: 20, weight: .semibold)).multilineTextAlignment(.center).submitLabel(.done)
-                        .frame(minHeight: 44)
-                    Divider()
-                    ZStack(alignment: .topLeading) {
-                        if description.isEmpty {
-                            Text("描述").font(.system(size: 15)).foregroundStyle(Color(.placeholderText))
-                                .padding(.top, 10).allowsHitTesting(false)
+            List(selection: $selectedTracks) {
+                PlaylistEditorFields(title: $title, description: $description, artwork: artwork,
+                                     coverSelection: coverSelection)
+                    .selectionDisabled(true)
+                    .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 10, trailing: 16))
+                    .listRowSeparator(.hidden)
+                ForEach(tracks) { song in
+                    HStack(spacing: 8) {
+                        PlaylistSongArtwork(song: song, cornerRadius: 5).frame(width: 48, height: 48)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(song.title).font(.body)
+                                .foregroundStyle(song.unavailabilityReason == nil ? .primary : .secondary)
+                            Text(song.unavailabilityReason ?? song.artist).font(.subheadline).foregroundStyle(.secondary)
                         }
-                        PlaylistDescriptionTextView(text: $description)
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .frame(height: 58)
-                    Divider()
-                    Toggle("在个人资料页和搜索中显示", isOn: $showsOnProfile)
-                        .font(.subheadline).tint(.green).frame(minHeight: 40)
-                    Divider()
-                    if !tracks.isEmpty {
-                        ForEach(tracks) { song in
-                            HStack {
-                                Button {
-                                    if !selectedTracks.insert(song.id).inserted { selectedTracks.remove(song.id) }
-                                } label: {
-                                    HStack {
-                                        Image(systemName: selectedTracks.contains(song.id) ? "checkmark.circle.fill" : "circle")
-                                        PlaylistDetailSongLabel(song: song)
-                                    }
-                                }.buttonStyle(.plain)
-                                Menu("调整顺序", systemImage: "line.3.horizontal") {
-                                    Button("上移") {
-                                        LibraryHaptics.impact()
-                                        move(song.id, by: -1)
-                                    }
-                                    Button("下移") {
-                                        LibraryHaptics.impact()
-                                        move(song.id, by: 1)
-                                    }
-                                }.labelStyle(.iconOnly)
-                            }.padding(.vertical, 4)
-                            Divider()
-                        }
-                    }
-                }.padding(.horizontal, 16)
+                    .tag(song.id)
+                    .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                }
+                .onMove { tracks.move(fromOffsets: $0, toOffset: $1) }
             }
+            .listStyle(.plain)
+            .contentMargins(.top, 0, for: .scrollContent)
+            .scrollContentBackground(.hidden)
+            .background(Color(.systemBackground))
+            .environment(\.editMode, .constant(.active))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("取消", systemImage: "xmark") { showsDiscard = true }.tint(.primary)
+                    Button("取消", systemImage: "xmark", action: requestDismiss).tint(.primary)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("完成", systemImage: "checkmark") {
@@ -723,19 +726,22 @@ private struct PlaylistEditor: View {
             }
             .sheet(isPresented: $showsMusic) {
                 AddPlaylistMusicView(title: title, songs: availableSongs, playlists: library.playlists,
-                                     existingIDs: Set(tracks.map(\.id))) { selected in tracks.append(contentsOf: selected) }
+                                     existingIDs: Set(tracks.map(\.id)),
+                                     playlistSongs: Dictionary(uniqueKeysWithValues: library.playlists.map { playlist in
+                                         (playlist.id, playlist.isSystem ? availableSongs.filter(\.isFavorite) : library.songs(in: playlist.id))
+                                     })) { selected in tracks.append(contentsOf: selected) }
             }
             .modifier(PlaylistCoverPicker(selection: coverSelection))
-            .interactiveDismissDisabled()
-            .onSheetDismissAttempt { showsDiscard = true }
+            .interactiveDismissDisabled(hasChanges)
+            .onSheetDismissAttempt(requestDismiss)
             .alert("", isPresented: $showsDiscard) {
-                Button("放弃更改", role: .destructive) { dismiss() }
+                Button("放弃更改", role: .destructive, action: close)
                 Button("取消", role: .cancel) {}
             } message: {
                 Text("确定要放弃更改吗？")
             }
             .onAppear {
-                guard let playlist = library.playlist(playlistID) else { return }
+                guard initialDraft == nil, let playlist = library.playlist(playlistID) else { return }
                 title = playlist.title
                 description = playlist.description
                 #if DEBUG
@@ -748,41 +754,118 @@ private struct PlaylistEditor: View {
                 showsOnProfile = playlist.showsOnProfile
                 artwork = playlist.artwork
                 tracks = library.songs(in: playlistID)
+                initialDraft = PlaylistDraftSnapshot(title: title, description: description, songIDs: tracks.map(\.id))
             }
         }
     }
-    private func move(_ id: String, by distance: Int) {
-        guard let index = tracks.firstIndex(where: { $0.id == id }),
-              tracks.indices.contains(index + distance) else { return }
-        tracks.swapAt(index, index + distance)
+
+    private func requestDismiss() {
+        if hasChanges { showsDiscard = true } else { close() }
+    }
+
+    private func close() {
+        coverSelection.cancelPendingLoad()
+        dismiss()
     }
 
 }
 
-/// 固定两行的原生文本区域，文本较长时在内部滚动。
-private struct PlaylistDescriptionTextView: UIViewRepresentable {
+struct PlaylistFormCover: View {
+    let selection: PlaylistCoverSelection
+    var artwork: Artwork = .playlist
+    let accessibilityLabel: String
+    let bottomSpacing: CGFloat
+
+    var body: some View {
+        ZStack {
+            Color(.tertiarySystemFill)
+            if let image = selection.image {
+                Image(uiImage: image).resizable().scaledToFill()
+            } else if case .image = artwork {
+                ArtworkView(artwork: artwork, cornerRadius: 6)
+            }
+            PlaylistCoverMenu(selection: selection, accessibilityLabel: accessibilityLabel)
+        }
+        .frame(width: 180, height: 180)
+        .clipShape(.rect(cornerRadius: 6))
+        .overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(.black.opacity(0.04)) }
+        .padding(.top, 20)
+        .padding(.bottom, bottomSpacing)
+    }
+}
+
+private struct PlaylistEditorFields: View {
+    @Binding var title: String
+    @Binding var description: String
+    var artwork: Artwork = .playlist
+    let coverSelection: PlaylistCoverSelection
+    @ScaledMetric(relativeTo: .title3) private var titleSize: CGFloat = 20
+    @ScaledMetric(relativeTo: .subheadline) private var descriptionSize: CGFloat = 15
+    @ScaledMetric(relativeTo: .subheadline) private var descriptionHeight: CGFloat = 58
+
+    var body: some View {
+        VStack(spacing: 0) {
+            PlaylistFormCover(selection: coverSelection, artwork: artwork,
+                              accessibilityLabel: "编辑播放列表封面", bottomSpacing: 58 + 2.0 / 3)
+            TextField("播放列表标题", text: $title)
+                .font(.system(size: titleSize, weight: .semibold)).multilineTextAlignment(.center).submitLabel(.done)
+                .frame(minHeight: 44)
+            Divider()
+            ZStack(alignment: .topLeading) {
+                if description.isEmpty {
+                    Text("描述").font(.system(size: descriptionSize)).foregroundStyle(Color(.placeholderText))
+                        .padding(.top, 10).allowsHitTesting(false)
+                }
+                PlaylistDescriptionTextView(text: $description)
+            }
+            .frame(height: descriptionHeight)
+            Divider()
+            Toggle("在个人资料页和搜索中显示", isOn: .constant(false))
+                .font(.subheadline).tint(.green).frame(minHeight: 40)
+                .disabled(true)
+                .accessibilityHint("本地播放列表暂不支持公开显示")
+            Divider()
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+/// 默认两行并随文字大小缩放，较长的描述在内部滚动。
+struct PlaylistDescriptionTextView: UIViewRepresentable {
     @Binding var text: String
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeUIView(context: Context) -> UITextView {
         let view = UITextView()
         view.backgroundColor = .clear
-        view.font = .systemFont(ofSize: 15)
+        view.adjustsFontForContentSizeCategory = true
         view.textContainerInset = UIEdgeInsets(top: 10, left: 0, bottom: 6, right: 0)
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.lineSpacing = 2
-        view.typingAttributes = [.font: UIFont.systemFont(ofSize: 15), .paragraphStyle: paragraph]
         view.textContainer.lineFragmentPadding = 0
         view.isScrollEnabled = true
         view.delegate = context.coordinator
         view.accessibilityLabel = "描述"
+        updateTextAndStyle(view)
         return view
     }
     func updateUIView(_ view: UITextView, context: Context) {
+        updateTextAndStyle(view)
+    }
+
+    func updateTextAndStyle(_ view: UITextView) {
+        let font = UIFontMetrics(forTextStyle: .subheadline)
+            .scaledFont(for: .systemFont(ofSize: 15), compatibleWith: view.traitCollection)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineSpacing = 2
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font, .foregroundColor: UIColor.label, .paragraphStyle: paragraph
+        ]
         if view.text != text {
-            let paragraph = NSMutableParagraphStyle()
-            paragraph.lineSpacing = 2
-            view.attributedText = NSAttributedString(string: text, attributes: [.font: UIFont.systemFont(ofSize: 15), .foregroundColor: UIColor.label, .paragraphStyle: paragraph])
+            view.attributedText = NSAttributedString(string: text, attributes: attributes)
+        } else if view.font != font {
+            view.textStorage.addAttributes(attributes, range: NSRange(location: 0, length: view.textStorage.length))
         }
+        view.font = font
+        view.typingAttributes = attributes
+        view.adjustsFontForContentSizeCategory = true
     }
     final class Coordinator: NSObject, UITextViewDelegate {
         let parent: PlaylistDescriptionTextView
@@ -804,6 +887,10 @@ final class PlaylistCoverSelection {
     private(set) var generation = 0
 
     func prepareForSelection() {
+        cancelPendingLoad()
+    }
+
+    func cancelPendingLoad() {
         generation += 1
         photo = nil
         isLoading = false
@@ -878,12 +965,19 @@ struct PlaylistCoverMenu: View {
                 selection.showsFilePicker = true
             }
         } label: {
-            Image(systemName: "photo").font(.system(size: 25, weight: .medium))
-                .foregroundStyle(.white).frame(width: 64, height: 64).background(.black, in: .circle)
-                .contentShape(.circle)
+            Group {
+                if selection.isLoading {
+                    ProgressView().tint(.white)
+                } else {
+                    Image(systemName: "photo").font(.system(size: 25, weight: .medium))
+                        .foregroundStyle(.white)
+                }
+            }
+            .frame(width: 64, height: 64).background(.black, in: .circle)
+            .contentShape(.circle)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(accessibilityLabel)
+        .accessibilityLabel(selection.isLoading ? "正在读取照片" : accessibilityLabel)
     }
 }
 
@@ -904,6 +998,7 @@ struct PlaylistCoverPicker: ViewModifier {
                 guard let photo = selection.photo else { return }
                 await selection.loadPhoto { try await photo.loadTransferable(type: Data.self) }
             }
+            .onDisappear { selection.cancelPendingLoad() }
             .alert("无法读取图片", isPresented: $selection.photoError) {
                 Button("好", role: .cancel) {}
             } message: {
@@ -911,6 +1006,15 @@ struct PlaylistCoverPicker: ViewModifier {
             }
     }
 }
+
+#if DEBUG
+#Preview("封面照片读取进度") {
+    let selection = PlaylistCoverSelection()
+    selection.isLoading = true
+    let library = PlaylistLibrary(playlists: [LibraryPlaylistItem(id: "preview:playlist", title: "2", artwork: .playlist)])
+    return PlaylistEditor(playlistID: "preview:playlist", library: library, availableSongs: [], coverSelection: selection)
+}
+#endif
 
 private struct PlaylistCoverCamera: UIViewControllerRepresentable {
     @Binding var image: UIImage?

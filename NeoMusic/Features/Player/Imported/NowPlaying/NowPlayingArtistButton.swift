@@ -8,20 +8,36 @@ struct NowPlayingArtistButton: View {
     var interactive = true
     var lineHeight: CGFloat = 26
     var fontSize: CGFloat = 20
+    var fontSizeIsScaled = false
+    @ScaledMetric private var scaledLineHeight: CGFloat
+
+    init(track: ReferenceTrack, interactive: Bool = true, lineHeight: CGFloat = 26,
+         fontSize: CGFloat = 20, fontSizeIsScaled: Bool = false) {
+        self.track = track
+        self.interactive = interactive
+        self.lineHeight = lineHeight
+        self.fontSize = fontSize
+        self.fontSizeIsScaled = fontSizeIsScaled
+        _scaledLineHeight = ScaledMetric(wrappedValue: lineHeight, relativeTo: fontSize == 13 ? .footnote : .subheadline)
+    }
+
+    private var resolvedLineHeight: CGFloat {
+        fontSizeIsScaled || fontSize == 20 ? lineHeight : scaledLineHeight
+    }
 
     var body: some View {
         if interactive {
-            NowPlayingArtistMenuButton(track: track, lineHeight: lineHeight)
+            NowPlayingArtistMenuButton(track: track, lineHeight: resolvedLineHeight)
                 .background(alignment: .leading) {
                     label.accessibilityHidden(true)
                 }
         } else {
-            label.frame(height: lineHeight)
+            label.frame(height: resolvedLineHeight)
         }
     }
 
     private var label: some View {
-        NowPlayingVibrantLabel(text: track.artists, fontSize: fontSize)
+        NowPlayingVibrantLabel(text: track.artists, fontSize: fontSize, fontSizeIsScaled: fontSizeIsScaled)
             .frame(maxWidth: .infinity, alignment: .leading)
             .allowsHitTesting(false)
     }
@@ -33,6 +49,7 @@ struct NowPlayingVibrantLabel: View {
     let text: String
     let fontSize: CGFloat
     var role: PlayerEDRRole = .artist
+    var fontSizeIsScaled = false
     @Environment(\.playerEDRLevels) private var edrLevels
     @Environment(\.nowPlayingBackdropImage) private var image
     @Environment(\.nowPlayingUndimmedBackdropImage) private var undimmedImage
@@ -41,14 +58,15 @@ struct NowPlayingVibrantLabel: View {
     @Environment(\.playerArtistEDREnabled) private var edrEnabled
 
     private var glyphs: some View {
-        NowPlayingGlyphMask(text: text, fontSize: fontSize)
+        NowPlayingGlyphMask(text: text, fontSize: fontSize, fontSizeIsScaled: fontSizeIsScaled)
     }
 
     var body: some View {
         glyphs.hidden()
             .overlay {
                 if edrEnabled, let image = undimmedImage ?? image, let backdropAnchor {
-                    PlayerEDRArtistLabel(text: text, fontSize: fontSize, image: image, anchor: backdropAnchor, brightness: edrLevels.value(for: role))
+                    PlayerEDRArtistLabel(text: text, fontSize: fontSize, image: image, anchor: backdropAnchor,
+                                         brightness: edrLevels.value(for: role), fontSizeIsScaled: fontSizeIsScaled)
                 } else {
                     ZStack {
                         Color(white: 0.88)
@@ -72,6 +90,7 @@ struct NowPlayingVibrantLabel: View {
 private struct NowPlayingGlyphMask: UIViewRepresentable {
     let text: String
     let fontSize: CGFloat
+    let fontSizeIsScaled: Bool
 
     func makeUIView(context: Context) -> UILabel {
         let label = UILabel()
@@ -84,10 +103,8 @@ private struct NowPlayingGlyphMask: UIViewRepresentable {
 
     func updateUIView(_ label: UILabel, context: Context) {
         label.text = text
-        let baseFont = UIFont.systemFont(ofSize: fontSize)
-        label.font = fontSize == 20 ? baseFont : UIFontMetrics(
-            forTextStyle: fontSize == 13 ? .footnote : .subheadline
-        ).scaledFont(for: baseFont, compatibleWith: label.traitCollection)
+        label.font = PlayerEDRGlyphView.textFont(fontSize: fontSize, weight: .regular, isWhite: false,
+                                               fontSizeIsScaled: fontSizeIsScaled, traits: label.traitCollection)
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UILabel, context: Context) -> CGSize? {

@@ -85,6 +85,8 @@ import XCTest
         let store = NeteaseSearchStore(client: client)
         await store.loadCategories(); await store.loadCategories()
         XCTAssertEqual(store.categories.map(\.name), ["热门", "语种", "风格"])
+        XCTAssertEqual(store.categories.map(\.group), [3, 0, 1])
+        XCTAssertEqual(store.categories.map(\.isHot), [true, false, false])
         XCTAssertEqual(SearchFixtureProtocol.state.withLock { $0.counts["/eapi/playlist/catalogue"] }, 1)
         await store.openCategory("流行")
         await store.loadMoreCategory()
@@ -100,6 +102,53 @@ import XCTest
         XCTAssertEqual(store.categoryPage?.groups.first?.items.map(\.resourceID), [1, 2, 3])
         await store.setSession(owner: 2, credential: nil)
         XCTAssertTrue(store.categories.isEmpty); XCTAssertNil(store.categoryPage); XCTAssertNil(store.category)
+    }
+
+    func testCategoryMetadataProjectsIntoStableHotAndSemanticSections() {
+        let source: [NeteaseSearchCategory] = [
+            .init(name: "摇滚", group: 1, isHot: true),
+            .init(name: "影视原声", group: 4, isHot: false),
+            .init(name: "华语", group: 0, isHot: true),
+            .init(name: "夜晚", group: 2, isHot: false),
+            .init(name: "怀旧", group: 3, isHot: false),
+            .init(name: "古典", group: 1, isHot: false),
+            .init(name: "新分类", group: 8, isHot: false)
+        ]
+        let projected = SearchMusicIntegration.categoryItems(source)
+        XCTAssertEqual(projected.map(\.id), source.map(\.id))
+        XCTAssertEqual(projected.map(\.group), source.map { Optional($0.group) })
+        XCTAssertEqual(projected.map(\.isHot), source.map(\.isHot))
+        XCTAssertEqual(projected.map(\.colorIndex), Array(source.indices))
+
+        let sections = MusicSearchCategorySection.sections(for: projected)
+        XCTAssertEqual(sections.map(\.id), ["hot", "group:0", "group:1", "group:2", "group:3", "group:4", "other"])
+        XCTAssertEqual(sections.map(\.title), ["热门", "语种", "风格", "场景", "情感", "主题", "其他"])
+        XCTAssertEqual(sections[0].items.map(\.id), ["摇滚", "华语"])
+        XCTAssertEqual(sections[2].items.map(\.id), ["摇滚", "古典"])
+        XCTAssertEqual(sections.last?.items.map(\.id), ["新分类"])
+        XCTAssertEqual(Set(sections.dropFirst().flatMap(\.items).map(\.id)), Set(projected.map(\.id)))
+    }
+
+    func testCategoriesWithoutGroupMetadataRetainFlatPresentation() {
+        let items = [MusicSearchCategory(id: "流行", title: "流行"),
+                     MusicSearchCategory(id: "民谣", title: "民谣", colorIndex: 1)]
+        let sections = MusicSearchCategorySection.sections(for: items)
+        XCTAssertEqual(sections.count, 1)
+        XCTAssertEqual(sections.first?.id, "all")
+        XCTAssertNil(sections.first?.title)
+        XCTAssertEqual(sections.first?.items, items)
+        XCTAssertTrue(MusicSearchCategorySection.sections(for: []).isEmpty)
+    }
+
+    func testCategoryForegroundMeetsNormalTextContrastAcrossCurrentPalette() {
+        XCTAssertEqual(SearchCategoryColor.palette.count, 7)
+        for color in SearchCategoryColor.palette {
+            XCTAssertGreaterThanOrEqual(color.contrast, 4.5)
+            XCTAssertTrue(color.usesDarkForeground)
+        }
+        let dark = SearchCategoryColor(red: 0.1, green: 0.1, blue: 0.1)
+        XCTAssertFalse(dark.usesDarkForeground)
+        XCTAssertGreaterThanOrEqual(dark.contrast, 4.5)
     }
 
     func testIndexPersistsFullMembershipAndSharedSongSurvivesCollectionRemoval() async throws {
@@ -197,6 +246,118 @@ import XCTest
         XCTAssertNotEqual(store.sessionID, session)
     }
 
+    func testCancelledSearchActivationKeepsGuestHistory() async {
+        let suite = "search-session-test-\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(["Guest query"], forKey: "search.history.guest.online")
+        defaults.set(["Account query"], forKey: "search.history.1.online")
+        let store = NeteaseSearchStore(defaults: defaults)
+        let sessionID = store.sessionID
+        let activation = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            await store.setSession(owner: 1, credential: nil)
+        }
+        await activation.value
+        XCTAssertEqual(store.history, ["Guest query"])
+        XCTAssertEqual(store.sessionID, sessionID)
+        store.record("Another guest query", scope: "online")
+        XCTAssertEqual(defaults.stringArray(forKey: "search.history.1.online"), ["Account query"])
+        XCTAssertEqual(defaults.stringArray(forKey: "search.history.guest.online")?.first, "Another guest query")
+    }
+
+    func testCancelledLibraryActivationRetainsStableOwner() async throws {
+        let store = NeteaseLibrarySearchStore(directory: directory())
+        let saved = NeteaseLibrarySearchIndex.Session(owner: "1", revision: UUID())
+        await store.index.activate(saved)
+        try await store.index.replace(collection: "liked", version: "", resources: [resource(1)], session: saved)
+        await store.setSession(owner: 1, credential: nil)
+        let revision = store.revision
+        let activation = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            await store.setSession(owner: 2, credential: nil)
+        }
+        await activation.value
+        let result = try await store.search("Song 1")
+        XCTAssertEqual(result.map(\.resourceID), [1])
+        XCTAssertEqual(store.revision, revision)
+    }
+
+    func testLogoutJoinsSynchronizationCancelledBeforeItStarts() async throws {
+        let store = NeteaseLibrarySearchStore(directory: directory())
+        await store.setSession(owner: 1, credential: try .init(musicU: "fixture"))
+        let finished = expectation(description: "Cancelled synchronization joined")
+        let logout = Task {
+            store.scheduleSynchronization()
+            await store.setSession(owner: nil, credential: nil)
+            finished.fulfill()
+        }
+        let result = await XCTWaiter.fulfillment(of: [finished], timeout: 2)
+        XCTAssertEqual(result, .completed)
+        if result == .completed {
+            await logout.value
+            XCTAssertFalse(store.isSyncing)
+        } else {
+            logout.cancel()
+        }
+    }
+
+    func testOverlappingLibraryRestorationAndLogoutStaysSignedOut() async throws {
+        let store = NeteaseLibrarySearchStore(directory: directory())
+        let saved = NeteaseLibrarySearchIndex.Session(owner: "1", revision: UUID())
+        await store.index.activate(saved)
+        try await store.index.replace(collection: "liked", version: "", resources: [resource(1)], session: saved)
+        await store.index.activate(nil)
+        let gate = SearchIndexExecutorGate(entered: expectation(description: "Index executor occupied"))
+        defer { gate.release.signal() }
+        let occupied = Task { await store.index.holdExecutor(using: gate) }
+        await fulfillment(of: [gate.entered], timeout: 2)
+        let restoring = expectation(description: "Account restoration requested")
+        let activation = Task {
+            restoring.fulfill()
+            await store.setSession(owner: 1, credential: nil)
+        }
+        await fulfillment(of: [restoring], timeout: 2)
+        let exiting = expectation(description: "Logout requested")
+        let logout = Task {
+            exiting.fulfill()
+            await store.setSession(owner: nil, credential: nil)
+        }
+        await fulfillment(of: [exiting], timeout: 2)
+        gate.release.signal()
+        await occupied.value
+        await activation.value
+        await logout.value
+        let result = try await store.search("Song 1")
+        XCTAssertTrue(result.isEmpty)
+        XCTAssertFalse(store.isSyncing)
+    }
+
+    func testCancelledPendingLibraryActivationDoesNotPublishItsOwner() async throws {
+        let store = NeteaseLibrarySearchStore(directory: directory())
+        let saved = NeteaseLibrarySearchIndex.Session(owner: "1", revision: UUID())
+        await store.index.activate(saved)
+        try await store.index.replace(collection: "liked", version: "", resources: [resource(1)], session: saved)
+        await store.index.activate(nil)
+        let gate = SearchIndexExecutorGate(entered: expectation(description: "Index executor occupied"))
+        defer { gate.release.signal() }
+        let occupied = Task { await store.index.holdExecutor(using: gate) }
+        await fulfillment(of: [gate.entered], timeout: 2)
+        let restoring = expectation(description: "Account restoration requested")
+        let activation = Task {
+            restoring.fulfill()
+            await store.setSession(owner: 1, credential: nil)
+        }
+        await fulfillment(of: [restoring], timeout: 2)
+        activation.cancel()
+        gate.release.signal()
+        await occupied.value
+        await activation.value
+        let result = try await store.search("Song 1")
+        XCTAssertTrue(result.isEmpty)
+        XCTAssertFalse(store.isSyncing)
+    }
+
     func testLibraryMatchingMergesDownloadedCopiesAndRanksAllFields() {
         func item(_ id: String, title: String, album: String = "", local: Bool = false) -> MusicSearchItem {
             let song = LibrarySongItem(id: local ? "Music/song.flac" : "netease:1:7", title: title,
@@ -262,6 +423,43 @@ import XCTest
         XCTAssertFalse(search.history.contains("Saved query"))
     }
 
+    func testFailedLogoutRestoresCachedIndexWithoutNetworkRefresh() async throws {
+        let (client, network) = client(responses: [
+            "/eapi/user/playlist": [Data(#"{"code":200,"playlist":[],"more":false}"#.utf8)],
+            "/eapi/album/sublist": [Data(#"{"code":200,"data":[],"hasMore":false}"#.utf8)],
+            "/eapi/artist/sublist": [Data(#"{"code":200,"data":[],"hasMore":false}"#.utf8)],
+            "/eapi/song/like/get": [Data(#"{"code":200,"ids":[1]}"#.utf8)],
+            "/eapi/v3/song/detail": [songs([1])]
+        ])
+        defer {
+            SearchFixtureProtocol.state.withLock { $0.onRequest = nil }
+            network.invalidateAndCancel()
+        }
+        let saved = NeteaseSavedSession(profile: .init(userID: 1, nickname: "Fixture", avatarURL: nil),
+            credential: try .init(musicU: "fixture"))
+        let library = NeteaseLibrarySearchStore(client: .init(transport: client.transport), directory: directory())
+        let account = NeteaseAccount(readSession: { saved }, saveSession: { _ in },
+            deleteSession: { throw NeteaseAccountError.keychain(-1) },
+            validateCredential: { _ in saved.profile }, cachedAvatar: { _ in nil },
+            loadAvatar: { _ in Data() }, clearAvatarCache: {}, librarySearch: library)
+        await account.restoreCachedContent()
+        await library.synchronize()
+        let baseline = SearchFixtureProtocol.state.withLock { $0.counts }
+        XCTAssertEqual(baseline.values.reduce(0, +), 5)
+        let unexpected = expectation(description: "Cache recovery keeps the network idle")
+        unexpected.isInverted = true
+        SearchFixtureProtocol.state.withLock { $0.onRequest = { unexpected.fulfill() } }
+
+        do { try await account.logout(); XCTFail("Expected failed logout") }
+        catch { XCTAssertEqual(error as? NeteaseAccountError, .keychain(-1)) }
+
+        let cached = try await library.search("Song 1")
+        XCTAssertEqual(cached.map(\.resourceID), [1])
+        XCTAssertNotNil(account.error)
+        await fulfillment(of: [unexpected], timeout: 0.1)
+        XCTAssertEqual(SearchFixtureProtocol.state.withLock { $0.counts }, baseline)
+    }
+
     func testSearchPlaybackUsesLoadedGroupAndRetainsQueueOnLoginOrReplacementCancellation() {
         let account = NeteaseAccount(readSession: { nil }, saveSession: { _ in }, deleteSession: {},
             validateCredential: { _ in throw NeteaseAccountError.authenticationRequired }, cachedAvatar: { _ in nil },
@@ -312,12 +510,33 @@ import XCTest
     }
 }
 
+private final class SearchIndexExecutorGate: @unchecked Sendable {
+    let entered: XCTestExpectation
+    let release = DispatchSemaphore(value: 0)
+    init(entered: XCTestExpectation) { self.entered = entered }
+    func hold() {
+        entered.fulfill()
+        release.wait()
+    }
+}
+
+private extension NeteaseLibrarySearchIndex {
+    /// Holds the real index executor while a session change is waiting for SQLite work.
+    func holdExecutor(using gate: SearchIndexExecutorGate) { gate.hold() }
+}
+
 private final class SearchFixtureProtocol: URLProtocol, @unchecked Sendable {
-    struct State { var responses: [String: [Data]]; var counts: [String: Int] = [:] }
+    struct State {
+        var responses: [String: [Data]]
+        var counts: [String: Int] = [:]
+        var onRequest: (@Sendable () -> Void)?
+    }
     static let state = Mutex(State(responses: [:]))
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
+        let onRequest = Self.state.withLock { $0.onRequest }
+        onRequest?()
         let data = Self.state.withLock { value -> Data in
             let key = request.url!.path; value.counts[key, default: 0] += 1
             guard var values = value.responses[key], let result = values.first else { return Data(#"{"code":404}"#.utf8) }

@@ -3,6 +3,168 @@ import Synchronization
 @testable import NeoMusic
 
 @MainActor final class NeteaseHomeTests: XCTestCase {
+    func testMissingFailedHomeSectionKeepsItsPlaceAndCachedSectionKeepsItsItems() {
+        let chart = feedBlock("HOMEPAGE_BLOCK_TOPLIST", id: 12, title: "排行榜")
+        let feed = NeteaseHomeFeed(blocks: [chart], hasMore: false, cursor: nil)
+        let issues: [HomeFeedIssue] = [
+            .init(id: "feed", title: "推荐内容", message: "Failed", sectionID: nil),
+            .init(id: "recommendations", title: "推荐歌单", message: "Failed", sectionID: "recommendedPlaylists"),
+            .init(id: "charts", title: "排行榜", message: "Failed", sectionID: "charts")
+        ]
+        let sections = HomeMusicIntegration.feedSections(feed, issues: issues, artwork: { _ in .missing })
+        XCTAssertEqual(sections.map(\.id), ["recommendedPlaylists", "charts"])
+        XCTAssertEqual(sections.first?.title, "推荐歌单")
+        XCTAssertTrue(sections.first?.items.isEmpty == true)
+        XCTAssertEqual(sections.last?.items.map(\.id), ["list/12"])
+    }
+
+    func testSourceRetriesRequestOnlyTheirOwnEndpoint() async throws {
+        let endpoints: [(NeteaseHomeStore.RetrySource, String)] = [
+            (.feed, "/eapi/homepage/block/page"),
+            (.recommendations, "/eapi/v1/discovery/recommend/resource"),
+            (.likedRecommendations, "/eapi/v1/discovery/simiSong"),
+            (.charts, "/eapi/toplist"),
+            (.followedReleases, "/eapi/sub/artist/new/works/song/list"),
+            (.newSongs, "/eapi/v1/discovery/new/songs")
+        ]
+        for (source, path) in endpoints {
+            let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let network = try paginationNetwork(count: 1)
+            defer { network.invalidateAndCancel() }
+            HomePaginationProtocol.state.withLock { $0.responses["/eapi/v1/discovery/simiSong"] = songResponse([2], key: "songs") }
+            let store = NeteaseHomeStore(client: NeteaseMusicClient(transport: NeteaseAccountClient(session: network)), directory: root)
+            await store.activate(try savedSession(), refresh: false)
+            if source == .likedRecommendations {
+                let seed = NeteaseMusicSong(id: 1, title: "Seed", artist: "Artist", album: "Album", artworkURL: nil, duration: 1)
+                store.updateLikedSongs(playlistID: 12, songs: [seed], likedAt: [1: Date()], likedIDs: [1])
+                await store.retry(.likedRecommendations)
+                HomePaginationProtocol.state.withLock { $0.paths = [] }
+            }
+            await store.retry(source)
+            XCTAssertEqual(HomePaginationProtocol.state.withLock { $0.paths }, [path], source.rawValue)
+            XCTAssertTrue(store.refreshingSources.isEmpty)
+            await store.flush()
+        }
+    }
+
+    func testSourceRetryAndWholeRefreshShareTheSamePendingRequest() async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let network = try paginationNetwork(count: 1)
+        defer { network.invalidateAndCancel() }
+        let chartsPath = "/eapi/toplist"
+        let started = expectation(description: "Charts retry started")
+        let feedStarted = expectation(description: "Whole refresh started")
+        HomePaginationProtocol.state.withLock {
+            $0.blocked.insert(chartsPath)
+            $0.started = { path in
+                if path == chartsPath { started.fulfill() }
+                if path == "/eapi/homepage/block/page" { feedStarted.fulfill() }
+            }
+        }
+        let store = NeteaseHomeStore(client: NeteaseMusicClient(transport: NeteaseAccountClient(session: network)), directory: root)
+        await store.activate(try savedSession(), refresh: false)
+        let first = Task { await store.retry(.charts) }
+        await fulfillment(of: [started], timeout: 3)
+        let duplicate = Task { await store.retry(.charts) }
+        let refresh = Task { await store.refresh() }
+        await fulfillment(of: [feedStarted], timeout: 3)
+        XCTAssertEqual(store.refreshingSources.contains(.charts), true)
+        HomePaginationProtocol.release(chartsPath)
+        await first.value; await duplicate.value; await refresh.value
+        XCTAssertEqual(HomePaginationProtocol.count(chartsPath), 1)
+        XCTAssertTrue(store.refreshingSources.isEmpty)
+        await store.flush()
+    }
+
+    func testCancelledSourceRetryCanBeRetriedWithoutPublishingAnError() async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let network = try paginationNetwork(count: 1)
+        defer { network.invalidateAndCancel() }
+        let path = "/eapi/homepage/block/page"
+        let started = expectation(description: "Source retry started")
+        HomePaginationProtocol.state.withLock {
+            $0.blocked.insert(path)
+            $0.started = { if $0 == path { started.fulfill() } }
+        }
+        let store = NeteaseHomeStore(client: NeteaseMusicClient(transport: NeteaseAccountClient(session: network)), directory: root)
+        await store.activate(try savedSession(), refresh: false)
+        let retry = Task { await store.retry(.feed) }
+        await fulfillment(of: [started], timeout: 3)
+        retry.cancel()
+        await retry.value
+        XCTAssertNil(store.feedError)
+        XCTAssertTrue(store.refreshingSources.isEmpty)
+        HomePaginationProtocol.state.withLock { $0.started = { _ in } }
+        HomePaginationProtocol.release(path)
+        await store.retry(.feed)
+        XCTAssertEqual(HomePaginationProtocol.count(path), 2)
+        XCTAssertNotNil(store.feed)
+        await store.flush()
+    }
+
+    func testAccountSwitchCancelsSourceRetryAndClearsItsState() async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let network = try paginationNetwork(count: 1)
+        defer { network.invalidateAndCancel() }
+        let path = "/eapi/toplist"
+        let started = expectation(description: "Charts source started")
+        let stopped = expectation(description: "Charts source cancelled")
+        HomePaginationProtocol.state.withLock {
+            $0.blocked.insert(path)
+            $0.started = { if $0 == path { started.fulfill() } }
+            $0.stopped = { if $0 == path { stopped.fulfill() } }
+        }
+        let store = NeteaseHomeStore(client: NeteaseMusicClient(transport: NeteaseAccountClient(session: network)), directory: root)
+        await store.activate(try savedSession(), refresh: false)
+        let retry = Task { await store.retry(.charts) }
+        await fulfillment(of: [started], timeout: 3)
+        await store.activate(try savedSession(99), refresh: false)
+        await fulfillment(of: [stopped], timeout: 3)
+        await retry.value
+        HomePaginationProtocol.release(path)
+        XCTAssertEqual(store.userID, 99)
+        XCTAssertNil(store.charts)
+        XCTAssertNil(store.chartsError)
+        XCTAssertTrue(store.refreshingSources.isEmpty)
+    }
+
+    func testLocalRetryPreservesCachedContentAndOtherSourceErrors() async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let network = try paginationNetwork(count: 1)
+        defer { network.invalidateAndCancel() }
+        let path = "/eapi/toplist"
+        let charts = Data(#"{"code":200,"list":[{"id":12,"name":"Saved chart"}]}"#.utf8)
+        HomePaginationProtocol.state.withLock { $0.responses[path] = charts }
+        let store = NeteaseHomeStore(client: NeteaseMusicClient(transport: NeteaseAccountClient(session: network)), directory: root)
+        await store.activate(try savedSession(), refresh: false)
+        await store.retry(.charts)
+        let saved = store.charts
+        HomePaginationProtocol.state.withLock { $0.failures.formUnion([path, "/eapi/homepage/block/page"]) }
+        await store.retry(.charts)
+        await store.retry(.feed)
+        XCTAssertEqual(store.charts, saved)
+        XCTAssertEqual(HomeMusicIntegration.feedIssues(store).map(\.id), ["feed", "charts"])
+        let started = expectation(description: "Local retry started")
+        HomePaginationProtocol.state.withLock {
+            $0.failures.remove(path); $0.blocked.insert(path)
+            $0.started = { if $0 == path { started.fulfill() } }
+        }
+        let retry = Task { await store.retry(.charts) }
+        await fulfillment(of: [started], timeout: 3)
+        XCTAssertEqual(HomeMusicIntegration.feedIssues(store).first(where: { $0.id == "charts" })?.isRetrying, true)
+        XCTAssertEqual(store.charts, saved)
+        HomePaginationProtocol.release(path)
+        await retry.value
+        XCTAssertEqual(HomeMusicIntegration.feedIssues(store).map(\.id), ["feed"])
+        XCTAssertEqual(store.charts, saved)
+        await store.flush()
+    }
+
     func testRefreshReadsAllPagesAndReplacesSnapshotWithoutAccumulating() async throws {
         let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

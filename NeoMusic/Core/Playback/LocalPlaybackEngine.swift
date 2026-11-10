@@ -4,6 +4,7 @@ import Observation
 /// Independent audio transport. Its owner supplies file URLs and owns the logical queue.
 @MainActor @Observable final class LocalPlaybackEngine {
     private(set) var isPlaying = false
+    private(set) var isActivating = false
     private(set) var isLoading = false
     private(set) var elapsed: Double = 0
     private(set) var duration: Double = 0
@@ -12,6 +13,9 @@ import Observation
     @ObservationIgnored private var incoming = AVQueuePlayer()
     @ObservationIgnored private var spectrumAnalyzers: [ObjectIdentifier: AudioSpectrumAnalyzer] = [:]
     @ObservationIgnored private var spectrumTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
+    @ObservationIgnored private let activateSession: @Sendable () async throws -> Bool
+    @ObservationIgnored private(set) var activation: Task<Void, Never>?
+    @ObservationIgnored private var playRequested = false
 
     /// Read on demand by visible indicators; no high-frequency Observation invalidations.
     func spectrumLevels() -> [Float] {
@@ -85,7 +89,8 @@ import Observation
     @ObservationIgnored var onStateChange: (() -> Void)?
     @ObservationIgnored var onTimeChange: (() -> Void)?
 
-    init() {
+    init(activateSession: @escaping @Sendable () async throws -> Bool = LocalPlaybackEngine.activateAudioSession) {
+        self.activateSession = activateSession
         // Advance is coordinated by the owner so duplicate entries retain their identity.
         player.actionAtItemEnd = .pause
         bindClock()
@@ -213,6 +218,7 @@ import Observation
         try await candidate.waitUntilReady()
         try Task.checkCancellation()
         let position = elapsed
+        cancelActivation()
         // Keep the ready item attached to its original player. Detaching an item
         // does not synchronously release AVFoundation's player association.
         if let clock { player.removeTimeObserver(clock); self.clock = nil }
@@ -238,26 +244,71 @@ import Observation
             }
         }
         guard generation == revision, !Task.isCancelled else { return }
-        if isPlaying && shouldResume() { play() }
+        if playRequested && shouldResume() { play() }
         else { pause() }
     }
 
     func play() {
         guard player.currentItem != nil, error == nil else { return }
-        do {
-            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
-            try AVAudioSession.sharedInstance().setActive(true)
-            isPlaying = true; player.play(); if isCrossfading { incoming.play() }; onStateChange?()
-        } catch { self.error = error.localizedDescription; pause() }
+        playRequested = true
+        if isPlaying {
+            player.play(); if isCrossfading { incoming.play() }; onStateChange?()
+            return
+        }
+        guard !isActivating else { return }
+        let token = generation
+        let activate = activateSession
+        isActivating = true
+        activation = Task { [weak self] in
+            do {
+                let activated = try await activate()
+                guard !Task.isCancelled, let self, self.generation == token, self.playRequested else { return }
+                self.activation = nil; self.isActivating = false
+                guard activated else {
+                    self.error = "无法激活音频会话"
+                    self.pause()
+                    return
+                }
+                self.isPlaying = true
+                self.player.play()
+                if self.isCrossfading { self.incoming.play() }
+                self.onStateChange?()
+            } catch {
+                guard !Task.isCancelled, let self, self.generation == token, self.playRequested else { return }
+                self.activation = nil; self.isActivating = false
+                self.error = error.localizedDescription
+                self.pause()
+            }
+        }
+        onStateChange?()
     }
+
+    @concurrent private static func activateAudioSession() async throws -> Bool {
+        try Task.checkCancellation()
+        let session = AVAudioSession.sharedInstance()
+        if session.category != .playback || session.mode != .default {
+            try session.setCategory(.playback, mode: .default)
+        }
+        try Task.checkCancellation()
+        return try await session.activate()
+    }
+
+    private func cancelActivation() {
+        activation?.cancel(); activation = nil; isActivating = false
+    }
+
     func pause() {
         resumeAfterInterruption = false
+        playRequested = false
+        cancelActivation()
         player.pause(); incoming.pause(); isPlaying = false; onStateChange?()
     }
     func handleInterruption(began: Bool, shouldResume: Bool = false) {
         if began {
-            if !interrupted { resumeAfterInterruption = isPlaying }
+            if !interrupted { resumeAfterInterruption = playRequested }
             interrupted = true
+            playRequested = false
+            cancelActivation()
             player.pause(); incoming.pause(); isPlaying = false; onStateChange?()
         } else {
             let resume = interrupted && resumeAfterInterruption && shouldResume
@@ -268,7 +319,8 @@ import Observation
 
     @discardableResult func advancePrepared() -> Bool {
         guard player.items().count > 1 else { return false }
-        let continuing = isPlaying
+        let continuing = playRequested
+        cancelActivation()
         cancelFade()
         generation += 1; preparation?.cancel(); preparedURL = nil; nextDuration = 0
         player.advanceToNextItem()
@@ -279,7 +331,10 @@ import Observation
         duration = length.isFinite ? max(0, length) : 0
         isLoading = item.status == .unknown
         observeStatus(item)
-        if continuing { player.play() }
+        if continuing {
+            if isPlaying { player.play() }
+            else { play() }
+        }
         onAdvanced?()
         return true
     }

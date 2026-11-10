@@ -3,6 +3,7 @@ import SwiftUI
 struct SearchPageView: View {
     @Bindable var model: SearchPageModel
     @Environment(\.openLibraryRoute) private var openRoute
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     var body: some View {
         Group {
             if !model.isSearching && !model.submitted { browse }
@@ -20,10 +21,26 @@ struct SearchPageView: View {
 
     private var browse: some View {
         ScrollView {
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)], spacing: 12) {
-                ForEach(model.categories) { item in
-                    Button { model.onCategory?(item.id); openRoute(.playlistFolder("search-category:" + item.id)) } label: { SearchCategoryCard(item: item) }
-                        .buttonStyle(.plain)
+            LazyVStack(alignment: .leading, spacing: 28) {
+                ForEach(MusicSearchCategorySection.sections(for: model.categories)) { section in
+                    VStack(alignment: .leading, spacing: 12) {
+                        if let title = section.title {
+                            Text(title).font(.title3.bold()).accessibilityAddTraits(.isHeader)
+                        }
+                        LazyVGrid(columns: categoryColumns, spacing: 12) {
+                            ForEach(section.items) { item in
+                                Button {
+                                    model.onCategory?(item.id)
+                                    openRoute(.playlistFolder("search-category:" + item.id))
+                                } label: {
+                                    SearchCategoryCard(item: item)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityHint("打开\(item.title)歌单")
+                            }
+                        }
+                    }
+                    .accessibilityIdentifier("search.categories.\(section.id)")
                 }
             }
             .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 24)
@@ -33,6 +50,11 @@ struct SearchPageView: View {
         }
         .overlay { if model.categories.isEmpty { availability } }
         .refreshable { await model.onRefresh?() }
+    }
+
+    private var categoryColumns: [GridItem] {
+        if dynamicTypeSize.isAccessibilitySize { return [GridItem(.flexible())] }
+        return [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
     }
 
     private var recent: some View {
@@ -155,6 +177,7 @@ private struct SearchResultList: View {
                             Spacer()
                             if group.hasMore || group.items.count > 3 {
                                 Button("查看全部") { model.select(group.kind) }.font(.subheadline)
+                                    .accessibilityLabel("查看全部\(group.kind.title)")
                             }
                         }.textCase(nil).padding(.top, 8)
                     }
@@ -198,21 +221,13 @@ extension SearchResultList: @MainActor Equatable {
 
 private struct SearchCategoryCard: View {
     let item: MusicSearchCategory
-    // Solid colors sampled from the supplied Apple Music recording.
-    private static let colors: [Color] = [
-        Color(red: 221 / 255, green: 170 / 255, blue: 0),
-        Color(red: 224 / 255, green: 90 / 255, blue: 126 / 255),
-        Color(red: 231 / 255, green: 81 / 255, blue: 52 / 255),
-        Color(red: 202 / 255, green: 125 / 255, blue: 47 / 255),
-        Color(red: 51 / 255, green: 176 / 255, blue: 112 / 255),
-        Color(red: 88 / 255, green: 126 / 255, blue: 236 / 255),
-        Color(red: 137 / 255, green: 104 / 255, blue: 218 / 255)
-    ]
+    private var palette: SearchCategoryColor { SearchCategoryColor.palette[item.colorIndex % SearchCategoryColor.palette.count] }
+
     var body: some View {
-        Self.colors[item.colorIndex % Self.colors.count].aspectRatio(1.78, contentMode: .fit)
+        palette.background.aspectRatio(1.78, contentMode: .fit)
             .overlay { SearchCategorySymbol(category: item.title) }
             .overlay(alignment: .bottomLeading) {
-                Text(item.title).font(.headline).foregroundStyle(.white).lineLimit(2).padding(12)
+                Text(item.title).font(.headline).foregroundStyle(palette.foreground).lineLimit(2).padding(12)
             }
             .clipShape(.rect(cornerRadius: 14))
             .accessibilityElement(children: .ignore).accessibilityLabel(item.title)

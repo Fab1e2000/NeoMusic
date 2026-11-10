@@ -66,14 +66,22 @@ struct PopupItem<Identifier: Hashable>: @MainActor Identifiable {
 	let image: PopupItemImageType?
 	let buttonContainer: ButtonContainer
 	let progress: Float?
+	/// The accessibility label for the popup bar's title element.
+	public let accessibilityLabel: String?
+	/// The accessibility hint for opening the popup from its title element.
+	public let accessibilityHint: String?
 
 	internal
-	init(id: Identifier, titleContainer: TitleContainer, image: PopupItemImageType?, buttonContainer: ButtonContainer, progress: Float?) {
+	init(id: Identifier, titleContainer: TitleContainer, image: PopupItemImageType?,
+		 buttonContainer: ButtonContainer, progress: Float?,
+		 accessibilityLabel: String? = nil, accessibilityHint: String? = nil) {
 		self.id = id
 		self.titleContainer = titleContainer
 		self.image = image
 		self.buttonContainer = buttonContainer
 		self.progress = progress
+		self.accessibilityLabel = accessibilityLabel
+		self.accessibilityHint = accessibilityHint
 	}
 }
 
@@ -149,12 +157,22 @@ extension PopupItem {
 	///   - id: The popup item identifier.
 	///   - image: An optional image of the popup item.
 	///   - progress: An optional progress of the popup item.
+	///   - accessibilityLabel: The accessibility label for the popup bar's title element.
+	///   - accessibilityHint: The accessibility hint for opening the popup.
 	///   - title: A `ViewBuilder` that you use to declare the views to draw as the popup item's title.
 	///   - subtitle: An optional `ViewBuilder` that you use to declare the views to draw as the popup item's subtitle.
 	///   - buttons: Optional bar buttons of the popup item.
     @_disfavoredOverload
-    init<TitleContent: View, SubtitleContent: View, Trailing: ToolbarContent>(id: Identifier, image: PopupItemImageType? = nil, progress: Float? = nil, @ViewBuilder title: () -> TitleContent, @ViewBuilder subtitle: () -> SubtitleContent = { EmptyView() }, @ToolbarContentBuilder buttons: () -> Trailing = { EmptyPopupToolbarContent() }) {
-		self.init(id: id, titleContainer: ViewTitleContainer(titleView: AnyView(title()), subtitleView: AnyView(subtitle())), image: image, buttonContainer: makeButtonContainer(buttons: buttons()), progress: progress)
+    init<TitleContent: View, SubtitleContent: View, Trailing: ToolbarContent>(
+        id: Identifier, image: PopupItemImageType? = nil, progress: Float? = nil,
+        accessibilityLabel: String? = nil, accessibilityHint: String? = nil,
+        @ViewBuilder title: () -> TitleContent,
+        @ViewBuilder subtitle: () -> SubtitleContent = { EmptyView() },
+        @ToolbarContentBuilder buttons: () -> Trailing = { EmptyPopupToolbarContent() }
+    ) {
+		self.init(id: id, titleContainer: ViewTitleContainer(titleView: AnyView(title()), subtitleView: AnyView(subtitle())),
+                  image: image, buttonContainer: makeButtonContainer(buttons: buttons()), progress: progress,
+                  accessibilityLabel: accessibilityLabel, accessibilityHint: accessibilityHint)
 	}
 }
 

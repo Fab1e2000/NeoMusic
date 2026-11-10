@@ -15,6 +15,7 @@ final class NeteaseLibrarySearchStore {
     @ObservationIgnored private var credential: NeteaseCredential?
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var generation = UUID()
+    @ObservationIgnored private var sessionTask: Task<Void, Never>?
     @ObservationIgnored private var lastSync: Date?
     @ObservationIgnored private var scheduled: Task<Void, Never>?
     @ObservationIgnored private var needsAnotherSync = false
@@ -25,23 +26,37 @@ final class NeteaseLibrarySearchStore {
         index = NeteaseLibrarySearchIndex(directory: directory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("NeteaseSearch"))
     }
     func setSession(owner: Int64?, credential: NeteaseCredential?) async {
-        guard session?.owner != owner.map(String.init) || self.credential != credential else { return }
+        guard !Task.isCancelled else { return }
+        guard sessionTask != nil || session?.owner != owner.map(String.init) || self.credential != credential else { return }
         let generation = UUID(); self.generation = generation
+        let previousSession = sessionTask
+        previousSession?.cancel()
         let previous = task, previousScheduled = scheduled
         previous?.cancel(); previousScheduled?.cancel(); task = nil; scheduled = nil; needsAnotherSync = false; forceRequested = false
         session = nil; self.credential = nil
-        await previous?.value
-        await previousScheduled?.value
-        guard self.generation == generation else { return }
-        let next = owner.map { NeteaseLibrarySearchIndex.Session(owner: String($0), revision: generation) }
-        await index.activate(next)
-        guard self.generation == generation else { return }
-        session = next; self.credential = credential
-        isSyncing = false; completed = 0; total = 0; failedCollections = []; error = nil; lastSync = nil; revision &+= 1
+        let work = Task { [self] in
+            defer {
+                if self.generation == generation {
+                    sessionTask = nil
+                    isSyncing = false; completed = 0; total = 0; failedCollections = []; error = nil
+                    lastSync = nil; revision &+= 1
+                }
+            }
+            await previousSession?.value
+            await previous?.value
+            await previousScheduled?.value
+            guard self.generation == generation, !Task.isCancelled else { return }
+            let next = owner.map { NeteaseLibrarySearchIndex.Session(owner: String($0), revision: generation) }
+            await index.activate(next)
+            guard self.generation == generation, !Task.isCancelled else { return }
+            session = next; self.credential = credential
+        }
+        sessionTask = work
+        await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
     }
     /// Started by the account lifecycle; collection mutations request one bounded follow-up.
     func scheduleSynchronization(changed: Bool = false) {
-        guard session != nil else { return }
+        guard sessionTask == nil, session != nil else { return }
         if changed { lastSync = nil; needsAnotherSync = true }
         guard scheduled == nil else { return }
         let generation = generation
@@ -55,12 +70,21 @@ final class NeteaseLibrarySearchStore {
         }
     }
     func search(_ query: String, kind: NeteaseSearchKind = .combined) async throws -> [NeteaseSearchResource] {
+        try Task.checkCancellation()
+        let generation = generation
+        await sessionTask?.value
+        try Task.checkCancellation()
+        guard self.generation == generation, sessionTask == nil else { throw CancellationError() }
         guard let session else { return [] }
         let result = try await index.search(query, kind: kind, session: session)
         guard self.session == session else { throw CancellationError() }
         return result
     }
     func synchronize(force: Bool = false) async {
+        guard !Task.isCancelled else { return }
+        let generation = generation
+        await sessionTask?.value
+        guard self.generation == generation, sessionTask == nil, !Task.isCancelled else { return }
         if force { forceRequested = true }
         if let task { await task.value; return }
         guard let session, let credential, let owner = Int64(session.owner) else { return }

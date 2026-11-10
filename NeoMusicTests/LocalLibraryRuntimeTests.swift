@@ -102,6 +102,105 @@ final class LocalLibraryAlbumProjectionTests: XCTestCase {
 
 @MainActor
 final class LocalLibraryRuntimeTests: XCTestCase {
+    func testIndependentRuntimesPublishOnlyToTheirInjectedLibraries() async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let firstDocuments = root.appendingPathComponent("first")
+        let secondDocuments = root.appendingPathComponent("second")
+        let firstStore = firstDocuments.appendingPathComponent("state")
+        let secondStore = secondDocuments.appendingPathComponent("state")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: firstStore, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: secondStore, withIntermediateDirectories: true)
+        let firstTrack = LocalTrack(id: "first.wav", title: "First", artist: "Artist", album: "First album",
+            albumArtist: "Artist", trackNumber: 1, duration: 10, artworkData: nil, addedDate: .distantPast)
+        let secondTrack = LocalTrack(id: "second.wav", title: "Second", artist: "Artist", album: "Second album",
+            albumArtist: "Artist", trackNumber: 1, duration: 10, artworkData: nil, addedDate: .distantPast)
+        try JSONEncoder().encode([firstTrack]).write(to: firstStore.appendingPathComponent("tracks.json"))
+        try JSONEncoder().encode([secondTrack]).write(to: secondStore.appendingPathComponent("tracks.json"))
+        let suite = "IndependentRuntimeTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let firstSongs = SongLibrary(songs: [], defaults: defaults)
+        let secondSongs = SongLibrary(songs: [], defaults: defaults)
+        let firstPlayer = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false)
+        let secondPlayer = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false)
+        defer { firstPlayer.shutdownPlayback(); secondPlayer.shutdownPlayback() }
+        var firstPublications: [[String]] = [], secondPublications: [[String]] = []
+        let first = LocalLibraryRuntime(documents: firstDocuments, store: firstStore,
+            songLibrary: firstSongs, playlistLibrary: PlaylistLibrary(playlists: []), player: firstPlayer,
+            favoriteAlbums: LibrarySelectionSet(ids: []), pinnedAlbums: LibrarySelectionSet(ids: []),
+            deletedAlbums: LibrarySelectionSet(ids: []), defaults: defaults,
+            onLocalSongsApplied: { firstPublications.append($0.map(\.id)) })
+        let second = LocalLibraryRuntime(documents: secondDocuments, store: secondStore,
+            songLibrary: secondSongs, playlistLibrary: PlaylistLibrary(playlists: []), player: secondPlayer,
+            favoriteAlbums: LibrarySelectionSet(ids: []), pinnedAlbums: LibrarySelectionSet(ids: []),
+            deletedAlbums: LibrarySelectionSet(ids: []), defaults: defaults,
+            onLocalSongsApplied: { secondPublications.append($0.map(\.id)) })
+        let appSongs = LocalLibrary.songLibrary.songs
+        await first.restoreCachedState()
+        XCTAssertEqual(firstSongs.songs.map(\.id), [firstTrack.id])
+        XCTAssertTrue(secondSongs.songs.isEmpty)
+        XCTAssertEqual(firstPublications, [[firstTrack.id]])
+        XCTAssertTrue(secondPublications.isEmpty)
+        await second.restoreCachedState()
+        XCTAssertEqual(first.localSongs.map(\.id), [firstTrack.id])
+        XCTAssertEqual(second.localSongs.map(\.id), [secondTrack.id])
+        XCTAssertEqual(firstPublications, [[firstTrack.id]])
+        XCTAssertEqual(secondPublications, [[secondTrack.id]])
+        XCTAssertEqual(LocalLibrary.songLibrary.songs, appSongs)
+    }
+
+    func testIndependentRuntimeAlbumSelectionsAndHiddenFlagsStayIsolated() throws {
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let firstSuite = "IndependentSelections.first.\(UUID().uuidString)"
+        let secondSuite = "IndependentSelections.second.\(UUID().uuidString)"
+        let firstDefaults = try XCTUnwrap(UserDefaults(suiteName: firstSuite))
+        let secondDefaults = try XCTUnwrap(UserDefaults(suiteName: secondSuite))
+        defer {
+            firstDefaults.removePersistentDomain(forName: firstSuite)
+            secondDefaults.removePersistentDomain(forName: secondSuite)
+        }
+        let oldTrack = LocalTrack(id: "shared/song.wav", title: "Song", artist: "Artist", album: "Album",
+            albumArtist: "Artist", trackNumber: 1, duration: 10, artworkData: nil, addedDate: .distantPast)
+        var newTrack = oldTrack
+        newTrack.albumDirectory = "shared"
+        let oldID = "Artist\u{001F}Album", newID = "folder:shared"
+        let firstFavorites = LibrarySelectionSet(ids: [oldID]), firstPins = LibrarySelectionSet(ids: [oldID])
+        let firstDeleted = LibrarySelectionSet(ids: [oldID])
+        let secondFavorites = LibrarySelectionSet(ids: [oldID]), secondPins = LibrarySelectionSet(ids: [oldID])
+        let secondDeleted = LibrarySelectionSet(ids: [])
+        let firstPlayer = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false)
+        let secondPlayer = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false)
+        defer { firstPlayer.shutdownPlayback(); secondPlayer.shutdownPlayback() }
+        let song = LibrarySongItem(id: oldTrack.id, title: "Song", artist: "Artist", album: "Album",
+            albumArtist: "Artist", trackNumber: 1, artwork: .missing)
+        let first = LocalLibraryRuntime(documents: root.appendingPathComponent("first"),
+            songLibrary: SongLibrary(songs: [song], defaults: firstDefaults),
+            playlistLibrary: PlaylistLibrary(playlists: []), player: firstPlayer,
+            favoriteAlbums: firstFavorites, pinnedAlbums: firstPins, deletedAlbums: firstDeleted,
+            defaults: firstDefaults, onLocalSongsApplied: { _ in })
+        let second = LocalLibraryRuntime(documents: root.appendingPathComponent("second"),
+            songLibrary: SongLibrary(songs: [song], defaults: secondDefaults),
+            playlistLibrary: PlaylistLibrary(playlists: []), player: secondPlayer,
+            favoriteAlbums: secondFavorites, pinnedAlbums: secondPins, deletedAlbums: secondDeleted,
+            defaults: secondDefaults, onLocalSongsApplied: { _ in })
+        XCTAssertTrue(first.localSongs.isEmpty)
+        XCTAssertEqual(second.localSongs.map(\.id), [song.id])
+        first.migrateAlbumSelections(from: [oldTrack], to: [newTrack])
+        XCTAssertTrue(firstFavorites.ids.contains(newID))
+        XCTAssertTrue(firstPins.ids.contains(newID))
+        XCTAssertFalse(secondFavorites.ids.contains(newID))
+        XCTAssertFalse(secondPins.ids.contains(newID))
+        XCTAssertTrue(secondDeleted.ids.isEmpty)
+        XCTAssertEqual(firstDefaults.stringArray(forKey: "hiddenSongs"), [oldTrack.id])
+        XCTAssertNil(secondDefaults.object(forKey: "hiddenSongs"))
+        second.migrateAlbumSelections(from: [oldTrack], to: [newTrack])
+        XCTAssertTrue(secondFavorites.ids.contains(newID))
+        XCTAssertTrue(secondPins.ids.contains(newID))
+        XCTAssertNil(secondDefaults.object(forKey: "hiddenSongs"))
+    }
+
     func testUnreadablePlaybackDoesNotPublishOrOverwriteAndCanRestoreOnRetry() async throws {
         let documents = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let previous = LocalLibrary.songLibrary.songs
@@ -116,8 +215,16 @@ final class LocalLibraryRuntimeTests: XCTestCase {
         let url = store.appendingPathComponent("playback.json")
         let unreadable = Data("incomplete snapshot".utf8)
         try unreadable.write(to: url)
-        let runtime = LocalLibraryRuntime(documents: documents, store: store,
-            playlistLibrary: PlaylistLibrary(playlists: []), player: player)
+        let runtime = LocalLibraryRuntime(
+            documents: documents,
+            store: store,
+            songLibrary: LocalLibrary.songLibrary,
+            playlistLibrary: PlaylistLibrary(playlists: []),
+            player: player,
+            favoriteAlbums: LocalLibrary.favoriteAlbums,
+            pinnedAlbums: LocalLibrary.pinnedAlbums,
+            deletedAlbums: LocalLibrary.deletedAlbums,
+            onLocalSongsApplied: { LocalLibrary.downloads.setLocalSongs($0) })
         await runtime.restoreCachedState()
         XCTAssertFalse(runtime.hasRestoredPlayback)
         runtime.completeInitialPlaybackRestoration(ownerID: "42", songs: [])
@@ -158,8 +265,16 @@ final class LocalLibraryRuntimeTests: XCTestCase {
         let url = store.appendingPathComponent("playback.json")
         let broken = Data("unreadable queue".utf8)
         try broken.write(to: url)
-        let runtime = LocalLibraryRuntime(documents: documents, store: store,
-            playlistLibrary: PlaylistLibrary(playlists: []), player: player)
+        let runtime = LocalLibraryRuntime(
+            documents: documents,
+            store: store,
+            songLibrary: LocalLibrary.songLibrary,
+            playlistLibrary: PlaylistLibrary(playlists: []),
+            player: player,
+            favoriteAlbums: LocalLibrary.favoriteAlbums,
+            pinnedAlbums: LocalLibrary.pinnedAlbums,
+            deletedAlbums: LocalLibrary.deletedAlbums,
+            onLocalSongsApplied: { LocalLibrary.downloads.setLocalSongs($0) })
         await runtime.restoreCachedState()
         player.saveQueueForBackground()
         await player.flushQueuePersistence()
@@ -202,8 +317,16 @@ final class LocalLibraryRuntimeTests: XCTestCase {
         try JSONEncoder().encode([cached]).write(to: store.appendingPathComponent("tracks.json"))
         let saved = NowPlayingModel.SavedQueue(ids: [cached.id], index: 0, elapsed: 0, repeatMode: .off, shuffled: false)
         try JSONEncoder().encode(saved).write(to: store.appendingPathComponent("playback.json"))
-        let runtime = LocalLibraryRuntime(documents: documents, store: store,
-                                          playlistLibrary: PlaylistLibrary(playlists: []), player: player)
+        let runtime = LocalLibraryRuntime(
+            documents: documents,
+            store: store,
+            songLibrary: LocalLibrary.songLibrary,
+            playlistLibrary: PlaylistLibrary(playlists: []),
+            player: player,
+            favoriteAlbums: LocalLibrary.favoriteAlbums,
+            pinnedAlbums: LocalLibrary.pinnedAlbums,
+            deletedAlbums: LocalLibrary.deletedAlbums,
+            onLocalSongsApplied: { LocalLibrary.downloads.setLocalSongs($0) })
         await runtime.restoreCachedState()
         XCTAssertEqual(LocalLibrary.songs.map(\.id), [cached.id])
         XCTAssertEqual(player.queue.map(\.title), [cached.title])
@@ -236,11 +359,22 @@ final class LocalLibraryRuntimeTests: XCTestCase {
         let original = PlaylistLibrary(playlists: [])
         original.configurePersistence(url: store.appendingPathComponent("playlists.json"), songs: [song])
         let playlistID = try XCTUnwrap(original.createPlaylist(named: "Saved", artwork: .playlist, in: nil)).id
+        await original.flushPersistence()
         XCTAssertEqual(original.addSongs([song], to: playlistID), 1)
+        await original.flushPersistence()
         let saved = NowPlayingModel.SavedQueue(ids: [song.id], index: 0, elapsed: 4, repeatMode: .all, shuffled: false)
         try JSONEncoder().encode(saved).write(to: store.appendingPathComponent("playback.json"))
         let restored = PlaylistLibrary(playlists: [])
-        let runtime = LocalLibraryRuntime(documents: documents, store: store, playlistLibrary: restored, player: player)
+        let runtime = LocalLibraryRuntime(
+            documents: documents,
+            store: store,
+            songLibrary: LocalLibrary.songLibrary,
+            playlistLibrary: restored,
+            player: player,
+            favoriteAlbums: LocalLibrary.favoriteAlbums,
+            pinnedAlbums: LocalLibrary.pinnedAlbums,
+            deletedAlbums: LocalLibrary.deletedAlbums,
+            onLocalSongsApplied: { LocalLibrary.downloads.setLocalSongs($0) })
 
         await runtime.restoreCachedState()
         XCTAssertEqual(player.unavailableIDs, [song.id])
@@ -302,11 +436,22 @@ final class LocalLibraryRuntimeTests: XCTestCase {
         let original = PlaylistLibrary(playlists: [])
         original.configurePersistence(url: store.appendingPathComponent("playlists.json"), songs: [song])
         let playlistID = try XCTUnwrap(original.createPlaylist(named: "Saved", artwork: .playlist, in: nil)).id
+        await original.flushPersistence()
         _ = original.addSongs([song], to: playlistID)
+        await original.flushPersistence()
         let queue = NowPlayingModel.SavedQueue(ids: [song.id], index: 0, elapsed: 0, repeatMode: .off, shuffled: false)
         try JSONEncoder().encode(queue).write(to: store.appendingPathComponent("playback.json"))
         let restored = PlaylistLibrary(playlists: [])
-        let runtime = LocalLibraryRuntime(documents: documents, store: store, playlistLibrary: restored, player: player)
+        let runtime = LocalLibraryRuntime(
+            documents: documents,
+            store: store,
+            songLibrary: LocalLibrary.songLibrary,
+            playlistLibrary: restored,
+            player: player,
+            favoriteAlbums: LocalLibrary.favoriteAlbums,
+            pinnedAlbums: LocalLibrary.pinnedAlbums,
+            deletedAlbums: LocalLibrary.deletedAlbums,
+            onLocalSongsApplied: { LocalLibrary.downloads.setLocalSongs($0) })
 
         // Missing metadata retains saved identities while the background scan resolves them.
         let snapshotAtReady = Mutex<[[String]]?>(nil)
@@ -348,13 +493,24 @@ final class LocalLibraryRuntimeTests: XCTestCase {
         let original = PlaylistLibrary(playlists: [])
         original.configurePersistence(url: playlistURL, songs: [song])
         let id = try XCTUnwrap(original.createPlaylist(named: "Saved", artwork: .playlist, in: nil)).id
+        await original.flushPersistence()
         original.addSongs([song], to: id)
+        await original.flushPersistence()
         let playlistData = try Data(contentsOf: playlistURL)
         let playbackData = try JSONEncoder().encode(NowPlayingModel.SavedQueue(
             ids: [song.id], index: 0, elapsed: 0, repeatMode: .off, shuffled: false))
         try playbackData.write(to: playbackURL)
         let restored = PlaylistLibrary(playlists: [])
-        let runtime = LocalLibraryRuntime(documents: documents, store: store, playlistLibrary: restored, player: player)
+        let runtime = LocalLibraryRuntime(
+            documents: documents,
+            store: store,
+            songLibrary: LocalLibrary.songLibrary,
+            playlistLibrary: restored,
+            player: player,
+            favoriteAlbums: LocalLibrary.favoriteAlbums,
+            pinnedAlbums: LocalLibrary.pinnedAlbums,
+            deletedAlbums: LocalLibrary.deletedAlbums,
+            onLocalSongsApplied: { LocalLibrary.downloads.setLocalSongs($0) })
         let snapshot = Mutex<[[String]]?>(nil)
         _ = withObservationTracking { runtime.isInitialLibraryReady } onChange: {
             MainActor.assumeIsolated {
@@ -400,8 +556,16 @@ final class LocalLibraryRuntimeTests: XCTestCase {
         let cacheData = try JSONEncoder().encode([cached])
         try cacheData.write(to: cacheURL)
         try writeWave(root.appendingPathComponent("new.wav"))
-        let runtime = LocalLibraryRuntime(documents: documents, store: store,
-                                          playlistLibrary: PlaylistLibrary(playlists: []), player: player)
+        let runtime = LocalLibraryRuntime(
+            documents: documents,
+            store: store,
+            songLibrary: LocalLibrary.songLibrary,
+            playlistLibrary: PlaylistLibrary(playlists: []),
+            player: player,
+            favoriteAlbums: LocalLibrary.favoriteAlbums,
+            pinnedAlbums: LocalLibrary.pinnedAlbums,
+            deletedAlbums: LocalLibrary.deletedAlbums,
+            onLocalSongsApplied: { LocalLibrary.downloads.setLocalSongs($0) })
         _ = withObservationTracking { runtime.isInitialLibraryReady } onChange: {
             withUnsafeCurrentTask { $0?.cancel() }
         }
@@ -491,7 +655,16 @@ final class LocalLibraryRuntimeTests: XCTestCase {
         try playbackData.write(to: playbackURL)
         let restored = PlaylistLibrary(playlists: [])
         let player = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false)
-        let runtime = LocalLibraryRuntime(documents: documents, store: store, playlistLibrary: restored, player: player)
+        let runtime = LocalLibraryRuntime(
+            documents: documents,
+            store: store,
+            songLibrary: LocalLibrary.songLibrary,
+            playlistLibrary: restored,
+            player: player,
+            favoriteAlbums: LocalLibrary.favoriteAlbums,
+            pinnedAlbums: LocalLibrary.pinnedAlbums,
+            deletedAlbums: LocalLibrary.deletedAlbums,
+            onLocalSongsApplied: { LocalLibrary.downloads.setLocalSongs($0) })
         await runtime.refresh()
 
         XCTAssertTrue(runtime.isInitialLibraryReady)
@@ -522,7 +695,16 @@ final class LocalLibraryRuntimeTests: XCTestCase {
         try cacheData.write(to: cacheURL)
         let restored = PlaylistLibrary(playlists: [])
         let player = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false)
-        let runtime = LocalLibraryRuntime(documents: documents, store: store, playlistLibrary: restored, player: player)
+        let runtime = LocalLibraryRuntime(
+            documents: documents,
+            store: store,
+            songLibrary: LocalLibrary.songLibrary,
+            playlistLibrary: restored,
+            player: player,
+            favoriteAlbums: LocalLibrary.favoriteAlbums,
+            pinnedAlbums: LocalLibrary.pinnedAlbums,
+            deletedAlbums: LocalLibrary.deletedAlbums,
+            onLocalSongsApplied: { LocalLibrary.downloads.setLocalSongs($0) })
         let cancelled = Task { @MainActor in
             withUnsafeCurrentTask { $0?.cancel() }
             await runtime.refresh()
@@ -574,7 +756,14 @@ final class LocalLibraryRuntimeTests: XCTestCase {
             }
             UserDefaults.standard.set(previousHidden, forKey: "hiddenSongs")
         }
-        LocalLibraryRuntime().migrateAlbumSelections(from: [old], to: [new])
+        LocalLibraryRuntime(
+            songLibrary: LocalLibrary.songLibrary,
+            playlistLibrary: LocalLibrary.playlistLibrary,
+            player: LocalLibrary.player,
+            favoriteAlbums: LocalLibrary.favoriteAlbums,
+            pinnedAlbums: LocalLibrary.pinnedAlbums,
+            deletedAlbums: LocalLibrary.deletedAlbums,
+            onLocalSongsApplied: { LocalLibrary.downloads.setLocalSongs($0) }).migrateAlbumSelections(from: [old], to: [new])
         XCTAssertTrue(LocalLibrary.favoriteAlbums.ids.contains(newID))
         XCTAssertTrue(LocalLibrary.pinnedAlbums.ids.contains(newID))
         XCTAssertFalse(LocalLibrary.deletedAlbums.ids.contains(newID))
@@ -596,7 +785,16 @@ final class LocalLibraryRuntimeTests: XCTestCase {
         let cache = store.appendingPathComponent("tracks.json")
         try JSONEncoder().encode([track]).write(to: cache)
         try Data("invalid audio".utf8).write(to: root.appendingPathComponent(track.id))
-        let runtime = LocalLibraryRuntime(documents: documents, store: store)
+        let runtime = LocalLibraryRuntime(
+            documents: documents,
+            store: store,
+            songLibrary: LocalLibrary.songLibrary,
+            playlistLibrary: LocalLibrary.playlistLibrary,
+            player: LocalLibrary.player,
+            favoriteAlbums: LocalLibrary.favoriteAlbums,
+            pinnedAlbums: LocalLibrary.pinnedAlbums,
+            deletedAlbums: LocalLibrary.deletedAlbums,
+            onLocalSongsApplied: { LocalLibrary.downloads.setLocalSongs($0) })
         await runtime.refresh()
         XCTAssertEqual(LocalLibrary.songs.map(\.id), [track.id])
         let song = try XCTUnwrap(LocalLibrary.songs.first)
@@ -628,7 +826,15 @@ final class LocalLibraryRuntimeTests: XCTestCase {
         let documents = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try Data().write(to: documents)
         defer { try? FileManager.default.removeItem(at: documents) }
-        let runtime = LocalLibraryRuntime(documents: documents)
+        let runtime = LocalLibraryRuntime(
+            documents: documents,
+            songLibrary: LocalLibrary.songLibrary,
+            playlistLibrary: LocalLibrary.playlistLibrary,
+            player: LocalLibrary.player,
+            favoriteAlbums: LocalLibrary.favoriteAlbums,
+            pinnedAlbums: LocalLibrary.pinnedAlbums,
+            deletedAlbums: LocalLibrary.deletedAlbums,
+            onLocalSongsApplied: { LocalLibrary.downloads.setLocalSongs($0) })
         await runtime.refresh()
         XCTAssertTrue(runtime.isInitialLibraryReady)
         XCTAssertNotNil(runtime.status)
@@ -646,12 +852,23 @@ final class LocalLibraryRuntimeTests: XCTestCase {
             let original = PlaylistLibrary(playlists: [])
             original.configurePersistence(url: playlistURL, songs: [song])
             let playlist = try XCTUnwrap(original.createPlaylist(named: "saved", artwork: .playlist, in: nil))
+            await original.flushPersistence()
             _ = original.addSongs([song], to: playlist.id)
+            await original.flushPersistence()
             let before = try Data(contentsOf: playlistURL)
             if corrupt { try Data("bad cache".utf8).write(to: store.appendingPathComponent("tracks.json")) }
             let restored = PlaylistLibrary(playlists: [])
             let player = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false)
-            let runtime = LocalLibraryRuntime(documents: documents, store: store, playlistLibrary: restored, player: player)
+            let runtime = LocalLibraryRuntime(
+                documents: documents,
+                store: store,
+                songLibrary: LocalLibrary.songLibrary,
+                playlistLibrary: restored,
+                player: player,
+                favoriteAlbums: LocalLibrary.favoriteAlbums,
+                pinnedAlbums: LocalLibrary.pinnedAlbums,
+                deletedAlbums: LocalLibrary.deletedAlbums,
+                onLocalSongsApplied: { LocalLibrary.downloads.setLocalSongs($0) })
             XCTAssertFalse(runtime.isInitialLibraryReady)
             // An aborted scan must not resolve identities against an empty library or touch the store.
             let cancelled = Task { @MainActor in

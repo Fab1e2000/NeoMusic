@@ -3,8 +3,10 @@ import SwiftUI
 
 /// Isolated layout approval fixture; only the supplied quick-action covers are real service artwork.
 struct HomeFeedPreview: View {
+    private let feedbackOverride: String?
     @State private var selected: String?
     @State private var heroScrollID: HomeQuickAction?
+    @ScaledMetric(relativeTo: .title3) private var headingSize: CGFloat = 20
     private let titles = ["推荐歌单", "你的雷达歌单", "排行榜", "你关注的艺人新动向", "场景歌单", "新歌速递"]
     private let cards = [
         ["夜晚散步", "在路上的那些天", "今天的好心情"],
@@ -14,8 +16,11 @@ struct HomeFeedPreview: View {
         ["悠闲时光", "游戏时间", "夜色温柔"],
         ["NEW ROMANCER", "我的流动", "いつか分かる"]
     ]
-    init() {
-        _heroScrollID = State(initialValue: Self.argument("-homeQuickActionPreviewAction").flatMap(HomeQuickAction.init(rawValue:)))
+    init(feedbackMode: String? = nil) {
+        feedbackOverride = feedbackMode
+        let requestedAction = Self.argument("-homeQuickActionPreviewAction").flatMap(HomeQuickAction.init(rawValue:))
+        let waiting = (feedbackMode ?? Self.argument("-homeFeedbackPreview")) == "waiting"
+        _heroScrollID = State(initialValue: requestedAction ?? (waiting ? .heartMode : nil))
     }
     private static func argument(_ key: String) -> String? {
         let arguments = ProcessInfo.processInfo.arguments
@@ -27,6 +32,7 @@ struct HomeFeedPreview: View {
         guard let index = arguments.firstIndex(of: "-homeFeedPreviewSection"), arguments.indices.contains(index + 1) else { return nil }
         return Int(arguments[index + 1].replacingOccurrences(of: "section-", with: ""))
     }
+    private var feedbackMode: String? { feedbackOverride ?? Self.argument("-homeFeedbackPreview") }
     var body: some View {
         NavigationStack {
             Group {
@@ -34,11 +40,17 @@ struct HomeFeedPreview: View {
                     LazyVStack(alignment: .leading, spacing: HomeMetrics.sectionSpacing) {
                         if previewStart == nil {
                             heroShelf.id("top")
+                        }
+                        if feedbackMode == "errors" {
+                            HomeFeedIssueRow(issue: .init(id: "feed", title: "推荐内容", message: "部分推荐内容暂时未能更新。", sectionID: nil)) { selected = "重新载入推荐内容" }
+                                .padding(.horizontal, HomeMetrics.margin)
+                        }
+                        if previewStart == nil {
                             songs("根据你喜欢的歌曲推荐", seed: 0)
                             songs("根据「Hortus Regis Alti」推荐", seed: 3)
                         }
                         ForEach(titles.indices.filter { $0 >= (previewStart ?? 0) }, id: \.self) { index in
-                            shelf(titles[index]) {
+                            shelf(titles[index], showsContent: feedbackMode != "errors" || index != 3, issue: previewIssue(index)) {
                                 ForEach(cards[index].indices, id: \.self) { item in
                                     square(cards[index][item], subtitle: index == 3 ? ["RIM", "46", "晴空乐队"][item] : "", image: index * 3 + item)
                                 }
@@ -49,7 +61,7 @@ struct HomeFeedPreview: View {
                 }
 
             }
-            .background(.white)
+            .background(Color(.systemBackground))
             .navigationTitle("主页")
             .toolbarTitleDisplayMode(.inlineLarge)
             .toolbar { AccountToolbar() }
@@ -63,7 +75,6 @@ struct HomeFeedPreview: View {
                 Button("好", role: .cancel) { selected = nil }
             } message: { Text(selected ?? "") }
         }
-        .environment(\.colorScheme, .light)
     }
     private func image(_ index: Int) -> some View {
         Image(String(format: "AlbumSample%02d", index % 20 + 1)).resizable().scaledToFill()
@@ -99,8 +110,10 @@ struct HomeFeedPreview: View {
         return .file(URL(fileURLWithPath: directory, isDirectory: true).appendingPathComponent("\(name).jpg"))
     }
     private func previewState(for action: HomeQuickAction) -> HomeQuickActionState {
+        if feedbackMode == "waiting", [.dailySongs, .heartMode].contains(action) { return .loading }
         let target = Self.argument("-homeQuickActionPreviewAction").flatMap(HomeQuickAction.init(rawValue:)) ?? .dailySongs
         guard action == target else { return .idle }
+        if feedbackMode == "waiting" { return .loading }
         switch Self.argument("-homeQuickActionPreviewState") {
         case "loading": return .loading
         case "failed": return .failed("连接暂时中断，请重试。")
@@ -108,17 +121,30 @@ struct HomeFeedPreview: View {
         default: return .idle
         }
     }
-    private func shelf<Content: View>(_ title: String, snapping: Bool = false, @ViewBuilder content: () -> Content) -> some View {
+    private func previewIssue(_ index: Int) -> HomeFeedIssue? {
+        guard feedbackMode == "errors", [0, 3].contains(index) else { return nil }
+        return .init(id: "section-\(index)", title: titles[index],
+                     message: index == 0 ? "暂时未能更新，仍显示上次的推荐歌单。" : "艺人新动向载入失败，请重试。", sectionID: "section-\(index)")
+    }
+    private func shelf<Content: View>(_ title: String, snapping: Bool = false, showsContent: Bool = true,
+                                      issue: HomeFeedIssue? = nil, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: HomeMetrics.headingSpacing) {
-            Text(title).font(.system(size: 20, weight: .bold)).padding(.horizontal, HomeMetrics.margin)
+            Text(title).font(.system(size: headingSize, weight: .bold)).padding(.horizontal, HomeMetrics.margin)
+                .accessibilityAddTraits(.isHeader)
             let shelf = ScrollView(.horizontal) {
                 LazyHStack(alignment: .top, spacing: HomeMetrics.cardSpacing, content: content).scrollTargetLayout()
             }
             .contentMargins(.horizontal, HomeMetrics.margin, for: .scrollContent)
             .scrollIndicators(.hidden)
             .scrollClipDisabled()
-            if snapping { shelf.scrollTargetBehavior(.viewAligned) }
-            else { shelf }
+            if showsContent {
+                if snapping { shelf.scrollTargetBehavior(.viewAligned) }
+                else { shelf }
+            }
+            if let issue {
+                HomeFeedIssueRow(issue: issue) { selected = "重新载入\(issue.title)" }
+                    .padding(.horizontal, HomeMetrics.margin)
+            }
         }
     }
     private func square(_ title: String, subtitle: String, image index: Int) -> some View {

@@ -34,6 +34,7 @@ struct CollectionDetailView: View {
     @Environment(\.closeLibraryDetail) private var closeLibraryDetail
     @Environment(\.libraryNavigationChrome) private var navigationChrome
     @Environment(\.libraryNavigationPreview) private var navigationPreview
+    @Environment(\.dynamicTypeSize) private var textSize
     @State private var query = ""
     @State private var isConfirmingAlbumDeletion = false
 
@@ -108,7 +109,7 @@ struct CollectionDetailView: View {
                 CollectionActions(detail: detail, albumBackground: detail.albumBackdrop?.color)
                     .padding(.top, 13.5 + 4.0 / 3).padding(.bottom, 23 + 2.0 / 3)
             }.frame(maxWidth: .infinity)),
-            footer: AnyView(Text(summary).font(.subheadline).foregroundStyle(.secondary)
+            footer: AnyView(Text(summary).font(.subheadline).foregroundStyle(.primary)
                 .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 20).padding(.top, 20).padding(.bottom, 32)),
             pageColor: UIColor(pageBackground), scheme: albumColorScheme ?? colorScheme)
             // Let the actual scrolling content continue beneath the system bars.
@@ -168,7 +169,8 @@ struct CollectionDetailView: View {
     private var header: some View {
         VStack(spacing: 0) {
             headerArtwork
-                .frame(width: 266, height: 266)
+                .frame(width: textSize.isAccessibilitySize && !isFavorites ? 180 : 266,
+                       height: textSize.isAccessibilitySize && !isFavorites ? 180 : 266)
                 .padding(.top, 13)
                 .padding(.bottom, 23)
             if !isFavorites {
@@ -192,11 +194,11 @@ struct CollectionDetailView: View {
                 // 实测 Apple Music：年份约 11pt 粗体。
                 Text(caption)
                     .font(.caption2.weight(.bold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(detail.kind == .album ? .primary : .secondary)
                     .padding(.top, 5 - 2.0 / 3)
             }
         }
-        .lineLimit(2)
+        .lineLimit(textSize.isAccessibilitySize ? nil : 2)
         .padding(.horizontal, 20)
     }
 
@@ -313,6 +315,7 @@ private struct CollectionActions: View {
     let albumBackground: Color?
     @Environment(\.collectionMenuActions) private var actions
     @Environment(\.libraryDownloads) private var downloads
+    @Environment(\.dynamicTypeSize) private var textSize
     @State private var actionFeedback = 0
 
     private var canPlay: Bool { detail.route != nil && !detail.songs.isEmpty }
@@ -336,7 +339,9 @@ private struct CollectionActions: View {
                 }
                 .font(.headline)
                 .foregroundStyle(albumBackground ?? Color(.systemBackground))
-                .frame(width: 160, height: 48)
+                .padding(.vertical, textSize.isAccessibilitySize ? 10 : 0)
+                .frame(width: 160)
+                .frame(minHeight: 48)
                 .background(Color.primary, in: .capsule)
             }
             .buttonStyle(.plain)
@@ -442,6 +447,7 @@ struct DownloadProgressRing: View {
 private struct PlaylistTrackRow: View {
     let song: LibrarySongItem
     let play: () -> Void
+    @Environment(\.dynamicTypeSize) private var textSize
 
     var body: some View {
         HStack(spacing: 12) {
@@ -455,7 +461,7 @@ private struct PlaylistTrackRow: View {
                         Text(song.unavailabilityReason ?? song.artist)
                             .font(.footnote).foregroundStyle(.secondary)
                     }
-                    .lineLimit(1)
+                    .lineLimit(textSize.isAccessibilitySize ? nil : 1)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .contentShape(.rect)
@@ -852,10 +858,12 @@ private final class AlbumSongsController: UICollectionViewController {
 private struct NativeAlbumRowContent: View {
     let song: LibrarySongItem
     @Environment(\.libraryDownloads) private var downloads
+    @Environment(\.dynamicTypeSize) private var textSize
     var body: some View {
         HStack(spacing: 9) {
-            AlbumSongPosition(song: song)
-            Text(song.title).font(.callout).foregroundStyle(.primary).lineLimit(1)
+            AlbumSongPosition(song: song, foreground: .primary)
+            Text(song.title).font(.callout).foregroundStyle(.primary)
+                .lineLimit(textSize.isAccessibilitySize ? nil : 1)
                 .frame(maxWidth: .infinity, alignment: .leading)
             SongDownloadStatus(song: song)
         }
@@ -863,7 +871,7 @@ private struct NativeAlbumRowContent: View {
     }
 }
 
-private final class AlbumSelectionCell: UICollectionViewListCell {
+final class AlbumSelectionCell: UICollectionViewListCell {
     let more = UIButton(type: .system)
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -871,7 +879,7 @@ private final class AlbumSelectionCell: UICollectionViewListCell {
         automaticallyUpdatesBackgroundConfiguration = false
         more.frame = CGRect(x: 0, y: 0, width: 30, height: 44)
         more.setImage(UIImage(systemName: "ellipsis", withConfiguration: UIImage.SymbolConfiguration(pointSize: 16, weight: .semibold)), for: .normal)
-        more.tintColor = .secondaryLabel
+        more.tintColor = .label
         more.showsMenuAsPrimaryAction = true
         more.accessibilityLabel = "更多"
         accessories = [.customView(configuration: .init(customView: more, placement: .trailing(),
@@ -889,7 +897,8 @@ private final class AlbumSelectionCell: UICollectionViewListCell {
         if state.isSwiped {
             background.backgroundColor = overlay.withAlphaComponent(0.06)
         } else if state.isSelected {
-            background.backgroundColor = overlay.withAlphaComponent(isDark ? 0.10 : 0.06)
+            let selectionOverlay: UIColor = isDark ? .black : .white
+            background.backgroundColor = selectionOverlay.withAlphaComponent(isDark ? 0.10 : 0.06)
         } else {
             background.backgroundColor = .clear
         }

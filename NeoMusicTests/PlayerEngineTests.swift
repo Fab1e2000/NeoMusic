@@ -2,6 +2,25 @@ import AVFoundation
 import XCTest
 @testable import NeoMusic
 
+actor SessionActivation {
+    enum RequestError: Error { case missingRequest }
+    private var requests: [CheckedContinuation<Bool, Error>?] = []
+    var count: Int { requests.count }
+
+    func activate(started: @Sendable () -> Void = {}) async throws -> Bool {
+        try await withCheckedThrowingContinuation {
+            requests.append($0)
+            started()
+        }
+    }
+
+    func complete(_ index: Int = 0, with result: Result<Bool, Error> = .success(true)) throws {
+        guard requests.indices.contains(index), let request = requests[index] else { throw RequestError.missingRequest }
+        request.resume(with: result)
+        requests[index] = nil
+    }
+}
+
 @MainActor final class PlayerEngineTests: XCTestCase {
     private func audioFile(seconds: Int = 1) throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".wav")
@@ -52,12 +71,13 @@ import XCTest
         XCTAssertFalse(engine.isCrossfading)
         XCTAssertFalse(engine.isPlaying)
     }
-    private func waitUntil(_ predicate: () -> Bool, seconds: Double = 6) async throws {
+    private func waitUntil(_ predicate: @MainActor () async -> Bool, seconds: Double = 6) async throws {
         for _ in 0..<Int(seconds * 50) {
-            if predicate() { return }
+            if await predicate() { return }
             try await Task.sleep(for: .milliseconds(20))
         }
         XCTFail("Timed out waiting for transport state")
+        throw CancellationError()
     }
 
     func testCrossfadePromotesPlayingIncomingOnce() async throws {
@@ -142,7 +162,7 @@ import XCTest
         XCTAssertFalse(engine.isPlaying)
     }
 
-    func testInterruptionResumesOnlyPreservedIntent() throws {
+    func testInterruptionResumesOnlyPreservedIntent() async throws {
         let url = try audioFile(seconds: 4)
         defer { try? FileManager.default.removeItem(at: url) }
         let engine = LocalPlaybackEngine()
@@ -151,6 +171,7 @@ import XCTest
         engine.handleInterruption(began: true)
         XCTAssertFalse(engine.isPlaying)
         engine.handleInterruption(began: false, shouldResume: true)
+        try await waitUntil({ engine.isPlaying })
         XCTAssertTrue(engine.isPlaying)
         engine.handleInterruption(began: true)
         engine.pause()
@@ -162,4 +183,152 @@ import XCTest
         XCTAssertFalse(engine.isPlaying)
     }
 
+    func testSessionActivationPublishesPlayingOnlyAfterSuccessAndSharesPendingRequest() async throws {
+        let url = try audioFile(seconds: 4)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let activation = SessionActivation()
+        let engine = LocalPlaybackEngine(activateSession: { try await activation.activate() })
+        defer { engine.shutdown() }
+        engine.load(url: url, autoplay: true)
+        XCTAssertTrue(engine.isActivating)
+        XCTAssertFalse(engine.isPlaying)
+        engine.play()
+        try await waitUntil({ await activation.count == 1 })
+        try await activation.complete()
+        try await waitUntil({ engine.isPlaying })
+        XCTAssertFalse(engine.isActivating)
+        XCTAssertNil(engine.error)
+        engine.play()
+        let requests = await activation.count
+        XCTAssertEqual(requests, 1)
+    }
+
+    func testFailedAndDeclinedSessionActivationStayPaused() async throws {
+        let url = try audioFile(seconds: 4)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let results: [Result<Bool, Error>] = [.success(false), .failure(URLError(.cannotConnectToHost))]
+        for result in results {
+            let activation = SessionActivation()
+            let engine = LocalPlaybackEngine(activateSession: { try await activation.activate() })
+            defer { engine.shutdown() }
+            engine.load(url: url, autoplay: true)
+            try await waitUntil({ await activation.count == 1 })
+            try await activation.complete(with: result)
+            try await waitUntil({ !engine.isActivating })
+            XCTAssertFalse(engine.isPlaying)
+            XCTAssertNotNil(engine.error)
+        }
+    }
+
+    func testCancelledSessionActivationCannotResumeAfterUserOrSystemStop() async throws {
+        let url = try audioFile(seconds: 4)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let stops: [(String, (LocalPlaybackEngine) -> Void)] = [
+            ("pause", { $0.pause() }),
+            ("stop", { $0.stop() }),
+            ("shutdown", { $0.shutdown() }),
+            ("replacement", { $0.load(url: url) }),
+            ("interruption", { $0.handleInterruption(began: true) }),
+            ("route", { _ in
+                NotificationCenter.default.post(name: AVAudioSession.routeChangeNotification,
+                    object: AVAudioSession.sharedInstance(),
+                    userInfo: [AVAudioSessionRouteChangeReasonKey: AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue])
+            })
+        ]
+        for (name, stop) in stops {
+            let activation = SessionActivation()
+            let engine = LocalPlaybackEngine(activateSession: { try await activation.activate() })
+            defer { engine.shutdown() }
+            engine.load(url: url, autoplay: true)
+            try await waitUntil({ await activation.count == 1 })
+            let pending = engine.activation
+            stop(engine)
+            XCTAssertFalse(engine.isActivating, name)
+            try await activation.complete()
+            await pending?.value
+            XCTAssertFalse(engine.isPlaying, name)
+            XCTAssertFalse(engine.isActivating, name)
+            XCTAssertNil(engine.error, name)
+        }
+    }
+
+    func testNewPlayRequestSurvivesLateFailureFromPreviousActivation() async throws {
+        let url = try audioFile(seconds: 4)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let activation = SessionActivation()
+        let engine = LocalPlaybackEngine(activateSession: { try await activation.activate() })
+        defer { engine.shutdown() }
+        engine.load(url: url, autoplay: true)
+        try await waitUntil({ await activation.count == 1 })
+        let previous = engine.activation
+        engine.pause()
+        engine.play()
+        try await waitUntil({ await activation.count == 2 })
+        try await activation.complete(1)
+        try await waitUntil({ engine.isPlaying })
+        try await activation.complete(0, with: .failure(URLError(.cancelled)))
+        await previous?.value
+        XCTAssertTrue(engine.isPlaying)
+        XCTAssertFalse(engine.isActivating)
+        XCTAssertNil(engine.error)
+    }
+
+    func testSwitchingTracksDuringActivationUsesOnlyTheNewRequest() async throws {
+        let first = try audioFile(seconds: 4), second = try audioFile(seconds: 6)
+        defer { try? FileManager.default.removeItem(at: first); try? FileManager.default.removeItem(at: second) }
+        let activation = SessionActivation()
+        let engine = LocalPlaybackEngine(activateSession: { try await activation.activate() })
+        defer { engine.shutdown() }
+        engine.load(url: first, autoplay: true)
+        try await waitUntil({ await activation.count == 1 })
+        let previous = engine.activation
+        engine.load(url: second, autoplay: true)
+        try await waitUntil({ await activation.count == 2 })
+        try await activation.complete(0)
+        await previous?.value
+        XCTAssertTrue(engine.isActivating)
+        XCTAssertFalse(engine.isPlaying)
+        try await activation.complete(1)
+        try await waitUntil({ engine.isPlaying && !engine.isLoading && engine.duration > 0 })
+        XCTAssertEqual(engine.duration, 6, accuracy: 0.1)
+    }
+
+    func testPreparedAdvancePreservesPendingPlaybackIntent() async throws {
+        let first = try audioFile(seconds: 4), second = try audioFile(seconds: 6)
+        defer { try? FileManager.default.removeItem(at: first); try? FileManager.default.removeItem(at: second) }
+        let activation = SessionActivation()
+        let engine = LocalPlaybackEngine(activateSession: { try await activation.activate() })
+        defer { engine.shutdown() }
+        var advances = 0
+        engine.onAdvanced = { advances += 1 }
+        engine.load(url: first, nextURL: second, autoplay: true)
+        try await waitUntil({ await activation.count == 1 })
+        XCTAssertTrue(engine.advancePrepared())
+        try await waitUntil({ await activation.count == 2 })
+        try await activation.complete(0)
+        try await activation.complete(1)
+        try await waitUntil({ engine.isPlaying && engine.duration > 0 })
+        XCTAssertEqual(engine.duration, 6, accuracy: 0.1)
+        XCTAssertEqual(advances, 1)
+    }
+
+    func testResourceReplacementPreservesPendingPlaybackIntent() async throws {
+        let first = try audioFile(seconds: 4), second = try audioFile(seconds: 6)
+        defer { try? FileManager.default.removeItem(at: first); try? FileManager.default.removeItem(at: second) }
+        let activation = SessionActivation()
+        let engine = LocalPlaybackEngine(activateSession: { try await activation.activate() })
+        defer { engine.shutdown() }
+        engine.load(url: first, autoplay: true)
+        try await waitUntil({ await activation.count == 1 })
+        let previous = engine.activation
+        try await engine.replaceResource(url: second, shouldResume: { true })
+        try await waitUntil({ await activation.count == 2 })
+        try await activation.complete(1)
+        try await waitUntil({ engine.isPlaying && engine.duration > 0 })
+        try await activation.complete(0, with: .failure(URLError(.cancelled)))
+        await previous?.value
+        XCTAssertTrue(engine.isPlaying)
+        XCTAssertNil(engine.error)
+        XCTAssertEqual(engine.duration, 6, accuracy: 0.1)
+    }
 }

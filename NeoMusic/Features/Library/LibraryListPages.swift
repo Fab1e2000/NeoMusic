@@ -139,10 +139,11 @@ struct SongsListView: View {
         let sections = result.sections
         let ordered = result.ordered
         List {
-            PlayShuffleButtons(play: { playAll(ordered, false) }, shuffle: { playAll(ordered, true) })
-                .disabled(ordered.isEmpty)
-                .listRowInsets(EdgeInsets(top: 10, leading: 20, bottom: 8, trailing: 20))
-                .listRowSeparator(.hidden)
+            if !ordered.isEmpty {
+                PlayShuffleButtons(play: { playAll(ordered, false) }, shuffle: { playAll(ordered, true) })
+                    .listRowInsets(EdgeInsets(top: 10, leading: 20, bottom: 8, trailing: 20))
+                    .listRowSeparator(.hidden)
+            }
             ForEach(sections) { section in
                 // 字母标题作为普通行而非分组标题，滚动时不吸顶，与 Apple Music 一致。
                 Section {
@@ -169,6 +170,11 @@ struct SongsListView: View {
         .listSectionSpacing(0)
         .scrollContentBackground(.hidden)
         .background(Color(.systemBackground))
+        .overlay {
+            if ordered.isEmpty {
+                LibraryListEmptyState(noun: "歌曲", symbol: "music.note", query: $query, filter: $filter)
+            }
+        }
         .libraryNavigationTitle("歌曲")
         .libraryTitleDisplayMode(.large)
         .librarySearchable(text: $query, prompt: "搜索歌曲")
@@ -188,6 +194,7 @@ struct SongRow: View {
     var play: () -> Void = {}
     @Environment(\.songMenuActions) private var actions
     @Environment(\.libraryDownloads) private var downloads
+    @Environment(\.dynamicTypeSize) private var textSize
 
     var body: some View {
         HStack(spacing: 12) {
@@ -201,7 +208,7 @@ struct SongRow: View {
                         Text(song.title).font(.callout)
                         Text(song.artist).font(.footnote).foregroundStyle(.secondary)
                     }
-                    .lineLimit(1)
+                    .lineLimit(textSize.isAccessibilitySize ? nil : 1)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .contentShape(.rect)
@@ -277,7 +284,10 @@ struct AlbumsGridView: View {
     @State private var sort = AlbumSort.artist
     @State private var layout = LibraryLayout.grid
     @State private var projection = LibraryListProjection<ProjectionInput, [LibraryShelfItem]>()
-    private let columns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
+    @Environment(\.dynamicTypeSize) private var textSize
+    private var columns: [GridItem] {
+        Array(repeating: GridItem(.flexible(), spacing: 12), count: textSize.isAccessibilitySize ? 1 : 2)
+    }
 
     private struct ProjectionInput: Equatable {
         let albums: [LibraryShelfItem]
@@ -295,8 +305,9 @@ struct AlbumsGridView: View {
         }
         ScrollView {
             VStack(spacing: 24) {
-                PlayShuffleButtons(play: { playAll(shown.map(\.id), false) }, shuffle: { playAll(shown.map(\.id), true) })
-                    .disabled(shown.isEmpty)
+                if !shown.isEmpty {
+                    PlayShuffleButtons(play: { playAll(shown.map(\.id), false) }, shuffle: { playAll(shown.map(\.id), true) })
+                }
                 switch layout {
                 case .grid:
                     LazyVGrid(columns: columns, alignment: .leading, spacing: 21) {
@@ -317,6 +328,11 @@ struct AlbumsGridView: View {
             .padding(.top, 10)
             .padding(.bottom, 24)
         }
+        .overlay {
+            if shown.isEmpty {
+                LibraryListEmptyState(noun: "专辑", symbol: "square.stack", query: $query, filter: $filter)
+            }
+        }
         .libraryNavigationTitle("专辑")
         .libraryTitleDisplayMode(.large)
         .libraryRootAccountButton()
@@ -335,6 +351,7 @@ struct AlbumsGridView: View {
 struct CollectionListRow: View {
     let item: LibraryShelfItem
     let showsSeparator: Bool
+    @Environment(\.dynamicTypeSize) private var textSize
 
     var body: some View {
         HStack(spacing: 12) {
@@ -347,7 +364,7 @@ struct CollectionListRow: View {
                     Text(subtitle).font(.subheadline).foregroundStyle(.secondary)
                 }
             }
-            .lineLimit(1)
+            .lineLimit(textSize.isAccessibilitySize ? nil : 1)
             .frame(maxWidth: .infinity, alignment: .leading)
             Image(systemName: "chevron.right")
                 .font(.footnote.weight(.semibold))
@@ -365,11 +382,47 @@ struct CollectionListRow: View {
     }
 }
 
+struct LibraryListEmptyState: View {
+    let noun: String
+    let symbol: String
+    @Binding var query: String
+    @Binding var filter: LibraryFilter
+
+    var body: some View {
+        ContentUnavailableView {
+            Label(query.isEmpty ? (filter == .favorites ? "暂无喜爱的\(noun)" : "暂无\(noun)") : "没有找到结果",
+                  systemImage: query.isEmpty ? symbol : "magnifyingglass")
+        } description: {
+            if !query.isEmpty {
+                Text("没有符合“\(query)”的\(noun)。")
+            } else if filter == .favorites {
+                Text("将\(noun)加入喜爱后，会显示在这里。")
+            } else {
+                Text("添加到资料库的\(noun)会显示在这里。")
+            }
+        } actions: {
+            if !query.isEmpty {
+                Button("清除搜索") { query = "" }
+                    .accessibilityIdentifier("library.empty.clear-search")
+            }
+            if filter == .favorites {
+                Button("显示全部") {
+                    query = ""
+                    filter = .all
+                }
+                .accessibilityIdentifier("library.empty.show-all")
+            }
+        }
+        .accessibilityIdentifier("library.empty-state")
+    }
+}
+
 // MARK: - 艺人
 
 struct ArtistsListView: View {
     let artists: [LibraryArtistItem]
     @State private var filter = LibraryFilter.all
+    @Environment(\.dynamicTypeSize) private var textSize
 
     var body: some View {
         List(filter == .favorites ? artists.filter(\.isFavorite) : artists) { artist in
@@ -378,7 +431,7 @@ struct ArtistsListView: View {
                     ArtistAvatar(artwork: artist.artwork)
                         .frame(width: 48, height: 48)
                         .overlay(alignment: .leading) { FavoriteMark(isFavorite: artist.isFavorite, color: .yellow) }
-                    Text(artist.name).font(.callout).lineLimit(1)
+                    Text(artist.name).font(.callout).lineLimit(textSize.isAccessibilitySize ? nil : 1)
                 }
                 .frame(minHeight: 56)
                 .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] + 60 }

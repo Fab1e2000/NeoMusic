@@ -125,6 +125,33 @@ final class NeteaseDownloadTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(store.resource(songID: 12), file)
         XCTAssertEqual(store.states[12], .downloaded)
     }
+    @MainActor func testProfileRefreshKeepsDownloadSessionAndProcessing() async throws {
+        let root = try directory(), job = try stage(root), gate = DownloadProcessingGate()
+        try persist(Saved(jobs: [job]), root: root)
+        let store = store(root, responses: [#"{"code":200}"#]) { source, _, _, staging in
+            await gate.pause()
+            let output = staging.appending(path: "processed.flac")
+            try FileManager.default.copyItem(at: source, to: output)
+            return output
+        }
+        let original = try saved()
+        await store.restore()
+        await store.activate(original)
+        await gate.waitUntilStarted()
+        let revision = store.sessionRevision
+        let refreshed = NeteaseSavedSession(profile: .init(userID: original.profile.userID,
+            nickname: "Updated", avatarURL: URL(string: "https://example.com/new-avatar.jpg")),
+            credential: original.credential)
+
+        await store.activate(refreshed)
+        XCTAssertEqual(store.sessionRevision, revision)
+        XCTAssertEqual(store.states[12], .processing)
+        await gate.open()
+        await store.waitForProcessing()
+        XCTAssertEqual(store.states[12], .downloaded)
+        XCTAssertNotNil(store.resource(songID: 12))
+    }
+
     @MainActor func testDifferentAccountCancelsRestoredTransferWithoutPublishing() async throws {
         let root = try directory(), job = try stage(root)
         try persist(Saved(jobs: [job]), root: root)
@@ -295,6 +322,38 @@ final class NeteaseDownloadTests: XCTestCase, @unchecked Sendable {
         XCTAssertNil(store.resource(songID: 12)); XCTAssertNil(store.states[12])
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appending(path: "Processing/" + job.id.uuidString).path))
     }
+    @MainActor func testRepeatedCredentialSwitchCleansCancelledProcessing() async throws {
+        let root = try directory(), job = try stage(root), gate = DownloadProcessingGate()
+        try persist(Saved(jobs: [job]), root: root)
+        let store = store(root, responses: [#"{"code":200}"#]) { source, _, _, staging in
+            await gate.pause()
+            let output = staging.appending(path: "late.flac")
+            try FileManager.default.copyItem(at: source, to: output)
+            return output
+        }
+        await store.restore()
+        await store.activate(try saved())
+        await gate.waitUntilStarted()
+        let replacement = NeteaseSavedSession(profile: try saved().profile,
+            credential: try .init(musicU: "replacement"))
+        let originalRevision = store.sessionRevision
+        let first = Task { await store.activate(replacement) }
+        while store.sessionRevision == originalRevision { await Task.yield() }
+        let firstRevision = store.sessionRevision
+        let second = Task { await store.activate(replacement) }
+        while store.sessionRevision == firstRevision { await Task.yield() }
+        await gate.open()
+        await first.value
+        await second.value
+        await store.waitForProcessing()
+        XCTAssertEqual(store.userID, replacement.profile.userID)
+        XCTAssertNil(store.states[12])
+        XCTAssertNil(store.resource(songID: 12))
+        let data = try Data(contentsOf: root.appending(path: "index.json"))
+        let snapshot = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual((snapshot["jobs"] as? [Any])?.count, 0)
+    }
+
     @MainActor func testStoppingProcessingRetainsExistingCompletedFiles() async throws {
         let root = try directory(), job = try stage(root), gate = DownloadProcessingGate()
         let path = "网易云/Other [4]/01 Existing [99].flac"

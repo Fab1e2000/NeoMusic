@@ -9,6 +9,7 @@ struct ReferenceNowPlayingView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var accessibilityVoiceOverEnabled
+    @Environment(\.dynamicTypeSize) private var textSize
     @Environment(ReferencePlayerState.self) private var player
     @Environment(ReferenceLibrary.self) private var library
     @Environment(\.scenePhase) private var scenePhase
@@ -24,6 +25,7 @@ struct ReferenceNowPlayingView: View {
     @State private var artworkPageFrame = CGRect.zero
     @State private var preparedLyricsSongID: ReferenceTrack.ID?
     @State private var lyricsModel = NowPlayingLyricsModel()
+    @State private var controlsHeight = NowPlayingBottomControls.overlayHeight
     @State private var importingLyrics = false
     @State private var importTrackID: String?
     @State private var pagePerformanceInterval: PerformanceDiagnostics.Interval?
@@ -62,6 +64,8 @@ struct ReferenceNowPlayingView: View {
                 }
             }
             .environment(\.nowPlayingLayout, layout)
+            .environment(\.nowPlayingControlsOverflow, textSize.isAccessibilitySize
+                         ? max(0, controlsHeight - NowPlayingBottomControls.overlayHeight) : 0)
             .environment(\.nowPlayingBackdropAnchor, backdropAnchor)
             .environment(\.nowPlayingBackdropImage, backdropImage)
             .environment(\.nowPlayingUndimmedBackdropImage, undimmedBackdropImage)
@@ -83,11 +87,6 @@ struct ReferenceNowPlayingView: View {
         .task(id: transitionSettlementTaskID) { await settlePageTransition() }
         .task(id: lyricsEntranceTaskID) { await presentLyricsEntrance() }
         .onChange(of: page) { _, _ in showsLyricsControls = true }
-        .onChange(of: lyricsAvailability, initial: true) { _, availability in
-            if availability != .available, page == .lyrics {
-                pageSelection.wrappedValue = .artwork
-            }
-        }
         .onChange(of: player.currentTrack == nil) { _, empty in if empty { closePlayer() } }
         .onDisappear { finishPageMeasurement() }
         .fileImporter(isPresented: $importingLyrics, allowedContentTypes: [.data, .plainText]) { result in
@@ -119,12 +118,12 @@ struct ReferenceNowPlayingView: View {
     ) -> some View {
         ZStack(alignment: .bottom) {
             portraitPlayerControls(for: song)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { controlsHeight = $0 }
                 .allowsHitTesting(!hidesLyricsControls)
                 .accessibilityHidden(hidesLyricsControls)
 
 
         }
-        .frame(height: NowPlayingBottomControls.overlayHeight)
     }
 
     private func portraitPlayerControls(for song: ReferenceTrack) -> some View {
@@ -142,6 +141,11 @@ struct ReferenceNowPlayingView: View {
 
     private var lyricsAvailability: NowPlayingLyricsModel.Availability {
         lyricsModel.availability(for: player.currentTrack?.id)
+    }
+
+    private var lyricsContent: NowPlayingLyricsContent {
+        NowPlayingLyricsContent(availability: lyricsAvailability,
+                                lyrics: lyricsModel.lyrics, error: lyricsModel.error)
     }
 
     private var pageSelection: Binding<NowPlayingPage> {
@@ -350,7 +354,7 @@ struct ReferenceNowPlayingView: View {
         onInitialFocusPrepared: (() -> Void)? = nil
     ) -> some View {
         NowPlayingLyricsPage(
-            song: song, lyrics: lyricsModel.lyrics, errorMessage: lyricsModel.error,
+            song: song, lyrics: lyricsContent.lyrics, errorMessage: lyricsContent.error,
             isActive: visualsActive && page == .lyrics, isInterfaceHidden: hidesLyricsControls,
             artworkNamespace: pageArtworkNamespace, showsSongHeader: false,
             playerFrame: geometryState.contentFrame,
@@ -558,7 +562,7 @@ struct ReferenceNowPlayingView: View {
     }
 
     private var isLyricsContentPrepared: Bool {
-        (lyricsModel.lyrics?.isEmpty == true || lyricsModel.error != nil)
+        (lyricsContent.lyrics?.isEmpty == true || lyricsContent.error != nil)
             || preparedLyricsSongID == player.currentTrack?.id
     }
 

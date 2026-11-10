@@ -9,9 +9,11 @@ extension EnvironmentValues {
 /// read by its UIView, so display frames never invalidate the list or its rows.
 struct AlbumSongPosition: View {
     let song: LibrarySongItem
+    var foreground: Color? = nil
     @Environment(\.songRowPlayback) private var playback
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ScaledMetric(relativeTo: .callout) private var positionWidth = 22.0
 
     var body: some View {
         Group {
@@ -24,10 +26,10 @@ struct AlbumSongPosition: View {
                 Text("\(song.trackNumber)")
                     .font(.callout)
                     .monospacedDigit()
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(foreground ?? .secondary)
             }
         }
-        .frame(width: 22)
+        .frame(width: positionWidth)
         .overlay(alignment: .leading) { FavoriteMark(isFavorite: song.isFavorite) }
     }
 }

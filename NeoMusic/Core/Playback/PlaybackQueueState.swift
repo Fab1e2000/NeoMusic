@@ -1,5 +1,16 @@
 import Foundation
 
+/// Identifies an account-owned queue that can request further songs.
+struct PlaybackQueueContinuation: Codable, Equatable, Sendable {
+    let id: UUID
+    let ownerID: String
+
+    init(ownerID: String, id: UUID = UUID()) {
+        self.id = id
+        self.ownerID = ownerID
+    }
+}
+
 /// File identities and queue-entry identities are distinct: one file may occur more than once.
 struct PlaybackQueueState: Codable, Equatable {
     enum Mode: String, Codable { case off, all, one }

@@ -37,5 +37,6 @@ jobs:
           path: |
             build/ci/TestResults.xcresult
             build/ci/xcodebuild.log
+            build/ci/source-state.json
           if-no-files-found: warn
           retention-days: 7

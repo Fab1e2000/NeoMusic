@@ -19,7 +19,15 @@ final class LibraryDownloads {
         var isComplete: Bool { totalCount > 0 && completedCount == totalCount && !isResolving }
         var isActive: Bool { activeCount > 0 || isResolving }
         var failureSummary: String? {
-            failedCount > 0 ? "\(completedCount) / \(totalCount) 首已完成 · \(failedCount) 首失败，轻点重试" : nil
+            failedCount > 0 ? "\(completedCount) / \(totalCount) 首已完成 · \(failedCount) 首失败" : nil
+        }
+        var accessibilityValue: String {
+            if isResolving { return "正在读取完整曲目列表" }
+            if isComplete { return "\(totalCount) 首已下载" }
+            var result = "\(completedCount) / \(totalCount) 首已完成"
+            if isActive { result += "，进度 \(Int(min(1, max(0, progress)) * 100))%" }
+            if failedCount > 0 { result += "，\(failedCount) 首失败" }
+            return result
         }
     }
     @MainActor @Observable final class SongStatus { var value: SongState? }
@@ -124,6 +132,7 @@ private struct DownloadRemovalConfirmation: ViewModifier {
 struct CollectionDownloadButton: View {
     let route: LibraryRoute
     let songs: [LibrarySongItem]
+    var compact = false
     @Environment(\.libraryDownloads) private var downloads
     @Environment(\.collectionMenuActions) private var actions
     @State private var feedback = 0
@@ -146,14 +155,17 @@ struct CollectionDownloadButton: View {
                     if summary?.isResolving == true { ProgressView().tint(.primary) }
                     else { DownloadProgressRing(progress: summary?.progress ?? downloads?.progress(of: songs) ?? 0) }
                 } else if completed { DrawnCheckmark(animates: downloadedHere) }
-                else { Image(systemName: failed ? "arrow.clockwise" : "arrow.down").font(.system(size: 17, weight: .semibold)) }
+                else { Image(systemName: failed ? "arrow.clockwise" : "arrow.down").font(.system(size: compact ? 20 : 17, weight: .semibold)) }
             }
-            .frame(width: 48, height: 48)
-            .background(Color.primary.opacity(0.08), in: .circle)
+            .frame(width: compact ? 32 : 48, height: compact ? 32 : 48)
+            .background(Color.primary.opacity(compact ? 0.2 : 0.08), in: .circle)
+            .frame(width: compact ? 44 : 48, height: compact ? 44 : 48)
+            .contentShape(.rect)
         }
         .buttonStyle(.plain)
         .disabled(!active && !(completed ? actions.canRemoveDownload(route) : actions.canDownload(route)))
         .accessibilityLabel(completed ? "已下载，移除下载" : active ? "停止下载" : failed ? "重试未完成的下载" : "下载")
+        .accessibilityValue(summary?.accessibilityValue ?? "")
         .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.6), trigger: feedback)
     }
 }
@@ -161,10 +173,22 @@ struct CollectionDownloadButton: View {
 struct CollectionDownloadSummary: View {
     let route: LibraryRoute
     @Environment(\.libraryDownloads) private var downloads
+    @Environment(\.collectionMenuActions) private var actions
     var body: some View {
-        if let text = downloads?.collectionState(of: route)?.failureSummary {
-            Text(text).font(.footnote).foregroundStyle(.secondary)
-                .multilineTextAlignment(.center).padding(.top, 10)
+        if let summary = downloads?.collectionState(of: route), let text = summary.failureSummary {
+            VStack(spacing: 8) {
+                Text(text).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                if !summary.isActive {
+                    Button("重试未完成的\(summary.totalCount - summary.completedCount)首", systemImage: "arrow.clockwise") {
+                        LibraryHaptics.impact()
+                        actions.download(route)
+                    }
+                    .disabled(!actions.canDownload(route))
+                }
+            }
+            .font(.footnote)
+            .padding(.top, 10)
         }
     }
 }
@@ -214,6 +238,7 @@ struct SongDownloadIndicator: View {
         }
         .frame(width: 12, height: 12)
         .accessibilityLabel(progress > 0 ? "正在下载" : "等待下载")
+        .accessibilityValue(progress > 0 ? "\(Int(min(1, max(0, progress)) * 100))%" : "")
     }
 }
 

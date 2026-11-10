@@ -31,6 +31,7 @@ final class NeteaseSearchStore {
     @ObservationIgnored private var owner = "guest"
     @ObservationIgnored private var credential: NeteaseCredential?
     @ObservationIgnored private var generation = UUID()
+    @ObservationIgnored private var sessionTask: Task<Void, Never>?
     @ObservationIgnored private var searchID = UUID()
     @ObservationIgnored private var suggestionID = UUID()
     @ObservationIgnored private var searchTask: Task<Void, Never>?
@@ -45,23 +46,44 @@ final class NeteaseSearchStore {
         history = defaults.stringArray(forKey: "search.history.guest.online") ?? []
     }
     func setSession(owner: Int64?, credential: NeteaseCredential?) async {
+        guard !Task.isCancelled else { return }
         let nextOwner = owner.map(String.init) ?? "guest"
-        guard self.owner != nextOwner || self.credential != credential else { return }
+        guard sessionTask != nil || self.owner != nextOwner || self.credential != credential else { return }
         let generation = UUID(); self.generation = generation
+        let previousSession = sessionTask
+        previousSession?.cancel()
         let previous = [searchTask, suggestionTask, categoriesTask, categoryTask].compactMap { $0 } + Array(artworkTasks.values)
         previous.forEach { $0.cancel() }
         searchTask = nil; suggestionTask = nil; categoriesTask = nil; categoryTask = nil
         artworkTasks = [:]
-        for task in previous { await task.value }
-        guard self.generation == generation else { return }
-        self.owner = owner.map(String.init) ?? "guest"; self.credential = credential
-        request = nil; page = nil; cache = [:]; isLoading = false; isLoadingMore = false
-        suggestions = .init(keywords: [], resources: []); error = nil; moreError = nil; suggestionError = nil
-        history = recent(scope: "online")
-        categories = []; categoriesError = nil; isLoadingCategories = false
-        category = nil; categoryPage = nil; categoryCache = [:]
-        isLoadingCategory = false; isLoadingMoreCategory = false; categoryError = nil; categoryMoreError = nil
-        sessionID = generation
+        let work = Task { [self] in
+            defer {
+                if self.generation == generation {
+                    sessionTask = nil
+                    isLoading = false; isLoadingMore = false; isLoadingCategories = false
+                    isLoadingCategory = false; isLoadingMoreCategory = false
+                }
+            }
+            await previousSession?.value
+            for task in previous { await task.value }
+            guard self.generation == generation, !Task.isCancelled else { return }
+            self.owner = nextOwner; self.credential = credential
+            request = nil; page = nil; cache = [:]; isLoading = false; isLoadingMore = false
+            suggestions = .init(keywords: [], resources: []); error = nil; moreError = nil; suggestionError = nil
+            history = defaults.stringArray(forKey: historyKey("online")) ?? []
+            categories = []; categoriesError = nil; isLoadingCategories = false
+            category = nil; categoryPage = nil; categoryCache = [:]
+            isLoadingCategory = false; isLoadingMoreCategory = false; categoryError = nil; categoryMoreError = nil
+            sessionID = generation
+        }
+        sessionTask = work
+        await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
+    }
+    private func waitForSession() async -> Bool {
+        guard !Task.isCancelled else { return false }
+        let generation = generation
+        await sessionTask?.value
+        return self.generation == generation && sessionTask == nil && !Task.isCancelled
     }
     func cancelQuery() async {
         searchID = UUID(); suggestionID = UUID()
@@ -72,8 +94,12 @@ final class NeteaseSearchStore {
         suggestions = .init(keywords: [], resources: []); suggestionError = nil
         for task in previous { await task.value }
     }
-    func cachedArtwork(_ remote: URL) -> URL? { artworkCache.cachedURL(for: remote, scope: owner == "guest" ? "public" : owner) }
+    func cachedArtwork(_ remote: URL) -> URL? {
+        guard sessionTask == nil else { return nil }
+        return artworkCache.cachedURL(for: remote, scope: owner == "guest" ? "public" : owner)
+    }
     func requestArtwork(_ remote: URL) {
+        guard sessionTask == nil else { return }
         guard artworkTasks[remote] == nil else { return }
         if cachedArtwork(remote) != nil { onArtworkChange?([remote]); return }
         let generation = generation, scope = owner == "guest" ? "public" : owner
@@ -86,8 +112,12 @@ final class NeteaseSearchStore {
             } catch { }
         }
     }
-    func recent(scope: String) -> [String] { defaults.stringArray(forKey: historyKey(scope)) ?? [] }
+    func recent(scope: String) -> [String] {
+        guard sessionTask == nil else { return [] }
+        return defaults.stringArray(forKey: historyKey(scope)) ?? []
+    }
     func record(_ query: String, scope: String) {
+        guard sessionTask == nil else { return }
         let value = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return }
         let updated = Array(([value] + recent(scope: scope).filter { $0 != value }).prefix(20))
@@ -95,6 +125,7 @@ final class NeteaseSearchStore {
         if scope == "online" { history = updated }
     }
     func removeHistory(_ query: String?, scope: String) {
+        guard sessionTask == nil else { return }
         let updated = query.map { word in recent(scope: scope).filter { $0 != word } } ?? []
         defaults.set(updated, forKey: historyKey(scope))
         if scope == "online" { history = updated }
@@ -102,6 +133,7 @@ final class NeteaseSearchStore {
     private func historyKey(_ scope: String) -> String { "search.history.\(owner).\(scope)" }
 
     func loadCategories(force: Bool = false) async {
+        guard await waitForSession() else { return }
         if let categoriesTask { await categoriesTask.value; return }
         guard force || categories.isEmpty else { return }
         let generation = generation, credential = credential
@@ -121,6 +153,7 @@ final class NeteaseSearchStore {
     }
 
     func openCategory(_ name: String, force: Bool = false) async {
+        guard await waitForSession() else { return }
         if !force, category == name, let categoryTask { await categoryTask.value; return }
         let id = UUID(); categoryID = id
         let enteredGeneration = generation
@@ -147,6 +180,7 @@ final class NeteaseSearchStore {
     }
 
     func loadMoreCategory() async {
+        guard await waitForSession() else { return }
         guard categoryTask == nil, let category, let old = categoryPage, old.hasMore else { return }
         let id = UUID(); categoryID = id
         let generation = generation, credential = credential
@@ -167,6 +201,7 @@ final class NeteaseSearchStore {
     }
 
     func suggest(_ query: String) async {
+        guard await waitForSession() else { return }
         let id = UUID(); suggestionID = id
         let enteredGeneration = generation
         let previous = suggestionTask; previous?.cancel(); suggestionTask = nil
@@ -191,6 +226,7 @@ final class NeteaseSearchStore {
     }
 
     func search(_ query: String, kind: NeteaseSearchKind, force: Bool = false) async {
+        guard await waitForSession() else { return }
         let next = Request(query: query.trimmingCharacters(in: .whitespacesAndNewlines), kind: kind)
         if !force, request == next, let searchTask { await searchTask.value; return }
         let id = UUID(); searchID = id
@@ -222,6 +258,7 @@ final class NeteaseSearchStore {
     }
 
     func loadMore() async {
+        guard await waitForSession() else { return }
         guard searchTask == nil, let request, request.kind != .combined, let old = page, old.hasMore else { return }
         let id = UUID(); searchID = id
         let generation = generation, credential = credential

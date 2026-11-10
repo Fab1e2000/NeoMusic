@@ -177,7 +177,7 @@ final class SearchMusicIntegration {
     private func publish() {
         guard let store else { return }
         assign(\.ownerID, account.profile.map { String($0.userID) })
-        assign(\.categories, store.categories.enumerated().map { .init(id: $0.element.id, title: $0.element.name, colorIndex: $0.offset) })
+        assign(\.categories, Self.categoryItems(store.categories))
         assign(\.history, store.recent(scope: scopeKey))
         if !model.isSearching && !model.submitted { assign(\.isLoading, store.isLoadingCategories); assign(\.error, store.categoriesError) }
         else if model.scope == .online {
@@ -206,6 +206,12 @@ final class SearchMusicIntegration {
             assign(\.categoryMoreError, store.categoryMoreError)
         }
         publishSongs()
+    }
+
+    static func categoryItems(_ categories: [NeteaseSearchCategory]) -> [MusicSearchCategory] {
+        categories.enumerated().map { index, item in
+            .init(id: item.id, title: item.name, colorIndex: index, group: item.group, isHot: item.isHot)
+        }
     }
 
     private func assign<Value: Equatable>(_ keyPath: ReferenceWritableKeyPath<SearchPageModel, Value>, _ value: Value) {

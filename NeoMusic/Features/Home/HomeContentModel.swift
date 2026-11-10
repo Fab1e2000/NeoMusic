@@ -34,6 +34,8 @@ enum HomeQuickAction: String, CaseIterable, Identifiable {
         case .heartMode, .privateRoaming, .similarSongs: false
         }
     }
+    var loadingMessage: String { opensDetail ? "正在载入内容" : "正在准备播放" }
+    var accessibilityHint: String { opensDetail ? "打开歌曲列表" : "开始播放音乐" }
 }
 
 struct HomeQuickActionItem: Identifiable, Equatable {
@@ -70,6 +72,14 @@ struct HomeContentSection: Identifiable, Equatable {
     var items: [HomeContentItem]
 }
 
+struct HomeFeedIssue: Identifiable, Equatable {
+    let id: String
+    let title: String
+    let message: String
+    let sectionID: String?
+    var isRetrying = false
+}
+
 @MainActor @Observable final class HomeContentModel {
     var quickActions: [HomeQuickActionItem] = []
     var quickActionStates: [HomeQuickAction: HomeQuickActionState] = [:]
@@ -80,7 +90,8 @@ struct HomeContentSection: Identifiable, Equatable {
     var performQuickAction: (HomeQuickAction) -> Void = { _ in }
     var sections: [HomeContentSection] = []
     var isLoading = false
-    var feedError: String?
+    var feedIssues: [HomeFeedIssue] = []
+    var retryIssue: (String) async -> Void = { _ in }
     var refresh: () async -> Void = {}
     var play: (String, String) -> Void = { _, _ in }
 

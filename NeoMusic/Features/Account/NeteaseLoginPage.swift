@@ -9,6 +9,7 @@ struct NeteaseLoginPage: View {
     @State private var browser = NeteaseLoginBrowser()
     @State private var loginTask: Task<Void, Never>?
     @State private var error: String?
+    @State private var errorTechnicalDetails: String?
     @State private var pageError: String?
     @State private var loadID = 0
     @State private var checking = false
@@ -25,7 +26,7 @@ struct NeteaseLoginPage: View {
                 .padding()
             }
             if let error {
-                Text(error)
+                AccountErrorMessage(message: error, technicalDetails: errorTechnicalDetails)
                     .font(.footnote)
                     .foregroundStyle(.red)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -42,8 +43,10 @@ struct NeteaseLoginPage: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
-                Button("完成") {
+                Button {
                     loginTask = Task { await finishLogin() }
+                } label: {
+                    LoginCompletionLabel(checking: checking)
                 }
                 .disabled(checking || account.isAuthenticating || account.isLoggingOut)
                 .accessibilityIdentifier("account.login.complete")
@@ -70,6 +73,7 @@ struct NeteaseLoginPage: View {
     private func finishLogin() async {
         checking = true
         error = nil
+        errorTechnicalDetails = nil
         defer { checking = false }
         do {
             let cookies = await browser.dataStore.httpCookieStore.allCookies()
@@ -82,7 +86,20 @@ struct NeteaseLoginPage: View {
         catch {
             guard !Task.isCancelled else { return }
             self.error = error.localizedDescription
+            errorTechnicalDetails = (error as? NeteaseAccountError)?.technicalDetails
         }
+    }
+}
+
+struct LoginCompletionLabel: View {
+    let checking: Bool
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if checking { ProgressView().controlSize(.small) }
+            Text(checking ? "正在验证登录" : "完成")
+        }
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -96,5 +113,19 @@ private final class NeteaseLoginBrowser {
         configuration.websiteDataStore = dataStore
         configuration.defaultNavigationPreferences.preferredContentMode = .desktop
         page = WebPage(configuration: configuration)
+    }
+}
+
+#Preview("登录核查进度") {
+    NavigationStack {
+        Color(.systemBackground)
+            .navigationTitle("登录网易云音乐")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button {} label: { LoginCompletionLabel(checking: true) }
+                        .disabled(true)
+                }
+            }
     }
 }

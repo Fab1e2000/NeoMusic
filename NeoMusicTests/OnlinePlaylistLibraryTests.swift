@@ -2,7 +2,7 @@ import XCTest
 @testable import NeoMusic
 
 @MainActor final class OnlinePlaylistLibraryTests: XCTestCase {
-    func testOnlineMirrorIsReadOnlyAndLocalReferencesSurviveScan() throws {
+    func testOnlineMirrorIsReadOnlyAndLocalReferencesSurviveScan() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let local = LibraryPlaylistItem(id: "local", title: "Local", artwork: .playlist)
@@ -12,19 +12,24 @@ import XCTest
         let online = LibraryPlaylistItem(id: "netease-playlist:1:2", title: "Online", artwork: .playlist, sourceOwnerID: "1")
         let song = LibrarySongItem(id: "netease:1:3", title: "Song", artist: "Artist", album: "Album", albumArtist: "Artist", trackNumber: 1, artwork: .missing)
         library.replaceOnlinePlaylists(items: [online], songs: [online.id: [song]], ownerID: "1")
+        await library.flushPersistence()
         XCTAssertFalse(library.canDelete(online.id))
         XCTAssertEqual(library.addSongs([song], to: online.id), 0)
+        await library.flushPersistence()
         XCTAssertEqual(library.addSongs([song], to: local.id), 1)
+        await library.flushPersistence()
         library.reconcileSongs([])
+        await library.flushPersistence()
         XCTAssertEqual(library.songs(in: local.id).map(\.id), [song.id])
         let saved = try JSONDecoder().decode(PlaylistLibrary.Snapshot.self, from: Data(contentsOf: url))
         XCTAssertEqual(saved.playlists.map(\.id), ["local"])
         library.replaceOnlinePlaylists(items: [], songs: [:], ownerID: nil)
+        await library.flushPersistence()
         XCTAssertNil(library.playlist(online.id))
         XCTAssertEqual(library.songs(in: local.id).map(\.id), [song.id])
     }
 
-    func testPreferenceRestoreAndOnlineRefreshPreserveLocalEntries() throws {
+    func testPreferenceRestoreAndOnlineRefreshPreserveLocalEntries() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let url = root.appendingPathComponent("playlists.json")
@@ -32,31 +37,39 @@ import XCTest
         let first = PlaylistLibrary(playlists: [])
         XCTAssertTrue(first.configurePersistence(url: url, songs: []))
         first.replaceOnlinePlaylists(items: [item], songs: [:], ownerID: "1")
+        await first.flushPersistence()
         first.togglePin(item.id)
+        await first.flushPersistence()
         let restored = PlaylistLibrary(playlists: [])
         XCTAssertTrue(restored.configurePersistence(url: url, songs: []))
         restored.replaceOnlinePlaylists(items: [item], songs: [:], ownerID: "1")
+        await restored.flushPersistence()
         XCTAssertEqual(restored.playlist(item.id)?.isPinned, true)
         restored.replaceOnlinePlaylists(items: [item], songs: [:], ownerID: "1")
+        await restored.flushPersistence()
         XCTAssertEqual(restored.playlist(item.id)?.isPinned, true)
         let local = try XCTUnwrap(restored.createPlaylist(named: "Local", artwork: .playlist, in: nil))
+        await restored.flushPersistence()
         let song = LibrarySongItem(id: "file.mp3", title: "Local", artist: "", album: "", albumArtist: "", trackNumber: 1, artwork: .missing)
         restored.addSongs([song], to: local.id)
+        await restored.flushPersistence()
         restored.reconcileOnlineSongs([])
         XCTAssertEqual(restored.songs(in: local.id).map(\.id), [song.id])
     }
 
-    func testOnlineDiscoveryAndPlayDatesSurviveRefresh() throws {
+    func testOnlineDiscoveryAndPlayDatesSurviveRefresh() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let library = PlaylistLibrary(playlists: [])
         XCTAssertTrue(library.configurePersistence(url: root.appendingPathComponent("playlists.json"), songs: []))
         let item = LibraryPlaylistItem(id: "netease-playlist:1:2", title: "Online", artwork: .playlist, sourceOwnerID: "1")
         library.replaceOnlinePlaylists(items: [item], songs: [:], ownerID: "1")
+        await library.flushPersistence()
         let firstSeen = try XCTUnwrap(library.playlist(item.id)?.addedAt)
         library.markPlayed(item.id)
         let played = try XCTUnwrap(library.playlist(item.id)?.lastPlayedAt)
         library.replaceOnlinePlaylists(items: [item], songs: [:], ownerID: "1")
+        await library.flushPersistence()
         XCTAssertEqual(library.playlist(item.id)?.addedAt, firstSeen)
         XCTAssertEqual(library.playlist(item.id)?.lastPlayedAt, played)
         library.updateOnlineSongs(playlistID: item.id, songs: [], error: nil, loading: true)
@@ -67,21 +80,28 @@ import XCTest
         XCTAssertFalse(library.loadedOnlinePlaylistIDs.contains(item.id))
     }
 
-    func testOnlineFolderDeletionAndAccountPreferences() throws {
+    func testOnlineFolderDeletionAndAccountPreferences() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let library = PlaylistLibrary(playlists: [])
         XCTAssertTrue(library.configurePersistence(url: root.appendingPathComponent("playlists.json"), songs: []))
         let online = LibraryPlaylistItem(id: "netease-playlist:1:2", title: "Online", artwork: .playlist, sourceOwnerID: "1")
         library.replaceOnlinePlaylists(items: [online], songs: [:], ownerID: "1")
+        await library.flushPersistence()
         library.togglePin(online.id)
+        await library.flushPersistence()
         let folder = library.createFolder(named: "Folder", in: nil)
+        await library.flushPersistence()
         library.move(playlistID: online.id, to: folder.id)
+        await library.flushPersistence()
         library.deleteFolder(folder.id)
+        await library.flushPersistence()
         XCTAssertNotNil(library.playlist(online.id))
         XCTAssertNil(library.folderID(of: online.id))
         library.replaceOnlinePlaylists(items: [], songs: [:], ownerID: nil)
+        await library.flushPersistence()
         library.replaceOnlinePlaylists(items: [online], songs: [:], ownerID: "1")
+        await library.flushPersistence()
         XCTAssertEqual(library.playlist(online.id)?.isPinned, true)
         XCTAssertNil(library.folderID(of: online.id))
     }

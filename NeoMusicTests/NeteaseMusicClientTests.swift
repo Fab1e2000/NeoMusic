@@ -577,7 +577,9 @@ final class NeteaseMusicClientTests: XCTestCase, @unchecked Sendable {
         let library = PlaylistLibrary(playlists: [])
         library.configurePersistence(url: folder.appendingPathComponent("playlists.json"), songs: [local])
         let id = try XCTUnwrap(library.createPlaylist(named: "Mixed", artwork: .playlist, in: nil)).id
+        await library.flushPersistence()
         XCTAssertEqual(library.addSongs([.unavailable("netease:1:12"), local], to: id), 2)
+        await library.flushPersistence()
         library.restoreOnlineIdentity(ownerID: "1")
 
         await OnlineMusicIntegration(account: account).restoreReferencedMetadata(player: player, playlistLibrary: library)

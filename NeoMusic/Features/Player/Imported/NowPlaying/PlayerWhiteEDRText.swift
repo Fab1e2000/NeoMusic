@@ -4,6 +4,7 @@ import SwiftUI
 struct PlayerWhiteEDRText: View {
     let text: String
     let fontSize: CGFloat
+    var fontSizeIsScaled = false
     var fontWeight: UIFont.Weight = .semibold
     @Environment(\.playerArtistEDREnabled) private var enabled
     @Environment(\.nowPlayingBackdropImage) private var image
@@ -16,7 +17,8 @@ struct PlayerWhiteEDRText: View {
             .overlay {
                 if enabled, let image, let anchor {
                     PlayerEDRArtistLabel(text: text, fontSize: fontSize, image: image, anchor: anchor,
-                                         brightness: 0.70, isWhite: true, fontWeight: fontWeight)
+                                         brightness: 0.70, isWhite: true, fontWeight: fontWeight,
+                                         fontSizeIsScaled: fontSizeIsScaled)
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
                 }

@@ -47,7 +47,7 @@ struct LibraryAppTabs<Library: View>: UIViewControllerRepresentable {
         search.automaticallyActivatesSearch = false
         context.coordinator.searchIdentifier = search.identifier
         let home = UITab(title: "主页", image: UIImage(named: "HomeTabIcon"), identifier: AppTab.home.rawValue) { _ in
-            homeBridge.makeNavigationController(root: homeRoot, rootTitle: "主页", rootColorScheme: .light)
+            homeBridge.makeNavigationController(root: homeRoot, rootTitle: "主页")
         }
         let libraryTab = UITab(title: "资料库", image: UIImage(systemName: "music.note.square.stack.fill"), identifier: AppTab.library.rawValue) { _ in
             navigation.makeNavigationController(root: AnyView(library), initialPath: initialPath)
@@ -158,7 +158,7 @@ struct LibraryAppTabs<Library: View>: UIViewControllerRepresentable {
         let libraryStyle = navigation.colorScheme.map { UIUserInterfaceStyle($0) } ?? controller.traitCollection.userInterfaceStyle
         navigation.navigationController?.navigationBar.overrideUserInterfaceStyle = libraryStyle
         if let homeNavigation {
-            homeNavigation.navigationController?.navigationBar.overrideUserInterfaceStyle = homeNavigation.colorScheme.map { UIUserInterfaceStyle($0) } ?? .light
+            homeNavigation.navigationController?.navigationBar.overrideUserInterfaceStyle = homeNavigation.colorScheme.map { UIUserInterfaceStyle($0) } ?? controller.traitCollection.userInterfaceStyle
         }
         Self.applyAppearance(style, to: controller.tabBar, navigationBar: nil)
     }
@@ -199,7 +199,7 @@ struct LibraryAppTabs<Library: View>: UIViewControllerRepresentable {
         var playlistIDs: [String] = []
         func updateNavigationAppearance(systemStyle: UIUserInterfaceStyle) {
             libraryBridge?.navigationController?.navigationBar.overrideUserInterfaceStyle = libraryBridge?.colorScheme.map { UIUserInterfaceStyle($0) } ?? systemStyle
-            homeBridge?.navigationController?.navigationBar.overrideUserInterfaceStyle = homeBridge?.colorScheme.map { UIUserInterfaceStyle($0) } ?? .light
+            homeBridge?.navigationController?.navigationBar.overrideUserInterfaceStyle = homeBridge?.colorScheme.map { UIUserInterfaceStyle($0) } ?? systemStyle
             for bridge in sectionBridges.values {
                 bridge.navigationController?.navigationBar.overrideUserInterfaceStyle = bridge.colorScheme.map { UIUserInterfaceStyle($0) } ?? systemStyle
             }

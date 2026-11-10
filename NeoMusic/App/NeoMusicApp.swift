@@ -3,12 +3,15 @@ import SwiftUI
 @main
 struct NeoMusicApp: App {
     @UIApplicationDelegateAdaptor(DownloadBackgroundDelegate.self) private var downloadDelegate
-    @State private var account: NeteaseAccount
-    @State private var integration: OnlineMusicIntegration
-    @State private var artists: ArtistMusicIntegration
-    @State private var home: HomeMusicIntegration
-    @State private var search: SearchMusicIntegration
-    @State private var downloads: DownloadMusicIntegration
+    @State private var runtime: AppRuntime
+    @Environment(\.scenePhase) private var scenePhase
+
+    private var account: NeteaseAccount { runtime.account }
+    private var integration: OnlineMusicIntegration { runtime.integration }
+    private var artists: ArtistMusicIntegration { runtime.artists }
+    private var home: HomeMusicIntegration { runtime.home }
+    private var search: SearchMusicIntegration { runtime.search }
+
     init() {
         let interval = PerformanceDiagnostics.begin("AppInitialization")
         defer { PerformanceDiagnostics.end("AppInitialization", interval) }
@@ -17,26 +20,21 @@ struct NeoMusicApp: App {
             defer { PerformanceDiagnostics.end("ImageCachePreparation", preparation) }
             ArtworkImagePipeline.configureMemoryCache()
         }
-        let account = NeteaseAccount(client: NeteaseAccountClient(), credentialStore: NeteaseCredentialStore(),
-                                     avatarClient: NeteaseAvatarClient())
-        _account = State(initialValue: account)
-        _integration = State(initialValue: OnlineMusicIntegration(account: account))
-        _home = State(initialValue: HomeMusicIntegration(account: account))
-        _artists = State(initialValue: ArtistMusicIntegration(account: account))
-        _search = State(initialValue: SearchMusicIntegration(account: account))
-        let downloads = DownloadMusicIntegration(account: account)
-        _downloads = State(initialValue: downloads)
-        downloads.connect()
-        Task {
-            await downloads.restore()
-            await account.restoreCachedContent()
-        }
+        let runtime = AppRuntime()
+        _runtime = State(initialValue: runtime)
+        #if DEBUG
+        if !isPreviewLaunch { runtime.start() }
+        #else
+        runtime.start()
+        #endif
     }
-    @Environment(\.scenePhase) private var scenePhase
+
     var body: some Scene {
         WindowGroup {
             #if DEBUG
-            if ProcessInfo.processInfo.arguments.contains("-searchPreview") {
+            if ProcessInfo.processInfo.arguments.contains("-frontendReviewPreview") {
+                FrontendReviewPreview().environment(account)
+            } else if ProcessInfo.processInfo.arguments.contains("-searchPreview") {
                 SearchPreviewRoot().environment(account)
             } else if ProcessInfo.processInfo.arguments.contains("-downloadsPreview") {
                 DownloadsPreview()
@@ -48,7 +46,9 @@ struct NeoMusicApp: App {
                 HomeRecommendationPreview(mode: mode)
                     .environment(account)
                     .task {
-                        if ProcessInfo.processInfo.arguments.contains("-homeReadProbe") {
+                        if ProcessInfo.processInfo.arguments.contains("-assessmentReadProbe") {
+                            await NeteaseAssessmentReadProbe.run()
+                        } else if ProcessInfo.processInfo.arguments.contains("-homeReadProbe") {
                             await NeteaseHomeReadProbe.run()
                         }
                     }
@@ -67,6 +67,13 @@ struct NeoMusicApp: App {
             libraryApp
             #endif
         }
+        .onChange(of: account.restoredPlaybackIdentity) { _, _ in runtime.completeRestoredPlayback() }
+        .onChange(of: account.profile?.userID) { _, _ in
+            if runtime.startupTask != nil { runtime.downloads.publishMetadata() }
+        }
+        .onChange(of: LocalLibrary.runtime.hasRestoredPlayback) { _, _ in runtime.completeRestoredPlayback() }
+        .onChange(of: LocalLibrary.player.hasCurrent) { _, _ in runtime.completeRestoredPlayback() }
+        .onChange(of: scenePhase) { previous, phase in runtime.sceneDidChange(from: previous, to: phase) }
     }
 
     private var libraryApp: some View {
@@ -83,124 +90,16 @@ struct NeoMusicApp: App {
                 integration.requestArtwork(for: id)
                 search.requestArtwork(for: id)
             })
-            .task {
-                downloads.requestLogin = { home.showsLogin = true }
-                integration.onPublication = { downloads.publishMetadata() }
-                await downloads.restore()
-                search.prepareNavigation = { home.prepareNavigation($0) }
-                search.onPublication = { downloads.publishMetadata() }
-                search.connect()
-                home.connect()
-                artists.connect()
-                integration.connect()
-                await integration.connectLyrics()
-                #if DEBUG
-                if ProcessInfo.processInfo.arguments.contains("-artistReadProbe") { await NeteaseArtistReadProbe.run() }
-                #endif
-                async let history: Void = home.restore()
-                do {
-                    let interval = PerformanceDiagnostics.begin("StartupRestore")
-                    defer { PerformanceDiagnostics.end("StartupRestore", interval) }
-                    async let local: Void = restoreInitialLibrary()
-                    async let online: Void = account.restoreCachedContent()
-                    _ = await (local, online)
-                    guard !Task.isCancelled else { return }
-                    completeRestoredPlayback()
-                    #if DEBUG
-                    if ProcessInfo.processInfo.arguments.contains("-searchReadProbe") {
-                        Task { await NeteaseSearchReadProbe.run(account: account) }
-                    }
-                    if ProcessInfo.processInfo.arguments.contains("-playbackReadProbe") {
-                        Task { await NeteasePlaybackReadProbe.run() }
-                    }
-                    if ProcessInfo.processInfo.arguments.contains("-downloadReadProbe"), let store = account.downloads {
-                        Task { await NeteaseDownloadReadProbe.run(store: store) }
-                    }
-                    #endif
-                }
-                async let scan: Void = LocalLibrary.runtime.refresh()
-                async let validation: Void = restoreRemainingOnlineContent()
-                async let artwork: Void = prepareInitialOnlineArtwork()
-                _ = await (scan, validation, history, artwork)
-            }
-            .onChange(of: account.restoredPlaybackIdentity) { _, _ in completeRestoredPlayback() }
-            .onChange(of: account.profile?.userID) { _, _ in downloads.publishMetadata() }
-            .onChange(of: LocalLibrary.runtime.hasRestoredPlayback) { _, _ in completeRestoredPlayback() }
-            .onChange(of: LocalLibrary.player.hasCurrent) { _, _ in completeRestoredPlayback() }
-            .onChange(of: scenePhase) { previous, phase in
-                if phase == .background {
-                    LocalLibrary.player.saveQueueForBackground()
-                    LocalLibrary.playlistLibrary.persistRestoredMetadata()
-                    home.flushHistoryForBackground()
-                }
-                // Initial activation is already covered by the task above.
-                if previous == .background, phase != .background {
-                    Task { await LocalLibrary.runtime.refresh() }
-                    Task { await account.revalidate() }
-                }
-            }
-    }
-
-    @MainActor
-    private func completeRestoredPlayback() {
-        let owner: String?
-        switch account.restoredPlaybackIdentity {
-        case .pending:
-            PerformanceDiagnostics.restoration("player.waitingForIdentity")
-            return
-        case .signedOut: owner = nil
-        case .signedIn(let value): owner = value
-        }
-        LocalLibrary.runtime.completeInitialPlaybackRestoration(ownerID: owner, songs: LocalLibrary.allSongs)
-    }
-
-    @MainActor
-    private func restoreInitialLibrary() async {
-        await LocalLibrary.runtime.restoreCachedState()
-        guard !Task.isCancelled else { return }
-        await LocalArtworkImages.prepare(initialLibraryArtwork)
-        guard !Task.isCancelled else { return }
-        LocalLibrary.runtime.completeInitialPresentation(songs: LocalLibrary.allSongs)
-    }
-
-    @MainActor
-    private var initialLibraryArtwork: [Artwork] {
-        (Array(LocalLibrary.pinned.prefix(6)) + Array(LocalLibrary.recentlyAdded.prefix(4))).map(\.artwork)
-    }
-
-    @MainActor
-    private func prepareInitialOnlineArtwork() async {
-        var ids: [String] = []
-        func collect(_ artwork: Artwork) {
-            if let id = artwork.loadID, !ids.contains(id), ids.count < 10 { ids.append(id) }
-            if case .folder(let children) = artwork { children.prefix(4).forEach(collect) }
-        }
-        initialLibraryArtwork.forEach(collect)
-        for id in ids {
-            guard !Task.isCancelled else { return }
-            let file: URL?
-            if let found = await integration.cachedArtworkFile(for: id) { file = found }
-            else if let found = await artists.cachedArtworkFile(for: id) { file = found }
-            else { file = await home.cachedArtworkFile(for: id) }
-            guard !Task.isCancelled, let file else { continue }
-            _ = await LocalArtworkImages.load(file, pixels: 512)
-            guard !Task.isCancelled else { return }
-            integration.requestArtwork(for: id)
-            artists.requestArtwork(for: id)
-            home.requestArtwork(for: id)
-        }
-    }
-
-    @MainActor
-    private func restoreRemainingOnlineContent() async {
-        await account.restoreHomeCachedContent()
-        guard !Task.isCancelled else { return }
-        await integration.restoreReferencedMetadata()
-        guard !Task.isCancelled else { return }
-        await account.revalidate()
     }
 
     #if DEBUG
+    private var isPreviewLaunch: Bool {
+        let arguments = ProcessInfo.processInfo.arguments
+        let directPreviews = ["-frontendReviewPreview", "-searchPreview", "-downloadsPreview", "-homeFeedPreview", "-artistPagePreview"]
+        return directPreviews.contains(where: arguments.contains) || homePreviewMode != nil ||
+            onlinePreviewPage != nil || accountPreviewState != nil
+    }
+
     private var homePreviewMode: HomeRecommendationPreview.Mode? {
         let arguments = ProcessInfo.processInfo.arguments
         guard let index = arguments.firstIndex(of: "-homeRecommendationPreview"),

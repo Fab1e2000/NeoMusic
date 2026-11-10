@@ -57,7 +57,7 @@ struct OnlineLibraryShellPreview: View {
             }
         }, nowPlaying: player, playlistLibrary: library, toasts: toasts,
            referencePlayer: ReferencePlayerState(model: player), referenceLibrary: lyrics,
-           makePlayerActions: { _ in
+           makePlayerActions: { _, _ in
                ReferencePlayerActions(isFavorite: { _ in false }, toggleFavorite: { _ in },
                                       addToPlaylist: { _ in }, openAlbum: { _ in }, openArtist: { _ in })
            }, libraryPath: initialPath, isPlayerPresented: initialPage == "queue")

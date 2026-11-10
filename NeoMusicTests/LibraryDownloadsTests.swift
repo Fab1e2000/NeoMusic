@@ -45,6 +45,18 @@ import Observation
         XCTAssertEqual(downloads.collectionState(of: route)?.isComplete, true)
     }
 
+    func testCollectionFeedbackMatchesProgressAndFailureActions() {
+        var state = LibraryDownloads.CollectionState(totalCount: 20, completedCount: 2,
+            activeCount: 3, failedCount: 1, progress: 0.25)
+        XCTAssertEqual(state.failureSummary, "2 / 20 首已完成 · 1 首失败")
+        XCTAssertEqual(state.accessibilityValue, "2 / 20 首已完成，进度 25%，1 首失败")
+        state.isResolving = true
+        XCTAssertEqual(state.accessibilityValue, "正在读取完整曲目列表")
+        state = .init(totalCount: 20, completedCount: 20, activeCount: 0, failedCount: 0, progress: 1)
+        XCTAssertNil(state.failureSummary)
+        XCTAssertEqual(state.accessibilityValue, "20 首已下载")
+    }
+
     func testTransferProgressInvalidatesOnlyTheAffectedSongStatus() {
         let downloads = LibraryDownloads()
         downloads.publish(states: ["1": .downloading(0.2), "2": .downloaded], managedSongIDs: ["1", "2"])
