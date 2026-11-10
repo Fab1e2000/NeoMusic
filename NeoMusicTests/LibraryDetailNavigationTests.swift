@@ -370,7 +370,10 @@ final class LibraryDetailNavigationTests: XCTestCase {
             library: { TestRoot() }, detailDestination: { AnyView(TestDetail(route: $0)) },
             nowPlaying: nil, playlistLibrary: PlaylistLibrary(playlists: []), toasts: LibraryToastCenter(),
             referencePlayer: player, referenceLibrary: PlayerTestFixtures.library(),
-            makePlayerActions: { _, _ in PlayerTestFixtures.actions() }).environment(account))
+            makePlayerActions: { _, _ in PlayerTestFixtures.actions() })
+            .environment(account)
+            .environment(\.scenePhase, .active)
+            .dynamicTypeSize(.large))
         window.makeKeyAndVisible()
         try await settle()
         func findTabs(in controller: UIViewController) -> UITabBarController? {
@@ -385,12 +388,24 @@ final class LibraryDetailNavigationTests: XCTestCase {
         let pager = try XCTUnwrap(descendants(of: UIScrollView.self, in: tabs.popupBar).first {
             $0.panGestureRecognizer.name == "NeoDizzy.NowPlayingTrackSwipe"
         })
-        let updates = Mutex(0)
+        // Finish the initial native display before measuring placement-only updates.
+        XCTAssertTrue(pager.window === window)
+        let initialBar = UIGraphicsImageRenderer(bounds: tabs.popupBar.bounds).image { _ in
+            XCTAssertTrue(tabs.popupBar.drawHierarchy(in: tabs.popupBar.bounds, afterScreenUpdates: true))
+        }
+        let initialAppearance = XCTAttachment(image: initialBar)
+        initialAppearance.name = "mini-player-before-placement-changes"
+        initialAppearance.lifetime = .keepAlways
+        add(initialAppearance)
+        let updates = Mutex((phase: "initial", events: [String]()))
         // LNPopupUI writes userInfo whenever it resubmits a PopupItem, even for the same song.
-        let observation = item.observe(\.userInfo, options: [.new]) { _, _ in updates.withLock { $0 += 1 } }
+        let observation = item.observe(\.userInfo, options: [.new]) { _, _ in
+            updates.withLock { $0.events.append("\($0.phase) at \(ProcessInfo.processInfo.systemUptime)") }
+        }
         defer { observation.invalidate() }
-        for _ in 0..<3 {
+        for cycle in 0..<3 {
             for placement in [LNPopupBar.Environment.inline, .regular] {
+                updates.withLock { $0.phase = "cycle=\(cycle), placement=\(placement)" }
                 // These are the two native trait updates made by LN's minimization callback.
                 content.traitOverrides[LNPopupBar.EnvironmentTrait.self] = placement
                 tabs.popupBar.traitOverrides[LNPopupBar.EnvironmentTrait.self] = placement
@@ -402,8 +417,9 @@ final class LibraryDetailNavigationTests: XCTestCase {
                 XCTAssertEqual(pager.bounds.height, placement == .inline ? 18 : 36, accuracy: 1)
             }
         }
-        let itemUpdates = updates.withLock { $0 }
-        let evidence = XCTAttachment(string: "placementChanges=6, popupItemResubmissions=\(itemUpdates)")
+        let updateEvents = updates.withLock { $0.events }
+        let itemUpdates = updateEvents.count
+        let evidence = XCTAttachment(string: "placementChanges=6, popupItemResubmissions=\(itemUpdates)\n\(updateEvents.joined(separator: "\n"))")
         evidence.name = "mini-player-placement-updates"
         evidence.lifetime = .keepAlways
         add(evidence)
@@ -1533,7 +1549,7 @@ final class AlbumInitialAppearanceTests: XCTestCase {
         var rootReturned: XCTestExpectation?
         var nextAppearance: XCTestExpectation?
         var appearances: [String] = []
-        var renderedPages: Set<ObjectIdentifier> = []
+        var displayedPage: LibraryDetailHostingController?
         window.rootViewController = UIHostingController(rootView: LibraryNavigationContainer(
             navigation: bridge,
             root: TestRoot().background {
@@ -1565,29 +1581,10 @@ final class AlbumInitialAppearanceTests: XCTestCase {
                             } catch { XCTFail("Unable to inspect prepared album appearance: \(error)") }
                             appearances.append(id)
                         }, onDisplayed: { probe in
-                            // Signal the UIKit event before rendering/encoding diagnostic
-                            // attachments, so their cost is not part of the lifecycle wait.
-                            nextAppearance?.fulfill()
-                            // All pushes are nonanimated. This observes the first completed
-                            // appearance, not the compositor's first frame of an animated zoom.
                             do {
-                                let page = try XCTUnwrap(probe.navigationController?.topViewController as? LibraryDetailHostingController)
-                                // Snapshot only newly created destinations. Return appearances
-                                // retain the state checks above; their pixels require device review.
-                                guard renderedPages.insert(ObjectIdentifier(page)).inserted else { return }
-                                XCTAssertNotNil(page.view.libraryArtworkAlignmentRect(), "The album content must be present")
-                                let sequence = appearances
-                                let appearance = "album=\(id), appearances=\(sequence)"
-                                let image = self.snapshot(of: page.view)
-                                let pixel = try self.backgroundPixel(in: page.view, snapshot: image)
-                                let diagnostic = "\(appearance), RGBA=\(pixel), sample=\(self.backgroundSamplePoint(in: page.view)), bounds=\(page.view.bounds), chrome=\(String(describing: page.chrome.colorScheme)), bridge=\(String(describing: bridge?.colorScheme))"
-                                self.attachAppearance(of: page.view, snapshot: image, name: "\(sequence.count)-\(id)", diagnostic: diagnostic)
-                                for (index, channel) in pixel.prefix(3).enumerated() {
-                                    XCTAssertLessThanOrEqual(abs(Int(channel) - (component == 0 ? 0 : 255)), 2,
-                                                            "channel=\(index), \(diagnostic)")
-                                }
-                                XCTAssertEqual(pixel[3], 255, "The initially rendered page background must be opaque: \(diagnostic)")
-                            } catch { XCTFail("Unable to inspect initially rendered album content: \(error)") }
+                                displayedPage = try XCTUnwrap(probe.navigationController?.topViewController as? LibraryDetailHostingController)
+                                nextAppearance?.fulfill()
+                            } catch { XCTFail("Unable to inspect displayed album: \(error)") }
                         }).frame(width: 0, height: 0)
                     })
             }))
@@ -1599,11 +1596,14 @@ final class AlbumInitialAppearanceTests: XCTestCase {
         nextAppearance = expectation(description: "Dark album first appearance")
         bridge.open(.album("dark"), animated: false)
         await fulfillment(of: [try XCTUnwrap(nextAppearance)], timeout: 3)
-        let darkPage = try XCTUnwrap(nav.topViewController)
+        let darkPage = try XCTUnwrap(displayedPage)
+        XCTAssertTrue(nav.topViewController === darkPage)
+        try assertRenderedAppearance(of: darkPage, component: 0, appearances: appearances, bridge: bridge)
 
         nextAppearance = expectation(description: "Light album first appearance")
         bridge.open(.album("light"), animated: false)
         await fulfillment(of: [try XCTUnwrap(nextAppearance)], timeout: 3)
+        try assertRenderedAppearance(of: XCTUnwrap(displayedPage), component: 1, appearances: appearances, bridge: bridge)
 
         nextAppearance = expectation(description: "Dark album reappears")
         nav.popViewController(animated: false)
@@ -1616,6 +1616,23 @@ final class AlbumInitialAppearanceTests: XCTestCase {
         nav.popViewController(animated: false)
         await fulfillment(of: [try XCTUnwrap(rootReturned)], timeout: 3)
         XCTAssertNil(bridge.colorScheme, "Returning to the library restores inherited appearance")
+    }
+
+    private func assertRenderedAppearance(of page: LibraryDetailHostingController, component: Double,
+                                          appearances: [String], bridge: LibraryDetailNavigation) throws {
+        // Capture after UIKit returns from viewDidAppear, outside its layout/display transaction.
+        XCTAssertNotNil(page.view.libraryArtworkAlignmentRect(), "The album content must be present")
+        let id = component == 0 ? "dark" : "light"
+        let appearance = "album=\(id), appearances=\(appearances)"
+        let image = snapshot(of: page.view)
+        let pixel = try backgroundPixel(in: page.view, snapshot: image)
+        let diagnostic = "\(appearance), RGBA=\(pixel), sample=\(backgroundSamplePoint(in: page.view)), bounds=\(page.view.bounds), chrome=\(String(describing: page.chrome.colorScheme)), bridge=\(String(describing: bridge.colorScheme))"
+        attachAppearance(of: page.view, snapshot: image, name: "\(appearances.count)-\(id)", diagnostic: diagnostic)
+        for (index, channel) in pixel.prefix(3).enumerated() {
+            XCTAssertLessThanOrEqual(abs(Int(channel) - (component == 0 ? 0 : 255)), 2,
+                                    "channel=\(index), \(diagnostic)")
+        }
+        XCTAssertEqual(pixel[3], 255, "The initially rendered page background must be opaque: \(diagnostic)")
     }
 
     private func backgroundSamplePoint(in view: UIView) -> CGPoint {

@@ -224,6 +224,43 @@ final class NeteaseAccountClientTests: XCTestCase, @unchecked Sendable {
         await fulfillment(of: [stopped], timeout: 2)
     }
 
+    @MainActor func testCancellationBelongsToTheRequestThatCapturedItsFixture() async throws {
+        let firstStarted = expectation(description: "First request started")
+        let firstStopped = expectation(description: "First request cancelled")
+        let (firstClient, firstSession) = makeClient()
+        defer { firstSession.invalidateAndCancel() }
+        NeteaseAccountURLProtocol.state.withLock {
+            $0.wait = true
+            $0.started = firstStarted
+            $0.stopped = firstStopped
+        }
+        let credential = try credential()
+        let firstTask = Task { try await firstClient.profile(credential: credential) }
+        await fulfillment(of: [firstStarted], timeout: 2)
+
+        let secondStarted = expectation(description: "Second request started")
+        let secondStopped = expectation(description: "Second request cancelled")
+        let (secondClient, secondSession) = makeClient()
+        defer { secondSession.invalidateAndCancel() }
+        NeteaseAccountURLProtocol.state.withLock {
+            $0.wait = true
+            $0.started = secondStarted
+            $0.stopped = secondStopped
+        }
+        let secondTask = Task { try await secondClient.profile(credential: credential) }
+        await fulfillment(of: [secondStarted], timeout: 2)
+
+        firstTask.cancel()
+        do { _ = try await firstTask.value; XCTFail("First cancelled request returned a profile") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        await fulfillment(of: [firstStopped], timeout: 2)
+
+        secondTask.cancel()
+        do { _ = try await secondTask.value; XCTFail("Second cancelled request returned a profile") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        await fulfillment(of: [secondStopped], timeout: 2)
+    }
+
     @MainActor private func makeClient(body: String = "", status: Int = 200, error: URLError? = nil) -> (NeteaseAccountClient, URLSession) {
         NeteaseAccountURLProtocol.state.withLock { $0 = .init(body: Data(body.utf8), status: status, error: error) }
         let configuration = NeteaseAccountClient.sessionConfiguration()
@@ -274,11 +311,13 @@ private final class NeteaseAccountURLProtocol: URLProtocol, @unchecked Sendable 
         var stopped: XCTestExpectation?
     }
     static let state = Mutex(State())
+    private let stopExpectation = Mutex<XCTestExpectation?>(nil)
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
         let state = Self.state.withLock { $0 }
+        stopExpectation.withLock { $0 = state.stopped }
         state.started?.fulfill()
         guard !state.wait else { return }
         if let error = state.error {
@@ -290,5 +329,11 @@ private final class NeteaseAccountURLProtocol: URLProtocol, @unchecked Sendable 
         client?.urlProtocol(self, didLoad: state.body)
         client?.urlProtocolDidFinishLoading(self)
     }
-    override func stopLoading() { Self.state.withLock { $0.stopped }?.fulfill() }
+    override func stopLoading() {
+        let expectation = stopExpectation.withLock { pending in
+            defer { pending = nil }
+            return pending
+        }
+        expectation?.fulfill()
+    }
 }

@@ -14,6 +14,10 @@ ZERO = "0" * 40
 
 class RepositoryFixture(unittest.TestCase):
     def setUp(self):
+        # Hooks export repository-specific Git variables; each fixture owns its repository.
+        self.environment = os.environ.copy()
+        for name in subprocess.check_output(["git", "rev-parse", "--local-env-vars"], text=True).splitlines():
+            self.environment.pop(name, None)
         self.temporary = tempfile.TemporaryDirectory(prefix="neomusic-workflow-test-")
         self.addCleanup(self.temporary.cleanup)
         self.directory = Path(self.temporary.name)
@@ -31,7 +35,8 @@ class RepositoryFixture(unittest.TestCase):
         path.chmod(0o755)
 
     def git(self, *arguments):
-        return subprocess.check_output(["git", *arguments], cwd=self.directory, text=True).strip()
+        return subprocess.check_output(["git", *arguments], cwd=self.directory,
+                                       env=self.environment, text=True).strip()
 
     def commit(self, message):
         self.git("add", "-A")
@@ -53,7 +58,7 @@ class PrePushTests(RepositoryFixture):
         line = f"refs/heads/main {local} refs/heads/main {remote}\n"
         return subprocess.run(["bash", "scripts/pre-push.sh"], cwd=self.directory,
                               input=line + extra, text=True, capture_output=True,
-                              env={**os.environ, **(environment or {})})
+                              env={**self.environment, **(environment or {})})
 
     def code_commit(self):
         self.write("App.swift", "let value = 2\n")
@@ -200,7 +205,7 @@ class CIRecordTests(RepositoryFixture):
 
     def run_ci(self, environment=None):
         return subprocess.run(["bash", "scripts/ci.sh"], cwd=self.directory, text=True,
-                              capture_output=True, env={**os.environ,
+                              capture_output=True, env={**self.environment,
                               "PATH": str(self.directory / "bin") + os.pathsep + os.environ["PATH"],
                               **(environment or {})})
 
