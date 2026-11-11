@@ -152,12 +152,24 @@ final class NeteaseMusicClientTests: XCTestCase, @unchecked Sendable {
         let song = try await client.songDetail(id: 12, credential: nil)
         XCTAssertEqual(song.artists?.map(\.id), [1, 2])
         XCTAssertEqual(song.albumID, 3)
+        XCTAssertEqual(song.trackNumber, 0)
+        XCTAssertEqual(song.discNumber, 1)
+    }
+    @MainActor func testAlbumRetainsTrackAndDiscNumbersThroughCaching() async throws {
+        let client = makeClient([#"{"code":200,"album":{"id":3,"name":"Album","size":3},"songs":[{"id":12,"name":"Seventh","ar":[],"al":{"id":3,"name":"Album"},"dt":90000,"no":7,"cd":"01"},{"id":13,"name":"Eighth","ar":[],"al":{"id":3,"name":"Album"},"dt":90000,"no":8,"cd":"01"},{"id":14,"name":"Second disc","ar":[],"al":{"id":3,"name":"Album"},"dt":90000,"no":1,"cd":"02"}]}"#])
+        let album = try await client.albumDetail(id: 3, credential: nil)
+        XCTAssertEqual(album.songs.map(\.trackNumber), [7, 8, 1])
+        XCTAssertEqual(album.songs.map(\.discNumber), [1, 1, 2])
+        let restored = try JSONDecoder().decode(NeteaseArtistAlbumDetail.self, from: JSONEncoder().encode(album))
+        XCTAssertEqual(restored.songs, album.songs)
     }
     func testLegacySongCacheDecodesWithoutArtistIdentity() throws {
         let data = Data(#"{"id":12,"title":"Song","artist":"Artist","album":"Album","duration":90,"unavailable":false}"#.utf8)
         let song = try JSONDecoder().decode(NeteaseMusicSong.self, from: data)
         XCTAssertNil(song.artists)
         XCTAssertNil(song.albumID)
+        XCTAssertNil(song.trackNumber)
+        XCTAssertNil(song.discNumber)
     }
     @MainActor func testTrialIsSkippedForCompleteLowerQuality() async throws {
         let client = makeClient([

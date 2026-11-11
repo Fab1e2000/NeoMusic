@@ -258,8 +258,8 @@ final class OnlineMusicIntegration {
     private func song(_ value: NeteaseMusicSong, owner: Int64, music: NeteaseMusicStore) -> LibrarySongItem {
         let artworkURL = value.artworkURL.flatMap { music.cachedArtworkURL($0) }
         return LibrarySongItem(id: "netease:\(owner):\(value.id)", title: value.title, artist: value.artist,
-            album: value.album, albumArtist: value.artist, trackNumber: 0,
-            artwork: artwork(value.artworkURL, music: music, placeholder: .missing), artworkURL: artworkURL,
+            album: value.album, albumArtist: value.artist, trackNumber: value.trackNumber ?? 0,
+            artwork: artwork(value.artworkURL, music: music, placeholder: .missing), discNumber: value.discNumber ?? 1, artworkURL: artworkURL,
             duration: Int(value.duration), isFavorite: music.likedIDs.contains(value.id),
             favoriteAddedAt: music.likedAt[value.id], unavailabilityReason: value.unavailable ? "暂无完整音源" : nil, onlineAlbumID: value.albumID,
             artistReferences: (value.artists ?? []).map { .init(id: "catalog:artist:\($0.id)", name: $0.name) })

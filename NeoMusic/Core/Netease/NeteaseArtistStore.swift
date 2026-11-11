@@ -235,7 +235,8 @@ final class NeteaseArtistStore {
             guard token == revision, !Task.isCancelled else { return }
             restoredPages.insert(key)
             guard let page = cached ?? legacy?.0 else { return }
-            albums[id] = page.detail; refreshedAt[key] = page.refreshedAt
+            albums[id] = page.detail
+            refreshedAt[key] = page.detail.songs.contains { $0.trackNumber == nil || $0.discNumber == nil } ? nil : page.refreshedAt
             mergeSongs(page.detail.songs, source: key)
             if let artwork = legacy?.1 { legacyArtwork.merge(artwork) { _, new in new } }
             publish(.album(id))

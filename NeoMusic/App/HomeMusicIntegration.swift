@@ -706,8 +706,8 @@ import Observation
     private func mapSong(_ song: NeteaseMusicSong) -> LibrarySongItem {
         let id = owner.map { "netease:\($0):\(song.id)" } ?? "home-guest:\(song.id)"
         let url = song.artworkURL.flatMap { account.home?.cachedArtworkURL(remote: $0) }
-        return LibrarySongItem(id: id, title: song.title, artist: song.artist, album: song.album, albumArtist: song.artist, trackNumber: 0,
-                               artwork: artwork(song.artworkURL, placeholder: .missing), artworkURL: url, duration: Int(song.duration),
+        return LibrarySongItem(id: id, title: song.title, artist: song.artist, album: song.album, albumArtist: song.artist, trackNumber: song.trackNumber ?? 0,
+                               artwork: artwork(song.artworkURL, placeholder: .missing), discNumber: song.discNumber ?? 1, artworkURL: url, duration: Int(song.duration),
                                isFavorite: account.music?.likedIDs.contains(song.id) == true,
                                favoriteAddedAt: account.music?.likedAt[song.id], unavailabilityReason: song.unavailable ? "暂无完整音源" : nil, onlineAlbumID: song.albumID,
                 artistReferences: (song.artists ?? []).map { .init(id: "catalog:artist:\($0.id)", name: $0.name) })

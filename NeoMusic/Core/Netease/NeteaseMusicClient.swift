@@ -151,7 +151,7 @@ final class NeteaseMusicClient: Sendable {
     struct Song: Decodable {
         struct Artist: Decodable { let id: Int64?; let name: String }
         struct Album: Decodable { let id: Int64?; let name: String; let picUrl: String? }
-        let id: Int64; let name: String; let ar: [Artist]; let al: Album; let dt: Double
-        var model: NeteaseMusicSong { .init(id: id, title: name, artist: ar.map(\.name).joined(separator: " / "), album: al.name, artworkURL: NeteaseMusicClient.url(al.picUrl), duration: dt / 1000, artists: ar.compactMap { artist in artist.id.map { NeteaseArtistReference(id: $0, name: artist.name, artworkURL: nil) } }, albumID: al.id) }
+        let id: Int64; let name: String; let ar: [Artist]; let al: Album; let dt: Double; let no: Int?; let cd: String?
+        var model: NeteaseMusicSong { .init(id: id, title: name, artist: ar.map(\.name).joined(separator: " / "), album: al.name, artworkURL: NeteaseMusicClient.url(al.picUrl), duration: dt / 1000, artists: ar.compactMap { artist in artist.id.map { NeteaseArtistReference(id: $0, name: artist.name, artworkURL: nil) } }, albumID: al.id, trackNumber: max(0, no ?? 0), discNumber: max(1, Int(cd ?? "1") ?? 1)) }
     }
 }

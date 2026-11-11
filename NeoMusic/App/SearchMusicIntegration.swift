@@ -229,7 +229,7 @@ final class SearchMusicIntegration {
         if let value = resource.song {
             let id = "netease:\(account.profile.map { String($0.userID) } ?? "search-guest"):\(value.id)"
             song = LibrarySongItem(id: id, title: value.title, artist: value.artist, album: value.album,
-                albumArtist: value.artist, trackNumber: 0, artwork: cover,
+                albumArtist: value.artist, trackNumber: value.trackNumber ?? 0, artwork: cover, discNumber: value.discNumber ?? 1,
                 artworkURL: value.artworkURL.flatMap { store?.cachedArtwork($0) }, duration: Int(value.duration),
                 isFavorite: account.music?.likedIDs.contains(value.id) == true, favoriteAddedAt: account.music?.likedAt[value.id],
                 unavailabilityReason: value.unavailable ? "暂无完整音源" : nil, onlineAlbumID: value.albumID,

@@ -244,7 +244,7 @@ import Observation
     }
     private func songItem(_ value: NeteaseMusicSong) -> LibrarySongItem {
         let url = value.artworkURL.flatMap { store?.cachedArtworkURL($0) }
-        return .init(id: owner.map { "netease:\($0):\(value.id)" } ?? "catalog-guest:\(value.id)", title: value.title, artist: value.artist, album: value.album, albumArtist: value.artist, trackNumber: 0, artwork: artwork(value.artworkURL), artworkURL: url, duration: Int(value.duration), isFavorite: account.music?.likedIDs.contains(value.id) == true, favoriteAddedAt: account.music?.likedAt[value.id], unavailabilityReason: value.unavailable ? "暂无完整音源" : nil, onlineAlbumID: value.albumID, artistReferences: (value.artists ?? []).map { .init(id: "catalog:artist:\($0.id)", name: $0.name) })
+        return .init(id: owner.map { "netease:\($0):\(value.id)" } ?? "catalog-guest:\(value.id)", title: value.title, artist: value.artist, album: value.album, albumArtist: value.artist, trackNumber: value.trackNumber ?? 0, artwork: artwork(value.artworkURL), discNumber: value.discNumber ?? 1, artworkURL: url, duration: Int(value.duration), isFavorite: account.music?.likedIDs.contains(value.id) == true, favoriteAddedAt: account.music?.likedAt[value.id], unavailabilityReason: value.unavailable ? "暂无完整音源" : nil, onlineAlbumID: value.albumID, artistReferences: (value.artists ?? []).map { .init(id: "catalog:artist:\($0.id)", name: $0.name) })
     }
     func artistDetail(_ id: Int64) -> ArtistDetail? { state("artist:\(id)").artist }
     private func makeArtistDetail(_ id: Int64) -> ArtistDetail? {

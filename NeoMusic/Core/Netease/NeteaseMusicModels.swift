@@ -10,6 +10,8 @@ struct NeteaseMusicSong: Codable, Sendable, Equatable, Identifiable {
     var unavailable = false
     var artists: [NeteaseArtistReference]? = nil
     var albumID: Int64? = nil
+    var trackNumber: Int? = nil
+    var discNumber: Int? = nil
 }
 struct NeteaseMusicPlaylist: Codable, Sendable, Equatable, Identifiable {
     let id: Int64

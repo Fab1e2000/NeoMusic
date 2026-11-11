@@ -167,6 +167,53 @@ import Synchronization
         await store.invalidate()
     }
 
+    func testAlbumWithoutCachedTrackNumbersRefreshesAndPublishesNumbersAfterOfflineRetry() async throws {
+        let directory = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cache = NeteasePageCache(directory: directory.appendingPathComponent("Pages"))
+        let album = NeteaseArtistAlbum(id: 8, title: "Album", artist: "Artist", artworkURL: nil,
+                                      publishTime: nil, type: "Album", trackCount: 3)
+        let songs = (80...82).map { NeteaseMusicSong(id: Int64($0), title: "Song \($0)", artist: "Artist",
+                                                   album: "Album", artworkURL: nil, duration: 1, albumID: 8) }
+        try await cache.save(ArtistAlbumPageFixture(detail: .init(album: album, songs: songs), refreshedAt: Date()), scope: "public", key: "album:8")
+        let store = try await contentStore(directory: directory)
+        let account = NeteaseAccount(readSession: { nil }, saveSession: { _ in }, deleteSession: {},
+                                    validateCredential: { _ in throw NeteaseAccountError.authenticationRequired },
+                                    cachedAvatar: { _ in nil }, loadAvatar: { _ in Data() }, clearAvatarCache: {}, artists: store)
+        let integration = ArtistMusicIntegration(account: account)
+        integration.connect()
+        ArtistContentProtocol.state.withLock { $0.offline = true }
+        await store.loadAlbum(id: 8)
+        XCTAssertEqual(store.albums[8]?.songs, songs, "The cached album remains available during a failed refresh")
+        XCTAssertEqual(integration.albumDetail(8)?.songs.count, 3)
+        XCTAssertNotNil(store.errors["album:8"])
+        ArtistContentProtocol.state.withLock { $0.offline = false }
+        await store.loadAlbum(id: 8)
+        XCTAssertNil(store.errors["album:8"])
+        XCTAssertEqual(integration.albumDetail(8)?.songs.map(\.trackNumber), [7, 8, 1])
+        XCTAssertEqual(integration.albumDetail(8)?.songs.map(\.discNumber), [1, 1, 2])
+        XCTAssertEqual(ArtistContentProtocol.state.withLock { $0.paths }, ["/eapi/v1/album/8", "/eapi/v1/album/8"])
+        await store.loadAlbum(id: 8)
+        XCTAssertEqual(ArtistContentProtocol.state.withLock { $0.paths.count }, 2, "Updated track metadata remains fresh")
+        await store.invalidate()
+    }
+
+    func testFreshAlbumCacheWithTrackNumbersNeedsNoRequest() async throws {
+        let directory = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cache = NeteasePageCache(directory: directory.appendingPathComponent("Pages"))
+        let album = NeteaseArtistAlbum(id: 8, title: "Album", artist: "Artist", artworkURL: nil,
+                                      publishTime: nil, type: "Album", trackCount: 1)
+        let song = NeteaseMusicSong(id: 80, title: "Song", artist: "Artist", album: "Album", artworkURL: nil,
+                                   duration: 1, albumID: 8, trackNumber: 7, discNumber: 2)
+        try await cache.save(ArtistAlbumPageFixture(detail: .init(album: album, songs: [song]), refreshedAt: Date()), scope: "public", key: "album:8")
+        let store = try await contentStore(directory: directory)
+        await store.loadAlbum(id: 8)
+        XCTAssertEqual(store.albums[8]?.songs, [song])
+        XCTAssertTrue(ArtistContentProtocol.state.withLock { $0.paths.isEmpty })
+        await store.invalidate()
+    }
+
     func testArtistPageRestoresFreshnessAndAccountScope() async throws {
         let directory = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -374,6 +421,8 @@ private final class ArtistContentProtocol: URLProtocol, @unchecked Sendable {
             body = """
             {"code":200,"artist":{"id":\(id),"name":"Artist \(id)","briefDesc":"Brief"},"hotSongs":\(songs)}
             """
+        } else if path == "/eapi/v1/album/8" {
+            body = #"{"code":200,"album":{"id":8,"name":"Album","size":3},"songs":[{"id":80,"name":"Song 80","ar":[{"id":7,"name":"Artist"}],"al":{"id":8,"name":"Album"},"dt":1000,"no":7,"cd":"01"},{"id":81,"name":"Song 81","ar":[{"id":7,"name":"Artist"}],"al":{"id":8,"name":"Album"},"dt":1000,"no":8,"cd":"01"},{"id":82,"name":"Song 82","ar":[{"id":7,"name":"Artist"}],"al":{"id":8,"name":"Album"},"dt":1000,"no":1,"cd":"02"}]}"#
         } else if path.hasSuffix("/artist/introduction") {
             body = #"{"code":200,"briefDesc":"Full biography","introduction":[]}"#
         } else if path.contains("/artist/albums/") {
