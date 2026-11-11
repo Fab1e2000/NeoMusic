@@ -99,17 +99,17 @@ xcodebuild -project NeoMusic.xcodeproj -scheme NeoMusic -configuration Release \
 
 边界检查覆盖全部 Swift 与 Objective-C 源文件，限制网易云网络和凭据代码归属 `Core/Netease`、WebKit 认证界面归属 `Features/Account`；App 只负责装配。通用播放器与本地资料库不得引用网易云类型或承担账户请求，网易云业务不得访问本地资料库和播放状态。既有播放器依赖继续按目录限制。
 
-## CI 与 Release
+## 本机验证与 Release
 
-GitHub Actions 使用 `xcode-27` 托管 runner 与 Xcode 27.1，版本依据 [GitHub runner 软件清单](https://github.com/actions/runner-images/blob/main/images/macos/xcode-27-arm64-Readme.md)。该 runner 仍处于预览期。
+项目验证统一在本机执行，入口为 `bash scripts/ci.sh`。
 
-**CI** 在推送 `main`、提交 PR 或手动运行时依次执行脚本回归、模块边界检查、XcodeGen 工程生成及 `NeoMusicTests` 的 Release 测试，开启 `ENABLE_TESTABILITY`。脚本回归覆盖边界规则、推送门禁、CI 记录及 Release 草稿保护，使用临时仓库与隔离命令替身。测试本身完成编译。纯文档、设计参考与许可证改动跳过自动 CI，手动运行不受此限制。日志、`.xcresult` 和 `source-state.json` 保存 7 天。
+完整检查依次执行脚本回归、模块边界检查、XcodeGen 工程生成及 `NeoMusicTests` 的 Release 测试，开启 `ENABLE_TESTABILITY`。脚本回归覆盖边界规则、推送门禁、验证记录及 Release 草稿保护，使用临时仓库与隔离命令替身。测试本身完成编译，日志、`.xcresult` 和 `source-state.json` 保存在本机忽略目录。
 
-CI 使用 iOS 27.0 的标准 iPhone 模拟器，不运行依赖外置音乐和基线应用的 UI 测试；Metal 和系统 zoom 用例按实际环境报告跳过，不能视为体验验收。
+完整检查使用 iOS 27.0 的标准 iPhone 模拟器。依赖外置音乐和基线应用的 UI 测试按专项范围另行运行。Metal 和系统 zoom 用例按实际环境报告通过、失败或跳过，真机与交互体验按对应阶段验收。
 
-推送代码、脚本或工程变更时，仓库里的 `pre-push` 钩子运行 `scripts/ci.sh`。每个需要 CI 的待推 ref 都须指向当前 HEAD，附注标签先解析到提交。工作区须已保存全部已跟踪和未跟踪修改，忽略的构建产物可保留。一次推送多个代码 ref 时要求它们指向同一 HEAD，文档 ref 可指向其他提交。检查失败时先保存修改或切换到待推提交，再重新推送。
+推送代码、脚本或工程变更时，仓库里的 `pre-push` 钩子运行 `scripts/ci.sh`。每个需要完整检查的待推 ref 都须指向当前 HEAD，附注标签先解析到提交。工作区须已保存全部已跟踪和未跟踪修改，忽略的构建产物可保留。一次推送多个代码 ref 时要求它们指向同一 HEAD，文档 ref 可指向其他提交。检查失败时先保存修改或切换到待推提交，再重新推送。
 
-路径判断分别检查每个 ref，关闭重命名检测以保留源码删除路径。没有已知共同基线时检查目标提交的完整树，覆盖首次推送和合并提交。只含说明文档、`design/` 或许可证时跳过，与 Actions 的 `paths-ignore` 一致。开始 CI 前，钩子将已有结果包与来源记录分别保存为 `TestResults.previous.xcresult` 和 `source-state.previous.json`。
+路径判断分别检查每个 ref，关闭重命名检测以保留源码删除路径。没有已知共同基线时检查目标提交的完整树，覆盖首次推送和合并提交。只含说明文档、`design/` 或许可证时跳过完整检查。开始检查前，钩子将已有结果包与来源记录分别保存为 `TestResults.previous.xcresult` 和 `source-state.previous.json`。
 
 本机安装一次：
 
@@ -125,12 +125,12 @@ bash scripts/ci.sh
 bash scripts/release.sh
 ```
 
-默认输出分别为 `build/ci/`、`build/release/` 和 `dist/`。可用 `NEOMUSIC_DERIVED_DATA` 指定已有构建目录。`build/ci/source-state.json` 记录提交 ID、开始和结束时的 dirty 标志、UTC 时间、退出码及通过／失败状态。手动运行 CI 可检查未提交工作，来源记录保留对应 dirty 状态。推送门禁要求干净 HEAD。直接再跑 `scripts/ci.sh` 时先移走旧的结果包及来源记录，保留它们的对应关系。
+默认输出分别为 `build/ci/`、`build/release/` 和 `dist/`。可用 `NEOMUSIC_DERIVED_DATA` 指定已有构建目录。`build/ci/source-state.json` 记录提交 ID、开始和结束时的 dirty 标志、UTC 时间、退出码及通过／失败状态。手动检查可覆盖未提交工作，来源记录保留对应 dirty 状态。推送门禁要求干净 HEAD。直接再跑 `scripts/ci.sh` 时先移走旧的结果包及来源记录，保留它们的对应关系。
 
-**Release** 的使用方式：
+GitHub Actions 的 Release 工作流使用 `xcode-27` runner 与 Xcode 27.1。Release 的使用方式如下。
 
 1. 修改 `project.yml` 中的 `MARKETING_VERSION`，更新 `CURRENT_PROJECT_VERSION`，运行 XcodeGen，并编写 `docs/releases/vX.Y.Z.md`。
-2. 提交代码并确认 CI 通过。
+2. 提交代码并完成本机完整检查。
 3. 在 Actions 手动运行 Release 可先检查打包结果；它只上传 IPA 与 SHA-256 校验文件，不创建标签或发布版本。
 4. 为确认好的提交创建并推送 `vX.Y.Z` 标签。标签须与工程版本一致，流程会生成未签名 IPA 和 Release 草稿。
 5. 在 GitHub Releases 检查草稿、附件与更新说明，决定是否标为预发布，再点击发布。

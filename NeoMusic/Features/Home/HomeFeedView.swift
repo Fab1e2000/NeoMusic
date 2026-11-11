@@ -177,7 +177,7 @@ struct HomeQuickActionCard: View {
         .foregroundStyle(.white)
         .multilineTextAlignment(.leading)
         .padding(16)
-        .frame(width: HomeMetrics.heroWidth)
+        .frame(width: HomeMetrics.heroWidth, alignment: .leading)
         .frame(minHeight: HomeMetrics.heroHeight, alignment: .bottomLeading)
         .background {
             LibraryCardArtwork(content: AnyView(HomeQuickActionArtwork(item: item).id(sourceIdentity)), sources: artworkSources, sourceID: sourceIdentity, cornerRadius: 16)

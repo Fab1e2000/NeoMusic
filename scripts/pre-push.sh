@@ -1,5 +1,5 @@
 #!/bin/bash
-# 推送前跑与 GitHub CI 相同的检查。纯文档、设计参考和许可证与 CI 的 paths-ignore 一样跳过。
+# 推送前执行本机完整检查。纯文档、设计参考和许可证跳过。
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -45,20 +45,20 @@ PY
 done
 
 if [ ! -s "$commits" ]; then
-    echo "推送内容与 CI 的忽略范围相同，跳过本地 CI。"
+    echo "本次推送无需本机完整检查。"
     exit 0
 fi
 
 head_commit=$(git rev-parse HEAD)
 while read -r commit; do
     if [ "$commit" != "$head_commit" ]; then
-        echo "需要 CI 的待推提交必须是当前 HEAD，请切换到对应提交后推送。" >&2
+        echo "需要完整检查的待推提交必须是当前 HEAD，请切换到对应提交后推送。" >&2
         exit 1
     fi
 done <"$commits"
 working_tree=$(git status --porcelain --untracked-files=normal)
 if [ -n "$working_tree" ]; then
-    echo "需要 CI 的推送要求干净工作区，请先保存已跟踪和未跟踪的修改。" >&2
+    echo "需要完整检查的推送要求干净工作区，请先保存已跟踪和未跟踪的修改。" >&2
     exit 1
 fi
 
@@ -70,5 +70,5 @@ if [ -f build/ci/source-state.json ]; then
     mv -f build/ci/source-state.json build/ci/source-state.previous.json
 fi
 
-echo "推送前运行与 GitHub 相同的 CI：脚本回归、边界检查、XcodeGen、NeoMusicTests Release。"
+echo "推送前运行本机完整检查，包含脚本回归、边界检查、XcodeGen 和 NeoMusicTests Release。"
 bash scripts/ci.sh

@@ -8,7 +8,6 @@
 
 SwiftUI 与 UIKit 原生构建 · iOS 27 · AVFoundation 播放
 
-[![CI](https://github.com/Fab1e2000/NeoMusic/actions/workflows/ci.yml/badge.svg?style=flat-square)](https://github.com/Fab1e2000/NeoMusic/actions/workflows/ci.yml)
 [![iOS 27+](https://img.shields.io/badge/iOS-27%2B-111111?style=flat-square&logo=apple&logoColor=white)](#环境要求)
 [![Swift 6](https://img.shields.io/badge/Swift-6-F05138?style=flat-square&logo=swift&logoColor=white)](https://www.swift.org)
 [![SwiftUI](https://img.shields.io/badge/UI-SwiftUI-0A84FF?style=flat-square)](https://developer.apple.com/xcode/swiftui/)
@@ -94,7 +93,7 @@ open NeoMusic.xcodeproj
 
 选择 `NeoMusic` scheme 和 iPhone 模拟器即可运行。参与开发前请阅读[项目规范](AGENTS.md)；`project.yml` 是工程配置的唯一编辑来源。最近验证环境、依赖版本与完整测试说明见[开发指南](docs/development.md)。
 
-[CI](https://github.com/Fab1e2000/NeoMusic/actions/workflows/ci.yml) 自动检查模块边界并运行正式测试 target；推送匹配工程版本的标签会生成 Release 草稿，确认后手动发布。
+验证统一在本机执行，推送前通过 `pre-push` 钩子运行脚本回归、模块边界检查、工程生成和 Release 全量测试。安装与手动运行方式见[开发指南](docs/development.md)。推送匹配工程版本的标签会生成 Release 草稿，确认后手动发布。
 
 ## 项目结构
 
@@ -109,7 +108,7 @@ NeoMusicTests/                # 单元与业务回归测试
 NeoMusicNavigationUITests/    # 原生交互测试
 NeoMusicFunctionalParityTests/ # 专项对照测试
 docs/               # 开发指南、阶段计划与发布说明
-scripts/            # 边界检查、CI 与发布脚本
+scripts/            # 本机检查、推送门禁与发布脚本
 ```
 
 ## 文档
