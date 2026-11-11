@@ -1,5 +1,6 @@
 import XCTest
 import Synchronization
+import SwiftUI
 @testable import NeoMusic
 
 @MainActor final class NeteaseLoadingPerformanceTests: XCTestCase {
@@ -107,6 +108,140 @@ import Synchronization
         XCTAssertTrue(reused)
         XCTAssertEqual(Array(LoadingProtocol.state.withLock { $0.startedPaths }.dropFirst(requests.count)), ["/eapi/radio/like"])
         await restored.invalidate()
+    }
+
+    func testFavoritesPageLoadsAllSongsWhenAccountRestoresAfterPageAppears() async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let network = network(try playlistFixtures(count: 2, favorites: true))
+        defer { network.invalidateAndCancel() }
+        let saved = try session()
+        let original = NeteaseMusicStore(client: client(network), directory: root, artworkSession: network)
+        await original.activate(saved)
+        await original.waitForCacheWrites()
+        await original.invalidate()
+
+        let responses = try playlistFixtures(count: 205, favorites: true)
+        LoadingProtocol.state.withLock { $0.responses = responses; $0.startedPaths = [] }
+        let music = NeteaseMusicStore(client: client(network), directory: root, artworkSession: network)
+        let account = NeteaseAccount(readSession: { saved }, saveSession: { _ in }, deleteSession: {},
+            validateCredential: { _ in saved.profile }, cachedAvatar: { _ in nil },
+            loadAvatar: { _ in Data() }, clearAvatarCache: {}, music: music)
+        let loaded = expectation(description: "The favorites route completes every page")
+        var didLoad = false
+        music.onChange = {
+            if !didLoad, music.playlistTracks[7]?.count == 205 {
+                didLoad = true
+                loaded.fulfill()
+            }
+        }
+        let scene = try await applicationWindowScene()
+        let window = UIWindow(windowScene: scene)
+        window.rootViewController = UIHostingController(rootView:
+            LocalFavoritesDetail().environment(account))
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true; window.rootViewController = nil }
+
+        await account.restoreCachedContent()
+        await fulfillment(of: [loaded], timeout: 5)
+        XCTAssertEqual(music.playlistTracks[7], Array(1...205).map(Int64.init))
+        XCTAssertEqual(music.likedIDs, Set((1...205).map(Int64.init)))
+        XCTAssertFalse(music.hasMorePlaylist(id: 7))
+        let requests = LoadingProtocol.state.withLock { $0.startedPaths }
+        XCTAssertEqual(requests.filter { $0 == "/eapi/v6/playlist/detail" }.count, 1)
+        XCTAssertEqual(requests.filter { $0 == "/eapi/v3/song/detail" }.count, 2)
+        music.onChange = nil
+        window.isHidden = true
+        window.rootViewController = nil
+        await music.invalidate()
+    }
+
+    func testFavoritesLoadRetriesFailedDetailInsideLibraryFreshnessWindow() async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let network = network(try playlistFixtures(count: 2, favorites: true))
+        defer { network.invalidateAndCancel() }
+        let music = NeteaseMusicStore(client: client(network), directory: root, artworkSession: network)
+        await music.activate(try session())
+        let responses = try playlistFixtures(count: 205, favorites: true)
+        let path = "/eapi/v6/playlist/detail"
+        LoadingProtocol.state.withLock { $0.responses = responses; $0.statuses[path] = 503 }
+
+        await music.loadFavorites(force: true)
+        XCTAssertEqual(music.playlistTracks[7], [1, 2])
+        XCTAssertEqual(music.likedIDs.count, 205)
+        XCTAssertNotNil(music.playlistErrors[7])
+        LoadingProtocol.state.withLock { $0.statuses[path] = nil }
+
+        await music.loadFavorites()
+        XCTAssertEqual(music.playlistTracks[7], Array(1...205).map(Int64.init))
+        XCTAssertNil(music.playlistErrors[7])
+        XCTAssertFalse(music.hasMorePlaylist(id: 7))
+        let requests = LoadingProtocol.state.withLock { $0.startedPaths }
+        await music.loadFavorites()
+        XCTAssertEqual(LoadingProtocol.state.withLock { $0.startedPaths }, requests)
+        await music.invalidate()
+    }
+
+    func testFavoritesLoadRetriesFailedMembershipAndCompletesRemainingSongs() async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = "/eapi/song/like/get"
+        let network = network(try playlistFixtures(count: 205, favorites: true), statuses: [path: 503])
+        defer { network.invalidateAndCancel() }
+        let music = NeteaseMusicStore(client: client(network), directory: root, artworkSession: network)
+        await music.activate(try session())
+        XCTAssertTrue(music.likedIDs.isEmpty)
+        XCTAssertNotNil(music.error)
+        LoadingProtocol.state.withLock { $0.statuses[path] = nil }
+
+        await music.loadFavorites()
+        XCTAssertEqual(music.likedIDs, Set((1...205).map(Int64.init)))
+        XCTAssertEqual(music.playlistTracks[7], Array(1...205).map(Int64.init))
+        XCTAssertNil(music.error)
+        XCTAssertFalse(music.hasMorePlaylist(id: 7))
+        await music.invalidate()
+    }
+
+    func testFavoritesPublishWhenLocalRestorationFinishesBeforeOnlineConnection() async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let network = network(try playlistFixtures(count: 203, favorites: true))
+        defer { network.invalidateAndCancel() }
+        let saved = try session()
+        let music = NeteaseMusicStore(client: client(network), directory: root, artworkSession: network)
+        let account = NeteaseAccount(readSession: { saved }, saveSession: { _ in }, deleteSession: {},
+            validateCredential: { _ in saved.profile }, cachedAvatar: { _ in nil },
+            loadAvatar: { _ in Data() }, clearAvatarCache: {}, music: music)
+        await account.restoreCachedContent()
+        await music.loadFavorites()
+        XCTAssertEqual(music.playlistTracks[7]?.count, 203)
+
+        await LocalLibrary.runtime.restoreCachedState()
+        XCTAssertTrue(LocalLibrary.runtime.hasRestoredPlayback)
+        let previousOnline = LocalLibrary.songLibrary.onlineSongs
+        let previousRestored = LocalLibrary.runtime.onLibraryRestored
+        defer {
+            LocalLibrary.songLibrary.replaceExternalSongs([], source: "favorites-publication-test")
+            LocalLibrary.songLibrary.replaceOnline(previousOnline)
+            LocalLibrary.runtime.onLibraryRestored = previousRestored
+        }
+        let identities = Set((1...203).map { "netease:42:\($0)" })
+        let preview = (1...4).map {
+            LibrarySongItem(id: "netease:42:\($0)", title: "Preview \($0)", artist: "Artist", album: "Album",
+                            albumArtist: "Artist", trackNumber: 0, artwork: .missing, isFavorite: true)
+        }
+        LocalLibrary.songLibrary.replaceOnline([])
+        LocalLibrary.songLibrary.replaceExternalSongs(preview, source: "favorites-publication-test")
+        XCTAssertEqual(LocalLibrary.favorites.filter { identities.contains($0.id) }.count, 4)
+
+        let integration = OnlineMusicIntegration(account: account)
+        integration.connect()
+        let detail = try XCTUnwrap(LocalLibrary.playlistDetail("favorites"))
+        XCTAssertEqual(detail.songs.filter { identities.contains($0.id) }.count, 203)
+        XCTAssertEqual(LocalLibrary.songLibrary.onlineSongs.count, 203)
+        await music.invalidate()
+        XCTAssertTrue(LocalLibrary.songLibrary.onlineSongs.isEmpty)
     }
 
     func testCachedPlaylistPublishesBeforeRefreshAndSurvivesRefreshFailure() async throws {

@@ -519,9 +519,38 @@ private struct LocalDestination: View {
     }
 }
 
-private struct LocalFavoritesDetail: View {
+struct LocalFavoritesDetail: View {
+    @Environment(NeteaseAccount.self) private var account
+
+    private struct LoadRequest: Equatable {
+        let revision: UUID
+        let playlistID: Int64
+    }
+
+    private var loadRequest: LoadRequest? {
+        guard account.hasRestored, let music = account.music, music.userID != nil,
+              let favorites = music.playlists.first(where: \.isFavorites) else { return nil }
+        return LoadRequest(revision: music.sessionRevision, playlistID: favorites.id)
+    }
+
     var body: some View {
-        if let detail = LocalLibrary.playlistDetail("favorites") { CollectionDetailView(detail: detail) }
+        if let detail = LocalLibrary.playlistDetail("favorites") {
+            CollectionDetailView(detail: detail)
+                .task(id: loadRequest) {
+                    guard loadRequest != nil else { return }
+                    await loadFavorites()
+                }
+                .refreshable { await loadFavorites(force: true) }
+        }
+    }
+
+    private func loadFavorites(force: Bool = false) async {
+        guard let music = account.music else { return }
+        let revision = music.sessionRevision
+        await music.loadFavorites(force: force)
+        guard revision == music.sessionRevision, !Task.isCancelled else { return }
+        let playlistError = music.playlists.first(where: \.isFavorites).flatMap { music.playlistErrors[$0.id] }
+        if let message = playlistError ?? music.error { LocalLibrary.toasts.show(.error(message)) }
     }
 }
 

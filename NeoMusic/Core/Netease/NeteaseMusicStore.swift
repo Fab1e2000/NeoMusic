@@ -220,6 +220,18 @@ final class NeteaseMusicStore {
         details[id]?.orderedTrackIDs.count ?? playlists.first(where: { $0.id == id })?.trackCount ?? 0
     }
 
+    func loadFavorites(force: Bool = false) async {
+        guard userID != nil, !Task.isCancelled else { return }
+        let revision = generation
+        await refresh(force: force)
+        guard revision == generation, !Task.isCancelled,
+              let favorites = playlists.first(where: \.isFavorites) else { return }
+        if force, playlistErrors[favorites.id] != nil { return }
+        await loadPlaylist(id: favorites.id)
+        guard revision == generation, !Task.isCancelled, playlistErrors[favorites.id] == nil else { return }
+        _ = await completePlaylist(id: favorites.id)
+    }
+
     func loadPlaylist(id: Int64, force: Bool = false) async {
         guard !Task.isCancelled else { return }
         if let existing = detailTasks[id] { _ = await existing.value; return }

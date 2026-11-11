@@ -4,7 +4,6 @@ import SwiftUI
 @MainActor
 final class OnlineMusicIntegration {
     private let account: NeteaseAccount
-    private var libraryRestored = false
     var onPublication: (() -> Void)?
     private struct Content: Equatable {
         let owner: Int64
@@ -31,7 +30,6 @@ final class OnlineMusicIntegration {
         }
         music.onQualityChange = { LocalLibrary.player.reloadCurrentResource() }
         LocalLibrary.runtime.onLibraryRestored = { [weak self] in
-            self?.libraryRestored = true
             self?.publish()
         }
         LocalLibrary.runtime.configureOnlineResolver { [weak music] id in
@@ -194,7 +192,7 @@ final class OnlineMusicIntegration {
     }
 
     private func publish() {
-        guard libraryRestored else { return }
+        guard LocalLibrary.runtime.hasRestoredPlayback else { return }
         defer { onPublication?() }
         guard let music = account.music else { return }
         if LocalLibrary.playlistLibrary.onlineStatus != music.error { LocalLibrary.playlistLibrary.onlineStatus = music.error }
@@ -290,7 +288,7 @@ final class OnlineMusicIntegration {
     }
 
     private func publishArtwork(_ urls: Set<URL>) {
-        guard libraryRestored, let music = account.music, let owner = music.userID,
+        guard LocalLibrary.runtime.hasRestoredPlayback, let music = account.music, let owner = music.userID,
               owner == account.profile?.userID, published?.owner == owner else { return }
         var songs: [String: LibrarySongItem] = [:]
         for url in urls {
