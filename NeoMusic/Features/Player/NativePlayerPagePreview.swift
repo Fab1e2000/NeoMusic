@@ -165,12 +165,11 @@ private struct NativePlayerMotionContent: View {
                 )
                 if let song = player.currentTrack {
                     VStack(spacing: 0) {
-                        Color.clear.frame(height: 22).accessibilityHidden(true)
+                        dismissalHandle(layout: layout)
                         pages(song)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .overlay(alignment: .bottom) { controls(song) }
                     }
-                    .overlay(alignment: .top) { dismissalHandle(layout: layout) }
                     .padding(.horizontal, Self.horizontalPadding)
                     .safeAreaPadding(.bottom, 3)
                 }
@@ -214,18 +213,19 @@ private struct NativePlayerMotionContent: View {
     }
 
     private func dismissalHandle(layout: ReferenceNowPlayingLayout) -> some View {
-        Button(action: onDismiss) {
-            ZStack(alignment: .top) {
-                Capsule().fill(.white.opacity(0.58))
-                    .frame(width: layout.width(60), height: 3.8)
-                    .padding(.top, layout.contentY(69))
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: 44, alignment: .top)
-            .contentShape(.rect)
+        ZStack(alignment: .top) {
+            Capsule().fill(.white.opacity(0.58))
+                .frame(width: layout.width(60), height: 3.8)
+                .padding(.top, layout.contentY(69))
         }
-        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity)
+        .frame(height: 22, alignment: .top)
+        .contentShape(.rect)
+        .onTapGesture { onDismiss() }
+        .accessibilityElement()
         .accessibilityLabel("收起播放器")
+        .accessibilityHint("返回上一页")
+        .accessibilityAction { onDismiss() }
     }
 
     private func controls(_ song: ReferenceTrack) -> some View {

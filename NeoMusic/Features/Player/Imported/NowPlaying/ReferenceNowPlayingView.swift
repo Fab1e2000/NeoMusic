@@ -107,7 +107,7 @@ struct ReferenceNowPlayingView: View {
 
     private func portraitContent(for song: ReferenceTrack, layout: ReferenceNowPlayingLayout) -> some View {
         VStack(spacing: 0) {
-            Color.clear.frame(height: 22).accessibilityHidden(true)
+            dismissalHandle(layout: layout)
 
             pageContent(for: song)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -115,7 +115,6 @@ struct ReferenceNowPlayingView: View {
                     portraitPlayerControlsLayer(for: song)
                 }
         }
-        .overlay(alignment: .top) { dismissalHandle(layout: layout) }
         .padding(.horizontal, Self.portraitHorizontalPadding)
         .safeAreaPadding(.bottom, 3)
     }
@@ -213,21 +212,25 @@ struct ReferenceNowPlayingView: View {
     }
 
     private func dismissalHandle(layout: ReferenceNowPlayingLayout) -> some View {
-        Button(action: closePlayer) {
-            ZStack(alignment: .top) {
-                Capsule()
-                    .fill(.white.opacity(0.58))
-                    .frame(width: layout.width(60), height: 3.8)
-                    .padding(.top, layout.contentY(69))
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: 44, alignment: .top)
-            .contentShape(.rect)
+        ZStack(alignment: .top) {
+            Capsule()
+                .fill(.white.opacity(0.58))
+                .frame(width: layout.width(60), height: 3.8)
+                .padding(.top, layout.contentY(69))
         }
-        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity)
+        .frame(height: 22, alignment: .top)
+        .contentShape(.rect)
+        .onTapGesture {
+            closePlayer()
+        }
+        .accessibilityElement()
         .accessibilityLabel("收起播放器")
         .accessibilityHint("返回上一页")
         .accessibilityIdentifier("player.dismiss")
+        .accessibilityAction {
+            closePlayer()
+        }
     }
 
     private func pageContent(for song: ReferenceTrack) -> some View {

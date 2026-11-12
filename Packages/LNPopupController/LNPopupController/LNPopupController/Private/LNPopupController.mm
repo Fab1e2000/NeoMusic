@@ -215,6 +215,8 @@ __attribute__((objc_direct_members))
 	CALayer* _observedTabBarContainerLayer;
 	
 	BOOL _gesturesIgnored;
+	BOOL _neo_sawGestureBegan;
+	BOOL _neo_holdingLayoutForGestureTakeover;
 #if TARGET_OS_MACCATALYST
 	_LNPopupCatalystHelper* _catalystHelper;
 #endif
@@ -828,7 +830,8 @@ __attribute__((objc_direct_members))
 //			parameters = [[UISpringTimingParameters alloc] initWithDampingRatio:0.9 initialVelocity:vector];
 //		}
 		_runningPopupAnimation = [[UIViewPropertyAnimator alloc] initWithDuration:animationDuration timingParameters:parameters];
-		_runningPopupAnimation.userInteractionEnabled = state == LNPopupPresentationStateOpen;
+		// NeoMusic: a closing animation must not freeze the page revealed underneath.
+		_runningPopupAnimation.userInteractionEnabled = YES;
 		
 		if(stateAtStart == LNPopupPresentationStateBarPresented)
 		{
@@ -949,7 +952,9 @@ __attribute__((objc_direct_members))
 	}
 	
 	LNPopupInteractionStyle resolvedStyle = _LNPopupResolveInteractionStyleFromInteractionStyle(_containerController.popupInteractionStyle, _popupControllerPublicState, nullptr);
+	_neo_sawGestureBegan = YES;
 	self.popupContentView.applyScreenCorners = YES;
+	[self.popupContentView layoutIfNeeded];
 	
 	if(resolvedStyle == LNPopupInteractionStyleNone)
 	{
@@ -1110,6 +1115,13 @@ __attribute__((objc_direct_members))
 			[self _generateSoftFeedbackWithIntensity:0.8];
 		}
 		
+		if(_neo_sawGestureBegan == NO)
+		{
+			[pgr setTranslation:CGPointZero inView:self.popupBar.superview];
+			_neo_sawGestureBegan = YES;
+		}
+		self.popupContentView.applyScreenCorners = YES;
+		
 		_lastSeenMovement = CACurrentMediaTime();
 		BOOL prevState = self.popupBar.barHighlightGestureRecognizer.enabled;
 		self.popupBar.barHighlightGestureRecognizer.enabled = NO;
@@ -1147,6 +1159,7 @@ __attribute__((objc_direct_members))
 	
 	if(_dismissGestureStarted == YES)
 	{
+		[self _neo_releaseLayoutHold];
 		CGFloat targetCenterY = MIN(_lastPopupBarLocation.y + [pgr translationInView:self.popupBar.superview].y, _cachedDefaultFrame.origin.y - self.popupBar.frame.size.height / 2 - _cachedInsets.bottom) - _dismissStartingOffset;
 		targetCenterY = MAX(targetCenterY, _cachedOpenPopupFrame.origin.y + self.popupBar.frame.size.height / 2);
 		
@@ -1205,8 +1218,14 @@ __attribute__((objc_direct_members))
 {
 	if(_dismissGestureStarted == NO)
 	{
+		BOOL shouldFinishReturn = _neo_holdingLayoutForGestureTakeover && _popupControllerInternalState == LNPopupPresentationStateOpen;
+		[self _neo_releaseLayoutHold];
 		[self _end120HzHack];
 		[self _endTransitioningLock];
+		if(shouldFinishReturn)
+		{
+			[self openPopupAnimated:YES completion:nil];
+		}
 	}
 	else
 	{
@@ -1268,13 +1287,81 @@ __attribute__((objc_direct_members))
 	}
 	
 	_dismissGestureStarted = NO;
+	_neo_sawGestureBegan = NO;
+}
+
+- (void)_neo_releaseLayoutHold
+{
+	if(_neo_holdingLayoutForGestureTakeover == NO)
+	{
+		return;
+	}
+	
+	_neo_holdingLayoutForGestureTakeover = NO;
+	[_containerController _ln_setIgnoringLayoutDuringTransition:NO];
+}
+
+- (BOOL)_neo_takeOverReturnToOpenForGesture:(UIPanGestureRecognizer*)pgr
+{
+	if(_runningPopupAnimation == nil || _popupControllerTargetState != LNPopupPresentationStateOpen)
+	{
+		return NO;
+	}
+	
+	CGPoint velocity = [pgr velocityInView:self.popupContentView];
+	if(pgr.state == UIGestureRecognizerStateBegan && fabs(velocity.y) < fabs(velocity.x))
+	{
+		return NO;
+	}
+	
+	CGRect barFrame = self.popupBar.frame;
+	CGRect contentFrame = self.popupContentView.frame;
+	UIViewPropertyAnimator* animator = _runningPopupAnimation;
+	if(animator.state == UIViewAnimatingStateActive)
+	{
+		[animator stopAnimation:NO];
+	}
+	if(animator.state == UIViewAnimatingStateStopped)
+	{
+		[animator finishAnimationAtPosition:UIViewAnimatingPositionCurrent];
+	}
+	
+	// Finishing at the current position skips the end callback that clears the
+	// screen corners and rebinds the pan while the finger is still down.
+	self.popupBar.frame = barFrame;
+	self.popupContentView.frame = contentFrame;
+	_popupControllerInternalState = LNPopupPresentationStateOpen;
+	_popupControllerTargetState = _LNPopupPresentationStateTransitioning;
+	_gesturesIgnored = NO;
+	_dismissGestureStarted = NO;
+	self.popupContentView.applyScreenCorners = YES;
+	if(_neo_holdingLayoutForGestureTakeover == NO && _containerController._ln_ignoringLayoutDuringTransition == NO)
+	{
+		[_containerController _ln_setIgnoringLayoutDuringTransition:YES];
+		_neo_holdingLayoutForGestureTakeover = YES;
+	}
+	[pgr setTranslation:CGPointZero inView:self.popupBar.superview];
+	return YES;
 }
 
 - (void)_popupBarPresentationByUserPanGestureHandler:(UIPanGestureRecognizer*)pgr
 {
-	if(_dismissalOverride || _gesturesIgnored)
+	if(_dismissalOverride)
 	{
 		return;
+	}
+	
+	if(_gesturesIgnored || _runningPopupAnimation != nil)
+	{
+		if([self _neo_takeOverReturnToOpenForGesture:pgr] == NO)
+		{
+			if(_gesturesIgnored && (pgr.state == UIGestureRecognizerStateBegan || pgr.state == UIGestureRecognizerStateChanged))
+			{
+				pgr.enabled = NO;
+				pgr.enabled = YES;
+			}
+			return;
+		}
 	}
 	
 	switch(pgr.state)

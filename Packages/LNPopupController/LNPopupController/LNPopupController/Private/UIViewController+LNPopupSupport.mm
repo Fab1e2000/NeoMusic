@@ -640,15 +640,11 @@ static const void* _LNPopupContentControllerDiscoveredTransitionView = &_LNPopup
 {
 //	NSLog(@"_ln_beginTransitioningLockWithWindow: %@ userInteractionsEnabled: %@ allowedViews: %@ lockRotation: %@", window, @(userInteractionEnabled), allowedViews, @(lockRotation));
 	
-	[window _ln_setLockedForPopupTransition:YES];
-	if(userInteractionEnabled)
-	{
-		[window _ln_setPopupInteractionOnly:allowedViews];
-	}
-	else
-	{
-		window.userInteractionEnabled = NO;
-	}
+	// NeoMusic: keep touches live through the open and close animations.
+	// The hit-test filter dropped taps on the presented player, and disabling
+	// the window blocked scrolling on the page underneath until the animation ended.
+	(void)userInteractionEnabled;
+	(void)allowedViews;
 	
 	static void(^beginDisablingInterfaceAutorotation)(UIWindow*) = nil;
 	static dispatch_once_t onceToken;
