@@ -10,6 +10,7 @@ struct NowPlayingProgressControl: View {
     @ScaledMetric(relativeTo: .caption2) private var timeFontSize: CGFloat = 12.5
 
     @Environment(\.nowPlayingLayout) private var layout
+    @State private var scrub = NowPlayingProgressScrub()
     let song: ReferenceTrack
 
     var body: some View {
@@ -43,8 +44,12 @@ struct NowPlayingProgressControl: View {
     }
 
     private var progressSlider: some View {
+        // A page animation can write the slider binding. Seek only while the finger is down.
+        // https://developer.apple.com/documentation/swiftui/slider/init(value:in:oneditingchanged:)
         Slider(value: Binding(get: { min(player.progress, progressMaximum) },
-                              set: { player.seek(to: $0) }), in: 0...progressMaximum)
+                              set: { scrub.propose($0) { player.seek(to: $0) } }),
+               in: 0...progressMaximum,
+               onEditingChanged: { scrub.setEditing($0) })
             .sliderThumbVisibility(.hidden)
             .tint(.white)
             .frame(height: 44)
@@ -91,6 +96,20 @@ struct NowPlayingProgressControl: View {
         guard value.isFinite else { return "0:00" }
         let seconds = max(0, Int(value))
         return String(format: "%d:%02d", seconds / 60, seconds % 60)
+    }
+}
+
+/// Forwards a slider value only while UIKit reports that the thumb is being dragged.
+@MainActor final class NowPlayingProgressScrub {
+    private(set) var isEditing = false
+
+    func setEditing(_ editing: Bool) {
+        isEditing = editing
+    }
+
+    func propose(_ value: Double, seek: (Double) -> Void) {
+        guard isEditing, value.isFinite else { return }
+        seek(value)
     }
 }
 

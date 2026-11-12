@@ -29,6 +29,8 @@ struct AppleMusicLocalLyricsView: View {
     @State private var rowGeometry: LyricsRowGeometry
     /// 上一次对齐到的行；与新行相邻时才用弹簧动画，跳转（拖进度条、点歌词）直接到位。
     @State private var lastFocusedID: Int?
+    @State private var restingFocusTop: CGFloat = 0
+    @State private var restingAnchor: CGFloat = 0.5
     @State private var visibility = LyricsScrollInterfaceVisibilityTracker()
     private let motion = AppleMusicLyricsMotionProfile.iOS26_6
     private var fontSize: CGFloat { fixedFontSize ?? scaledFontSize }
@@ -62,18 +64,22 @@ struct AppleMusicLocalLyricsView: View {
             let focusTop = min(max(preferredY - focusedHeight / 2, visibleHeight * 0.08),
                                max(visibleHeight * 0.08, visibleHeight * 0.84 - focusedHeight))
             let anchor = min(max(focusTop / max(height - focusedHeight, 1), 0), 1)
+            // The player coordinate space sits outside the page scale. While this page
+            // is inactive, keep the last active focus so shrinking does not move the line.
+            let appliedFocusTop = isActive ? focusTop : restingFocusTop
+            let scrollAnchor = isActive ? anchor : restingAnchor
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: motion.lineSpacing) {
                     ForEach(lyrics.lines) { line in
-                        lyricRow(line, focusTop: focusTop, stride: lineHeight + motion.lineSpacing)
+                        lyricRow(line, focusTop: appliedFocusTop, stride: lineHeight + motion.lineSpacing)
                             .id(line.id)
                     }
                 }
                 .scrollTargetLayout()
-                .padding(.top, max(focusTop, motion.firstLineStartOffset))
-                .padding(.bottom, max(height * (1 - anchor), 40))
+                .padding(.top, max(appliedFocusTop, motion.firstLineStartOffset))
+                .padding(.bottom, max(height * (1 - scrollAnchor), 40))
             }
-            .scrollPosition($position, anchor: UnitPoint(x: 0.5, y: anchor))
+            .scrollPosition($position, anchor: UnitPoint(x: 0.5, y: scrollAnchor))
             .coordinateSpace(name: "localLyricsViewport")
             .scrollIndicators(.hidden)
             .scrollClipDisabled()
@@ -105,9 +111,18 @@ struct AppleMusicLocalLyricsView: View {
                     browsing = false
                 } catch { }
             }
+            .onChange(of: focusTop, initial: true) { _, newValue in
+                if isActive { restingFocusTop = newValue }
+            }
+            .onChange(of: anchor, initial: true) { _, newValue in
+                if isActive { restingAnchor = newValue }
+            }
             .onChange(of: isActive) { _, active in
-                if active { browsing = false }
-                else {
+                if active {
+                    restingFocusTop = focusTop
+                    restingAnchor = anchor
+                    browsing = false
+                } else {
                     interacting = false
                     visibility.end()
                 }
@@ -126,6 +141,7 @@ struct AppleMusicLocalLyricsView: View {
         LocalLyricsRow(line: line, fontSize: fontSize, foreground: foreground,
                        focused: line.id == activeID, browsing: browsing, focusTop: focusTop,
                        stride: stride, coordinateSpaceName: "localLyricsViewport") {
+            guard isActive else { return }
             onSeek(line.time)
             browsing = false
             resumeGeneration += 1

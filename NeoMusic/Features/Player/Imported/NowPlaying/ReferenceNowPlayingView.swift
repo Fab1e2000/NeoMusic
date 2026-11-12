@@ -125,6 +125,7 @@ struct ReferenceNowPlayingView: View {
     ) -> some View {
         ZStack(alignment: .bottom) {
             portraitPlayerControls(for: song)
+                .modifier(LyricsControlSurfaceHitShield(isActive: page == .lyrics))
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { controlsHeight = $0 }
                 .allowsHitTesting(!hidesLyricsControls)
                 .accessibilityHidden(hidesLyricsControls)
@@ -444,6 +445,21 @@ struct ReferenceNowPlayingView: View {
         appleMusicControlsActivityGeneration &+= 1
     }
 
+}
+
+/// Keeps taps that miss a button on the lyrics control surface, instead of the lyric row behind it.
+struct LyricsControlSurfaceHitShield: ViewModifier {
+    var isActive: Bool
+
+    func body(content: Content) -> some View {
+        content.background {
+            if isActive {
+                Color.clear
+                    .contentShape(.rect)
+                    .accessibilityHidden(true)
+            }
+        }
+    }
 }
 
 /// Queue scroll writes here. Only the header and floating artwork read it, so the rest of the player stays put.

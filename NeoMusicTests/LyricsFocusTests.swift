@@ -57,6 +57,26 @@ final class LyricsFocusTests: XCTestCase {
         try await assertFocus(0, in: state)
     }
 
+    func testLeavingLyricsKeepsTheFocusedLineWhenThePageScales() async throws {
+        let state = LyricsFocusTestState()
+        let window = try await mount(state, size: .large)
+        defer { window.isHidden = true }
+        try await assertFocus(40, in: state)
+        let scrollView = try XCTUnwrap(scrollViews(in: window).first)
+        let offset = scrollView.contentOffset.y
+        let top = try XCTUnwrap(state.geometry.top(for: 40))
+        let seeksBefore = state.seekCount
+
+        state.isActive = false
+        state.presentationScale = 0.9
+        try await Task.sleep(for: .milliseconds(400))
+
+        XCTAssertEqual(state.geometry.top(for: 40) ?? -1, top, accuracy: 2)
+        XCTAssertEqual(scrollView.contentOffset.y, offset, accuracy: 2)
+        XCTAssertEqual(state.seekCount, seeksBefore)
+        XCTAssertEqual(state.activeID, 40)
+    }
+
     private func mount(_ state: LyricsFocusTestState, size: DynamicTypeSize) async throws -> UIWindow {
         let suite = "LyricsFocusTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -115,6 +135,8 @@ private final class LyricsFocusTestState {
     var viewportHeight: CGFloat = 0
     var renderedActiveID: Int?
     var renderedIsActive: Bool?
+    var presentationScale: CGFloat = 1
+    var seekCount = 0
 
     let lyrics: ReferenceLyrics = {
         let lines = (0..<80).map { index in
@@ -145,10 +167,14 @@ private struct LyricsFocusTestContent: View {
             lyrics: state.lyrics, playerFrame: CGRect(x: 0, y: 0, width: 338, height: 600),
             activeID: state.activeID, bottomOverlayHeight: 120, isActive: state.isActive,
             isInterfaceHidden: $state.isInterfaceHidden,
-            onSeek: { state.activeID = state.lyrics.activeLine(at: $0) ?? 0 },
+            onSeek: {
+                state.seekCount += 1
+                state.activeID = state.lyrics.activeLine(at: $0) ?? 0
+            },
             playerCoordinateSpace: .named("LyricsFocusTests"), rowGeometry: state.geometry
         )
         .id(state.trackIdentity)
+        .scaleEffect(state.presentationScale, anchor: .center)
         .frame(width: 338, height: 600)
         .coordinateSpace(name: "LyricsFocusTests")
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { state.viewportHeight = $0 }

@@ -5,6 +5,105 @@ import Nuke
 import AVFoundation
 @testable import NeoMusic
 
+@MainActor final class NowPlayingProgressScrubTests: XCTestCase {
+    func testScrubSeeksOnlyWhileTheFingerIsDown() {
+        let scrub = NowPlayingProgressScrub()
+        var sought: [Double] = []
+        scrub.propose(90) { sought.append($0) }
+        scrub.propose(.nan) { sought.append($0) }
+        scrub.setEditing(true)
+        scrub.propose(64) { sought.append($0) }
+        scrub.setEditing(false)
+        scrub.propose(96) { sought.append($0) }
+        XCTAssertEqual(sought, [64])
+    }
+}
+
+@MainActor final class LyricsControlSurfaceHitShieldTests: XCTestCase {
+    func testMissedButtonTapDoesNotReachTheLyricBehindTheControls() async throws {
+        try await assertProbe(shielded: false, besideHitsLyric: true)
+        try await assertProbe(shielded: true, besideHitsLyric: false)
+    }
+
+    private func assertProbe(shielded: Bool, besideHitsLyric: Bool) async throws {
+        let scene = try await applicationWindowScene()
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 300, height: 400)
+        let host = UIHostingController(rootView: LyricsControlHitProbe(shielded: shielded))
+        host.view.frame = window.bounds
+        host.view.backgroundColor = .clear
+        window.rootViewController = host
+        window.isHidden = false
+        host.view.layoutIfNeeded()
+        try await Task.sleep(for: .milliseconds(200))
+        defer { window.isHidden = true }
+
+        let lyric = try XCTUnwrap(view(identifier: "lyric", in: window))
+        let page = try XCTUnwrap(view(identifier: "page", in: window))
+        let pageFrame = page.convert(page.bounds, to: window)
+        let lyricFrame = lyric.convert(lyric.bounds, to: window)
+        let onButton = CGPoint(x: pageFrame.midX, y: min(pageFrame.maxY, window.bounds.maxY) - 4)
+        let beside = CGPoint(x: lyricFrame.minX + 12, y: pageFrame.minY - 16)
+        let besideHit = window.hitTest(beside, with: nil)
+        XCTAssertTrue(window.bounds.contains(beside))
+        XCTAssertTrue(window.bounds.contains(onButton))
+        XCTAssertGreaterThan(pageFrame.width, 30)
+        XCTAssertFalse(pageFrame.contains(beside))
+        XCTAssertEqual(isDescendant(besideHit, of: lyric), besideHitsLyric,
+                       "shielded=\(shielded) beside=\(String(describing: besideHit)) page=\(pageFrame) lyric=\(lyricFrame)")
+        XCTAssertTrue(isDescendant(window.hitTest(onButton, with: nil), of: page))
+    }
+
+    private func view(identifier: String, in root: UIView) -> UIView? {
+        if root.accessibilityIdentifier == identifier { return root }
+        for child in root.subviews {
+            if let found = view(identifier: identifier, in: child) { return found }
+        }
+        return nil
+    }
+
+    private func isDescendant(_ view: UIView?, of ancestor: UIView) -> Bool {
+        var current = view
+        while let candidate = current {
+            if candidate === ancestor { return true }
+            current = candidate.superview
+        }
+        return false
+    }
+}
+
+private struct LyricsControlHitProbe: View {
+    var shielded: Bool
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            HitTarget(identifier: "lyric")
+                .frame(width: 300, height: 400)
+            HitTarget(identifier: "page")
+                .frame(width: 44, height: 44)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                .frame(height: 120)
+                .modifier(LyricsControlSurfaceHitShield(isActive: shielded))
+        }
+        .frame(width: 300, height: 400)
+    }
+}
+
+private struct HitTarget: UIViewRepresentable {
+    var identifier: String
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.accessibilityIdentifier = identifier
+        view.backgroundColor = .clear
+        return view
+    }
+
+    func updateUIView(_ view: UIView, context: Context) {
+        view.accessibilityIdentifier = identifier
+    }
+}
+
 @MainActor final class ReferencePlayerAdapterTests: XCTestCase {
     private func track(_ id: String) -> ReferenceTrack {
         ReferenceTrack(id: id, title: id, artists: "Artist", albumTitle: "Album", coverURL: nil, duration: 210)
