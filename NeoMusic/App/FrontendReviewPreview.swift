@@ -7,6 +7,15 @@ struct FrontendReviewPreview: View {
         let title: String
     }
     private let pages = [
+        Page(id: "home-artwork-readability", title: "主页缺封面可读性核验"),
+        Page(id: "search-category-readability", title: "搜索分类大字号核验"),
+        Page(id: "menu-sizing", title: "菜单大字号预览对照"),
+        Page(id: "lyrics-focus", title: "歌词原生定位核验"),
+        Page(id: "catalog-loading", title: "首次载入反馈对照"),
+        Page(id: "library-audit", title: "资料库字号与操作核验"),
+        Page(id: "player-motion", title: "播放器原生切页对照"),
+        Page(id: "press-feedback", title: "按钮按下反馈对照"),
+        Page(id: "artwork-color", title: "专辑公开主色核验"),
         Page(id: "artist-release", title: "最新发行收藏与下载"),
         Page(id: "form", title: "草稿退出与提交文案"),
         Page(id: "errors", title: "账户错误与恢复"),
@@ -32,6 +41,11 @@ struct FrontendReviewPreview: View {
     ]
     @State private var selectedPage: Page?
     @State private var showsAudioQualitySettings = false
+    @State private var auditAccount = NeteaseAccount(
+        readSession: { nil }, saveSession: { _ in }, deleteSession: {},
+        validateCredential: { _ in throw URLError(.userAuthenticationRequired) },
+        cachedAvatar: { _ in nil }, loadAvatar: { _ in throw URLError(.userAuthenticationRequired) },
+        clearAvatarCache: {})
     @State private var previewMusic = NeteaseMusicStore(
         directory: URL.temporaryDirectory.appendingPathComponent("FrontendQualityPreview", isDirectory: true),
         defaults: UserDefaults(suiteName: "FrontendQualityPreview")!)
@@ -80,6 +94,24 @@ struct FrontendReviewPreview: View {
 
     @ViewBuilder private func content(_ page: String) -> some View {
         switch page {
+        case "home-artwork-readability":
+            HomeArtworkReadabilityPreview()
+        case "search-category-readability":
+            SearchCategoryReadabilityPreview()
+        case "menu-sizing":
+            FrontendMenuSizingPreview()
+        case "lyrics-focus":
+            NativeLyricsFocusPreview()
+        case "catalog-loading":
+            NativeCatalogLoadingPreview()
+        case "library-audit":
+            FrontendLibraryAuditPreview().environment(auditAccount)
+        case "player-motion":
+            NativePlayerPagePreview()
+        case "press-feedback":
+            FrontendPressFeedbackPreview()
+        case "artwork-color":
+            NativeArtworkColorPreview().environment(auditAccount)
         case "quality":
             NavigationStack {
                 PlayerAudioQualityPreview { showsAudioQualitySettings = true }
@@ -268,5 +300,98 @@ private struct FrontendLibraryReviewPreview: View {
             activeCount: retried ? 2 : 0, failedCount: page == "downloads" && !retried ? 2 : 0,
             progress: progress)])
     }
+}
+private struct NativeCatalogLoadingPreview: View {
+    @State private var showsFeedback = true
+    @State private var content = "专辑"
+
+    var body: some View {
+        NavigationStack {
+            VStack {
+                Picker("载入反馈", selection: $showsFeedback) {
+                    Text("当前空白").tag(false)
+                    Text("原生进度").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .padding()
+                Group {
+                    if showsFeedback { CatalogLoadingFeedback(title: "正在载入\(content)").id(content) }
+                    else { Color.clear }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .navigationTitle("首次载入反馈")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Picker("内容", selection: $content) {
+                        Text("专辑").tag("专辑")
+                        Text("艺人").tag("艺人")
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Uses the production album page with the current and public Core Image colors.
+/// Only this isolated preview consumes the candidate extraction result.
+private struct NativeArtworkColorPreview: View {
+    @State private var navigation = LibraryDetailNavigation()
+
+    var body: some View {
+        LibraryNavigationContainer(navigation: navigation, root: NativeArtworkColorContent(),
+                                   destination: { _ in AnyView(EmptyView()) })
+    }
+}
+
+private struct NativeArtworkColorContent: View {
+    @Environment(\.colorScheme) private var colorScheme
+    private let samples = ["AlbumSample01", "AlbumSample04", "AlbumSample08", "AlbumSample17"]
+    @State private var sample = "AlbumSample01"
+    @State private var backdrop: AlbumArtworkBackdrop?
+
+    var body: some View {
+        Group {
+            VStack(spacing: 0) {
+                CollectionDetailView(detail: .init(kind: .album, title: "Window Light",
+                    subtitle: "NeoMusic 示例", caption: "2026",
+                    artwork: .image(Image(sample)), tint: .blue,
+                    albumBackdrop: backdrop,
+                    songs: songs))
+            }
+            .background((backdrop?.color ?? Color(.systemBackground)).ignoresSafeArea())
+            .environment(\.colorScheme, backdrop?.colorScheme ?? colorScheme)
+            .libraryNavigationTitle("专辑公开主色")
+            .libraryTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Menu("切换封面", systemImage: "photo") {
+                        ForEach(Array(samples.enumerated()), id: \.element) { index, name in
+                            Button("封面 \(index + 1)") { sample = name }
+                        }
+                    }
+                }
+            }
+            .task(id: sample) {
+                backdrop = nil
+                guard let data = UIImage(named: sample)?.pngData() else { return }
+                let result = await Task.detached(priority: .userInitiated) {
+                    AlbumArtworkBackdrop.extract(from: data)
+                }.value
+                guard !Task.isCancelled else { return }
+                backdrop = result
+            }
+        }
+    }
+
+    private var songs: [LibrarySongItem] {
+        ["Morning Light", "Long Way Home", "静かな夜に"].enumerated().map { index, title in
+            LibrarySongItem(id: "audit-color-\(index)", title: title, artist: "NeoMusic 示例",
+                           album: "Window Light", albumArtist: "NeoMusic 示例", trackNumber: index + 1,
+                           artwork: .image(Image(sample)), duration: 200)
+        }
+    }
+
 }
 #endif

@@ -157,6 +157,7 @@ struct PlaylistsListView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.closeLibraryDetail) private var closeLibraryDetail
     @Environment(\.dynamicTypeSize) private var textSize
+    @Environment(\.accessibilityReduceMotion) private var reducesMotion
     @State private var renameText = ""
 
     private var title: String { folderID.flatMap { library.folder($0)?.name } ?? "播放列表" }
@@ -225,14 +226,19 @@ struct PlaylistsListView: View {
                 if let move = library.recentMove, let folder = library.folder(move.folderID) {
                     MovedToFolderToast(folderName: folder.name) { openLibraryRoute(.playlistFolder(folder.id)) }
                         .padding(.bottom, 12)
-                        .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                        .transition(reducesMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.9)))
                         .task(id: move.id) {
-                            try? await Task.sleep(for: .seconds(3))
-                            withAnimation(.smooth(duration: 0.3)) { library.clearRecentMove(move) }
+                            do {
+                                try await Task.sleep(for: .seconds(3))
+                                try Task.checkCancellation()
+                            } catch { return }
+                            withAnimation(reducesMotion ? .easeOut(duration: 0.15) : .smooth(duration: 0.3)) {
+                                library.clearRecentMove(move)
+                            }
                         }
                 }
             }
-            .animation(.smooth(duration: 0.3), value: library.recentMove)
+            .animation(reducesMotion ? .easeOut(duration: 0.15) : .smooth(duration: 0.3), value: library.recentMove)
             .libraryNavigationTitle(title)
             .libraryTitleDisplayMode(.large)
             .libraryRootAccountButton()
@@ -304,7 +310,7 @@ struct PlaylistsListView: View {
     }
 
     /// 文件夹的长按菜单，对照 Apple Music：重新命名、移到文件夹；从资料库删除（先确认）。
-    private func folderSections(_ folder: PlaylistFolder) -> LibraryMenuSections {
+    func folderSections(_ folder: PlaylistFolder) -> LibraryMenuSections {
         let targets = library.folders.filter { !library.isDescendant($0.id, of: folder.id) }
         let move: LibraryMenuItem
         if targets.isEmpty && folder.parentID == nil {
@@ -313,7 +319,8 @@ struct PlaylistsListView: View {
             let options: [(id: String?, name: String, image: String)] = [(nil, "播放列表", "music.note.list")]
                 + targets.map { ($0.id, $0.name, "folder") }
             move = LibraryMenuItem(title: "移到文件夹", systemImage: "folder", children: options.map { option in
-                LibraryMenuItem(title: option.name, systemImage: option.image, isSelected: option.id == folder.parentID) {
+                LibraryMenuItem(identity: option.id.map { "folder:" + $0 } ?? "playlist-root",
+                                title: option.name, systemImage: option.image, isSelected: option.id == folder.parentID) {
                     withAnimation { library.move(folderID: folder.id, to: option.id) }
                 }
             })

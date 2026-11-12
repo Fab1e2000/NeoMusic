@@ -68,7 +68,20 @@ struct LibraryNavigationPreview: Equatable {
     let title: String
     var subtitle: String? = nil
     let artwork: Artwork
+    let albumBackdrop: AlbumArtworkBackdrop?
     var contentID: String { "\(ownerID ?? "public"):\(route)" }
+
+    @MainActor init(route: LibraryRoute, ownerID: String?, title: String, subtitle: String? = nil,
+                    artwork: Artwork, albumBackdrop: AlbumArtworkBackdrop? = nil) {
+        self.route = route
+        self.ownerID = ownerID
+        self.title = title
+        self.subtitle = subtitle
+        self.artwork = artwork
+        if case .album = route {
+            self.albumBackdrop = albumBackdrop ?? LocalArtworkImages.cachedBackdrop(for: artwork)
+        } else { self.albumBackdrop = nil }
+    }
 }
 
 /// 在资料库导航栈中推入一页，由持有导航路径的宿主提供。
@@ -97,7 +110,8 @@ struct OpenLibraryRouteAction {
             artwork = .image(Image(uiImage: image))
         }
         let preview = LibraryNavigationPreview(route: route, ownerID: item.sourceOwnerID,
-            title: item.title, subtitle: item.subtitle, artwork: artwork)
+            title: item.title, subtitle: item.subtitle, artwork: artwork,
+            albumBackdrop: item.albumBackdrop ?? LocalArtworkImages.cachedBackdrop(for: item.artwork))
         callAsFunction(route, preview: preview, sourceProvider: sourceProvider)
     }
 }

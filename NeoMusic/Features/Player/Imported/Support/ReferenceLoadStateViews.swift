@@ -18,22 +18,3 @@ private struct PageContentReveal: ViewModifier {
             .transaction(value: isReady) { $0.animation = nil; $0.disablesAnimations = true }
     }
 }
-
-
-// Exact lyrics-only branch of NeoDizzy ContentSkeleton; unrelated page layouts omitted.
-enum ContentSkeletonLayout { case lyrics }
-struct ContentSkeleton: View {
-    var layout: ContentSkeletonLayout = .lyrics
-    var count = 4
-    var body: some View {
-        VStack(alignment: .leading, spacing: 28) {
-            ForEach(0..<count, id: \.self) { _ in
-                Text("等待音乐里的故事").font(.system(size: 36, weight: .bold))
-                    .redacted(reason: .placeholder)
-            }
-        }.frame(maxWidth: .infinity, alignment: .leading)
-            .hidden()
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
-    }
-}

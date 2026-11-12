@@ -22,6 +22,8 @@ struct NowPlayingPortraitArtwork: View {
     var body: some View {
         ArtworkImage(
             url: song.coverURL,
+            contentID: song.id,
+            artworkLoadID: song.artworkLoadID,
             cornerRadius: 12
         )
         .scaleEffect(bounceScale)
@@ -49,7 +51,7 @@ struct NowPlayingPortraitArtwork: View {
     }
 
     private var shouldBounce: Bool {
-        isArtworkPage && visualsActive && player.isPlaying
+        isArtworkPage && visualsActive && player.isPlaying && !accessibilityReduceMotion
     }
 
     private var shadowOpacity: Double {
@@ -69,21 +71,20 @@ struct NowPlayingPortraitArtwork: View {
 
     private func animateBounce() async {
         bounceScale = 1
-        guard shouldBounce, !accessibilityReduceMotion else {
+        guard shouldBounce else {
             return
         }
 
         await Task.yield()
         guard !Task.isCancelled else { return }
-        withAnimation(.easeOut(duration: 0.17)) {
-            bounceScale = 1.055
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            withAnimation(.easeOut(duration: 0.17), completionCriteria: .removed) {
+                bounceScale = 1.055
+            } completion: {
+                continuation.resume()
+            }
         }
-
-        do {
-            try await Task.sleep(for: .milliseconds(170))
-        } catch {
-            return
-        }
+        guard !Task.isCancelled else { return }
 
         withAnimation(.spring(duration: 0.42, bounce: 0.24)) {
             bounceScale = 1

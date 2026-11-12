@@ -3,10 +3,11 @@ import Observation
 
 @MainActor @Observable final class ArtistMusicIntegration {
     private let account: NeteaseAccount
+    private let player: NowPlayingModel
+    private let playlistLibrary: PlaylistLibrary
     var showsLogin = false
     private var connected = false
     @ObservationIgnored private var backdrops: [Int64: AlbumArtworkBackdrop] = [:]
-    private let backdropPreparer = AlbumArtworkBackdropPreparer()
     @ObservationIgnored private var backdropTasks: [Int64: Task<Void, Never>] = [:]
     @ObservationIgnored private var backdropSources: [Int64: URL] = [:]
     @ObservationIgnored private var artworkSongs: [URL: [NeteaseMusicSong]] = [:]
@@ -38,7 +39,12 @@ import Observation
         let state = DetailState(); detailStates[route] = state; return state
     }
     var sessionIdentity: String { "\(store?.isReady == true):\(owner.map(String.init) ?? "guest"):\(store?.userID.map(String.init) ?? "guest")" }
-    init(account: NeteaseAccount) { self.account = account }
+    init(account: NeteaseAccount, player: NowPlayingModel = LocalLibrary.player,
+         playlistLibrary: PlaylistLibrary = LocalLibrary.playlistLibrary) {
+        self.account = account
+        self.player = player
+        self.playlistLibrary = playlistLibrary
+    }
     private var store: NeteaseArtistStore? { account.artists }
     private var owner: Int64? { account.profile?.userID }
     func connect() {
@@ -143,6 +149,20 @@ import Observation
     private func publishSongs() {
         LocalLibrary.songLibrary.replaceExternalSongs(projectedSongs.keys.sorted().compactMap { projectedSongs[$0] }, source: "artists")
     }
+    @discardableResult private func discardUnreferencedSongs() -> Bool {
+        let playlistSongs = playlistLibrary.playlists.filter { !$0.isReadOnly && !$0.isSystem }
+            .flatMap { playlistLibrary.songs(in: $0.id) }
+        let referenced = Set((player.queue + playlistSongs)
+            .filter { $0.onlineOwnerID == owner.map(String.init) }.compactMap(\.onlineSongID))
+        let unused = songValues.keys.filter {
+            songRoutes[$0]?.isEmpty != false && !independentSongIDs.contains($0) && !referenced.contains($0)
+        }
+        for id in unused {
+            if let url = songValues[id]?.artworkURL { artworkSongs[url]?.removeAll { $0.id == id } }
+            songValues[id] = nil; projectedSongs[id] = nil; songRoutes[id] = nil
+        }
+        return !unused.isEmpty
+    }
     @discardableResult private func updateSongs(_ values: [NeteaseMusicSong]) -> Bool {
         var changed = false
         for value in values {
@@ -167,6 +187,7 @@ import Observation
         let values: [NeteaseMusicSong]
         var urls = Set<URL>(), artistIDs = Set<Int64>(), albumIDs = Set<Int64>()
         if route.hasPrefix("album:") {
+            prepareBackdrop(id)
             state.album = makeAlbumDetail(id)
             state.error = store.errors["album:\(id)"]
             values = store.albums[id]?.songs ?? []
@@ -199,17 +220,13 @@ import Observation
         guard shouldUpdateSongs, routeSongs[route] != values else { return }
         let previousIDs = Set((routeSongs[route] ?? []).map(\.id))
         let currentIDs = Set(values.map(\.id))
-        var removed = false
         for id in previousIDs.subtracting(currentIDs) {
             songRoutes[id]?.remove(route)
-            if songRoutes[id]?.isEmpty != false, !independentSongIDs.contains(id) {
-                if let url = songValues[id]?.artworkURL { artworkSongs[url]?.removeAll { $0.id == id } }
-                songValues[id] = nil; projectedSongs[id] = nil; songRoutes[id] = nil; removed = true
-            }
         }
         for value in values { songRoutes[value.id, default: []].insert(route) }
         routeSongs[route] = values
         let changed = updateSongs(values)
+        let removed = discardUnreferencedSongs()
         if shouldPublish && (changed || removed) { publishSongs() }
     }
     private func artwork(_ remote: URL?) -> Artwork {
@@ -237,7 +254,12 @@ import Observation
         .init(id: "catalog:artist:\(value.id)", name: value.name, artwork: artwork(value.artworkURL), isFavorite: subscribedArtistIDs.contains(value.id))
     }
     private func albumItem(_ value: NeteaseArtistAlbum) -> LibraryShelfItem {
-        .init(id: "catalog:album:\(value.id)", title: value.title, subtitle: value.artist, artwork: artwork(value.artworkURL), route: .album("catalog:album:\(value.id)"), isFavorite: subscribedAlbumIDs.contains(value.id), addedOrder: store?.albumAddedDate(value.id).map { Int($0.timeIntervalSince1970) } ?? 0, year: value.publishTime.map { Calendar.current.component(.year, from: $0) }, sourceOwnerID: owner.map(String.init))
+        let cover = artwork(value.artworkURL)
+        let prepared = LocalArtworkImages.cachedBackdrop(for: cover)
+        let retained: AlbumArtworkBackdrop?
+        if case .file(let url) = cover, backdropSources[value.id] == url { retained = backdrops[value.id] }
+        else { retained = nil }
+        return .init(id: "catalog:album:\(value.id)", title: value.title, subtitle: value.artist, artwork: cover, route: .album("catalog:album:\(value.id)"), isFavorite: subscribedAlbumIDs.contains(value.id), addedOrder: store?.albumAddedDate(value.id).map { Int($0.timeIntervalSince1970) } ?? 0, year: value.publishTime.map { Calendar.current.component(.year, from: $0) }, sourceOwnerID: owner.map(String.init), albumBackdrop: prepared ?? retained)
     }
     private func releaseItem(_ value: NeteaseArtistAlbum) -> LibraryShelfItem {
         var item = albumItem(value); item.subtitle = item.year.map { "\($0)年" }; return item
@@ -262,7 +284,12 @@ import Observation
     private func makeAlbumDetail(_ id: Int64) -> CollectionDetail? {
         guard store?.userID == owner, let value = store?.albums[id] else { return nil }
         let item = albumItem(value.album)
-        return .init(kind: .album, title: value.album.title, subtitle: value.album.artist, caption: item.year.map { "\($0)年" }, artwork: item.artwork, tint: Color(.systemBackground), albumBackdrop: backdrops[id], isFavorite: item.isFavorite, songs: value.songs.map(songItem), route: .album(item.id))
+        let cover: Artwork
+        if case .file(let url) = item.artwork, LocalArtworkImages.cached(url, pixels: 0) == nil, backdropSources[id] != url {
+            // Publish the newly decoded cover with its prepared appearance.
+            cover = .missing
+        } else { cover = item.artwork }
+        return .init(kind: .album, title: value.album.title, subtitle: value.album.artist, caption: item.year.map { "\($0)年" }, artwork: cover, tint: Color(.systemBackground), albumBackdrop: item.albumBackdrop, isFavorite: item.isFavorite, songs: value.songs.map(songItem), route: .album(item.id))
     }
     func destination(_ route: LibraryRoute) -> AnyView? {
         guard LocalLibrary.catalog.handles(route) else { return nil }
@@ -282,6 +309,7 @@ import Observation
     }
     private func publishArtwork(_ urls: Set<URL>) {
         guard let store, store.userID == owner, store.sessionRevision == sessionRevision else { return }
+        if discardUnreferencedSongs() { publishSongs() }
         var songs: [String: LibrarySongItem] = [:]
         var routes = Set<String>()
         for url in urls {
@@ -291,6 +319,14 @@ import Observation
                 songs[item.id] = item
                 projectedSongs[value.id] = item
             }
+        }
+        for route in routes where route.hasPrefix("album:") {
+            guard let id = Int64(route.dropFirst("album:".count)),
+                  let remote = store.albums[id]?.album.artworkURL, urls.contains(remote),
+                  store.cachedArtworkURL(remote) == nil else { continue }
+            backdropTasks.removeValue(forKey: id)?.cancel()
+            backdropSources[id] = nil
+            backdrops[id] = nil
         }
         for route in routes { rebuild(route, updateSongs: false) }
         for value in store.subscribedArtists where value.artworkURL.map(urls.contains) == true {
@@ -306,8 +342,8 @@ import Observation
             }
         }
         LocalLibrary.songLibrary.updateOnlineArtwork(songs, source: "artists")
-        LocalLibrary.playlistLibrary.updateArtwork(songs: songs)
-        LocalLibrary.player.updateArtwork(songs)
+        playlistLibrary.updateArtwork(songs: songs)
+        player.updateArtwork(songs)
         for route in routes where route.hasPrefix("album:") {
             if let id = Int64(route.dropFirst("album:".count)) { prepareBackdrop(id) }
         }
@@ -317,22 +353,18 @@ import Observation
         guard let store, store.userID == owner, let remote = store.albums[id]?.album.artworkURL,
               let url = store.cachedArtworkURL(remote), backdropSources[id] != url, backdropTasks[id] == nil else { return }
         let revision = store.sessionRevision
-        let preparer = backdropPreparer
         backdropTasks[id] = Task { [weak self] in
-            let data = await Task.detached(priority: .utility) { try? Data(contentsOf: url) }.value
-            guard !Task.isCancelled, let data else {
-                if self?.store?.sessionRevision == revision { self?.backdropTasks[id] = nil }
-                return
-            }
-            let colors = try? await preparer.prepare([String(id): data])
+            _ = await LocalArtworkImages.load(url, pixels: 128)
             guard let self, !Task.isCancelled, self.store?.sessionRevision == revision,
                   self.store?.userID == self.owner else { return }
             self.backdropTasks[id] = nil
-            self.backdropSources[id] = url
-            if self.backdrops[id] != colors?[String(id)] {
-                self.backdrops[id] = colors?[String(id)]
-                self.rebuild("album:\(id)", updateSongs: false)
+            guard self.store?.albums[id]?.album.artworkURL == remote, self.store?.cachedArtworkURL(remote) == url else {
+                self.prepareBackdrop(id)
+                return
             }
+            self.backdropSources[id] = url
+            self.backdrops[id] = LocalArtworkImages.cachedBackdrop(for: .file(url))
+            self.rebuild("album:\(id)", updateSongs: false)
         }
     }
 
@@ -353,8 +385,8 @@ import Observation
         guard let id = Self.number(route) else { return }
         if route.isCatalogAlbum { guard let detail = albumDetail(id) else { return }; songs = detail.songs; title = detail.title }
         else { guard let detail = artistDetail(id) else { return }; songs = detail.songs; title = detail.name }
-        if let song, let index = songs.firstIndex(where: { $0.id == song.id }) { LocalLibrary.player.requestPlay(songs, startingAt: index, from: title) }
-        else { LocalLibrary.player.requestPlay(songs, from: title, shuffled: shuffled) }
+        if let song, let index = songs.firstIndex(where: { $0.id == song.id }) { player.requestPlay(songs, startingAt: index, from: title) }
+        else { player.requestPlay(songs, from: title, shuffled: shuffled) }
     }
     func toggle(_ route: LibraryRoute) {
         guard owner != nil else { showsLogin = true; return }
@@ -445,8 +477,8 @@ import Observation
             guard available, captured == owner, let id = Self.number(route) else { return }
             let songs = route.isCatalogAlbum ? albumDetail(id)?.songs : artistDetail(id)?.songs
             guard let songs else { return }
-            if let next { if next { LocalLibrary.player.insertNext(songs) } else { LocalLibrary.player.appendLater(songs) } }
-            else { LocalLibrary.playlistLibrary.pendingAddition = .init(songs: songs) }
+            if let next { if next { self.player.insertNext(songs) } else { self.player.appendLater(songs) } }
+            else { self.playlistLibrary.pendingAddition = .init(songs: songs) }
         }
     }
     private func openSong(_ songID: String, artist: String?, album: Bool, open: @escaping (LibraryRoute) -> Void) {
@@ -484,7 +516,7 @@ private struct ArtistCatalogDestination: View {
                     ContentUnavailableView { Label("暂时无法读取", systemImage: "exclamationmark.circle") } description: { Text(error) } actions: { Button("重试") { Task { await integration.load(route) } } }
                 } else if case .artist = route, let placeholder = artistPlaceholder(id) {
                     artistPage(placeholder)
-                } else { Color.clear }
+                } else { CatalogLoadingFeedback(title: "正在载入艺人") }
             }
         }.environment(\.songMenuActions, integration.songActions(route))
         .environment(\.collectionMenuActions, integration.collectionActions)
@@ -516,7 +548,7 @@ private struct ArtistCatalogDestination: View {
         let preview = navigationPreview.flatMap { $0.route == route ? $0 : nil }
         let detail = integration.albumDetail(id) ?? preview.map {
             CollectionDetail(kind: .album, title: $0.title, subtitle: $0.subtitle, artwork: $0.artwork,
-                             tint: .clear, songs: [], route: route)
+                             tint: .clear, albumBackdrop: $0.albumBackdrop, songs: [], route: route)
         }
         if let detail {
             CollectionDetailView(detail: detail)
@@ -534,6 +566,32 @@ private struct ArtistCatalogDestination: View {
             ContentUnavailableView { Label("暂时无法读取", systemImage: "exclamationmark.circle") }
                 description: { Text(error) }
                 actions: { Button("重试") { Task { await integration.load(route) } } }
-        } else { Color.clear }
+        } else { CatalogLoadingFeedback(title: "正在载入专辑") }
+    }
+}
+
+struct CatalogLoadingFeedback: View {
+    let title: LocalizedStringKey
+    @State private var showsProgress = false
+
+    var body: some View {
+        Group {
+            if showsProgress {
+                ProgressView(title)
+                    .accessibilityIdentifier("catalog.loading")
+            } else {
+                Color.clear
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .task {
+            showsProgress = false
+            do {
+                try await Task.sleep(for: .seconds(3))
+                try Task.checkCancellation()
+                showsProgress = true
+            } catch {}
+        }
+        .onDisappear { showsProgress = false }
     }
 }

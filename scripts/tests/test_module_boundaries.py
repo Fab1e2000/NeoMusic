@@ -46,6 +46,13 @@ class ModuleBoundaryTests(unittest.TestCase):
         self.assertTrue(boundaries.check_source(path, "let account: NeteaseAccount"))
         self.assertTrue(boundaries.check_source(Path("NeoMusic/Core/Netease/Client.swift"), "import CoreImage"))
 
+    def test_album_color_processing_stays_in_its_renderer(self):
+        path = Path("NeoMusic/Features/Library/AlbumArtworkBackdrop.swift")
+        self.assertEqual(boundaries.check_source(path, "import CoreImage.CIFilterBuiltins"), [])
+        self.assertTrue(boundaries.check_source(path, "URLSession.shared"))
+        self.assertTrue(boundaries.check_source(path, "let account: NeteaseAccount"))
+        self.assertTrue(boundaries.check_source(Path("NeoMusic/App/FrontendReviewPreview.swift"), "import CoreImage"))
+
     def test_objective_c_and_renamed_sources_are_checked(self):
         self.assertTrue(boundaries.check_source(Path("NeoMusic/Core/Playback/Bridge.m"),
                                               "[NSURLSession sharedSession]; SecItemDelete(query);"))

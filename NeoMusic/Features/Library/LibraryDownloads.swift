@@ -256,10 +256,18 @@ struct SongDownloadStatus: View {
                 Button {
                     guard downloads?.isDownloadable(song) == true else { return }
                     feedback &+= 1; downloads?.download([song])
-                } label: { SongDownloadIndicator(state: state) }
+                } label: {
+                    SongDownloadIndicator(state: state)
+                        .frame(width: 28, height: 44, alignment: .trailing)
+                        .contentShape(.rect)
+                }
                 .accessibilityLabel("下载失败，轻点重试")
             } else if state?.isActive == true {
-                Button { feedback &+= 1; downloads?.stop([song]) } label: { SongDownloadIndicator(state: state) }
+                Button { feedback &+= 1; downloads?.stop([song]) } label: {
+                    SongDownloadIndicator(state: state)
+                        .frame(width: 28, height: 44, alignment: .trailing)
+                        .contentShape(.rect)
+                }
                     .accessibilityLabel(state == .waiting ? "等待 Wi-Fi，轻点停止下载" : "停止下载")
             } else { SongDownloadIndicator(state: state) }
             }

@@ -584,13 +584,15 @@ final class LibraryDetailNavigationTests: XCTestCase {
         source.backgroundColor = .systemBlue
         sourceContainer.addSubview(source)
         XCTAssertTrue(source.isDescendant(of: root.view))
-        bridge.open(.album("first"), source: source)
-        XCTAssertNotNil(nav.topViewController?.preferredTransition)
-        try await Task.sleep(for: .milliseconds(100))
-        nav.popViewController(animated: true)
-        try await settle()
-        XCTAssertTrue(nav.topViewController === root)
-        XCTAssertEqual(bridge.depth, 0)
+        for index in 0..<5 {
+            bridge.open(.album("rapid-\(index)"), source: source)
+            XCTAssertNotNil(nav.topViewController?.preferredTransition)
+            try await Task.sleep(for: .milliseconds(100))
+            nav.popViewController(animated: true)
+            try await settle()
+            XCTAssertTrue(nav.topViewController === root)
+            XCTAssertEqual(bridge.depth, 0)
+        }
         bridge.open(.album("second"), source: source)
         try await settle()
         XCTAssertTrue(nav.topViewController is LibraryDetailHostingController)
@@ -953,6 +955,46 @@ final class LibraryDetailNavigationTests: XCTestCase {
         XCTAssertEqual(page.navigationItem.title, "播放列表")
     }
 
+    func testPlaylistCollectionReconfiguresVisibleCellsWhenHostedAppearanceChanges() async throws {
+        let scene = try await applicationWindowScene()
+        let window = UIWindow(windowScene: scene)
+        defer { window.isHidden = true }
+        let list = PlaylistCollectionList(
+            entries: [.playlist(.init(id: "playlist", title: "播放列表", artwork: .playlist))],
+            menu: { _ in UIMenu() }, open: { _, _ in }, movePlaylist: { _, _ in })
+        func content(_ colorScheme: ColorScheme, _ typeSize: DynamicTypeSize, _ locale: Locale) -> AnyView {
+            AnyView(list.environment(\.colorScheme, colorScheme)
+                .environment(\.dynamicTypeSize, typeSize).environment(\.locale, locale))
+        }
+        let host = UIHostingController(rootView: content(.light, .large, Locale(identifier: "en_US")))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        try await settle()
+        let collection = try XCTUnwrap(descendants(of: UICollectionView.self, in: host.view).first)
+        let path = IndexPath(item: 0, section: 0)
+        let cell = try XCTUnwrap(collection.cellForItem(at: path))
+        XCTAssertEqual(cell.accessibilityTraits, .button)
+
+        let appearances: [(ColorScheme, DynamicTypeSize, Locale)] = [
+            (.dark, .large, Locale(identifier: "en_US")),
+            (.dark, .accessibility5, Locale(identifier: "en_US")),
+            (.dark, .accessibility5, Locale(identifier: "zh_CN"))
+        ]
+        for (scheme, size, locale) in appearances {
+            // The production cell provider restores its button trait when it reconfigures.
+            cell.accessibilityTraits = .header
+            host.rootView = content(scheme, size, locale)
+            try await settle()
+            XCTAssertTrue(collection.cellForItem(at: path) === cell)
+            XCTAssertEqual(cell.accessibilityTraits, .button)
+        }
+
+        cell.accessibilityTraits = .header
+        host.rootView = content(.dark, .accessibility5, Locale(identifier: "zh_CN"))
+        try await settle()
+        XCTAssertEqual(cell.accessibilityTraits, .header, "Unchanged inputs leave the existing configuration in place")
+    }
+
     func testCategoryTitlesArePreparedBeforeDestinationContentLoads() {
         let bridge = LibraryDetailNavigation()
         let expected: [(LibraryCategory, String)] = [
@@ -1246,8 +1288,10 @@ final class LibraryDetailNavigationTests: XCTestCase {
         let scene = try await applicationWindowScene()
         let window = UIWindow(windowScene: scene)
         defer { window.isHidden = true }
+        let backdrop = AlbumArtworkBackdrop(red: 0.05, green: 0.1, blue: 0.15)
         let item = LibraryShelfItem(id: "catalog:album:88", title: "Visible album", subtitle: "Artist",
-                                   artwork: .image(Image(systemName: "circle.fill")), route: .album("catalog:album:88"))
+                                   artwork: .image(Image(systemName: "circle.fill")), route: .album("catalog:album:88"),
+                                   albumBackdrop: backdrop)
         window.rootViewController = UIHostingController(rootView: LibraryNavigationContainer(
             navigation: bridge,
             root: CollectionCardLink(item: item) { AlbumCard(item: item) }.frame(width: 160),
@@ -1259,6 +1303,10 @@ final class LibraryDetailNavigationTests: XCTestCase {
         let selector = NSSelectorFromString("openCard")
         let source = try XCTUnwrap(descendants(of: UIView.self, in: root.view).first { $0.responds(to: selector) })
         source.perform(selector)
+        let initialPage = try XCTUnwrap(nav.topViewController as? LibraryDetailHostingController)
+        XCTAssertEqual(initialPage.chrome.colorScheme, backdrop.colorScheme)
+        XCTAssertEqual(initialPage.view.backgroundColor, backdrop.uiColor,
+                       "The native destination background must be ready when the zoom starts")
         try await settle()
         XCTAssertEqual(nav.viewControllers.count, 2)
         XCTAssertNotNil(nav.topViewController?.view.libraryArtworkAlignmentRect())
@@ -1271,6 +1319,34 @@ final class LibraryDetailNavigationTests: XCTestCase {
         attachment.name = "Library album cover before detail response"
         attachment.lifetime = .keepAlways
         add(attachment)
+    }
+
+    func testLocalAlbumSourcePreparesNativeBackgroundBeforePush() throws {
+        let original = LocalLibrary.songLibrary.songs
+        defer { LocalLibrary.songLibrary.replace(original) }
+        let backdrop = AlbumArtworkBackdrop(red: 0.1, green: 0.15, blue: 0.2)
+        let song = LibrarySongItem(id: "initial-appearance-local", title: "Local song", artist: "Artist", album: "Local album",
+            albumArtist: "Artist", trackNumber: 1, artwork: .missing, albumDirectory: UUID().uuidString,
+            artworkBackdrop: backdrop)
+        LocalLibrary.songLibrary.replace([song])
+        let item = try XCTUnwrap(LocalLibrary.albums.first { $0.id == song.albumID })
+        let detail = try XCTUnwrap(LocalLibrary.albumDetail(song.albumID))
+        var preview: LibraryNavigationPreview?
+        OpenLibraryRouteAction(handler: { _ in XCTFail("Expected the source preview") },
+            previewSourceHandler: { _, value, _ in preview = value })(item, sourceProvider: { nil })
+        let captured = try XCTUnwrap(preview)
+        XCTAssertEqual(captured.albumBackdrop, backdrop)
+        let bridge = LibraryDetailNavigation()
+        let page = bridge.makePage(AnyView(CollectionDetailView(detail: detail)), route: item.route, preview: captured)
+        XCTAssertNil(page.navigationController, "This assertion runs before the native push")
+        XCTAssertEqual(page.view.backgroundColor, backdrop.uiColor)
+        XCTAssertEqual(page.overrideUserInterfaceStyle, .dark)
+        XCTAssertEqual(page.chrome.colorScheme, backdrop.colorScheme)
+
+        let other = LibraryNavigationPreview(route: captured.route, ownerID: "other-account", title: item.title,
+            artwork: item.artwork, albumBackdrop: backdrop)
+        let rejected = bridge.makePage(AnyView(EmptyView()), route: item.route, preview: other)
+        XCTAssertNil(rejected.chrome.colorScheme, "A rejected account preview must not seed the native page appearance")
     }
 
     func testUnloadedHomeAlbumUsesPreviewHeaderAndRejectsAnotherAccountsPreview() async throws {
@@ -1394,6 +1470,82 @@ final class LibraryDetailNavigationTests: XCTestCase {
         XCTAssertGreaterThan(origins[2].y, origins[0].y + 20)
         let song = try XCTUnwrap(collection.cellForItem(at: IndexPath(item: 3, section: 0)))
         XCTAssertTrue(descendants(of: LibraryArtworkSurfaceView.self, in: song).isEmpty)
+    }
+
+    func testAccessibilityRecentlyAddedCardFitsScrollableContentAndKeepsCoverSourceOnReturn() async throws {
+        let scene = try await applicationWindowScene()
+        let window = UIWindow(windowScene: scene)
+        defer { window.isHidden = true }
+        let bridge = LibraryDetailNavigation()
+        let item = LibraryShelfItem(
+            id: "long-album",
+            title: "沿着城市边缘一直走到海边的那些漫长夜晚与清晨：完整现场录音特别纪念版",
+            subtitle: "The Northern Lights Collective with Friends from Every Corner of the City",
+            artwork: .missing, route: .album("long-album"))
+        window.rootViewController = UIHostingController(rootView: LibraryNavigationContainer(
+            navigation: bridge,
+            root: LibraryHomeView(pinned: [], recentlyAdded: [item], playlistLibrary: PlaylistLibrary(playlists: [])),
+            destination: { route in
+                AnyView(CollectionDetailView(detail: CollectionDetail(
+                    kind: .album, title: item.title, subtitle: item.subtitle,
+                    artwork: item.artwork, tint: Color(.systemBackground), songs: [], route: route)))
+            })
+            .environment(account)
+            .environment(\.dynamicTypeSize, .accessibility5))
+        window.makeKeyAndVisible()
+        try await settle()
+        let nav = try XCTUnwrap(bridge.navigationController)
+        let page = try XCTUnwrap(nav.topViewController?.view)
+        let list = try XCTUnwrap(descendants(of: UIScrollView.self, in: page)
+            .max { $0.contentSize.height < $1.contentSize.height })
+        let surfaces = descendants(of: LibraryArtworkSurfaceView.self, in: page)
+        XCTAssertEqual(surfaces.count, 1)
+        let cover = try XCTUnwrap(surfaces.first)
+        // The list also owns a context-menu interaction. Resolve the card's nearest
+        // menu host from its cover instead of accepting an ancestor of the whole list.
+        var ancestor = cover.superview
+        while let current = ancestor,
+              !current.interactions.contains(where: { $0 is UIContextMenuInteraction }) {
+            ancestor = current.superview
+        }
+        let card = try XCTUnwrap(ancestor)
+        XCTAssertFalse(card is UIScrollView)
+        XCTAssertTrue(card.isDescendant(of: list))
+        XCTAssertTrue(card.libraryArtworkSource() === cover)
+        XCTAssertGreaterThan(cover.bounds.width, list.bounds.width * 0.75,
+                             "An accessibility card uses the single-column content width")
+        XCTAssertEqual(cover.bounds.width, cover.bounds.height, accuracy: 0.5)
+
+        let cardFrame = list.convert(card.bounds, from: card)
+        XCTAssertGreaterThanOrEqual(cardFrame.minY, -1)
+        XCTAssertLessThanOrEqual(cardFrame.maxY, list.contentSize.height + 1,
+                                 "The complete multi-line card must be reachable in the list's scrollable content")
+        let fittingSize = card.systemLayoutSizeFitting(
+            CGSize(width: card.bounds.width, height: UIView.layoutFittingCompressedSize.height),
+            withHorizontalFittingPriority: .required, verticalFittingPriority: .fittingSizeLevel)
+        XCTAssertGreaterThanOrEqual(card.bounds.height, fittingSize.height - 1,
+                                    "The card must include its full content at the displayed width")
+        let largeTextTraits = UITraitCollection(preferredContentSizeCategory: .accessibilityExtraExtraExtraLarge)
+        let lineHeight = UIFont.preferredFont(forTextStyle: .footnote, compatibleWith: largeTextTraits).lineHeight
+        XCTAssertGreaterThan(card.bounds.height - cover.bounds.height, lineHeight * 4,
+                             "Long title and subtitle grow beyond a fixed two-line caption")
+
+        let coverFrame = list.convert(cover.bounds, from: cover)
+        let minimumOffset = -list.adjustedContentInset.top
+        let maximumOffset = max(minimumOffset, list.contentSize.height - list.bounds.height + list.adjustedContentInset.bottom)
+        list.setContentOffset(CGPoint(x: 0, y: min(maximumOffset, max(minimumOffset, coverFrame.minY - 40))), animated: false)
+        try await settle()
+        let retainedOffset = list.contentOffset
+        bridge.open(.album("long-album"), source: cover, animated: false)
+        try await settle()
+        XCTAssertEqual(nav.viewControllers.count, 2)
+        XCTAssertNotNil(nav.topViewController?.preferredTransition)
+        nav.popViewController(animated: false)
+        try await settle()
+        XCTAssertTrue(nav.topViewController?.view === page)
+        XCTAssertTrue(card.libraryArtworkSource() === cover)
+        XCTAssertTrue(cover.isDescendant(of: page))
+        XCTAssertEqual(list.contentOffset.y, retainedOffset.y, accuracy: 1)
     }
 
     func testPinnedEditingWobbleStopsAndRestartsWithCellLifecycle() async throws {

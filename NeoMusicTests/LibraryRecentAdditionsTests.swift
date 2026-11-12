@@ -78,6 +78,24 @@ final class AlbumLibraryAdditionsTests: XCTestCase {
 }
 
 @MainActor final class SongRowMenuTests: XCTestCase {
+    func testSameNamedArtistsKeepIndependentMenuIdentityAndActions() throws {
+        var song = LibrarySongItem(id: "netease:7:9", title: "歌", artist: "同名艺人", album: "辑", albumArtist: "同名艺人",
+                                   trackNumber: 1, artwork: .missing,
+                                   artistReferences: [.init(id: "catalog:artist:1", name: "同名艺人"),
+                                                      .init(id: "catalog:artist:2", name: "同名艺人")])
+        var opened: [LibraryRoute] = []
+        let artists = try XCTUnwrap(SongMenuActions().rowMenuSections(for: song) { opened.append($0) }.last)
+        XCTAssertEqual(artists.map(\.title), ["同名艺人", "同名艺人"])
+        XCTAssertEqual(Set(artists.map(\.id)).count, 2)
+        artists.forEach { $0.perform() }
+        XCTAssertEqual(opened, [.artist("catalog:artist:1"), .artist("catalog:artist:2")])
+
+        song.artistReferences = [.init(id: "catalog:artist:2", name: "新名称"),
+                                 .init(id: "catalog:artist:1", name: "同名艺人")]
+        let updated = try XCTUnwrap(SongMenuActions().rowMenuSections(for: song) { _ in }.last)
+        XCTAssertEqual(updated.map(\.id), artists.reversed().map(\.id))
+    }
+
     func testLocalSongMenuMatchesTheRowEllipsis() {
         var song = LibrarySongItem(id: "local", title: "歌", artist: "艺人", album: "专辑", albumArtist: "艺人", trackNumber: 1, artwork: .missing)
         song.isFavorite = true

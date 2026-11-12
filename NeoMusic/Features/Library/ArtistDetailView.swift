@@ -1,6 +1,6 @@
 import SwiftUI
 
-func artistPreview(_ artist: LibraryArtistItem) -> LibraryNavigationPreview {
+@MainActor func artistPreview(_ artist: LibraryArtistItem) -> LibraryNavigationPreview {
     .init(route: .artist(artist.id), ownerID: nil, title: artist.name, artwork: artist.artwork ?? .missing)
 }
 

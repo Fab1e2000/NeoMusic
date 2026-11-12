@@ -331,4 +331,136 @@ actor SessionActivation {
         XCTAssertNil(engine.error)
         XCTAssertEqual(engine.duration, 6, accuracy: 0.1)
     }
+
+    func testRestorationSeeksNativeItemBeforeStartingAndKeepsDisplayedPosition() async throws {
+        let url = try audioFile(seconds: 80)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let engine = LocalPlaybackEngine()
+        defer { engine.shutdown() }
+        let position = 67.475
+        var samples: [Double] = []
+        let record: () -> Void = { [weak engine] in
+            if let engine { samples.append(engine.elapsed) }
+        }
+        engine.onStateChange = record
+        engine.onTimeChange = record
+        engine.load(url: url, position: position)
+        samples.removeAll()
+        let native = try nativePlayer(in: engine)
+        XCTAssertEqual(engine.elapsed, position, accuracy: 0.001)
+        try await waitUntil({ !engine.isLoading })
+        XCTAssertNil(engine.error)
+        XCTAssertEqual(native.currentTime().seconds, position, accuracy: 0.002)
+        XCTAssertEqual(native.rate, 0)
+        XCTAssertTrue(samples.allSatisfy { abs($0 - position) < 0.002 }, "Pending restoration must not publish the item's initial zero time")
+
+        engine.play()
+        try await waitUntil({ native.currentTime().seconds > position + 0.1 })
+        engine.pause()
+        XCTAssertEqual(engine.elapsed, native.currentTime().seconds, accuracy: 0.002)
+    }
+
+    func testRapidSeeksAndItemReplacementKeepOnlyLatestNativePosition() async throws {
+        let first = try audioFile(seconds: 12), second = try audioFile(seconds: 16)
+        defer { try? FileManager.default.removeItem(at: first); try? FileManager.default.removeItem(at: second) }
+        let engine = LocalPlaybackEngine()
+        defer { engine.shutdown() }
+        engine.load(url: first)
+        try await waitUntil({ !engine.isLoading })
+        let native = try nativePlayer(in: engine)
+        let original = native.currentItem
+        for _ in 0..<5 {
+            for target in [7.0, 2.0, 9.0, 3.125] { engine.seek(to: target) }
+        }
+        XCTAssertEqual(engine.elapsed, 3.125, accuracy: 0.001)
+        try await waitUntil({ !engine.isLoading })
+        XCTAssertNil(engine.error)
+        XCTAssertEqual(native.currentTime().seconds, 3.125, accuracy: 0.002)
+        XCTAssertEqual(engine.elapsed, 3.125, accuracy: 0.002)
+
+        engine.seek(to: 9)
+        engine.load(url: second, position: 5.25)
+        try await waitUntil({ !engine.isLoading })
+        XCTAssertFalse(native.currentItem === original)
+        XCTAssertNil(engine.error)
+        XCTAssertEqual(native.currentTime().seconds, 5.25, accuracy: 0.002)
+        XCTAssertEqual(engine.elapsed, 5.25, accuracy: 0.002)
+        XCTAssertEqual(engine.duration, 16, accuracy: 0.1)
+    }
+
+    func testResourceReplacementCapturesNativePositionAndAcceptsLaterSeek() async throws {
+        let url = try audioFile(seconds: 12)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let engine = LocalPlaybackEngine()
+        defer { engine.shutdown() }
+        engine.load(url: url, autoplay: true)
+        let original = try nativePlayer(in: engine)
+        try await waitUntil({ original.currentTime().seconds > 0.47 })
+        let before = original.currentTime().seconds
+        try await engine.replaceResource(url: url, shouldResume: { true })
+        let replacement = try nativePlayer(in: engine)
+        XCTAssertFalse(replacement === original)
+        XCTAssertGreaterThanOrEqual(replacement.currentTime().seconds, before - 0.002,
+                                    "Resource handover must not rewind to an earlier periodic sample")
+        engine.pause()
+
+        var redirected = false
+        engine.onStateChange = { [weak engine] in
+            guard let engine, !redirected,
+                  let current = try? self.nativePlayer(in: engine), current !== replacement else { return }
+            redirected = true
+            engine.seek(to: 8.375)
+        }
+        try await engine.replaceResource(url: url, shouldResume: { false })
+        try await waitUntil({ !engine.isLoading })
+        XCTAssertTrue(redirected)
+        XCTAssertNil(engine.error)
+        XCTAssertFalse(engine.isPlaying)
+        XCTAssertEqual(try nativePlayer(in: engine).currentTime().seconds, 8.375, accuracy: 0.002)
+        XCTAssertEqual(engine.elapsed, 8.375, accuracy: 0.002)
+    }
+
+    func testCancelledResourcePreparationAndHandoverKeepCurrentAudioPlaying() async throws {
+        let url = try audioFile(seconds: 12)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let engine = LocalPlaybackEngine()
+        defer { engine.onStateChange = nil; engine.shutdown() }
+        engine.load(url: url, autoplay: true)
+        let original = try nativePlayer(in: engine)
+        try await waitUntil({ original.currentTime().seconds > 0.2 })
+        let discarded = Task { try await engine.replaceResource(url: url, shouldResume: { true }) }
+        discarded.cancel()
+        do {
+            try await discarded.value
+            XCTFail("A cancelled candidate must not replace current audio")
+        } catch is CancellationError { }
+        XCTAssertTrue(try nativePlayer(in: engine) === original)
+        let uninterrupted = original.currentTime().seconds
+        try await waitUntil({ original.currentTime().seconds > uninterrupted + 0.2 })
+
+        var replacement: Task<Void, Error>?
+        var cancelled = false
+        engine.onStateChange = { [weak engine] in
+            guard let engine, !cancelled,
+                  let current = try? self.nativePlayer(in: engine), current !== original else { return }
+            cancelled = true
+            replacement?.cancel()
+        }
+        let operation = Task { try await engine.replaceResource(url: url, shouldResume: { true }) }
+        replacement = operation
+        do {
+            try await operation.value
+            XCTFail("The superseded resource task must report cancellation")
+        } catch is CancellationError { }
+        XCTAssertTrue(cancelled)
+        let current = try nativePlayer(in: engine)
+        let resumedAt = current.currentTime().seconds
+        try await waitUntil({ current.currentTime().seconds > resumedAt + 0.2 })
+        XCTAssertTrue(engine.isPlaying)
+        XCTAssertNil(engine.error)
+    }
+
+    private func nativePlayer(in engine: LocalPlaybackEngine) throws -> AVQueuePlayer {
+        try XCTUnwrap(Mirror(reflecting: engine).children.first { $0.label == "player" }?.value as? AVQueuePlayer)
+    }
 }

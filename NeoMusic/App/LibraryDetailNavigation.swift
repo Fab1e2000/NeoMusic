@@ -66,6 +66,11 @@ final class LibraryDetailNavigation: NSObject, UINavigationControllerDelegate {
             }))
         }
         page.updateEnvironment?(environment)
+        if case .album = route, let preview, preview.route == route,
+           preview.ownerID == nil || preview.ownerID == environment[NeteaseAccount.self]?.profile.map({ String($0.userID) }),
+           let backdrop = preview.albumBackdrop {
+            page.chrome.setAlbumBackdrop(backdrop)
+        }
         return page
     }
 
@@ -259,6 +264,10 @@ final class LibraryNavigationChrome: NSObject, UISearchResultsUpdating, UISearch
         guard let controller, let navigation = controller.navigationController,
               navigation.topViewController === controller else { return }
         (navigation.delegate as? LibraryDetailNavigation)?.updateColorScheme(scheme)
+    }
+    func setAlbumBackdrop(_ backdrop: AlbumArtworkBackdrop?) {
+        controller?.view.backgroundColor = backdrop?.uiColor ?? .systemBackground
+        setColorScheme(backdrop?.colorScheme)
     }
     func attach(_ controller: UIViewController) {
         guard self.controller !== controller else { return }

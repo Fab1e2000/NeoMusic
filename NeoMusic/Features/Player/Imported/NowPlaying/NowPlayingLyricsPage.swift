@@ -33,12 +33,12 @@ struct NowPlayingLyricsPage: View {
     let playerFrame: CGRect
     @Environment(ReferencePlayerState.self) private var player
     @State private var lastActiveLineID: Int?
+    @State private var loadingFeedback = NowPlayingLyricsLoadingFeedback()
     let artworkNamespace: Namespace.ID
     let usesArtworkTransition: Bool
     let showsSongHeader: Bool
     let onInterfaceInteraction: (() -> Void)?
     let onInterfaceVisibilityChange: ((Bool) -> Void)?
-    let onInitialFocusPrepared: (() -> Void)?
 
     init(
         song: ReferenceTrack,
@@ -52,8 +52,7 @@ struct NowPlayingLyricsPage: View {
         showsSongHeader: Bool = true,
         playerFrame: CGRect,
         onInterfaceInteraction: (() -> Void)? = nil,
-        onInterfaceVisibilityChange: ((Bool) -> Void)? = nil,
-        onInitialFocusPrepared: (() -> Void)? = nil
+        onInterfaceVisibilityChange: ((Bool) -> Void)? = nil
     ) {
         self.playerFrame = playerFrame
         self.song = song
@@ -67,7 +66,6 @@ struct NowPlayingLyricsPage: View {
         self.showsSongHeader = showsSongHeader
         self.onInterfaceInteraction = onInterfaceInteraction
         self.onInterfaceVisibilityChange = onInterfaceVisibilityChange
-        self.onInitialFocusPrepared = onInitialFocusPrepared
     }
 
     var body: some View {
@@ -123,15 +121,35 @@ struct NowPlayingLyricsPage: View {
                     }
                     .padding(.bottom, appleMusicBottomOverlayHeight)
                 }
-            } else { ContentSkeleton(layout: .lyrics).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading) }
+            } else {
+                Group {
+                    if showsLoadingFeedback {
+                        ProgressView("正在载入歌词")
+                            .font(.body)
+                            .tint(.white)
+                            .foregroundStyle(.white)
+                            .padding(.top, 24)
+                            .accessibilityIdentifier("player.lyrics.loading")
+                    } else {
+                        Color.clear.accessibilityHidden(true)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            }
         }
-        .pageContentReveal(isReady: lyrics != nil || errorMessage != nil)
-        .task(id: lyrics != nil || errorMessage != nil) {
-            guard lyrics != nil || errorMessage != nil else { return }
-            await Task.yield()
-            guard !Task.isCancelled else { return }
-            onInitialFocusPrepared?()
+        .pageContentReveal(isReady: lyrics != nil || errorMessage != nil || showsLoadingFeedback)
+        .task(id: NowPlayingLyricsLoadingRequest(trackID: song.id, isLoading: lyrics == nil && errorMessage == nil,
+                                                isActive: isActive)) {
+            guard isActive, lyrics == nil, errorMessage == nil else {
+                loadingFeedback.reset()
+                return
+            }
+            await loadingFeedback.waitToShow(for: song.id)
         }
+    }
+
+    private var showsLoadingFeedback: Bool {
+        isActive && loadingFeedback.visibleTrackID == song.id
     }
 
     private var appleMusicBottomOverlayHeight: CGFloat {
@@ -166,6 +184,29 @@ struct NowPlayingLyricsPage: View {
             + lyricsContentSpacing
     }
 
+}
+
+private struct NowPlayingLyricsLoadingRequest: Equatable {
+    let trackID: String
+    let isLoading: Bool
+    let isActive: Bool
+}
+
+/// Delay belongs to the visible load task; replacing or hiding that task cancels publication.
+@MainActor @Observable final class NowPlayingLyricsLoadingFeedback {
+    private(set) var visibleTrackID: String?
+
+    func reset() { visibleTrackID = nil }
+
+    func waitToShow(for trackID: String,
+                    wait: () async throws -> Void = { try await Task.sleep(for: .seconds(3)) }) async {
+        reset()
+        do {
+            try await wait()
+            try Task.checkCancellation()
+            visibleTrackID = trackID
+        } catch { }
+    }
 }
 
 /// Reads playback progress without invalidating the lyric rows until the active line changes.

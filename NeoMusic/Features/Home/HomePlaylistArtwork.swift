@@ -5,10 +5,16 @@ import CoreImage
 /// The approved square cover and its softly extended lower edge.
 struct HomePlaylistArtwork: View {
     let artwork: Artwork
+    var onVisibleArtworkChange: (Bool) -> Void = { _ in }
     @Environment(\.displayScale) private var displayScale
     @State private var rendered: HomePlaylistArtworkRenderer.Images?
     @Environment(\.artworkLoadAction) private var loadArtwork
     private var url: URL? { if case .file(let url) = artwork { url } else { nil } }
+    private var hasVisibleArtwork: Bool {
+        if rendered != nil { return true }
+        if case .image = artwork { return true }
+        return false
+    }
     private static let fade = Gradient(stops: (0...64).map { index in
         let t = Double(index) / 64
         let value = pow(t, 2.8)
@@ -34,6 +40,9 @@ struct HomePlaylistArtwork: View {
         }
         .frame(width: HomeMetrics.heroWidth, height: HomeMetrics.heroHeight)
         .clipped()
+        .onChange(of: hasVisibleArtwork, initial: true) { _, visible in
+            onVisibleArtworkChange(visible)
+        }
         .task(id: artwork.loadID) { loadArtwork(artwork.loadID) }
         .task(id: url) {
             guard let url else { return }

@@ -117,6 +117,8 @@ struct NowPlayingSongHeader: View {
         if showsArtwork {
             ArtworkImage(
                 url: song.coverURL,
+                contentID: song.id,
+                artworkLoadID: song.artworkLoadID,
                 cornerRadius: usesReferenceLayout ? 12 : 10
             )
             .nowPlayingArtworkTransition(

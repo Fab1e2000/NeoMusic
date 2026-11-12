@@ -101,26 +101,6 @@ enum NowPlayingPageTransition {
         return nil
     }
 
-    static func residentLyricsSpatialAnimation(
-        for transition: NowPlayingTransitionContext?,
-        reducesMotion: Bool
-    ) -> Animation? {
-        guard !reducesMotion else { return nil }
-        return motion
-            .residentLyricsSpatialAnimation(for: transition)?
-            .animation
-    }
-
-    static func residentLyricsOpacityAnimation(
-        for transition: NowPlayingTransitionContext?,
-        reducesMotion: Bool
-    ) -> Animation? {
-        guard !reducesMotion else { return nil }
-        return motion
-            .residentLyricsOpacityAnimation(for: transition)?
-            .animation
-    }
-
     static func isDirectLyricsQueueTransition(
         from source: NowPlayingPage,
         to destination: NowPlayingPage

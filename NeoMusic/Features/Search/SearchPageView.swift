@@ -273,11 +273,28 @@ struct SearchResultRow: View {
 struct SearchCategoryPage: View {
     @Bindable var model: SearchPageModel
     let category: String
+    @Environment(\.dynamicTypeSize) private var textSize
+
+    var body: some View {
+        SearchCategoryContent(model: model, category: category,
+                              columns: Array(repeating: GridItem(.flexible(), spacing: 16),
+                                             count: textSize.isAccessibilitySize ? 1 : 2),
+                              titleLineLimit: textSize.isAccessibilitySize ? nil : 2,
+                              subtitleLineLimit: textSize.isAccessibilitySize ? nil : 1)
+    }
+}
+
+struct SearchCategoryContent: View {
+    @Bindable var model: SearchPageModel
+    let category: String
+    let columns: [GridItem]
+    let titleLineLimit: Int?
+    let subtitleLineLimit: Int?
     @State private var sources = LibraryArtworkSources()
     @Environment(\.openLibraryRoute) private var openRoute
     var body: some View {
         ScrollView {
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 16), GridItem(.flexible(), spacing: 16)], spacing: 24) {
+            LazyVGrid(columns: columns, spacing: 24) {
                 ForEach(model.categoryItems) { item in
                     Button {
                         guard let route = item.route else { return }
@@ -288,8 +305,8 @@ struct SearchCategoryPage: View {
                         VStack(alignment: .leading, spacing: 5) {
                             LibraryCardArtwork(content: AnyView(ArtworkView(artwork: item.artwork, contentID: item.id, cornerRadius: 0)),
                                 sources: sources, sourceID: item.id, cornerRadius: 8).aspectRatio(1, contentMode: .fit)
-                            Text(item.title).font(.subheadline).lineLimit(2).foregroundStyle(.primary)
-                            Text(item.subtitle).font(.caption).lineLimit(1).foregroundStyle(.secondary)
+                            Text(item.title).font(.subheadline).lineLimit(titleLineLimit).foregroundStyle(.primary)
+                            Text(item.subtitle).font(.caption).lineLimit(subtitleLineLimit).foregroundStyle(.secondary)
                         }.frame(maxWidth: .infinity, alignment: .leading)
                     }.buttonStyle(.plain)
                 }
@@ -330,6 +347,7 @@ private extension MusicSearchItem {
     @MainActor func preview(ownerID: String?, route: LibraryRoute) -> LibraryNavigationPreview {
         var cover = artwork
         if case .file(let url) = cover, let image = LocalArtworkImages.cached(url, pixels: 0) { cover = .image(Image(uiImage: image)) }
-        return .init(route: route, ownerID: ownerID, title: title, subtitle: subtitle, artwork: cover)
+        return .init(route: route, ownerID: ownerID, title: title, subtitle: subtitle, artwork: cover,
+                     albumBackdrop: LocalArtworkImages.cachedBackdrop(for: artwork))
     }
 }

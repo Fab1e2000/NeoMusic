@@ -238,8 +238,19 @@ final class PlaylistLibrary {
         var changedLocalContent = false
         for (id, existing) in contents where existing.contains(where: { songs[$0.id] != nil }) {
             let updated = existing.map { item in
-                guard !item.isOnline || offlineSong?(item.id) != nil || playlist(id)?.isReadOnly == true || item.onlineOwnerID == restoredOnlineOwnerID else { return item }
-                return songs[item.id].map { item.replacingArtwork(from: $0) } ?? item
+                let offline = offlineSong?(item.id)
+                guard !item.isOnline || offline != nil || playlist(id)?.isReadOnly == true || item.onlineOwnerID == restoredOnlineOwnerID,
+                      var replacement = songs[item.id] else { return item }
+                if let offline {
+                    let file: URL?
+                    if let url = offline.artworkURL { file = url }
+                    else if case .file(let url) = offline.artwork { file = url }
+                    else { file = nil }
+                    if let file, file.isFileURL, FileManager.default.fileExists(atPath: file.path) {
+                        replacement = offline
+                    }
+                }
+                return item.replacingArtwork(from: replacement)
             }
             if existing != updated {
                 contents[id] = updated

@@ -1,5 +1,6 @@
 import XCTest
 import UIKit
+import SwiftUI
 import Nuke
 import AVFoundation
 @testable import NeoMusic
@@ -271,6 +272,88 @@ import AVFoundation
         XCTAssertEqual(controller.menu()?.children.map(\.title), ["前往艺人"])
         XCTAssertEqual(controller.menu()?.children.first?.subtitle, "New Artist")
     }
+
+    func testArtistMenusMeetMinimumHitRegionAtDefaultAndAccessibilitySizes() async throws {
+        let scene = try await applicationWindowScene()
+        let song = track("artist-hit-region")
+        let player = PlayerTestFixtures.state(tracks: [song])
+        let actions = PlayerTestFixtures.actions()
+        let sizes: [(DynamicTypeSize, UIContentSizeCategory)] = [
+            (.large, .large),
+            (.accessibility5, .accessibilityExtraExtraExtraLarge)
+        ]
+
+        for (size, category) in sizes {
+            for surface in ArtistHitRegionSurface.allCases {
+                let context = "\(surface.rawValue), \(category.rawValue)"
+                let laidOut = expectation(description: "Artist control laid out: \(context)")
+                var reportedLayout = false
+                let content = ArtistHitRegionContent(song: song, surface: surface)
+                    .environment(player)
+                    .environment(actions)
+                    .environment(\.playerVisualsActive, false)
+                    .environment(\.playerArtistEDREnabled, false)
+                    .dynamicTypeSize(size)
+                    .onGeometryChange(for: CGSize.self) { $0.size } action: { measured in
+                        guard !reportedLayout, measured.width > 0, measured.height > 0 else { return }
+                        reportedLayout = true
+                        laidOut.fulfill()
+                    }
+                let host = UIHostingController(rootView: content)
+                host.traitOverrides.preferredContentSizeCategory = category
+                let window = UIWindow(windowScene: scene)
+                window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+                window.rootViewController = host
+                window.isHidden = false
+                defer { window.isHidden = true }
+                host.view.layoutIfNeeded()
+                await fulfillment(of: [laidOut], timeout: 2)
+                host.view.layoutIfNeeded()
+
+                let button = try XCTUnwrap(artistMenuButtons(in: host.view).first {
+                    $0.accessibilityLabel == song.artists && $0.showsMenuAsPrimaryAction
+                }, context)
+                let hierarchy = artistHitHierarchy(button, in: window)
+                let measurement = XCTAttachment(string: "\(context)\n\(hierarchy)")
+                measurement.name = "Artist hit region: \(context)"
+                measurement.lifetime = .keepAlways
+                add(measurement)
+
+                XCTAssertGreaterThanOrEqual(button.bounds.width, 28, "\(context)\n\(hierarchy)")
+                XCTAssertGreaterThanOrEqual(button.bounds.height, 28, "\(context)\n\(hierarchy)")
+                let bounds = button.bounds
+                let points = [
+                    CGPoint(x: bounds.midX, y: bounds.midY),
+                    CGPoint(x: bounds.midX, y: bounds.minY + 0.5),
+                    CGPoint(x: bounds.midX, y: bounds.maxY - 0.5),
+                    CGPoint(x: bounds.minX + 0.5, y: bounds.midY),
+                    CGPoint(x: bounds.maxX - 0.5, y: bounds.midY)
+                ]
+                for point in points {
+                    let windowPoint = button.convert(point, to: window)
+                    let hit = window.hitTest(windowPoint, with: nil)
+                    XCTAssertTrue(hit === button || hit?.isDescendant(of: button) == true,
+                                  "\(context), point=\(windowPoint), hit=\(String(describing: hit))\n\(hierarchy)")
+                }
+            }
+        }
+    }
+
+    private func artistMenuButtons(in view: UIView) -> [UIButton] {
+        let matches = (view as? UIButton).map { [$0] } ?? []
+        return matches + view.subviews.flatMap { artistMenuButtons(in: $0) }
+    }
+
+    private func artistHitHierarchy(_ button: UIButton, in window: UIWindow) -> String {
+        var lines: [String] = []
+        var ancestor: UIView? = button
+        while let view = ancestor {
+            lines.append("\(type(of: view)): frame=\(view.frame), bounds=\(view.bounds), window=\(view.convert(view.bounds, to: window)), clips=\(view.clipsToBounds), hidden=\(view.isHidden), alpha=\(view.alpha)")
+            ancestor = view.superview
+        }
+        return lines.joined(separator: "\n")
+    }
+
     func testImportedLyricsLateResponseDoesNotReplaceNewSong() async {
         let model = NowPlayingLyricsModel()
         var continuation: CheckedContinuation<ReferenceLyrics, Never>?
@@ -306,6 +389,33 @@ import AVFoundation
     }
 }
 
+private enum ArtistHitRegionSurface: String, CaseIterable {
+    case songHeader
+    case artwork
+}
+
+private struct ArtistHitRegionContent: View {
+    let song: ReferenceTrack
+    let surface: ArtistHitRegionSurface
+    @Namespace private var artworkNamespace
+
+    var body: some View {
+        Group {
+            switch surface {
+            case .songHeader:
+                NowPlayingSongHeader(song: song, artworkNamespace: artworkNamespace,
+                                     usesReferenceLayout: true, usesArtworkTransition: false, showsArtwork: false)
+            case .artwork:
+                NowPlayingArtworkPage(song: song, artworkNamespace: artworkNamespace,
+                                      usesArtworkTransition: false, showsArtwork: false)
+                    .frame(height: 650)
+            }
+        }
+        .frame(width: 338)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
 @MainActor final class ReferenceTrackPagingTests: XCTestCase {
     func testPrefetchWarmsExactArtworkRequests() async throws {
         let image = UIGraphicsImageRenderer(size: CGSize(width: 48, height: 48)).image { context in
@@ -326,6 +436,8 @@ import AVFoundation
         for request in requests {
             XCTAssertNotNil(ImagePipeline.shared.cache.cachedImage(for: request))
         }
+        XCTAssertNil(LocalArtworkImages.cached(url, pixels: 160))
+        XCTAssertNotNil(PlayerPopup.cachedArtwork(for: url), "The mini player must synchronously consume its prefetch cache")
     }
 }
 

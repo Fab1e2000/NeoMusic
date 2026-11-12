@@ -1,6 +1,7 @@
 import XCTest
 import Observation
 import Synchronization
+import UIKit
 @testable import NeoMusic
 
 @MainActor final class NeteaseArtistStoreTests: XCTestCase {
@@ -151,6 +152,72 @@ import Synchronization
         XCTAssertNil(LocalLibrary.songLibrary.song(id: "netease:42:70"))
         XCTAssertEqual(integration.artistDetail(7)?.songs.count, 0)
         await store.invalidate()
+    }
+
+    func testRemovedArtistSongsKeepLateArtworkForCurrentQueueAndLocalPlaylistOnly() async throws {
+        let directory = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try await contentStore(directory: directory, userID: 42)
+        let saved = NeteaseSavedSession(profile: .init(userID: 42, nickname: "Test", avatarURL: nil), credential: try .init(musicU: "test"))
+        let account = NeteaseAccount(readSession: { saved }, saveSession: { _ in }, deleteSession: {},
+            validateCredential: { _ in saved.profile }, cachedAvatar: { _ in nil },
+            loadAvatar: { _ in Data() }, clearAvatarCache: {}, artists: store)
+        await account.restoreCachedContent()
+        let remote = try XCTUnwrap(URL(string: "https://artwork.test/\(UUID().uuidString).png"))
+        ArtistContentProtocol.state.withLock { $0.artworkURL = remote }
+        let sentinel = LibrarySongItem(id: "local-sentinel", title: "Local", artist: "Artist", album: "Album",
+            albumArtist: "Artist", trackNumber: 1, artwork: .missing)
+        let player = NowPlayingModel(queue: [sentinel], currentIndex: 0, isPlaying: false)
+        defer { player.shutdownPlayback() }
+        player.restoreOnlineIdentity(ownerID: "42")
+        let library = PlaylistLibrary(playlists: [])
+        library.restoreOnlineIdentity(ownerID: "42")
+        let playlist = try XCTUnwrap(library.createPlaylist(named: "Retained songs", artwork: .playlist, in: nil))
+        let integration = ArtistMusicIntegration(account: account, player: player, playlistLibrary: library)
+        integration.connect()
+        let artistIDs: [Int64] = [7, 8, 9, 10]
+        for id in artistIDs { await store.loadArtistSongs(id: id) }
+        let queued = try XCTUnwrap(LocalLibrary.songLibrary.song(id: "netease:42:70"))
+        let savedSong = try XCTUnwrap(LocalLibrary.songLibrary.song(id: "netease:42:80"))
+        let otherOwner = LibrarySongItem(id: "netease:43:100", title: "Other owner", artist: "Artist", album: "Album",
+            albumArtist: "Artist", trackNumber: 1, artwork: .missing)
+        player.appendLater([queued, otherOwner])
+        XCTAssertEqual(library.addSongs([savedSong], to: playlist.id), 1)
+        ArtistContentProtocol.state.withLock { $0.emptySongs = true }
+        for id in artistIDs { await store.loadArtistSongs(id: id, force: true) }
+        XCTAssertTrue(store.cachedSongs.isEmpty)
+        XCTAssertNotNil(LocalLibrary.songLibrary.song(id: queued.id))
+        XCTAssertNotNil(LocalLibrary.songLibrary.song(id: savedSong.id))
+        XCTAssertNil(LocalLibrary.songLibrary.song(id: "netease:42:90"))
+        XCTAssertNil(LocalLibrary.songLibrary.song(id: "netease:42:100"), "Another account's reference must not retain this session's metadata")
+
+        let imageReady = expectation(description: "Late artist artwork reaches retained songs")
+        let publishArtwork = store.onArtworkChange
+        store.onArtworkChange = { urls in
+            publishArtwork?(urls)
+            if urls.contains(remote) { imageReady.fulfill() }
+        }
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 32, height: 32)).image { context in
+            UIColor.red.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 32, height: 32))
+        }
+        ArtistContentProtocol.finishArtwork(try XCTUnwrap(image.pngData()))
+        await fulfillment(of: [imageReady], timeout: 3)
+        store.onArtworkChange = publishArtwork
+        let file = try XCTUnwrap(store.cachedArtworkURL(remote))
+        XCTAssertEqual(player.queue.first { $0.id == queued.id }?.artworkURL, file)
+        XCTAssertEqual(library.songs(in: playlist.id).first?.artworkURL, file)
+        XCTAssertNil(player.queue.first { $0.id == otherOwner.id }?.artworkURL)
+
+        player.removeQueueEntry(at: try XCTUnwrap(player.queue.firstIndex { $0.id == queued.id }))
+        library.removeSong(savedSong.id, from: playlist.id)
+        store.onArtworkChange?([remote])
+        XCTAssertNil(LocalLibrary.songLibrary.song(id: queued.id), "Unused retained metadata leaves on the next publication")
+        XCTAssertNil(LocalLibrary.songLibrary.song(id: savedSong.id))
+        await store.invalidate()
+        let afterInvalidation = player.queue
+        publishArtwork?([remote])
+        XCTAssertEqual(player.queue, afterInvalidation, "A late callback from the invalidated session must not publish")
     }
 
     func testFailedRefreshPreservesArtistAndRetryClearsError() async throws {
@@ -404,7 +471,14 @@ private struct ArtistPageFixture: Codable, Sendable {
 }
 
 private final class ArtistContentProtocol: URLProtocol, @unchecked Sendable {
-    struct State { var paths: [String] = []; var offline = false; var emptySongs = false }
+    struct State {
+        var paths: [String] = []
+        var offline = false
+        var emptySongs = false
+        var artworkURL: URL?
+        var artworkData: Data?
+        var pendingArtwork: [ArtistContentProtocol] = []
+    }
     static let state = Mutex(State())
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -412,11 +486,21 @@ private final class ArtistContentProtocol: URLProtocol, @unchecked Sendable {
         let path = request.url!.path
         let offline = Self.state.withLock { $0.paths.append(path); return $0.offline }
         if offline { client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet)); return }
+        if request.url?.pathExtension == "png" {
+            let data = Self.state.withLock { state -> Data? in
+                if let data = state.artworkData { return data }
+                state.pendingArtwork.append(self)
+                return nil as Data?
+            }
+            if let data { deliverArtwork(data) }
+            return
+        }
         let body: String
         let emptySongs = Self.state.withLock { $0.emptySongs }
+        let artwork = Self.state.withLock { $0.artworkURL }.map { ",\"picUrl\":\"\($0.absoluteString)\"" } ?? ""
         if path.contains("/v1/artist/"), let id = Int(path.split(separator: "/").last ?? "") {
             let songs = emptySongs ? "[]" : """
-            [{"id":\(id * 10),"name":"Song \(id * 10)","ar":[{"id":\(id),"name":"Artist \(id)"}],"al":{"id":1,"name":"Album"},"dt":1000}]
+            [{"id":\(id * 10),"name":"Song \(id * 10)","ar":[{"id":\(id),"name":"Artist \(id)"}],"al":{"id":1,"name":"Album"\(artwork)},"dt":1000}]
             """
             body = """
             {"code":200,"artist":{"id":\(id),"name":"Artist \(id)","briefDesc":"Brief"},"hotSongs":\(songs)}
@@ -436,7 +520,24 @@ private final class ArtistContentProtocol: URLProtocol, @unchecked Sendable {
         client?.urlProtocol(self, didLoad: Data(body.utf8))
         client?.urlProtocolDidFinishLoading(self)
     }
-    override func stopLoading() {}
+    static func finishArtwork(_ data: Data) {
+        let pending = state.withLock { state in
+            state.artworkData = data
+            let pending = state.pendingArtwork
+            state.pendingArtwork = []
+            return pending
+        }
+        for request in pending { request.deliverArtwork(data) }
+    }
+    private func deliverArtwork(_ data: Data) {
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil,
+            headerFields: ["Content-Type": "image/png"])!, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {
+        Self.state.withLock { $0.pendingArtwork.removeAll { $0 === self } }
+    }
 }
 
 private struct ArtistSubscriptionsFixture: Codable, Sendable {

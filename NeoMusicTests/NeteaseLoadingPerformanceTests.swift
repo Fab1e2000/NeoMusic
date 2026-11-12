@@ -4,6 +4,85 @@ import SwiftUI
 @testable import NeoMusic
 
 @MainActor final class NeteaseLoadingPerformanceTests: XCTestCase {
+    func testPlaybackQualityOnlyChangesForTheActiveNetworkPreference() async throws {
+        let suite = "quality-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = NeteaseMusicStore(directory: root, defaults: defaults)
+        store.updateNetworkType(isCellular: false)
+        var reloads = 0
+        store.onQualityChange = { reloads += 1 }
+        store.cellularQuality = .lossless
+        store.wifiQuality = .lossless
+        store.updateNetworkType(isCellular: true)
+        XCTAssertEqual(reloads, 0, "The effective quality is unchanged")
+        store.wifiQuality = .high
+        XCTAssertEqual(reloads, 0, "An inactive preference must not interrupt playback")
+        store.cellularQuality = .high
+        XCTAssertEqual(reloads, 1)
+        store.updateNetworkType(isCellular: false)
+        XCTAssertEqual(reloads, 1)
+        store.wifiQuality = .lossless
+        XCTAssertEqual(reloads, 2)
+        await store.invalidate()
+    }
+
+    func testReferencedQueueSongsRecoverArtworkMetadataAndReuseIt() async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = "/eapi/v3/song/detail"
+        let network = network([path: #"{"code":200,"songs":[{"id":1,"name":"Restored song","ar":[{"name":"Artist"}],"al":{"name":"Album","picUrl":"https://fixture.test/cover"},"dt":60000}]}"#])
+        defer { network.invalidateAndCancel() }
+        let store = NeteaseMusicStore(client: client(network), directory: root, artworkSession: network)
+        await store.activate(try session(), refresh: false)
+        var publications = 0
+        store.onChange = { publications += 1 }
+        let restored = await store.resolveReferencedSongs(ids: [1])
+        XCTAssertEqual(restored.map(\.id), [1])
+        XCTAssertEqual(store.songs[1]?.artworkURL, URL(string: "https://fixture.test/cover"))
+        XCTAssertEqual(publications, 1)
+        _ = await store.resolveReferencedSongs(ids: [1])
+        XCTAssertEqual(LoadingProtocol.state.withLock { $0.startedPaths.filter { $0 == path }.count }, 1)
+        await store.invalidate()
+    }
+
+    func testFailedReferencedMetadataRecoveryKeepsExistingSongState() async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let network = network(["/eapi/v3/song/detail": #"{"code":500}"#])
+        defer { network.invalidateAndCancel() }
+        let store = NeteaseMusicStore(client: client(network), directory: root, artworkSession: network)
+        await store.activate(try session(), refresh: false)
+        let before = store.songs
+        let restored = await store.resolveReferencedSongs(ids: [1])
+        XCTAssertTrue(restored.isEmpty)
+        XCTAssertEqual(store.songs, before)
+        await store.invalidate()
+    }
+
+    func testReferencedMetadataRecoveryCannotPublishAfterAccountSwitch() async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let path = "/eapi/v3/song/detail"
+        let started = expectation(description: "Referenced metadata request started")
+        let network = network([path: #"{"code":200,"songs":[{"id":1,"name":"Old account song","ar":[],"al":{"name":"Album"},"dt":60000}]}"#], blocked: [path],
+                              started: { if $0 == path { started.fulfill() } })
+        defer { network.invalidateAndCancel() }
+        let store = NeteaseMusicStore(client: client(network), directory: root, artworkSession: network)
+        await store.activate(try session(), refresh: false)
+        let pending = Task { await store.resolveReferencedSongs(ids: [1]) }
+        await fulfillment(of: [started], timeout: 3)
+        await store.activate(try session(99), refresh: false)
+        LoadingProtocol.release(path)
+        let result = await pending.value
+        XCTAssertTrue(result.isEmpty)
+        XCTAssertEqual(store.userID, 99)
+        XCTAssertTrue(store.songs.isEmpty)
+        await store.invalidate()
+    }
+
     private func session(_ id: Int64 = 42) throws -> NeteaseSavedSession {
         .init(profile: .init(userID: id, nickname: "Test", avatarURL: nil), credential: try .init(musicU: "session-\(id)"))
     }

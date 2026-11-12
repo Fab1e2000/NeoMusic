@@ -136,6 +136,62 @@ final class DownloadedPlaybackTests: XCTestCase {
         XCTAssertNil(model.errorMessage)
     }
 
+    func testOnlineArtworkUpdatesKeepDownloadedCoverUntilLocalFileIsRemoved() throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let downloadedCover = directory.appendingPathComponent("downloaded.image")
+        let onlineCover = directory.appendingPathComponent("online.image")
+        try Data([1, 2, 3]).write(to: downloadedCover)
+        try Data([4, 5, 6]).write(to: onlineCover)
+        var downloaded = song("netease:12:34")
+        downloaded.artwork = .file(downloadedCover)
+        downloaded.artworkURL = downloadedCover
+        downloaded.artworkBackdrop = .init(red: 0.2, green: 0.3, blue: 0.4)
+        let offline = downloaded
+        var offlineAvailable = true
+        let model = NowPlayingModel(queue: [downloaded, downloaded], currentIndex: 1, isPlaying: false, elapsed: 6)
+        defer { model.shutdownPlayback() }
+        model.configureOfflineSongs { $0 == offline.id && offlineAvailable ? offline : nil }
+        model.restoreOnlineIdentity(ownerID: "12")
+        let entries = model.entryIDs
+        let library = PlaylistLibrary(playlists: [.init(id: "local", title: "Local playlist", artwork: .playlist)])
+        library.restoreOnlineIdentity(ownerID: "12")
+        library.configureOfflineSongs { $0 == offline.id && offlineAvailable ? offline : nil }
+        XCTAssertEqual(library.addSongs([downloaded], to: "local"), 1)
+
+        var invalidated = song(downloaded.id)
+        invalidated.artwork = .deferred(id: "music:fixture:cover", placeholder: .missing)
+        var refreshed = invalidated
+        refreshed.artwork = .file(onlineCover)
+        refreshed.artworkURL = onlineCover
+        refreshed.artworkBackdrop = .init(red: 0.8, green: 0.7, blue: 0.6)
+        for replacement in [invalidated, refreshed] {
+            model.updateArtwork([downloaded.id: replacement])
+            library.updateArtwork(songs: [downloaded.id: replacement])
+            XCTAssertEqual(model.queue, [downloaded, downloaded])
+            XCTAssertEqual(library.songs(in: "local"), [downloaded])
+            XCTAssertEqual(library.displayArtwork(of: try XCTUnwrap(library.playlist("local"))), downloaded.artwork)
+        }
+
+        try FileManager.default.removeItem(at: downloadedCover)
+        model.updateArtwork([downloaded.id: refreshed])
+        library.updateArtwork(songs: [downloaded.id: refreshed])
+        let online = downloaded.replacingArtwork(from: refreshed)
+        XCTAssertEqual(model.queue, [online, online])
+        XCTAssertEqual(library.songs(in: "local"), [online])
+
+        offlineAvailable = false
+        model.updateArtwork([downloaded.id: invalidated])
+        library.updateArtwork(songs: [downloaded.id: invalidated])
+        let awaitingArtwork = downloaded.replacingArtwork(from: invalidated)
+        XCTAssertEqual(model.queue, [awaitingArtwork, awaitingArtwork])
+        XCTAssertEqual(library.songs(in: "local"), [awaitingArtwork])
+        XCTAssertEqual(model.entryIDs, entries)
+        XCTAssertEqual(model.currentIndex, 1)
+        XCTAssertEqual(model.elapsed, 6)
+        XCTAssertFalse(model.isPlaying)
+    }
+
     func testRemovedOfflineFileReturnsToAccountAvailabilityRules() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

@@ -5,6 +5,7 @@ import ImageIO
 @MainActor enum LocalArtworkImages {
     private final class Variants {
         var images: [Int: UIImage] = [:]
+        var backdrop: AlbumArtworkBackdrop?
         var cost: Int { images.values.reduce(0) { $0 + ($1.cgImage?.bytesPerRow ?? 0) * ($1.cgImage?.height ?? 0) } }
 
         func image(for pixels: Int, allowingSmaller: Bool) -> UIImage? {
@@ -28,6 +29,11 @@ import ImageIO
 
     static func cached(_ url: URL, pixels: Int) -> UIImage? {
         images.object(forKey: url as NSURL)?.image(for: pixels, allowingSmaller: true)
+    }
+
+    static func cachedBackdrop(for artwork: Artwork) -> AlbumArtworkBackdrop? {
+        guard case .file(let url) = artwork else { return nil }
+        return images.object(forKey: url as NSURL)?.backdrop
     }
 
     /// Prepare a bounded set of local thumbnails before the first shelf is shown.
@@ -65,11 +71,12 @@ import ImageIO
             // alive for those consumers even when an individual row scrolls away.
             task = Task {
                 defer { loading[request] = nil }
-                guard let image = await decoder.load(url, pixels: pixels) else { return nil }
+                guard let prepared = await decoder.load(url, pixels: pixels) else { return nil }
                 let variants = images.object(forKey: url as NSURL) ?? Variants()
-                variants.images[pixels] = image
+                variants.images[pixels] = prepared.image
+                variants.backdrop = prepared.backdrop
                 images.setObject(variants, forKey: url as NSURL, cost: variants.cost)
-                return image
+                return prepared.image
             }
             loading[request] = task
         }
@@ -79,17 +86,27 @@ import ImageIO
 }
 
 private actor LocalArtworkDecoder {
-    func load(_ url: URL, pixels: Int) -> UIImage? {
+    struct Prepared: Sendable {
+        let image: UIImage
+        let backdrop: AlbumArtworkBackdrop?
+    }
+    private let backdrops = AlbumArtworkBackdropPreparer(
+        cacheURL: URL.cachesDirectory.appending(path: "ArtworkBackdrops.json"))
+
+    func load(_ url: URL, pixels: Int) async -> Prepared? {
+        guard !Task.isCancelled else { return nil }
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        let colors = try? await backdrops.prepareAdditionalArtwork([url.absoluteString: data])
         guard !Task.isCancelled else { return nil }
         return autoreleasepool {
-            guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
+            guard let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
                   let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, [
                     kCGImageSourceCreateThumbnailFromImageAlways: true,
                     kCGImageSourceCreateThumbnailWithTransform: true,
                     kCGImageSourceShouldCacheImmediately: true,
                     kCGImageSourceThumbnailMaxPixelSize: pixels
                   ] as CFDictionary) else { return nil }
-            return UIImage(cgImage: thumbnail)
+            return Prepared(image: UIImage(cgImage: thumbnail), backdrop: colors?[url.absoluteString])
         }
     }
 }

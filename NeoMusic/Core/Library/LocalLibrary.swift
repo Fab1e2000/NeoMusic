@@ -107,7 +107,8 @@ final class LocalAlbumIndex {
             for member in members where !credits.contains(member.albumArtist) { credits.append(member.albumArtist) }
             items.append(LibraryShelfItem(id: id, title: first.album, subtitle: credits.joined(separator: " / "),
                                           artwork: first.artwork, route: .album(id),
-                                          addedOrder: members.map(\.addedOrder).max() ?? 0))
+                                          addedOrder: members.map(\.addedOrder).max() ?? 0,
+                                          albumBackdrop: first.artworkBackdrop))
             songIDs[id] = members.map(\.id)
             for artist in credits { artistAlbums[artist, default: []].append(id) }
         }
@@ -123,7 +124,7 @@ final class LocalAlbumIndex {
         return zip(lhs, rhs).allSatisfy { a, b in
             a.id == b.id && a.albumID == b.albumID && a.album == b.album && a.albumArtist == b.albumArtist
                 && a.trackNumber == b.trackNumber && a.discNumber == b.discNumber
-                && a.artwork == b.artwork && a.addedOrder == b.addedOrder
+                && a.artwork == b.artwork && a.artworkBackdrop == b.artworkBackdrop && a.addedOrder == b.addedOrder
         }
     }
 }

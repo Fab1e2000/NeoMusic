@@ -1,84 +1,29 @@
-// Direct source port from MeloX (GPL-3.0), b8bc60f.
-// NeoDizzy adapters are limited to track data, available playback features and localization.
+// Player presentation for the MeloX-derived components (GPL-3.0).
 import SwiftUI
 
-private struct NowPlayingLyricsPagePresentationModifier: ViewModifier {
-    @Environment(\.playerVisualsActive) private var visualsActive
-    let visualState: NowPlayingPageVisualState
-    let opacityTransition: NowPlayingInterruptibleProgress
-    let spatialTransition: NowPlayingInterruptibleSpringProgress
-    let opacitySpec: NowPlayingAnimationSpec
+/// SwiftUI owns interpolation, retargeting and completion for the resident pages.
+struct NowPlayingPagePresentation: ViewModifier {
+    let isVisible: Bool
     let presentationScale: CGFloat
-    let reducesMotion: Bool
+    let hiddenOffset: CGFloat
+    let spatialAnimation: Animation?
+    let opacityAnimation: Animation?
 
     func body(content: Content) -> some View {
-        TimelineView(
-            .animation(
-                paused:
-                    !visualsActive || reducesMotion
-                    || !opacityTransition.isAnimating
-                        && !spatialTransition.isAnimating
-            )
-        ) { _ in
-            let now = ContinuousClock.now
-            let opacityProgress = reducesMotion
-                ? opacityTransition.targetProgress
-                : opacityTransition.progress(at: now)
-            let spatialProgress = reducesMotion
-                ? spatialTransition.targetProgress
-                : spatialTransition.presentation(at: now).progress
-            let scale = presentationScale
-                + (1 - presentationScale) * CGFloat(spatialProgress)
-
-            content
-                .offset(y: visualState.offsetY)
-                .scaleEffect(scale)
-                .blur(radius: visualState.blurRadius)
-                .opacity(
-                    opacitySpec.transformedProgress(opacityProgress)
-                )
-        }
+        content
+            .animation(spatialAnimation) {
+                $0.scaleEffect(isVisible ? 1 : presentationScale)
+                    .offset(y: isVisible ? 0 : hiddenOffset)
+            }
+            .animation(opacityAnimation) { $0.opacity(isVisible ? 1 : 0) }
     }
 }
 
-extension View {
-    func nowPlayingLyricsPagePresentation(
-        visualState: NowPlayingPageVisualState,
-        opacityTransition: NowPlayingInterruptibleProgress,
-        spatialTransition: NowPlayingInterruptibleSpringProgress,
-        opacitySpec: NowPlayingAnimationSpec,
-        presentationScale: CGFloat,
-        reducesMotion: Bool
-    ) -> some View {
-        modifier(
-            NowPlayingLyricsPagePresentationModifier(
-                visualState: visualState,
-                opacityTransition: opacityTransition,
-                spatialTransition: spatialTransition,
-                opacitySpec: opacitySpec,
-                presentationScale: presentationScale,
-                reducesMotion: reducesMotion
-            )
-        )
-    }
-
-    func nowPlayingQueuePagePresentation(
-        visualState: NowPlayingPageVisualState,
-        opacityTransition: NowPlayingInterruptibleProgress,
-        spatialTransition: NowPlayingInterruptibleSpringProgress,
-        opacitySpec: NowPlayingAnimationSpec,
-        presentationScale: CGFloat,
-        reducesMotion: Bool
-    ) -> some View {
-        modifier(
-            NowPlayingLyricsPagePresentationModifier(
-                visualState: visualState,
-                opacityTransition: opacityTransition,
-                spatialTransition: spatialTransition,
-                opacitySpec: opacitySpec,
-                presentationScale: presentationScale,
-                reducesMotion: reducesMotion
-            )
-        )
-    }
+/// Source identity keeps outgoing visuals active and rejects older completions.
+struct NowPlayingPageChange {
+    let id = UUID()
+    let source: NowPlayingPage
+    let destination: NowPlayingPage
+    let entersFromHiddenQueue: Bool
+    let startsFromRest: Bool
 }

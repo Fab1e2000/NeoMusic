@@ -95,9 +95,6 @@ struct HomeQuickActionCard: View {
     var sourceID: String? = nil
     var captureSource: (@escaping () -> UIView?) -> Void = { _ in }
     let action: () -> Void
-    @Environment(\.dynamicTypeSize) private var textSize
-    @ScaledMetric(relativeTo: .caption) private var eyebrowSize: CGFloat = 12
-    @ScaledMetric(relativeTo: .footnote) private var subtitleSize: CGFloat = 13
     @State private var localSources = LibraryArtworkSources()
     private var artworkSources: LibraryArtworkSources { sources ?? localSources }
     private var sourceIdentity: String { sourceID ?? "quick:\(item.id)" }
@@ -124,22 +121,11 @@ struct HomeQuickActionCard: View {
         .accessibilityIdentifier("home.quick-action.\(item.action.rawValue)")
     }
 
-    @ViewBuilder private var cardButton: some View {
-        let button = Button(action: activate) {
-            cover
-                .clipShape(.rect(cornerRadius: 16))
-                .background {
-                    RoundedRectangle(cornerRadius: 16)
-                        .fill(Color(.systemBackground))
-                        .shadow(color: .black.opacity(0.18), radius: 16, x: 0, y: 12)
-                }
-                .contentShape(.rect(cornerRadius: 16))
+    private var cardButton: some View {
+        Button(action: activate) {
+            HomeQuickActionCardLabel(item: item, state: state, sources: artworkSources, sourceID: sourceIdentity)
         }
-        if item.action.opensDetail {
-            button.buttonStyle(.plain)
-        } else {
-            button.buttonStyle(HomePlaybackCardButtonStyle())
-        }
+        .buttonStyle(.plain)
     }
 
     private func activate() {
@@ -148,12 +134,59 @@ struct HomeQuickActionCard: View {
         action()
     }
 
-    private var cover: some View {
+}
+
+struct HomeQuickActionCardLabel: View {
+    let item: HomeQuickActionItem
+    let state: HomeQuickActionState
+    let sources: LibraryArtworkSources
+    let sourceID: String
+    @State private var hasVisibleArtwork = false
+
+    var body: some View {
+        HomeQuickActionCardContent(item: item, state: state,
+                                   textColor: hasVisibleArtwork ? .white : .primary,
+                                   eyebrowColor: hasVisibleArtwork ? .white.opacity(0.75) : .secondary,
+                                   secondaryColor: hasVisibleArtwork ? .white.opacity(0.85) : .secondary)
+            .background {
+                LibraryCardArtwork(content: AnyView(
+                    HomeQuickActionArtwork(item: item, onVisibleArtworkChange: { hasVisibleArtwork = $0 })
+                        .id(sourceID)
+                ), sources: sources, sourceID: sourceID, cornerRadius: 16)
+                .overlay {
+                    if hasVisibleArtwork {
+                        LinearGradient(colors: [.clear, .black.opacity(0.6)], startPoint: .center, endPoint: .bottom)
+                    } else {
+                        Color(.secondarySystemBackground)
+                    }
+                }
+            }
+            .clipShape(.rect(cornerRadius: 16))
+            .background {
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(Color(.systemBackground))
+                    .shadow(color: .black.opacity(0.18), radius: 16, x: 0, y: 12)
+            }
+            .contentShape(.rect(cornerRadius: 16))
+    }
+}
+
+struct HomeQuickActionCardContent: View {
+    let item: HomeQuickActionItem
+    let state: HomeQuickActionState
+    let textColor: Color
+    let eyebrowColor: Color
+    let secondaryColor: Color
+    @Environment(\.dynamicTypeSize) private var textSize
+    @ScaledMetric(relativeTo: .caption) private var eyebrowSize: CGFloat = 12
+    @ScaledMetric(relativeTo: .footnote) private var subtitleSize: CGFloat = 13
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Spacer(minLength: textSize.isAccessibilitySize ? 90 : 0)
             Text(item.action.eyebrow)
                 .font(.system(size: eyebrowSize))
-                .foregroundStyle(.white.opacity(0.75))
+                .foregroundStyle(eyebrowColor)
                 .lineLimit(textSize.isAccessibilitySize ? nil : 1)
             Text(item.action.title).font(.title2.bold()).lineLimit(textSize.isAccessibilitySize ? nil : 2)
             switch state {
@@ -161,28 +194,24 @@ struct HomeQuickActionCard: View {
                 if !item.subtitle.isEmpty {
                     Text(item.subtitle)
                         .font(.system(size: subtitleSize))
-                        .foregroundStyle(.white.opacity(0.85))
+                        .foregroundStyle(secondaryColor)
                         .lineLimit(textSize.isAccessibilitySize ? nil : 2)
                 }
             case .loading:
                 Text(item.action.loadingMessage)
                     .font(.system(size: subtitleSize))
-                    .foregroundStyle(.white.opacity(0.85))
+                    .foregroundStyle(secondaryColor)
                     .lineLimit(textSize.isAccessibilitySize ? nil : 2)
             case .failed(let error):
                 Text(error).font(.system(size: subtitleSize)).lineLimit(textSize.isAccessibilitySize ? nil : 3)
                 Text("轻点重试").font(.system(size: subtitleSize, weight: .semibold))
             }
         }
-        .foregroundStyle(.white)
+        .foregroundStyle(textColor)
         .multilineTextAlignment(.leading)
         .padding(16)
         .frame(width: HomeMetrics.heroWidth, alignment: .leading)
         .frame(minHeight: HomeMetrics.heroHeight, alignment: .bottomLeading)
-        .background {
-            LibraryCardArtwork(content: AnyView(HomeQuickActionArtwork(item: item).id(sourceIdentity)), sources: artworkSources, sourceID: sourceIdentity, cornerRadius: 16)
-                .overlay { LinearGradient(colors: [.clear, .black.opacity(0.6)], startPoint: .center, endPoint: .bottom) }
-        }
     }
 }
 
@@ -207,20 +236,17 @@ struct HomeFeedIssueRow: View {
     }
 }
 
-/// 直接播放的首页卡不使用按钮按下时的变暗。
-private struct HomePlaybackCardButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View { configuration.label }
-}
-
-private struct HomeQuickActionArtwork: View {
+struct HomeQuickActionArtwork: View {
     let item: HomeQuickActionItem
+    var onVisibleArtworkChange: (Bool) -> Void = { _ in }
 
     var body: some View {
         Group {
             if let artwork = item.artwork {
-                HomePlaylistArtwork(artwork: artwork)
+                HomePlaylistArtwork(artwork: artwork, onVisibleArtworkChange: onVisibleArtworkChange)
             } else {
                 Color(.secondarySystemFill)
+                    .onAppear { onVisibleArtworkChange(false) }
             }
         }.accessibilityHidden(true)
     }

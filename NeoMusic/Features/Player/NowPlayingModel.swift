@@ -98,7 +98,7 @@ final class NowPlayingModel {
     /// 播放超过 3 秒时先回到开头，否则回到上一首。
     func skipBackward() {
         if elapsed > 3 || previous == nil {
-            elapsed = 0
+            seek(to: 0, source: .previous)
         } else {
             select(currentIndex - 1)
         }
@@ -369,7 +369,7 @@ final class NowPlayingModel {
         mediaSession = PlaybackMediaSession(play: { [weak self] in if let self, !self.isPlaying { self.togglePlayback() } },
             pause: { [weak self] in if let self, self.isPlaying { self.togglePlayback() } },
             next: { [weak self] in self?.skipForward() }, previous: { [weak self] in self?.skipBackward() },
-            seek: { [weak self] in self?.elapsed = $0 })
+            seek: { [weak self] in self?.seek(to: $0, source: .remote) })
         updateRemoteCommandAvailability()
     }
 
@@ -512,7 +512,7 @@ final class NowPlayingModel {
 
     private func resolveCurrent(at position: Double, replacing: Bool = false) {
         guard hasCurrent, let resolveResource else { return }
-        PerformanceDiagnostics.restoration("player.resource.request online=\(current.onlineOwnerID != nil) resume=\(position > 0)")
+        PerformanceDiagnostics.restoration("player.resource.request online=\(current.onlineOwnerID != nil) replacing=\(replacing) resume=\(position > 0) target=\(position)")
         if offlineSong?(current.id) == nil, let owner = current.onlineOwnerID,
            (hasResolvedOnlineIdentity ? owner != resolvedOnlineOwnerID : unavailableIDs.contains(current.id)) {
             resourceRevision = UUID()
@@ -533,6 +533,7 @@ final class NowPlayingModel {
             configuringAudio = true
             audio?.stop(); loadedEntry = nil; preparedEntry = nil
             configuringAudio = false
+            updatingTime = true; elapsed = max(0, position); updatingTime = false
             isPlaying = intent
             actualQuality = nil
             updateNowPlaying()
@@ -546,7 +547,7 @@ final class NowPlayingModel {
                       self.entryIDs[self.currentIndex] == entry else { return }
                 if let expiry = resource.expiresAt, expiry <= Date() { throw URLError(.resourceUnavailable) }
                 let autoplay = self.isPlaying
-                let resume = replacing ? self.elapsed : position
+                let resume = self.elapsed
                 if replacing {
                     try await self.ensureAudioEngine().replaceResource(url: resource.url, shouldResume: { self.isPlaying })
                     guard self.resourceRevision == revision, !Task.isCancelled else { return }
@@ -556,11 +557,15 @@ final class NowPlayingModel {
                     self.ensureAudioEngine().load(url: resource.url, position: resume, autoplay: autoplay)
                     self.configuringAudio = false
                 }
-                PerformanceDiagnostics.restoration("player.resource.ready resume=\(resume > 0)")
+                PerformanceDiagnostics.restoration("player.resource.ready replacing=\(replacing) resume=\(resume > 0)")
                 self.resolvingResource = false
                 self.actualQuality = resource.quality
                 self.resourceTask = nil
                 self.syncTransport(); self.prepareNext(); self.saveQueue()
+            } catch is CancellationError {
+                guard let self, self.resourceRevision == revision else { return }
+                self.resolvingResource = false; self.resourceTask = nil
+                self.syncTransport()
             } catch {
                 guard let self, self.resourceRevision == revision, !Task.isCancelled else { return }
                 PerformanceDiagnostics.restoration("player.resource.failed")
@@ -635,7 +640,10 @@ final class NowPlayingModel {
         audio?.prepareNext(url: next.flatMap { resolveURL?(queue[$0].id) })
     }
     private func syncTransport(publishNowPlaying: Bool = true) {
-        guard !configuringAudio, !resolvingResource, let audio else { return }
+        guard !configuringAudio, let audio else { return }
+        // A same-track resource request keeps playing its loaded occurrence.
+        // New-track resolution has no loaded entry and retains its requested position.
+        if resolvingResource, !hasCurrent || loadedEntry != entryIDs[currentIndex] { return }
         let stopped = isPlaying && !audio.isPlaying && !audio.isActivating
         updatingTime = true
         elapsed = audio.elapsed
@@ -648,6 +656,13 @@ final class NowPlayingModel {
         if let error = audio.error { errorMessage = error }
         if Date().timeIntervalSince(lastSavedPlaybackTime) >= 5 || stopped { saveQueue() }
         if publishNowPlaying { updateNowPlaying() }
+    }
+
+    private func seek(to position: Double, source: LocalPlaybackEngine.SeekSource) {
+        guard position.isFinite else { return }
+        updatingTime = true; elapsed = max(0, position); updatingTime = false
+        audio?.seek(to: elapsed, source: source)
+        saveQueue(); updateNowPlaying()
     }
     func startCurrent(at position: Double = 0) {
         if resolveResource != nil { resolveCurrent(at: position); return }
@@ -810,10 +825,20 @@ final class NowPlayingModel {
         var currentChanged = false
         for index in queue.indices {
             let existing = queue[index]
-            if offlineSong?(existing.id) == nil, let owner = existing.onlineOwnerID,
+            let offline = offlineSong?(existing.id)
+            if offline == nil, let owner = existing.onlineOwnerID,
                !hasResolvedOnlineIdentity || owner != resolvedOnlineOwnerID { continue }
-            guard let replacement = replacements[existing.id],
-                  replacement.artwork != existing.artwork
+            guard var replacement = replacements[existing.id] else { continue }
+            if let offline {
+                let file: URL?
+                if let url = offline.artworkURL { file = url }
+                else if case .file(let url) = offline.artwork { file = url }
+                else { file = nil }
+                if let file, file.isFileURL, FileManager.default.fileExists(atPath: file.path) {
+                    replacement = offline
+                }
+            }
+            guard replacement.artwork != existing.artwork
                     || replacement.artworkData != existing.artworkData
                     || replacement.artworkURL != existing.artworkURL
                     || replacement.artworkBackdrop != existing.artworkBackdrop else { continue }
@@ -843,7 +868,7 @@ final class NowPlayingModel {
             if let owner = song.onlineOwnerID, !hasResolvedOnlineIdentity || owner != resolvedOnlineOwnerID {
                 return Self.unavailableOnlineSong(song.id)
             }
-            return refreshed[song.id] ?? song
+            return refreshed[song.id]?.retainingArtwork(from: song) ?? song
         }
         var ids = Set(refreshed.keys)
         ids.formUnion(offline.keys)

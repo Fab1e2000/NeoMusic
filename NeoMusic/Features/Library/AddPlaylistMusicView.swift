@@ -270,7 +270,7 @@ private struct MusicPickerPage: Identifiable {
     }
 }
 
-private struct MusicPickerSongRow: View {
+struct MusicPickerSongRow: View {
     let song: LibrarySongItem
     let selected: Bool
     let alreadyAdded: Bool
@@ -278,25 +278,9 @@ private struct MusicPickerSongRow: View {
 
     var body: some View {
         Button(action: toggle) {
-            HStack(spacing: 16) {
-                ArtworkView(artwork: song.artwork, cornerRadius: 5).frame(width: 48, height: 48)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(song.title).font(.body).foregroundStyle(.primary)
-                    Text(song.artist).font(.footnote).foregroundStyle(Color(white: 0.60))
-                }
-                .lineLimit(1)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                Image(systemName: selected ? "checkmark" : "plus.circle")
-                    .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(selected ? Color.blue : Color.primary)
-                    .frame(width: 40)
-                    .padding(.trailing, 4)
-            }
-            .frame(minHeight: 64)
-            .contentShape(.rect)
+            MusicPickerSongRowLabel(song: song, selected: selected)
         }
-        // `.plain` 在按下时会把整行（封面、标题）调暗，看起来像闪白；这里按下时保持原样。
-        .buttonStyle(StaticRowButtonStyle())
+        .buttonStyle(.plain)
         .disabled(alreadyAdded)
         .accessibilityLabel("\(song.title)，\(song.artist)")
         .accessibilityValue(alreadyAdded ? "已在播放列表中" : selected ? "已选择" : "未选择")
@@ -304,9 +288,28 @@ private struct MusicPickerSongRow: View {
     }
 }
 
-/// 按下时不改变外观的按钮样式，用于点按只切换右侧勾选的列表行。
-private struct StaticRowButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
+struct MusicPickerSongRowLabel: View {
+    let song: LibrarySongItem
+    let selected: Bool
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    var body: some View {
+        HStack(spacing: 16) {
+            ArtworkView(artwork: song.artwork, cornerRadius: 5).frame(width: 48, height: 48)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(song.title).font(.body).foregroundStyle(.primary)
+                Text(song.artist).font(.footnote)
+                    .foregroundStyle(contrast == .increased ? Color.primary : Color(white: 0.60))
+            }
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Image(systemName: selected ? "checkmark" : "plus.circle")
+                .font(.system(size: 17, weight: .medium))
+                .foregroundStyle(selected ? Color.blue : Color.primary)
+                .frame(width: 40)
+                .padding(.trailing, 4)
+        }
+        .frame(minHeight: 64)
+        .contentShape(.rect)
     }
 }

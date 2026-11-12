@@ -94,11 +94,6 @@
       "destination": "NeoMusic/Features/Player/Imported/NowPlaying/NowPlayingInterfaceTransition.swift"
     },
     {
-      "source": "NeoDizzy/Features/Player/NowPlaying/NowPlayingInterruptibleProgress.swift",
-      "sha256": "0f837bbbb6b192c8a7590e1c805516a3f3cd73a22c0089f4942eb62376cf5176",
-      "destination": "NeoMusic/Features/Player/Imported/NowPlaying/NowPlayingInterruptibleProgress.swift"
-    },
-    {
       "source": "NeoDizzy/Features/Player/NowPlaying/NowPlayingLayout.swift",
       "sha256": "3435fadeb2b4a9eb14842184b03d4bb2f91983fbab0ae1b8fd8486a6ab39b59d",
       "destination": "NeoMusic/Features/Player/Imported/NowPlaying/NowPlayingLayout.swift"
@@ -177,11 +172,6 @@
       "source": "NeoDizzy/Features/Player/NowPlaying/NowPlayingTrackSwipe.swift",
       "sha256": "a0824557c318b5ef91e0e9ef90cb02f151b89d420efce35c82153a83561a5105",
       "destination": "NeoMusic/Features/Player/Imported/NowPlaying/NowPlayingTrackSwipe.swift"
-    },
-    {
-      "source": "NeoDizzy/Features/Player/NowPlaying/NowPlayingTransitionCoordinator.swift",
-      "sha256": "3d9bd14050be28590eb9760075449f5b3e0698ad21af85e0685dab6c0faf6351",
-      "destination": "NeoMusic/Features/Player/Imported/NowPlaying/NowPlayingTransitionCoordinator.swift"
     },
     {
       "source": "NeoDizzy/Features/Player/NowPlaying/NowPlayingTransportButtonStyle.swift",

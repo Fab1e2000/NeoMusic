@@ -1,9 +1,84 @@
 import XCTest
 import SwiftUI
+import Nuke
 @testable import NeoMusic
 
 @MainActor
 final class ArtworkRenderingTests: XCTestCase {
+    func testPlayerCoverSurvivesSameSongRefreshAndNeverLeaksToAnotherSong() async throws {
+        let firstURL = fileURL(), secondURL = fileURL()
+        try XCTUnwrap(solid(.red).pngData()).write(to: firstURL)
+        try XCTUnwrap(solid(.blue).pngData()).write(to: secondURL)
+        defer {
+            try? FileManager.default.removeItem(at: firstURL)
+            try? FileManager.default.removeItem(at: secondURL)
+        }
+        let size = CGSize(width: 96, height: 96)
+        let requests = [firstURL, secondURL].compactMap {
+            ArtworkImagePipeline.request(for: $0, size: size, displayScale: 1)
+        }
+        await ArtworkImagePipeline.prefetch(requests)
+        let state = ArtworkRenderingState(.deferred(id: "first-arrival", placeholder: .missing), contentID: "song-1")
+        let scene = try await applicationWindowScene()
+        let window = UIWindow(windowScene: scene)
+        let controller = UIHostingController(rootView: PlayerArtworkRenderingPage(state: state))
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        let host = ArtworkRenderingHost(window: window, controller: controller)
+        let empty = await frames(host, count: 2)
+        state.artwork = .file(firstURL)
+        let initial = await frames(host, count: 3)
+        let first = try XCTUnwrap(initial.last)
+        XCTAssertNotEqual(first.pixels, empty.last?.pixels)
+        state.artwork = .deferred(id: "replacement", placeholder: .missing)
+        let pending = await frames(host, count: 4)
+        state.artwork = .file(fileURL())
+        let failed = await frames(host, count: 4)
+        for frame in pending + failed { XCTAssertEqual(frame.pixels, first.pixels) }
+        state.contentID = "song-2"
+        state.artwork = .file(secondURL)
+        let updated = await frames(host, count: 4)
+        XCTAssertNotEqual(updated.last?.pixels, first.pixels)
+        state.artwork = .deferred(id: "second-refresh", placeholder: .missing)
+        let secondPending = await frames(host, count: 3)
+        for frame in secondPending { XCTAssertEqual(frame.pixels, updated.last?.pixels) }
+        state.contentID = "song-1"
+        state.artwork = .deferred(id: "first-refresh", placeholder: .missing)
+        let returned = await frames(host, count: 3)
+        for frame in returned { XCTAssertNotEqual(frame.pixels, updated.last?.pixels, "The second song's image must not be attributed to the first") }
+        state.artwork = .file(firstURL)
+        let reloaded = await frames(host, count: 3)
+        XCTAssertEqual(reloaded.last?.pixels, first.pixels)
+        state.artwork = .missing
+        let invalidated = await frames(host, count: 3)
+        XCTAssertNotEqual(invalidated.last?.pixels, first.pixels, "Signing out clears even the same song's retained image")
+        attach(empty + initial + pending + failed + updated + secondPending + returned + reloaded + invalidated,
+               name: "Player cover metadata refresh")
+    }
+
+    func testMetadataRefreshKeepsAvailableCoverAndNewLoadIdentity() throws {
+        let url = fileURL()
+        try XCTUnwrap(solid(.red).pngData()).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let old = LibrarySongItem(id: "netease:42:1", title: "Song", artist: "Artist", album: "Album",
+                                 albumArtist: "Artist", trackNumber: 1, artwork: .file(url), artworkURL: url)
+        var updated = old
+        updated.artworkURL = nil
+        updated.artwork = .deferred(id: "new-remote", placeholder: .missing)
+        updated.isFavorite = true
+        let merged = updated.retainingArtwork(from: old)
+        XCTAssertEqual(merged.artworkURL, url)
+        XCTAssertEqual(merged.artwork.loadID, "new-remote")
+        XCTAssertTrue(merged.isFavorite)
+        updated.unavailabilityReason = "Signed out"
+        XCTAssertNil(updated.retainingArtwork(from: old).artworkURL)
+        XCTAssertNil(LibrarySongItem.unavailable("netease:99:1").retainingArtwork(from: old).artworkURL)
+        try FileManager.default.removeItem(at: url)
+        updated.unavailabilityReason = nil
+        XCTAssertNil(updated.retainingArtwork(from: old).artworkURL)
+    }
+
     func testCachedThumbnailSurvivesSourceChangeWhileLargerDecodeIsPending() async throws {
         let url = fileURL()
         try XCTUnwrap(solid(.red).pngData()).write(to: url)
@@ -337,7 +412,21 @@ private struct ArtworkRenderingPage: View {
 
 @MainActor private struct ArtworkRenderingHost {
     let window: UIWindow
-    let controller: UIHostingController<ArtworkRenderingPage>
+    let controller: UIViewController
+}
+
+private struct PlayerArtworkRenderingPage: View {
+    let state: ArtworkRenderingState
+    private var url: URL? { if case .file(let url) = state.artwork { url } else { nil } }
+    var body: some View {
+        ArtworkImage(url: url, contentID: state.contentID, artworkLoadID: state.artwork.loadID, cornerRadius: 0)
+            .frame(width: 96, height: 96)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(.white)
+            .environment(\.displayScale, 1)
+            .environment(\.colorScheme, .light)
+            .ignoresSafeArea()
+    }
 }
 
 private struct ArtworkRenderedFrame {

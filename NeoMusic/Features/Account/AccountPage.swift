@@ -269,8 +269,6 @@ private struct TabOrderPage: View {
                 .disabled(shown == [.home, .library] && hidden.subtracting(playlistIDs.map(AppTab.playlist)) == AppTabOrder.defaultHidden)
             }
         }
-        // 编辑模式一直开着时，后插入的行不会带上系统排序把手。按当前显示的标签重建列表，把手会马上出现。
-        .id(shown.map(\.rawValue).sorted().joined(separator: ","))
         .environment(\.editMode, .constant(.active))
         .contentMargins(.horizontal, 20, for: .scrollContent)
         .navigationTitle("标签页")

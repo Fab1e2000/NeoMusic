@@ -44,6 +44,9 @@ struct PlaylistCollectionList: UIViewControllerRepresentable {
         private var hasApplied = false
         private var environment = EnvironmentValues()
         private weak var collectionView: UICollectionView?
+        private var configuredColorScheme: ColorScheme?
+        private var configuredDynamicTypeSize: DynamicTypeSize?
+        private var configuredLocale: Locale?
 
         /// 分隔线从标题起点画到右边距，最后一行不画；与 SwiftUI 版本及 Apple Music 一致。
         private static let separatorLeading: CGFloat = 20 + 64 + 12
@@ -70,13 +73,21 @@ struct PlaylistCollectionList: UIViewControllerRepresentable {
             var snapshot = NSDiffableDataSourceSnapshot<Int, String>()
             snapshot.appendSections([0])
             snapshot.appendItems(list.entries.map(\.id))
-            // 标题、数量、喜爱等变化后重新配置对应的行。
+            let appearanceChanged = configuredColorScheme != environment.colorScheme
+                || configuredDynamicTypeSize != environment.dynamicTypeSize || configuredLocale != environment.locale
+            // 行内容与显式传给独立 SwiftUI 宿主的外观值变化后重新配置。
             let changed = list.entries.filter { entry in
-                previous[entry.id].map { $0.shelfItem != entry.shelfItem } ?? false
+                previous[entry.id].map { $0.shelfItem != entry.shelfItem || appearanceChanged } ?? false
             }.map(\.id)
             snapshot.reconfigureItems(changed)
             if hasApplied, changed.isEmpty, dataSource.snapshot().itemIdentifiers == snapshot.itemIdentifiers { return }
-            dataSource.apply(snapshot, animatingDifferences: hasApplied && animated && !environment.accessibilityReduceMotion)
+            let needsLayout = configuredDynamicTypeSize != environment.dynamicTypeSize
+            configuredColorScheme = environment.colorScheme
+            configuredDynamicTypeSize = environment.dynamicTypeSize
+            configuredLocale = environment.locale
+            dataSource.apply(snapshot, animatingDifferences: hasApplied && animated && !environment.accessibilityReduceMotion) { [weak self] in
+                if needsLayout { self?.collectionView?.collectionViewLayout.invalidateLayout() }
+            }
             hasApplied = true
         }
 
@@ -134,11 +145,15 @@ struct PlaylistCollectionList: UIViewControllerRepresentable {
                   let latest else { return nil }
             let item = entry.shelfItem
             let environment = environment
+            let traits = collectionView.traitCollection.modifyingTraits {
+                $0.preferredContentSizeCategory = UIContentSizeCategory(environment.dynamicTypeSize)
+            }
             return UIContextMenuConfiguration(identifier: entry.id as NSString) {
-                let size = MenuPreviewCard.size(for: item.previewLines)
+                let size = MenuPreviewCard.size(for: item.previewLines, compatibleWith: traits)
                 let preview = UIHostingController(rootView: MenuPreviewCard(artwork: item.artwork, lines: item.previewLines)
                     .libraryHostedAppearance(environment)
                     .frame(width: size.width, height: size.height))
+                preview.traitOverrides.preferredContentSizeCategory = traits.preferredContentSizeCategory
                 preview.safeAreaRegions = []
                 preview.preferredContentSize = size
                 preview.view.backgroundColor = .clear

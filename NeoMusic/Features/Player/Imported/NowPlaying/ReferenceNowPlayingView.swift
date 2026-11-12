@@ -13,7 +13,8 @@ struct ReferenceNowPlayingView: View {
     @Environment(ReferencePlayerState.self) private var player
     @Environment(ReferenceLibrary.self) private var library
     @Environment(\.scenePhase) private var scenePhase
-    @State private var pageTransition: NowPlayingTransitionCoordinator
+    @State private var page: NowPlayingPage
+    @State private var pageChange: NowPlayingPageChange?
     @State private var showsLyricsControls = true
     @State private var appleMusicControlsActivityGeneration = 0
     @State private var isQueueSongHeaderHidden = false
@@ -23,22 +24,21 @@ struct ReferenceNowPlayingView: View {
     @State private var backdropImage: UIImage?
     @State private var undimmedBackdropImage: UIImage?
     @State private var artworkPageFrame = CGRect.zero
-    @State private var preparedLyricsSongID: ReferenceTrack.ID?
     @State private var lyricsModel = NowPlayingLyricsModel()
     @State private var controlsHeight = NowPlayingBottomControls.overlayHeight
     @State private var importingLyrics = false
     @State private var importTrackID: String?
     @State private var pagePerformanceInterval: PerformanceDiagnostics.Interval?
     @Namespace private var pageArtworkNamespace
-    private var page: NowPlayingPage { pageTransition.page }
     private let onDismiss: (() -> Void)?
     private let isActive: Bool
     private var visualsActive: Bool { isActive && scenePhase == .active }
+    private var animatesPageChanges: Bool { visualsActive && !accessibilityReduceMotion }
     init(initialPage: NowPlayingPage = .artwork, onDismiss: (() -> Void)? = nil,
          geometry: NowPlayingGeometry = NowPlayingGeometry(), isActive: Bool = true) {
         self.onDismiss = onDismiss
         self.isActive = isActive
-        _pageTransition = State(initialValue: NowPlayingTransitionCoordinator(initialPage: initialPage))
+        _page = State(initialValue: initialPage)
         // Geometry belongs to this presentation's identity; callers may supply
         // its initial owner to observe layout without screen-coordinate feedback.
         _geometryState = State(initialValue: geometry)
@@ -81,14 +81,20 @@ struct ReferenceNowPlayingView: View {
         .onGeometryChange(for: CGSize.self) { $0.size } action: { geometryState.contentSize = $0 }
         .task(id: "\(player.currentTrack?.id ?? "")/\(library.contentRevision)/\(lyricsModel.revision)") {
             guard let track = player.currentTrack else { return }
-            preparedLyricsSongID = nil
             await lyricsModel.load(track: track, library: library, player: player)
         }
-        .task(id: transitionSettlementTaskID) { await settlePageTransition() }
-        .task(id: lyricsEntranceTaskID) { await presentLyricsEntrance() }
+        .transaction {
+            if !animatesPageChanges { $0.animation = nil; $0.disablesAnimations = true }
+        }
+        .onChange(of: accessibilityReduceMotion) { _, reduced in
+            if reduced { finishPageChange() }
+        }
+        .onChange(of: visualsActive) { _, active in
+            if !active { finishPageChange() }
+        }
         .onChange(of: page) { _, _ in showsLyricsControls = true }
         .onChange(of: player.currentTrack == nil) { _, empty in if empty { closePlayer() } }
-        .onDisappear { finishPageMeasurement() }
+        .onDisappear { finishPageChange() }
         .fileImporter(isPresented: $importingLyrics, allowedContentTypes: [.data, .plainText]) { result in
             guard let id = importTrackID, case .success(let url) = result else { return }
             Task { await lyricsModel.importFile(url, trackID: id, reader: library.reader) }
@@ -101,7 +107,7 @@ struct ReferenceNowPlayingView: View {
 
     private func portraitContent(for song: ReferenceTrack, layout: ReferenceNowPlayingLayout) -> some View {
         VStack(spacing: 0) {
-            dismissalHandle(layout: layout)
+            Color.clear.frame(height: 22).accessibilityHidden(true)
 
             pageContent(for: song)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -109,6 +115,7 @@ struct ReferenceNowPlayingView: View {
                     portraitPlayerControlsLayer(for: song)
                 }
         }
+        .overlay(alignment: .top) { dismissalHandle(layout: layout) }
         .padding(.horizontal, Self.portraitHorizontalPadding)
         .safeAreaPadding(.bottom, 3)
     }
@@ -149,23 +156,44 @@ struct ReferenceNowPlayingView: View {
     }
 
     private var pageSelection: Binding<NowPlayingPage> {
-        Binding(
-            get: { page },
-            set: { newPage in
-                guard newPage != .lyrics || lyricsAvailability == .available else { return }
-                guard newPage != page else { return }
-                finishPageMeasurement()
-                pagePerformanceInterval = PerformanceDiagnostics.beginAnimation("PlayerPageSwitch")
-                pageTransition.select(
-                    newPage,
-                    usesAppleMusicLyrics:
-                        true,
-                    isQueueSongHeaderHidden:
-                        isQueueSongHeaderHidden,
-                    motion: NowPlayingPageTransition.motion
-                )
-            }
+        Binding(get: { page }, set: selectPage)
+    }
+
+    private func selectPage(_ destination: NowPlayingPage) {
+        guard destination != page,
+              destination != .lyrics || lyricsAvailability == .available else { return }
+        finishPageMeasurement()
+        pagePerformanceInterval = PerformanceDiagnostics.beginAnimation("PlayerPageSwitch")
+        let request = NowPlayingPageChange(
+            source: page, destination: destination,
+            entersFromHiddenQueue: page == .queue && isQueueSongHeaderHidden,
+            startsFromRest: pageChange == nil
         )
+        let animation = animatesPageChanges
+            ? NowPlayingPageTransition.selectionAnimation(from: page, to: destination) : nil
+        withAnimation(animation, completionCriteria: .removed) {
+            pageChange = request
+            page = destination
+        } completion: {
+            guard pageChange?.id == request.id else { return }
+            finishPageChange()
+        }
+    }
+
+    private func finishPageChange() {
+        if pageChange != nil {
+            var transaction = Transaction(animation: nil)
+            transaction.disablesAnimations = true
+            withTransaction(transaction) { pageChange = nil }
+        }
+        finishPageMeasurement()
+    }
+
+    private func pageAnimation(_ spec: NowPlayingAnimationSpec, includesDelay: Bool = true,
+                               extraDelay: TimeInterval = 0) -> Animation? {
+        guard animatesPageChanges else { return nil }
+        return NowPlayingAnimationSpec(spec.curve, duration: spec.duration,
+                                       delay: (includesDelay ? spec.delay : 0) + extraDelay).animation
     }
 
     private var hidesLyricsControls: Bool {
@@ -184,24 +212,21 @@ struct ReferenceNowPlayingView: View {
     }
 
     private func dismissalHandle(layout: ReferenceNowPlayingLayout) -> some View {
-        ZStack(alignment: .top) {
-            Capsule()
-                .fill(.white.opacity(0.58))
-                .frame(width: layout.width(60), height: 3.8)
-                .padding(.top, layout.contentY(69))
+        Button(action: closePlayer) {
+            ZStack(alignment: .top) {
+                Capsule()
+                    .fill(.white.opacity(0.58))
+                    .frame(width: layout.width(60), height: 3.8)
+                    .padding(.top, layout.contentY(69))
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 44, alignment: .top)
+            .contentShape(.rect)
         }
-        .frame(maxWidth: .infinity)
-        .frame(height: 22, alignment: .top)
-        .contentShape(.rect)
-        .onTapGesture {
-            closePlayer()
-        }
-        .accessibilityElement()
+        .buttonStyle(.plain)
         .accessibilityLabel("收起播放器")
         .accessibilityHint("返回上一页")
-        .accessibilityAction {
-            closePlayer()
-        }
+        .accessibilityIdentifier("player.dismiss")
     }
 
     private func pageContent(for song: ReferenceTrack) -> some View {
@@ -238,9 +263,7 @@ struct ReferenceNowPlayingView: View {
 
         }
         .background {
-            if keepsStableArtworkFrameMeasurement {
-                NowPlayingArtworkFrameMeasurement(onFrameChange: recordArtworkPageFrame)
-            }
+            NowPlayingArtworkFrameMeasurement(onFrameChange: recordArtworkPageFrame)
         }
         .overlay {
             QueueLinkedArtwork(
@@ -265,28 +288,12 @@ struct ReferenceNowPlayingView: View {
                 song: song,
                 artworkNamespace: pageArtworkNamespace,
                 usesArtworkTransition: false,
-                showsArtwork: false,
-                onArtworkFrameChange:
-                    recordPresentedArtworkPageFrame
+                showsArtwork: false
             )
             .transition(
                 pageContentTransition(for: .artwork)
             )
         }
-    }
-
-    private var keepsStableArtworkFrameMeasurement: Bool {
-        page != .artwork || pageTransition.transition != nil
-    }
-
-    private func recordPresentedArtworkPageFrame(
-        _ frame: CGRect
-    ) {
-        // The artwork page enters from below. Its geometry includes that
-        // temporary transition offset, so keep using the resident
-        // measurement until the page transition has settled.
-        guard pageTransition.transition == nil else { return }
-        recordArtworkPageFrame(frame)
     }
 
     private func recordArtworkPageFrame(_ frame: CGRect) {
@@ -311,7 +318,8 @@ struct ReferenceNowPlayingView: View {
     private func residentQueuePage(
         for song: ReferenceTrack
     ) -> some View {
-        let visualState = residentQueueVisualState
+        let isVisible = page == .queue
+        let motion = NowPlayingPageTransition.motion
 
         return NowPlayingQueuePage(
             song: song,
@@ -330,245 +338,60 @@ struct ReferenceNowPlayingView: View {
         .padding(.horizontal, Self.portraitHorizontalPadding)
         .clipped()
         .padding(.horizontal, -Self.portraitHorizontalPadding)
-        .nowPlayingQueuePagePresentation(
-            visualState: visualState,
-            opacityTransition: pageTransition.queueOpacityTransition,
-            spatialTransition: pageTransition.queueSpatialTransition,
-            opacitySpec:
-                pageTransition.queueOpacityTransition.targetProgress >= 1
-                    ? NowPlayingPageTransition.motion
-                        .queueOpacityPresentation
-                    : NowPlayingPageTransition.motion
-                        .queueOpacityDismissal,
-            presentationScale:
-                NowPlayingPageTransition.motion.queuePresentationScale,
-            reducesMotion: accessibilityReduceMotion
-        )
-        .allowsHitTesting(page == .queue)
-        .accessibilityHidden(page != .queue)
-        .environment(\.playerVisualsActive, visualsActive && (page == .queue || pageTransition.transition?.source == .queue))
+        .modifier(NowPlayingPagePresentation(
+            isVisible: isVisible, presentationScale: motion.queuePresentationScale,
+            hiddenOffset: motion.queueTravel,
+            spatialAnimation: pageAnimation(isVisible ? motion.queueSpatialPresentation : motion.queueSpatialDismissal),
+            opacityAnimation: pageAnimation(isVisible ? motion.queueOpacityPresentation : motion.queueOpacityDismissal,
+                                            includesDelay: pageChange?.startsFromRest == true)
+        ))
+        .allowsHitTesting(isVisible)
+        .accessibilityHidden(!isVisible)
+        .environment(\.playerVisualsActive, visualsActive && (isVisible || pageChange?.source == .queue))
     }
 
-    private func portraitLyricsPage(
-        for song: ReferenceTrack,
-        onInitialFocusPrepared: (() -> Void)? = nil
-    ) -> some View {
+    private func portraitLyricsPage(for song: ReferenceTrack) -> some View {
         NowPlayingLyricsPage(
             song: song, lyrics: lyricsContent.lyrics, errorMessage: lyricsContent.error,
             isActive: visualsActive && page == .lyrics, isInterfaceHidden: hidesLyricsControls,
             artworkNamespace: pageArtworkNamespace, showsSongHeader: false,
             playerFrame: geometryState.contentFrame,
-            onInterfaceVisibilityChange: setAppleMusicLyricsControlsVisible,
-            onInitialFocusPrepared: onInitialFocusPrepared
+            onInterfaceVisibilityChange: setAppleMusicLyricsControlsVisible
         )
         .accessibilityAction(named: lyricsInterfaceAccessibilityActionName) {
             handleLyricsInterfaceInteraction()
         }
     }
 
-    private func residentAppleMusicLyricsPage(
-        for song: ReferenceTrack
-    ) -> some View {
-        let visualState = residentLyricsVisualState
-
-        return portraitLyricsPage(
-            for: song,
-            onInitialFocusPrepared: {
-                markLyricsContentPrepared(for: song.id)
-            }
-        )
-        .id(song.id)
-        .nowPlayingLyricsPagePresentation(
-            visualState: visualState,
-            opacityTransition:
-                pageTransition.lyricsOpacityTransition,
-            spatialTransition:
-                pageTransition.lyricsSpatialTransition,
-            opacitySpec:
-                pageTransition.lyricsOpacityTransition
-                    .targetProgress >= 1
-                    ? NowPlayingPageTransition.motion
-                        .lyricsOpacityPresentation
-                    : NowPlayingPageTransition.motion
-                        .lyricsOpacityDismissal,
-            presentationScale:
-                NowPlayingPageTransition.motion
-                    .lyricsPresentationScale,
-            reducesMotion: accessibilityReduceMotion
-        )
-        .allowsHitTesting(page == .lyrics)
-        .accessibilityHidden(page != .lyrics)
-        .environment(\.playerVisualsActive, visualsActive && (page == .lyrics || pageTransition.transition?.source == .lyrics))
+    private func residentAppleMusicLyricsPage(for song: ReferenceTrack) -> some View {
+        let isVisible = page == .lyrics
+        let motion = NowPlayingPageTransition.motion
+        let entranceDelay = isVisible && pageChange?.startsFromRest == true ? motion.lyricsPresentationDelay : 0
+        return portraitLyricsPage(for: song)
+            .id(song.id)
+            .modifier(NowPlayingPagePresentation(
+                isVisible: isVisible, presentationScale: motion.lyricsPresentationScale,
+                hiddenOffset: motion.lyricsTravel,
+                spatialAnimation: pageAnimation(isVisible ? motion.lyricsSpatialPresentation : motion.lyricsSpatialDismissal,
+                                                extraDelay: entranceDelay),
+                opacityAnimation: pageAnimation(isVisible ? motion.lyricsOpacityPresentation : motion.lyricsOpacityDismissal,
+                                                extraDelay: entranceDelay)
+            ))
+            .allowsHitTesting(isVisible)
+            .accessibilityHidden(!isVisible)
+            .environment(\.playerVisualsActive, visualsActive && (isVisible || pageChange?.source == .lyrics))
     }
 
-    private var residentLyricsVisualState: NowPlayingPageVisualState {
-        NowPlayingPageTransition.motion.residentLyricsState(
-            selectedPage: page,
-            transition: pageTransition.transition,
-            isEntrancePresented:
-                pageTransition.isLyricsEntrancePresented
-        )
-    }
-
-    private var residentQueueVisualState: NowPlayingPageVisualState {
-        NowPlayingPageTransition.motion.residentQueueState(
-            selectedPage: page,
-            transition: pageTransition.transition
-        )
-    }
-
-    private func pageContentTransition(
-        for destination: NowPlayingPage
-    ) -> AnyTransition {
-        if NowPlayingPageTransition.isDirectLyricsQueueTransition(
-            from: pageTransition.sourcePage,
-            to: pageTransition.destinationPage
-        ) {
-            return NowPlayingPageTransition.directAlternateContent(
-                reducesMotion: accessibilityReduceMotion
-            )
-        }
-
-        return NowPlayingPageTransition.content(
-            for: destination,
-            entersFromHiddenQueue:
-                pageTransition.entersFromHiddenQueue,
-            reducesMotion: accessibilityReduceMotion
-        )
-    }
-
-    private var transitionSettlementTaskID:
-        NowPlayingTransitionSettlementTaskID {
-        NowPlayingTransitionSettlementTaskID(
-            requestID: pageTransition.transition?.id,
-            isLyricsEntrancePresented:
-                pageTransition.isLyricsEntrancePresented
-        )
-    }
-
-    private var lyricsEntranceTaskID:
-        NowPlayingLyricsEntranceTaskID {
-        NowPlayingLyricsEntranceTaskID(
-            requestID: pageTransition.pendingLyricsEntrance?
-                .requestID,
-            songID: player.currentTrack?.id,
-            preparedSongID: preparedLyricsSongID,
-            isContentPrepared: isLyricsContentPrepared
-        )
-    }
-
-    private func settlePageTransition() async {
-        guard let transition = pageTransition.transition,
-              pageTransition.isLyricsEntrancePresented else {
-            return
-        }
-
-        let now = ContinuousClock.now
-        let settlementDuration = accessibilityReduceMotion
-            ? 0
-            : max(
-                NowPlayingPageTransition.motion.settlementDuration(
-                    for: transition
-                ),
-                pageTransition.activeMotionRemainingDuration(at: now)
-            )
-        if settlementDuration > 0 {
-            do {
-                try await Task.sleep(
-                    for: .seconds(settlementDuration)
-                )
-            } catch {
-                return
-            }
-        }
-        guard !Task.isCancelled,
-              page == transition.destination,
-              pageTransition.transition?.id == transition.id else {
-            return
-        }
-
-        var transaction = Transaction(animation: nil)
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            pageTransition.settleTransition(
-                requestID: transition.id
-            )
-        }
-        finishPageMeasurement()
+    private func pageContentTransition(for destination: NowPlayingPage) -> AnyTransition {
+        NowPlayingPageTransition.content(for: destination,
+                                         entersFromHiddenQueue: pageChange?.entersFromHiddenQueue == true,
+                                         reducesMotion: accessibilityReduceMotion)
     }
 
     private func finishPageMeasurement() {
         guard let interval = pagePerformanceInterval else { return }
         PerformanceDiagnostics.end("PlayerPageSwitch", interval)
         pagePerformanceInterval = nil
-    }
-
-    private func presentLyricsEntrance() async {
-        guard let pendingEntrance =
-            pageTransition.pendingLyricsEntrance else {
-            return
-        }
-        let requestID = pendingEntrance.requestID
-
-        await Task.yield()
-        guard !Task.isCancelled,
-              pageTransition.pendingLyricsEntrance?.requestID
-                == requestID else {
-            return
-        }
-
-        if accessibilityReduceMotion {
-            var transaction = Transaction(animation: nil)
-            transaction.disablesAnimations = true
-            withTransaction(transaction) {
-                pageTransition.presentLyricsEntrance(
-                    requestID: requestID,
-                    motion: NowPlayingPageTransition.motion
-                )
-            }
-            return
-        }
-
-        guard page == .lyrics,
-              pageTransition.usesStagedLyricsEntrance else {
-            return
-        }
-
-        let presentationDeadline = isLyricsContentPrepared
-            ? pendingEntrance.notBefore
-            : pendingEntrance.fallbackAt
-        let remainingDelay = ContinuousClock.now.duration(
-            to: presentationDeadline
-        )
-        if remainingDelay > .zero {
-            do {
-                try await Task.sleep(for: remainingDelay)
-            } catch {
-                return
-            }
-        }
-
-        guard !Task.isCancelled,
-              page == .lyrics,
-              pageTransition.pendingLyricsEntrance?.requestID
-                == requestID else {
-            return
-        }
-
-        pageTransition.presentLyricsEntrance(
-            requestID: requestID,
-            motion: NowPlayingPageTransition.motion
-        )
-    }
-
-    private var isLyricsContentPrepared: Bool {
-        (lyricsContent.lyrics?.isEmpty == true || lyricsContent.error != nil)
-            || preparedLyricsSongID == player.currentTrack?.id
-    }
-
-    private func markLyricsContentPrepared(for songID: ReferenceTrack.ID) {
-        guard player.currentTrack?.id == songID else { return }
-        preparedLyricsSongID = songID
     }
 
     private var lyricsInterfaceAccessibilityActionName: String { "显示播放控件" }
@@ -621,18 +444,6 @@ struct ReferenceNowPlayingView: View {
         appleMusicControlsActivityGeneration &+= 1
     }
 
-}
-
-private struct NowPlayingTransitionSettlementTaskID: Equatable {
-    let requestID: UUID?
-    let isLyricsEntrancePresented: Bool
-}
-
-private struct NowPlayingLyricsEntranceTaskID: Equatable {
-    let requestID: UUID?
-    let songID: ReferenceTrack.ID?
-    let preparedSongID: ReferenceTrack.ID?
-    let isContentPrepared: Bool
 }
 
 /// Queue scroll writes here. Only the header and floating artwork read it, so the rest of the player stays put.

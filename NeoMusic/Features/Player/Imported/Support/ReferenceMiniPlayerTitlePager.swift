@@ -34,6 +34,11 @@ struct ReferenceMiniPlayerTitlePager<Content: View>: UIViewRepresentable {
         return view
     }
     func updateUIView(_ view: PagerView, context: Context) { context.coordinator.update(self) }
+    static func dismantleUIView(_ view: PagerView, coordinator: Coordinator) {
+        view.delegate = nil
+        view.onLayout = nil
+        coordinator.view = nil
+    }
 
     final class PagerView: UIScrollView {
         var onLayout: (() -> Void)?
@@ -90,7 +95,7 @@ struct ReferenceMiniPlayerTitlePager<Content: View>: UIViewRepresentable {
     final class Coordinator: NSObject, UIScrollViewDelegate {
         var latest: ReferenceMiniPlayerTitlePager
         weak var view: PagerView?
-        private var hosts: [UIHostingController<Content>] = []
+        private var contentViews: [any UIView & UIContentView] = []
         private var displayed: [Page] = []
         private var displayedIndex: Int?
         private var displayedID: ReferenceTrack.ID?
@@ -116,16 +121,16 @@ struct ReferenceMiniPlayerTitlePager<Content: View>: UIViewRepresentable {
             displayedIndex = value.currentIndex
             displayedID = value.song.id
             center = value.center
-            while hosts.count > displayed.count { hosts.removeLast().view.removeFromSuperview() }
+            while contentViews.count > displayed.count { contentViews.removeLast().removeFromSuperview() }
             for (index, page) in displayed.enumerated() {
                 let root = value.content(page.track, index == center)
-                if index < hosts.count { hosts[index].rootView = root }
+                let configuration = UIHostingConfiguration { root }.margins(.all, 0).minSize(width: 0, height: 0)
+                if index < contentViews.count { contentViews[index].configuration = configuration }
                 else {
-                    let host = UIHostingController(rootView: root)
-                    host.safeAreaRegions = []
-                    host.view.backgroundColor = .clear
-                    hosts.append(host)
-                    view?.addSubview(host.view)
+                    let contentView = configuration.makeContentView()
+                    contentView.backgroundColor = .clear
+                    contentViews.append(contentView)
+                    view?.addSubview(contentView)
                 }
             }
             layout(recenter: true)
@@ -138,14 +143,14 @@ struct ReferenceMiniPlayerTitlePager<Content: View>: UIViewRepresentable {
             size = view.bounds.size
             // Page geometry is bookkeeping; only the scroll view animates a swipe.
             UIView.performWithoutAnimation {
-                view.contentSize = CGSize(width: size.width * CGFloat(hosts.count), height: size.height)
-                for (index, host) in hosts.enumerated() {
-                    host.view.frame = CGRect(x: CGFloat(index) * size.width, y: 0, width: size.width, height: size.height)
+                view.contentSize = CGSize(width: size.width * CGFloat(contentViews.count), height: size.height)
+                for (index, contentView) in contentViews.enumerated() {
+                    contentView.frame = CGRect(x: CGFloat(index) * size.width, y: 0, width: size.width, height: size.height)
                 }
                 if recenter || (resized && !moving) {
                     view.setContentOffset(CGPoint(x: CGFloat(center) * size.width, y: 0), animated: false)
                 }
-                for host in hosts { host.view.layoutIfNeeded() }
+                for contentView in contentViews { contentView.layoutIfNeeded() }
             }
         }
         func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
@@ -153,7 +158,10 @@ struct ReferenceMiniPlayerTitlePager<Content: View>: UIViewRepresentable {
             didGiveSelectionFeedback = false
             // Prepare the shared generator so the release-time trigger has low latency.
             ReferenceTrackSwipeFeedback.prepare()
-            for (index, host) in hosts.enumerated() { host.rootView = latest.content(displayed[index].track, false) }
+            for (index, contentView) in contentViews.enumerated() {
+                let root = latest.content(displayed[index].track, false)
+                contentView.configuration = UIHostingConfiguration { root }.margins(.all, 0).minSize(width: 0, height: 0)
+            }
         }
         func scrollViewWillEndDragging(_ scrollView: UIScrollView, withVelocity velocity: CGPoint,
                                        targetContentOffset: UnsafeMutablePointer<CGPoint>) {

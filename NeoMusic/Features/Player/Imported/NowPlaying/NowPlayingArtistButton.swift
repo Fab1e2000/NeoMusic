@@ -151,7 +151,7 @@ private struct NowPlayingArtistMenuButton: UIViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UIButton, context: Context) -> CGSize? {
-        CGSize(width: proposal.width ?? uiView.intrinsicContentSize.width, height: lineHeight)
+        CGSize(width: proposal.width ?? uiView.intrinsicContentSize.width, height: max(28, lineHeight))
     }
 
     static func dismantleUIView(_ uiView: UIButton, coordinator: PlayerArtistMenuController) {

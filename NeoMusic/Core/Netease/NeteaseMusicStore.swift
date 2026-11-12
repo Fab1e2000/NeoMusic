@@ -18,9 +18,20 @@ final class NeteaseMusicStore {
     private(set) var loadingPlaylists: Set<Int64> = []
     private(set) var playlistErrors: [Int64: String] = [:]
     private(set) var morePlaylistIDs: Set<Int64> = []
-    var wifiQuality: NeteaseMusicQuality = .lossless { didSet { defaults.set(wifiQuality.rawValue, forKey: "netease.quality.wifi"); onQualityChange?() } }
-    var cellularQuality: NeteaseMusicQuality = .high { didSet { defaults.set(cellularQuality.rawValue, forKey: "netease.quality.cellular"); onQualityChange?() } }
+    var wifiQuality: NeteaseMusicQuality = .lossless {
+        didSet {
+            defaults.set(wifiQuality.rawValue, forKey: "netease.quality.wifi")
+            if !isCellular, wifiQuality != oldValue { onQualityChange?() }
+        }
+    }
+    var cellularQuality: NeteaseMusicQuality = .high {
+        didSet {
+            defaults.set(cellularQuality.rawValue, forKey: "netease.quality.cellular")
+            if isCellular, cellularQuality != oldValue { onQualityChange?() }
+        }
+    }
     private(set) var isCellular = false
+    private var playbackQuality: NeteaseMusicQuality { isCellular ? cellularQuality : wifiQuality }
     @ObservationIgnored var onAuthenticationRequired: (() -> Void)?
     @ObservationIgnored var onChange: (() -> Void)?
     @ObservationIgnored var onLibraryChange: (() -> Void)?
@@ -64,8 +75,7 @@ final class NeteaseMusicStore {
         monitor.pathUpdateHandler = { [weak self] path in
             let cellular = path.usesInterfaceType(.cellular)
             Task { @MainActor [weak self] in
-                guard let self, self.isCellular != cellular else { return }
-                self.isCellular = cellular; self.onQualityChange?()
+                self?.updateNetworkType(isCellular: cellular)
             }
         }
         monitor.start(queue: DispatchQueue(label: "NeoMusic.NetworkQuality"))
@@ -135,6 +145,13 @@ final class NeteaseMusicStore {
             onChange?()
         }
         if refresh { await self.refresh() }
+    }
+
+    func updateNetworkType(isCellular cellular: Bool) {
+        guard isCellular != cellular else { return }
+        let previous = playbackQuality
+        isCellular = cellular
+        if playbackQuality != previous { onQualityChange?() }
     }
 
     func invalidate() async {
@@ -270,6 +287,31 @@ final class NeteaseMusicStore {
         restoredPlaylists.insert(detail.playlist.id)
         apply(detail, persist: false)
         onChange?()
+    }
+
+    /// Restored queues can outlive search results and radio batches that supplied their metadata.
+    func resolveReferencedSongs(ids: Set<Int64>) async -> [NeteaseMusicSong] {
+        guard userID != nil, !Task.isCancelled else { return [] }
+        let requested = ids.filter { $0 > 0 }
+        let available = requested.compactMap { songs[$0] }.filter { !$0.unavailable && $0.artworkURL != nil }
+        let missing = requested.subtracting(available.map(\.id)).sorted()
+        guard !missing.isEmpty else { return available }
+        do {
+            var resolved: [NeteaseMusicSong] = []
+            for start in stride(from: 0, to: missing.count, by: 100) {
+                let batch = Array(missing[start..<min(start + 100, missing.count)])
+                let values = try await run { [client] in try await client.songs(ids: batch, credential: $0) }
+                resolved += values.filter { requested.contains($0.id) && !$0.unavailable }
+            }
+            var changed = false
+            for song in resolved where songs[song.id] != song {
+                songs[song.id] = song
+                if likedIDs.contains(song.id) { likedSongRevision &+= 1 }
+                changed = true
+            }
+            if changed { onChange?() }
+            return available + resolved
+        } catch { return [] }
     }
 
     func restoreCachedSongs(ids: Set<Int64>) async -> [NeteaseMusicSong] {
@@ -501,7 +543,7 @@ final class NeteaseMusicStore {
     }
 
     func stream(songID: Int64) async throws -> NeteaseMusicStream {
-        let quality = isCellular ? cellularQuality : wifiQuality
+        let quality = playbackQuality
         return try await run { [client] in try await client.stream(id: songID, quality: quality, credential: $0) }
     }
     func lyrics(songID: Int64) async throws -> NeteaseMusicLyrics {

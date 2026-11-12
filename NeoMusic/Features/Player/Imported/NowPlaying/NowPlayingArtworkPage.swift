@@ -42,6 +42,10 @@ struct NowPlayingArtworkPage: View {
         player.isPlaying
     }
 
+    private var shouldBounce: Bool {
+        showsArtwork && visualsActive && player.isPlaying && !accessibilityReduceMotion
+    }
+
     var body: some View {
         GeometryReader { proxy in
             let textScale = informationFontSize / 20
@@ -61,6 +65,8 @@ struct NowPlayingArtworkPage: View {
                     if showsArtwork {
                         ArtworkImage(
                             url: song.coverURL,
+                            contentID: song.id,
+                            artworkLoadID: song.artworkLoadID,
                             cornerRadius: 12
                         )
                         .frame(
@@ -120,12 +126,10 @@ struct NowPlayingArtworkPage: View {
                 .onChange(of: player.isPlaying) { _, playing in
                     if playing && showsArtwork && visualsActive { bounceGeneration += 1 }
                 }
-                .task(id: ArtworkBounceRequest(generation: bounceGeneration, isActive: visualsActive && player.isPlaying)) {
+                .task(id: ArtworkBounceRequest(generation: bounceGeneration, isActive: shouldBounce)) {
                     guard bounceGeneration > handledBounceGeneration else { artworkBounceScale = 1; return }
                     handledBounceGeneration = bounceGeneration
-                    await animateArtworkBounce(
-                        whenPlaying: player.isPlaying
-                    )
+                    await animateArtworkBounce()
                 }
                 .position(x: proxy.size.width / 2, y: layout.pageY(112) + artworkSize / 2)
 
@@ -175,28 +179,20 @@ struct NowPlayingArtworkPage: View {
         max(0, layout.artworkSide - max(0, 53 * (textScale - 1)) - controlsOverflow)
     }
 
-    private func animateArtworkBounce(
-        whenPlaying isPlaying: Bool
-    ) async {
+    private func animateArtworkBounce() async {
         artworkBounceScale = 1
-        guard showsArtwork,
-              visualsActive,
-              isPlaying,
-              !accessibilityReduceMotion else {
-            return
-        }
+        guard shouldBounce else { return }
 
         await Task.yield()
         guard !Task.isCancelled else { return }
-        withAnimation(.easeOut(duration: 0.17)) {
-            artworkBounceScale = 1.055
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            withAnimation(.easeOut(duration: 0.17), completionCriteria: .removed) {
+                artworkBounceScale = 1.055
+            } completion: {
+                continuation.resume()
+            }
         }
-
-        do {
-            try await Task.sleep(for: .milliseconds(170))
-        } catch {
-            return
-        }
+        guard !Task.isCancelled else { return }
 
         withAnimation(.spring(duration: 0.42, bounce: 0.24)) {
             artworkBounceScale = 1

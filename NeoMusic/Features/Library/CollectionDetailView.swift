@@ -52,9 +52,12 @@ struct CollectionDetailView: View {
         if case .missing = detail.artwork, let matchingPreview { return matchingPreview.artwork }
         return detail.artwork
     }
-    private var albumColorScheme: ColorScheme? { detail.kind == .album ? detail.albumBackdrop?.colorScheme : nil }
+    private var albumBackdrop: AlbumArtworkBackdrop? {
+        detail.kind == .album ? detail.albumBackdrop ?? matchingPreview?.albumBackdrop : nil
+    }
+    private var albumColorScheme: ColorScheme? { albumBackdrop?.colorScheme }
     private var pageBackground: Color {
-        if detail.kind == .album, let albumBackdrop = detail.albumBackdrop { return albumBackdrop.color }
+        if let albumBackdrop { return albumBackdrop.color }
         return usesFavoritesBackground ? Artwork.favoritesBackground : Color(.systemBackground)
     }
 
@@ -71,7 +74,10 @@ struct CollectionDetailView: View {
         .background(pageBackground)
         .environment(\.colorScheme, albumColorScheme ?? colorScheme)
         .toolbarColorScheme(albumColorScheme, for: .navigationBar)
-        .onChange(of: albumColorScheme, initial: true) { _, scheme in navigationChrome?.setColorScheme(scheme) }
+        .onChange(of: albumBackdrop, initial: true) { _, backdrop in
+            if detail.kind == .album { navigationChrome?.setAlbumBackdrop(backdrop) }
+            else { navigationChrome?.setColorScheme(nil) }
+        }
         .libraryTitleDisplayMode(.inline)
         .modifier(FavoritesTitleHidden(isHidden: isFavorites))
         .librarySearchable(text: $query, prompt: "搜索", enabled: detail.kind != .album)
@@ -106,7 +112,7 @@ struct CollectionDetailView: View {
         NativeAlbumSongList(songs: detail.songs, title: detail.title,
             header: AnyView(VStack(spacing: 0) {
                 header
-                CollectionActions(detail: detail, albumBackground: detail.albumBackdrop?.color)
+                CollectionActions(detail: detail, albumBackground: albumBackdrop?.color)
                     .padding(.top, 13.5 + 4.0 / 3).padding(.bottom, 23 + 2.0 / 3)
             }.frame(maxWidth: .infinity)),
             footer: AnyView(Text(summary).font(.subheadline).foregroundStyle(.primary)
@@ -262,9 +268,9 @@ private struct FavoritesHeaderStar: View {
                 .frame(width: 241)
                 .foregroundStyle(Artwork.favoritesRed)
                 .scaleEffect(reducesMotion ? 1 : 1 + max(-scrollDistance, 0) / 266, anchor: .bottom)
-                .blur(radius: max(distance - 110, 0) * 0.15)
+                .blur(radius: reducesMotion ? 0 : max(distance - 110, 0) * 0.15)
                 .opacity(1 - min(max(distance - 130, 0) / 360, 1))
-                .offset(y: -33 + distance * 0.24)
+                .offset(y: -33 + (reducesMotion ? 0 : distance * 0.24))
                 .accessibilityHidden(true)
         }
         .accessibilityElement(children: .ignore)
@@ -559,8 +565,9 @@ private struct SwipedSongBackground: UIViewRepresentable {
         }
 
         private func apply(to cell: UICollectionViewCell, state: UICellConfigurationState) {
-            let traits = UITraitCollection(traitsFrom: [cell.traitCollection,
-                UITraitCollection(userInterfaceStyle: isDark ? .dark : .light)])
+            let traits = cell.traitCollection.modifyingTraits {
+                $0.userInterfaceStyle = isDark ? .dark : .light
+            }
             let base = pageColor.resolvedColor(with: traits)
             var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
             let hasRGB = base.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
@@ -729,7 +736,6 @@ private final class AlbumSongsController: UICollectionViewController {
         guard let song = songsByID[id] else { return }
         cell.contentConfiguration = UIHostingConfiguration {
             hosted(NativeAlbumRowContent(song: song))
-                .allowsHitTesting(false)
         }.margins(.all, 0).margins(.leading, 20).margins(.trailing, 9)
         cell.more.menu = UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] completion in
             completion(self?.menu(for: id).children ?? [])
@@ -767,7 +773,7 @@ private final class AlbumSongsController: UICollectionViewController {
         if !song.artistReferences.isEmpty {
             let open = environment.openLibraryRoute
             sections.append(song.artistReferences.map { artist in
-                LibraryMenuItem(title: artist.name, systemImage: "music.microphone") { open(.artist(artist.id)) }
+                LibraryMenuItem(identity: "artist:" + artist.id, title: artist.name, systemImage: "music.microphone") { open(.artist(artist.id)) }
             })
         }
         return sections.nativeMenu(firstSectionIsRow: !downloaded)
@@ -775,10 +781,12 @@ private final class AlbumSongsController: UICollectionViewController {
 
     override func collectionView(_ collectionView: UICollectionView, contextMenuConfigurationForItemsAt indexPaths: [IndexPath], point: CGPoint) -> UIContextMenuConfiguration? {
         guard let path = indexPaths.first, let song = song(at: path) else { return nil }
+        let traits = collectionView.traitCollection
         return UIContextMenuConfiguration(identifier: song.id as NSString) {
             let lines = [song.title, song.artist, song.album]
-            let size = MenuPreviewCard.size(for: lines)
+            let size = MenuPreviewCard.size(for: lines, compatibleWith: traits)
             let host = UIHostingController(rootView: MenuPreviewCard(artwork: song.artwork, lines: lines).frame(width: size.width, height: size.height))
+            host.traitOverrides.preferredContentSizeCategory = traits.preferredContentSizeCategory
             host.safeAreaRegions = []; host.preferredContentSize = size; host.view.backgroundColor = .clear
             return host
         } actionProvider: { [weak self] _ in self?.menu(for: song.id) }

@@ -37,6 +37,25 @@ struct LibrarySongItem: Identifiable, Equatable {
 }
 
 extension LibrarySongItem {
+    /// Online metadata refreshes keep an available cover while a new source is loading.
+    /// The new deferred identity remains responsible for requesting its replacement.
+    func retainingArtwork(from previous: Self?) -> Self {
+        guard isOnline, let previous, previous.id == id, unavailabilityReason == nil,
+              artworkURL == nil else { return self }
+        let file: URL?
+        if let url = previous.artworkURL { file = url }
+        else if case .file(let url) = previous.artwork { file = url }
+        else { file = nil }
+        let availableFile = file.flatMap { $0.isFileURL && FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
+        guard availableFile != nil || previous.artworkData != nil else { return self }
+        var result = self
+        result.artworkURL = availableFile
+        result.artworkData = previous.artworkData
+        result.artworkBackdrop = previous.artworkBackdrop
+        if artwork.loadID == nil { result.artwork = availableFile.map(Artwork.file) ?? previous.artwork }
+        return result
+    }
+
     func replacingArtwork(from value: Self) -> Self {
         var result = self
         result.artwork = value.artwork

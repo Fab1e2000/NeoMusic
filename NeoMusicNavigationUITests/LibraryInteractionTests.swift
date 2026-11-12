@@ -1,6 +1,156 @@
 import XCTest
 
 final class LibraryInteractionTests: XCTestCase {
+    @MainActor func testAuditZoomCancellationAndReturnRepeatsFiveTimes() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-frontendReviewPreview", "library-audit",
+                               "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryL"]
+        app.launch()
+        let albums = app.buttons["专辑"].firstMatch
+        XCTAssertTrue(albums.waitForExistence(timeout: 5))
+        albums.tap()
+        let album = app.staticTexts["沿着城市边缘一直走到海边的那些漫长夜晚与清晨：完整现场录音特别纪念版"].firstMatch
+        XCTAssertTrue(album.waitForExistence(timeout: 5))
+        let initialFrame = album.frame
+        for _ in 0..<5 {
+            album.tap()
+            XCTAssertTrue(app.buttons["停止下载"].firstMatch.waitForExistence(timeout: 5))
+            let edge = app.coordinate(withNormalizedOffset: CGVector(dx: 0.005, dy: 0.5))
+            let shortReturn = app.coordinate(withNormalizedOffset: CGVector(dx: 0.20, dy: 0.5))
+            edge.press(forDuration: 0.05, thenDragTo: shortReturn, withVelocity: .slow, thenHoldForDuration: 0.5)
+            XCTAssertTrue(app.buttons["停止下载"].firstMatch.isHittable, "A cancelled return keeps the album active")
+            app.navigationBars.buttons["BackButton"].tap()
+            XCTAssertTrue(album.waitForExistence(timeout: 5))
+            XCTAssertTrue(album.isHittable)
+            XCTAssertEqual(album.frame.minY, initialFrame.minY, accuracy: 2)
+        }
+    }
+
+    @MainActor func testAuditSheetDismissalRestoresControlsFiveTimes() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-frontendReviewPreview", "library-audit",
+                               "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryL"]
+        app.launch()
+        let settings = app.buttons["library-audit.settings"]
+        for _ in 0..<5 {
+            XCTAssertTrue(settings.waitForExistence(timeout: 5))
+            settings.tap()
+            let bar = app.navigationBars["资料库核验"]
+            XCTAssertTrue(bar.waitForExistence(timeout: 5))
+            bar.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.1))
+                .press(forDuration: 0.05,
+                       thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.92)))
+            XCTAssertTrue(bar.waitForNonExistence(timeout: 5))
+            XCTAssertTrue(settings.isHittable)
+        }
+    }
+
+    @MainActor func testTabInsertionKeepsScrollAndNativeReorderHandles() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-neteaseAccountPreview", "signed-in",
+                               "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        app.launch()
+        XCTAssertTrue(app.buttons["account.tabs"].waitForExistence(timeout: 5))
+        app.buttons["account.tabs"].tap()
+        let reset = app.buttons["恢复默认"]
+        for _ in 0..<8 where !reset.isHittable { app.swipeUp() }
+        if reset.isEnabled { reset.tap() }
+
+        let addFavorite = app.buttons["添加喜爱歌曲"]
+        let addPlaylist = app.buttons["添加播放列表"]
+        let favoriteHandle = app.buttons["对喜爱歌曲重新排序"]
+        for _ in 0..<5 {
+            for _ in 0..<8 where !addFavorite.isHittable || !addPlaylist.isHittable { app.swipeUp() }
+            XCTAssertTrue(addFavorite.isHittable)
+            XCTAssertTrue(addPlaylist.isHittable)
+            addFavorite.tap()
+            XCTAssertTrue(addPlaylist.isHittable, "Adding a tab must keep the current list context")
+            for _ in 0..<8 where !favoriteHandle.isHittable { app.swipeDown() }
+            XCTAssertTrue(favoriteHandle.isHittable, "New rows need the system reorder handle")
+            app.buttons["移除喜爱歌曲"].tap()
+        }
+        for _ in 0..<8 where !addFavorite.isHittable { app.swipeUp() }
+        addFavorite.tap()
+        for _ in 0..<8 where !favoriteHandle.isHittable { app.swipeDown() }
+        for index in 0..<5 {
+            let target = app.buttons[index.isMultiple(of: 2) ? "对主页重新排序" : "对资料库重新排序"]
+            let previousY = favoriteHandle.frame.minY
+            favoriteHandle.press(forDuration: 0.2, thenDragTo: target)
+            XCTAssertNotEqual(favoriteHandle.frame.minY, previousY)
+        }
+    }
+
+    @MainActor func testCatalogLoadingFeedbackWaitsBeforeShowing() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-frontendReviewPreview", "catalog-loading",
+                               "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryL"]
+        app.launch()
+        let original = app.buttons["当前空白"]
+        XCTAssertTrue(original.waitForExistence(timeout: 5))
+        original.tap()
+        app.buttons["原生进度"].tap()
+        let progress = app.descendants(matching: .any).matching(identifier: "catalog.loading").firstMatch
+        XCTAssertFalse(progress.waitForExistence(timeout: 1))
+        XCTAssertTrue(progress.waitForExistence(timeout: 4))
+        original.tap()
+        XCTAssertTrue(progress.waitForNonExistence(timeout: 2))
+        app.buttons["原生进度"].tap()
+        XCTAssertFalse(progress.waitForExistence(timeout: 1))
+        XCTAssertTrue(progress.waitForExistence(timeout: 4))
+    }
+
+    @MainActor func testAlbumDownloadButtonsKeepIndependentActionsAtEdges() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-frontendReviewPreview", "library-audit", "-libraryAuditPage", "album",
+                               "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryL"]
+        app.launch()
+        let settings = app.buttons["library-audit.settings"]
+        for position in [0.05, 0.95, 0.5, 0.05, 0.95] {
+            let stop = app.buttons["停止下载"]
+            let retry = app.buttons["下载失败，轻点重试"]
+            XCTAssertTrue(stop.waitForExistence(timeout: 5))
+            XCTAssertGreaterThanOrEqual(stop.frame.width, 28)
+            XCTAssertEqual(stop.frame.height, 44, accuracy: 0.01)
+            stop.coordinate(withNormalizedOffset: CGVector(dx: position, dy: 0.5)).tap()
+            retry.coordinate(withNormalizedOffset: CGVector(dx: position, dy: 0.5)).tap()
+            settings.tap()
+            XCTAssertTrue(app.staticTexts["library-audit.count.stop"].waitForExistence(timeout: 5))
+            XCTAssertEqual(app.staticTexts["library-audit.count.stop"].label, "停止次数、1")
+            XCTAssertEqual(app.staticTexts["library-audit.count.retry"].label, "重试次数、1")
+            XCTAssertEqual(app.staticTexts["library-audit.count.play"].label, "播放次数、0")
+            app.buttons["library-audit.reset"].tap()
+            app.buttons["library-audit.settings.done"].tap()
+        }
+        app.staticTexts["停止按钮核验曲目"].firstMatch.tap()
+        settings.tap()
+        XCTAssertEqual(app.staticTexts["library-audit.count.play"].label, "播放次数、1")
+    }
+
+    @MainActor func testPlayerDismissButtonAcceptsRepeatedEdgeTaps() {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-frontendReviewPreview", "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryL"]
+        app.launch()
+        let entry = app.buttons["音质与输出入口"]
+        for position in [0.05, 0.95, 0.5, 0.05, 0.95] {
+            for _ in 0..<8 where !entry.isHittable { app.swipeUp() }
+            XCTAssertTrue(entry.isHittable)
+            entry.tap()
+            let close = app.buttons["player.dismiss"]
+            XCTAssertTrue(close.waitForExistence(timeout: 5))
+            XCTAssertGreaterThanOrEqual(close.frame.height, 44)
+            XCTAssertGreaterThanOrEqual(close.frame.width, 44)
+            close.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: position)).tap()
+            XCTAssertTrue(close.waitForNonExistence(timeout: 5))
+            XCTAssertTrue(entry.waitForExistence(timeout: 5))
+        }
+    }
+
     @MainActor func testPlaylistRowPlaybackIndicatorAndIndependentMenu() {
         continueAfterFailure = false
         let app = XCUIApplication()

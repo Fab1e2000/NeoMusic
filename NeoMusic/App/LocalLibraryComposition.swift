@@ -134,7 +134,7 @@ enum LocalLibrary {
         let orderedSongs = albumSongs(id)
         guard let album = albumItem(id) else { return nil }
         return CollectionDetail(kind: .album, title: album.title, subtitle: album.subtitle, caption: nil,
-            artwork: album.artwork, tint: Color(.systemBackground), albumBackdrop: orderedSongs.first?.artworkBackdrop, isFavorite: favoriteAlbums.ids.contains(id),
+            artwork: album.artwork, tint: Color(.systemBackground), albumBackdrop: album.albumBackdrop, isFavorite: favoriteAlbums.ids.contains(id),
             isPinned: pinnedAlbums.ids.contains(id), songs: orderedSongs, route: .album(id))
     }
     static func playlistDetail(_ id: String) -> CollectionDetail? {
@@ -482,17 +482,6 @@ struct LocalLibraryHome: View {
                         playSong: LocalLibrary.playLibrarySong,
                         songForMenu: LocalLibrary.songForMenu)
             .safeAreaInset(edge: .bottom) {
-                if ready, !LocalLibrary.runtime.isScanning, LocalLibrary.songs.isEmpty {
-                    VStack(spacing: 8) {
-                        Text("将音乐放入“文件 → 我的 iPhone → NeoMusic → 音乐”").font(.callout)
-                        Text("支持 MP3、AAC/M4A、ALAC、FLAC、WAV、AIFF，可包含子文件夹。").font(.caption).foregroundStyle(.secondary)
-                        Button("在文件中打开") {
-                            var components = URLComponents(url: LocalLibrary.runtime.root, resolvingAgainstBaseURL: false)
-                            components?.scheme = "shareddocuments"
-                            if let url = components?.url { UIApplication.shared.open(url) }
-                        }
-                    }.padding().frame(maxWidth: .infinity).background(.regularMaterial)
-                }
                 if let status = LocalLibrary.runtime.status { LibraryStatusMessage(message: status) }
                 if let error = LocalLibrary.player.errorMessage {
                     LibraryStatusMessage(message: error, title: "播放状态", isError: true)

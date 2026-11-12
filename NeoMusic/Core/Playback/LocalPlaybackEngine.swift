@@ -17,6 +17,19 @@ import Observation
     @ObservationIgnored private(set) var activation: Task<Void, Never>?
     @ObservationIgnored private var playRequested = false
 
+    enum SeekSource: String, Sendable {
+        case interaction, remote, previous, load, restore, resource
+    }
+    private struct SeekRequest: Sendable {
+        let revision: Int
+        let time: CMTime
+        let source: SeekSource
+        let completion: (@MainActor @Sendable (Bool) -> Void)?
+        var submitted = false
+    }
+    @ObservationIgnored private var seekRevision = 0
+    @ObservationIgnored private var pendingSeek: SeekRequest?
+
     /// Read on demand by visible indicators; no high-frequency Observation invalidations.
     func spectrumLevels() -> [Float] {
         guard isPlaying, !isLoading, error == nil, player.timeControlStatus == .playing,
@@ -99,9 +112,17 @@ import Observation
             let identity = ObjectIdentifier(endedItem)
             MainActor.assumeIsolated {
                 guard let self, let current = self.player.currentItem, identity == ObjectIdentifier(current) else { return }
+                PerformanceDiagnostics.restoration("player.ended generation=\(self.generation) current=\(current.currentTime().seconds) duration=\(current.duration.seconds)")
                 if self.isCrossfading, self.incoming.currentItem?.status == .readyToPlay {
                     self.completeFade()
                 } else if !self.advancePrepared() { self.pause(); self.onFinished?() }
+            }
+        })
+        notifications.append(NotificationCenter.default.addObserver(forName: AVPlayerItem.timeJumpedNotification, object: nil, queue: .main) { [weak self] note in
+            guard let item = note.object as? AVPlayerItem else { return }
+            MainActor.assumeIsolated {
+                guard let self, self.player.currentItem === item else { return }
+                PerformanceDiagnostics.restoration("player.timeJump generation=\(self.generation) current=\(item.currentTime().seconds) seeking=\(self.pendingSeek != nil)")
             }
         })
         notifications.append(NotificationCenter.default.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
@@ -127,13 +148,14 @@ import Observation
         clock = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.2, preferredTimescale: 600), queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self, self.player === observed else { return }
-                let time = self.player.currentTime().seconds
-                if time.isFinite { self.elapsed = max(0, time) }
+                // Keep the latest requested position visible until AVPlayer completes it.
+                // Earlier samples remain valid for audio, but must not undo the user's seek.
+                if self.pendingSeek == nil { self.readCurrentTime() }
                 let length = self.player.currentItem?.duration.seconds ?? 0
                 let duration = length.isFinite ? max(0, length) : 0
                 let durationChanged = self.duration != duration
                 self.duration = duration
-                self.updateFade()
+                if self.pendingSeek == nil { self.updateFade() }
                 // A newly resolved duration is metadata; ordinary time ticks only
                 // drive in-app progress. Now Playing extrapolates elapsed time.
                 if durationChanged { self.onStateChange?() }
@@ -147,8 +169,14 @@ import Observation
         status = item.observe(\.status, options: [.initial, .new]) { [weak self] item, _ in
             Task { @MainActor in
                 guard let self, token == self.generation, self.player.currentItem === item else { return }
-                self.isLoading = item.status == .unknown
-                if item.status == .failed { self.error = item.error?.localizedDescription ?? "无法播放此音乐文件"; self.pause() }
+                self.isLoading = item.status == .unknown || self.pendingSeek != nil
+                if item.status == .readyToPlay { self.submitPendingSeek() }
+                if item.status == .failed {
+                    self.error = item.error?.localizedDescription ?? "无法播放此音乐文件"
+                    self.invalidateSeek()
+                    self.isLoading = false
+                    self.pause()
+                }
                 self.onStateChange?()
             }
         }
@@ -156,6 +184,7 @@ import Observation
 
     private func completeFade() {
         guard isCrossfading, let item = incoming.currentItem else { return }
+        invalidateSeek()
         if let clock { player.removeTimeObserver(clock); self.clock = nil }
         let outgoing = player
         player = incoming
@@ -209,15 +238,22 @@ import Observation
             player.insert(makeItem(url: nextURL), after: item)
         }
         observeStatus(item)
-        seek(to: position)
+        seek(to: position, source: position > 0 ? .restore : .load)
         if autoplay { play() }
     }
 
     func replaceResource(url: URL, shouldResume: @MainActor () -> Bool) async throws {
         let candidate = PlaybackCandidate(url: url)
+        let previousGeneration = generation
         try await candidate.waitUntilReady()
         try Task.checkCancellation()
-        let position = elapsed
+        guard generation == previousGeneration else { throw CancellationError() }
+        // A pending interaction owns its target; otherwise capture the native clock
+        // at the handover, rather than the last periodic UI sample.
+        player.pause()
+        let position = pendingSeek?.time ?? player.currentTime()
+        guard position.seconds.isFinite else { throw URLError(.cannotDecodeContentData) }
+        invalidateSeek()
         cancelActivation()
         // Keep the ready item attached to its original player. Detaching an item
         // does not synchronously release AVFoundation's player association.
@@ -226,24 +262,28 @@ import Observation
         preparation?.cancel(); preparation = nil
         preparedURL = nil; nextDuration = 0
         status = nil
-        player.pause()
         player.removeAllItems()
         cancelFade()
         player = candidate.readyPlayer
         player.actionAtItemEnd = .pause
         guard let item = player.currentItem else { throw URLError(.cannotDecodeContentData) }
         pruneSpectrum()
-        bindClock()
         error = nil; isLoading = false
         observeStatus(item)
         let revision = generation
-        elapsed = position
-        await withCheckedContinuation { continuation in
-            player.seek(to: CMTime(seconds: position, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { _ in
-                continuation.resume()
+        var replacementSeek = 0
+        let finished = await withCheckedContinuation { continuation in
+            replacementSeek = requestSeek(to: position, source: .resource) { finished in
+                continuation.resume(returning: finished)
             }
+            bindClock()
+            if playRequested && shouldResume() { play() }
+            else { pause() }
         }
-        guard generation == revision, !Task.isCancelled else { return }
+        guard generation == revision, !Task.isCancelled else { throw CancellationError() }
+        // A later seek acts directly on the new player and owns its completion.
+        guard seekRevision == replacementSeek else { return }
+        guard finished else { throw URLError(.cannotDecodeContentData) }
         if playRequested && shouldResume() { play() }
         else { pause() }
     }
@@ -252,7 +292,9 @@ import Observation
         guard player.currentItem != nil, error == nil else { return }
         playRequested = true
         if isPlaying {
-            player.play(); if isCrossfading { incoming.play() }; onStateChange?()
+            if pendingSeek == nil { player.play() }
+            if isCrossfading { incoming.play() }
+            onStateChange?()
             return
         }
         guard !isActivating else { return }
@@ -270,7 +312,7 @@ import Observation
                     return
                 }
                 self.isPlaying = true
-                self.player.play()
+                if self.pendingSeek == nil { self.player.play() }
                 if self.isCrossfading { self.incoming.play() }
                 self.onStateChange?()
             } catch {
@@ -301,7 +343,9 @@ import Observation
         resumeAfterInterruption = false
         playRequested = false
         cancelActivation()
-        player.pause(); incoming.pause(); isPlaying = false; onStateChange?()
+        player.pause(); incoming.pause(); isPlaying = false
+        if pendingSeek == nil { readCurrentTime() }
+        onStateChange?()
     }
     func handleInterruption(began: Bool, shouldResume: Bool = false) {
         if began {
@@ -309,7 +353,9 @@ import Observation
             interrupted = true
             playRequested = false
             cancelActivation()
-            player.pause(); incoming.pause(); isPlaying = false; onStateChange?()
+            player.pause(); incoming.pause(); isPlaying = false
+            if pendingSeek == nil { readCurrentTime() }
+            onStateChange?()
         } else {
             let resume = interrupted && resumeAfterInterruption && shouldResume
             interrupted = false; resumeAfterInterruption = false
@@ -320,6 +366,7 @@ import Observation
     @discardableResult func advancePrepared() -> Bool {
         guard player.items().count > 1 else { return false }
         let continuing = playRequested
+        invalidateSeek()
         cancelActivation()
         cancelFade()
         generation += 1; preparation?.cancel(); preparedURL = nil; nextDuration = 0
@@ -338,14 +385,73 @@ import Observation
         onAdvanced?()
         return true
     }
-    func seek(to seconds: Double) {
+    func seek(to seconds: Double, source: SeekSource = .interaction) {
         guard seconds.isFinite else { return }
         cancelFade()
-        elapsed = max(0, seconds)
-        player.seek(to: CMTime(seconds: elapsed, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+        requestSeek(to: CMTime(seconds: max(0, seconds), preferredTimescale: 600), source: source)
+    }
+
+    @discardableResult
+    private func requestSeek(to time: CMTime, source: SeekSource,
+                             completion: (@MainActor @Sendable (Bool) -> Void)? = nil) -> Int {
+        invalidateSeek()
+        seekRevision += 1
+        guard player.currentItem != nil else {
+            completion?(false)
+            return seekRevision
+        }
+        pendingSeek = SeekRequest(revision: seekRevision, time: time, source: source, completion: completion)
+        elapsed = max(0, time.seconds)
+        isLoading = true
+        PerformanceDiagnostics.restoration("player.seek.request source=\(source.rawValue) generation=\(generation) request=\(seekRevision) target=\(time.seconds)")
+        submitPendingSeek()
+        return seekRevision
+    }
+
+    /// Item readiness comes from KVO; repeated input replaces the current request immediately.
+    private func submitPendingSeek() {
+        guard let request = pendingSeek, !request.submitted,
+              let item = player.currentItem, item.status == .readyToPlay else { return }
+        pendingSeek?.submitted = true
+        let observed = player, token = generation
+        observed.seek(to: request.time, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
+            Task { @MainActor in
+                guard let self else { return }
+                let current = self.player === observed && self.player.currentItem === item
+                    && self.generation == token && self.pendingSeek?.revision == request.revision
+                PerformanceDiagnostics.restoration("player.seek.completed source=\(request.source.rawValue) generation=\(token) request=\(request.revision) target=\(request.time.seconds) finished=\(finished) current=\(observed.currentTime().seconds) applied=\(current)")
+                guard current else { return }
+                self.pendingSeek = nil
+                self.readCurrentTime()
+                let length = item.duration.seconds
+                if length.isFinite { self.duration = max(0, length) }
+                self.isLoading = item.status == .unknown
+                if finished {
+                    if self.playRequested { self.play() }
+                    else { self.onStateChange?() }
+                } else {
+                    self.error = item.error?.localizedDescription ?? "无法定位到播放位置，请重试"
+                    self.pause()
+                }
+                request.completion?(finished)
+            }
+        }
+    }
+
+    private func invalidateSeek() {
+        guard let request = pendingSeek else { return }
+        pendingSeek = nil
+        player.currentItem?.cancelPendingSeeks()
+        request.completion?(false)
+    }
+
+    private func readCurrentTime() {
+        let time = player.currentTime().seconds
+        if time.isFinite { elapsed = max(0, time) }
     }
     func stop() {
         generation += 1; preparation?.cancel(); preparation = nil; nextDuration = 0
+        invalidateSeek()
         interrupted = false
         pause(); cancelFade(); preparedURL = nil; status = nil
         player.removeAllItems(); pruneSpectrum(); isLoading = false; elapsed = 0; duration = 0; error = nil

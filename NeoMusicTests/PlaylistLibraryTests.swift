@@ -303,6 +303,34 @@ final class PlaylistLibraryTests: XCTestCase {
         XCTAssertEqual(library.songs(in: "two").map(\.id), ["a"])
         XCTAssertTrue(library.folders.isEmpty)
     }
+
+    func testSameNamedFolderMenuTargetsKeepIndependentIdentityAndMoveActions() throws {
+        let library = library()
+        let first = library.createFolder(named: "播放列表", in: nil)
+        let second = library.createFolder(named: "播放列表", in: nil)
+        let moving = library.createFolder(named: "待移动", in: nil)
+        let page = PlaylistsListView(library: library)
+        func options() throws -> [LibraryMenuItem] {
+            try XCTUnwrap(page.folderSections(try XCTUnwrap(library.folder(moving.id)))
+                .flatMap { $0 }.first { $0.title == "移到文件夹" }).children
+        }
+
+        let initial = try options()
+        XCTAssertEqual(initial.filter { $0.title == "播放列表" }.count, 3)
+        XCTAssertEqual(Set(initial.map(\.id)).count, initial.count)
+        let firstTarget = try XCTUnwrap(initial.first { $0.id == "folder:" + first.id })
+        let secondTarget = try XCTUnwrap(initial.first { $0.id == "folder:" + second.id })
+        secondTarget.perform()
+        XCTAssertEqual(library.folder(moving.id)?.parentID, second.id)
+
+        library.renameFolder(first.id, to: "改名后的文件夹")
+        let renamed = try XCTUnwrap(try options().first { $0.id == firstTarget.id })
+        XCTAssertEqual(renamed.title, "改名后的文件夹")
+        renamed.perform()
+        XCTAssertEqual(library.folder(moving.id)?.parentID, first.id)
+        try XCTUnwrap(try options().first { $0.id == "playlist-root" }).perform()
+        XCTAssertNil(library.folder(moving.id)?.parentID)
+    }
 }
 
 @MainActor

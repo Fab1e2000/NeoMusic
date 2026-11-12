@@ -18,7 +18,7 @@ extension View {
         identity: String,
         menu: @escaping () -> UIMenu,
         preview: @escaping () -> AnyView,
-        previewSize: CGSize,
+        previewSize: @escaping @MainActor (UITraitCollection) -> CGSize,
         commit: @escaping (@escaping () -> UIView?) -> Void,
         tap: (() -> Void)? = nil,
         drag: NativeMenuDrag? = nil,
@@ -43,7 +43,7 @@ private struct NativeContextMenu<Content: View>: UIViewRepresentable {
     let identity: String
     let menu: () -> UIMenu
     let preview: () -> AnyView
-    let previewSize: CGSize
+    let previewSize: @MainActor (UITraitCollection) -> CGSize
     let commit: (@escaping () -> UIView?) -> Void
     /// 点按内容本身时执行；为空时与点按预览一样执行 `commit`。
     let tap: (() -> Void)?
@@ -84,7 +84,7 @@ private final class NativeContextMenuView: UIView, UIContextMenuInteractionDeleg
     private var revision = UUID()
     private var menu: () -> UIMenu = { UIMenu(children: []) }
     private var preview: () -> AnyView = { AnyView(EmptyView()) }
-    private var previewSize = CGSize.zero
+    private var previewSize: @MainActor (UITraitCollection) -> CGSize = { _ in .zero }
     private var environment = EnvironmentValues()
     private var commit: (@escaping () -> UIView?) -> Void = { _ in }
     private var tapAction: (() -> Void)?
@@ -110,7 +110,7 @@ private final class NativeContextMenuView: UIView, UIContextMenuInteractionDeleg
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     func update(content: AnyView, identity: String, menu: @escaping () -> UIMenu,
-                preview: @escaping () -> AnyView, previewSize: CGSize,
+                preview: @escaping () -> AnyView, previewSize: @escaping @MainActor (UITraitCollection) -> CGSize,
                 environment: EnvironmentValues, commit: @escaping (@escaping () -> UIView?) -> Void, tap: (() -> Void)?,
                 drag: NativeMenuDrag?, drop: NativeMenuDrop?) {
         self.drag = drag
@@ -156,6 +156,7 @@ private final class NativeContextMenuView: UIView, UIContextMenuInteractionDeleg
         tapAction = nil
         menu = { UIMenu(children: []) }
         preview = { AnyView(EmptyView()) }
+        previewSize = { _ in .zero }
     }
 
     private struct LocalPlaylistDrag {
@@ -229,9 +230,13 @@ private final class NativeContextMenuView: UIView, UIContextMenuInteractionDeleg
             guard let self, self.identity == identity, self.revision == revision else { return nil }
             let content = self.preview()
                 .libraryHostedAppearance(self.environment)
+            let traits = self.traitCollection.modifyingTraits {
+                $0.preferredContentSizeCategory = UIContentSizeCategory(self.environment.dynamicTypeSize)
+            }
             let preview = UIHostingController(rootView: AnyView(content))
+            preview.traitOverrides.preferredContentSizeCategory = traits.preferredContentSizeCategory
             preview.safeAreaRegions = []
-            preview.preferredContentSize = self.previewSize
+            preview.preferredContentSize = self.previewSize(traits)
             preview.view.backgroundColor = .clear
             return preview
         } actionProvider: { [weak self] _ in

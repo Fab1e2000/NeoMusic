@@ -572,9 +572,12 @@ final class NeteaseMusicClientTests: XCTestCase, @unchecked Sendable {
         }
         let cache = NeteasePageCache(directory: folder)
         let playlist = NeteaseMusicPlaylist(id: 2, title: "Cached", creator: "Creator", creatorID: 7, artworkURL: nil, trackCount: 1, isFavorites: false)
-        let cached = NeteaseMusicSong(id: 12, title: "Recovered title", artist: "Artist", album: "Album", artworkURL: nil, duration: 60, unavailable: false)
+        let remote = URL(string: "https://fixture.test/referenced-artwork.jpg")!
+        let (images, cover, artworkSession) = try await cachedArtworkFixture(directory: folder.appendingPathComponent("Artwork"), remote: remote)
+        defer { artworkSession.invalidateAndCancel() }
+        let cached = NeteaseMusicSong(id: 12, title: "Recovered title", artist: "Artist", album: "Album", artworkURL: remote, duration: 60, unavailable: false)
         try await cache.save(NeteasePlaylistDetail(playlist: playlist, songs: [cached], addedTimes: [:]), scope: "1", key: "playlist:2")
-        let store = NeteaseMusicStore(client: makeClient([]), directory: folder)
+        let store = NeteaseMusicStore(client: makeClient([]), directory: folder, artworkCache: images)
         let saved = try NeteaseSavedSession(profile: .init(userID: 1, nickname: "User", avatarURL: nil), credential: credential())
         let account = NeteaseAccount(readSession: { saved }, saveSession: { _ in }, deleteSession: {},
             validateCredential: { _ in XCTFail("Cache restoration must not use network"); return saved.profile },
@@ -596,11 +599,57 @@ final class NeteaseMusicClientTests: XCTestCase, @unchecked Sendable {
 
         await OnlineMusicIntegration(account: account).restoreReferencedMetadata(player: player, playlistLibrary: library)
         XCTAssertEqual(player.current.title, "Recovered title")
+        XCTAssertEqual(player.current.artworkURL, cover)
         XCTAssertEqual(player.elapsed, 4)
         XCTAssertTrue(player.unavailableIDs.isEmpty)
         XCTAssertEqual(library.songs(in: id).map(\.title), ["Recovered title", "Local"])
         XCTAssertTrue(store.songs.isEmpty)
         XCTAssertTrue(store.playlistTracks.isEmpty)
+        XCTAssertTrue(MusicFixtureProtocol.paths.withLock { $0.isEmpty })
+        await player.flushQueuePersistence()
+        await store.invalidate()
+    }
+
+    @MainActor func testReferencedMetadataReplacesMissingArtworkFileInKnownQueueAndLocalPlaylist() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let remote = URL(string: "https://fixture.test/known-artwork.jpg")!
+        let (images, cover, artworkSession) = try await cachedArtworkFixture(directory: folder.appendingPathComponent("Artwork"), remote: remote)
+        defer { artworkSession.invalidateAndCancel() }
+        let cached = NeteaseMusicSong(id: 12, title: "Known song", artist: "Artist", album: "Album", artworkURL: remote, duration: 60, unavailable: false)
+        let playlist = NeteaseMusicPlaylist(id: 2, title: "Cached", creator: "Creator", creatorID: 1, artworkURL: nil, trackCount: 1, isFavorites: false)
+        try await NeteasePageCache(directory: folder).save(NeteasePlaylistDetail(playlist: playlist, songs: [cached], addedTimes: [:]), scope: "1", key: "playlist:2")
+        let store = NeteaseMusicStore(client: makeClient([]), directory: folder, artworkCache: images)
+        let saved = try NeteaseSavedSession(profile: .init(userID: 1, nickname: "User", avatarURL: nil), credential: credential())
+        let account = NeteaseAccount(readSession: { saved }, saveSession: { _ in }, deleteSession: {},
+            validateCredential: { _ in XCTFail("Cached artwork restoration must keep the network idle"); return saved.profile },
+            cachedAvatar: { _ in nil }, loadAvatar: { _ in Data() }, clearAvatarCache: {}, music: store)
+        await account.restoreCachedContent()
+        let missing = folder.appendingPathComponent("removed.image")
+        let snapshot = LibrarySongItem(id: "netease:1:12", title: "Known song", artist: "Artist", album: "Album", albumArtist: "Artist",
+            trackNumber: 0, artwork: .file(missing), artworkURL: missing, duration: 60)
+        let player = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false)
+        defer { player.shutdownPlayback() }
+        player.configurePlayback(resolveURL: { _ in nil }, persistenceURL: folder.appendingPathComponent("playback.json"))
+        let entries = [UUID(), UUID()]
+        let queue = NowPlayingModel.SavedQueue(ids: [snapshot.id, snapshot.id], index: 1, elapsed: 14, repeatMode: .all,
+            shuffled: false, entryIDs: entries, songs: [PlaybackSongSnapshot(snapshot)])
+        XCTAssertTrue(player.restoreQueue(songs: [], restoredState: .success(queue)))
+        player.restoreOnlineIdentity(ownerID: "1")
+        let library = PlaylistLibrary(playlists: [])
+        library.restoreOnlineIdentity(ownerID: "1")
+        let retained = try XCTUnwrap(library.createPlaylist(named: "Retained", artwork: .playlist, in: nil))
+        XCTAssertEqual(library.addSongs([snapshot], to: retained.id), 1)
+
+        await OnlineMusicIntegration(account: account).restoreReferencedMetadata(player: player, playlistLibrary: library)
+
+        XCTAssertEqual(player.queue.map(\.artworkURL), [cover, cover])
+        XCTAssertEqual(library.songs(in: retained.id).first?.artworkURL, cover)
+        XCTAssertEqual(player.entryIDs, entries)
+        XCTAssertEqual(player.currentIndex, 1)
+        XCTAssertEqual(player.elapsed, 14)
+        XCTAssertFalse(player.isPlaying)
+        XCTAssertTrue(store.songs.isEmpty)
         XCTAssertTrue(MusicFixtureProtocol.paths.withLock { $0.isEmpty })
         await player.flushQueuePersistence()
         await store.invalidate()
@@ -711,6 +760,16 @@ final class NeteaseMusicClientTests: XCTestCase, @unchecked Sendable {
         XCTAssertNil(store.playlistErrors[2])
         XCTAssertEqual(MusicFixtureProtocol.paths.withLock { $0 }, ["/eapi/v6/playlist/detail", "/eapi/v3/song/detail", "/eapi/v3/song/detail"])
         await store.invalidate()
+    }
+
+    @MainActor private func cachedArtworkFixture(directory: URL, remote: URL) async throws -> (NeteaseArtworkCache, URL, URLSession) {
+        MusicFixtureProtocol.responses.withLock { $0 = ["cached artwork"] }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MusicFixtureProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let cache = NeteaseArtworkCache(directory: directory, session: session)
+        do { return (cache, try await cache.imageURL(for: remote, scope: "1"), session) }
+        catch { session.invalidateAndCancel(); throw error }
     }
 
     @MainActor private func makeClient(_ responses: [String]) -> NeteaseMusicClient {

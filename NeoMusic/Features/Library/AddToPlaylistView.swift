@@ -197,7 +197,8 @@ private struct AddToPlaylistList: View {
     }
 
     private func label(_ entry: PlaylistEntry) -> some View {
-        HStack(spacing: 12) {
+        let separatorInset: CGFloat = selection != nil && !entry.isFolder ? 102 : 60
+        return HStack(spacing: 12) {
             if let selection {
                 switch entry {
                 case .playlist(let playlist):
@@ -219,7 +220,7 @@ private struct AddToPlaylistList: View {
         }
         .frame(minHeight: 48)
         .alignmentGuide(.listRowSeparatorLeading) { dimensions in
-            dimensions[.leading] + (selection != nil && !entry.isFolder ? 102 : 60)
+            dimensions[.leading] + separatorInset
         }
     }
 

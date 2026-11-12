@@ -139,7 +139,18 @@ import Observation
         } onChange: { [weak self] in
             Task { @MainActor in self?.observeCurrentSong() }
         }
-        publishQuickActions()
+        if retainReferencedSongs() { publish() }
+        else { publishQuickActions() }
+    }
+
+    @discardableResult
+    private func retainReferencedSongs(adding songs: [NeteaseMusicSong] = []) -> Bool {
+        guard let home = account.home, let owner, home.userID.map(String.init) == owner,
+              account.profile?.userID == home.userID else { return false }
+        let playlistSongs = LocalLibrary.playlistLibrary.playlists.filter { !$0.isReadOnly && !$0.isSystem }
+            .flatMap { LocalLibrary.playlistLibrary.songs(in: $0.id) }
+        let ids = Set((player.queue + playlistSongs).filter { $0.onlineOwnerID == owner }.compactMap(\.onlineSongID))
+        return home.retainReferencedSongs(ids: ids, adding: songs)
     }
     private func observeRecent() {
         withObservationTracking {
@@ -149,6 +160,7 @@ import Observation
         } onChange: { [weak self] in
             Task { @MainActor in self?.observeRecent() }
         }
+        if retainReferencedSongs() { publish() }
         refreshRetainedArtwork()
         updateRecent()
         for (id, value) in loaded where id.hasPrefix("home:playlist:") {
@@ -236,6 +248,7 @@ import Observation
         if model.recommendations != recommendations { model.recommendations = recommendations }
         updateRecent()
         for (id, value) in loaded { updateDetail(id, item: value.0, songs: value.1) }
+        retainReferencedSongs()
         let values = account.home?.userID == account.profile?.userID ? account.home?.cachedSongs ?? [] : []
         artworkSongs = Dictionary(grouping: values.filter { $0.artworkURL != nil }, by: { $0.artworkURL! })
         let songs = values.map(mapSong)
@@ -250,6 +263,7 @@ import Observation
               let detail = home.cachedDetail(id: number) else { return }
         let route = "home:playlist:\(number)"
         if detailLibrary.playlist(route) != nil { applyDetail(detail, id: route, clearError: true) }
+        retainReferencedSongs()
         let values = home.cachedSongs
         artworkSongs = Dictionary(grouping: values.filter { $0.artworkURL != nil }, by: { $0.artworkURL! })
         let songs = values.map(mapSong)
@@ -325,7 +339,7 @@ import Observation
         var songs: [String: LibrarySongItem] = [:]
         for remote in urls {
             for value in artworkSongs[remote] ?? [] {
-                let item = mapSong(value)
+                let item = makeSong(value)
                 songs[item.id] = item
             }
         }
@@ -341,7 +355,7 @@ import Observation
                 if value.0.artwork != cover { loaded[id]?.0.artwork = cover; covers[id] = cover }
             }
             for value in value.1 where value.artworkURL.map(urls.contains) == true {
-                let item = mapSong(value)
+                let item = makeSong(value)
                 songs[item.id] = item
             }
         }
@@ -686,6 +700,8 @@ import Observation
             }
             let index = player.currentIndex
             player.appendContinuing(mapped)
+            retainReferencedSongs(adding: songs)
+            publish()
             if advance, player.currentIndex == index, player.queue.indices.contains(index + 1) {
                 player.select(index + 1)
             }
@@ -704,6 +720,10 @@ import Observation
     }
 
     private func mapSong(_ song: NeteaseMusicSong) -> LibrarySongItem {
+        let item = makeSong(song)
+        return item.retainingArtwork(from: LocalLibrary.songLibrary.song(id: item.id))
+    }
+    private func makeSong(_ song: NeteaseMusicSong) -> LibrarySongItem {
         let id = owner.map { "netease:\($0):\(song.id)" } ?? "home-guest:\(song.id)"
         let url = song.artworkURL.flatMap { account.home?.cachedArtworkURL(remote: $0) }
         return LibrarySongItem(id: id, title: song.title, artist: song.artist, album: song.album, albumArtist: song.artist, trackNumber: song.trackNumber ?? 0,

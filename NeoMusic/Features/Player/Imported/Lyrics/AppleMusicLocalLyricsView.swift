@@ -20,17 +20,35 @@ struct AppleMusicLocalLyricsView: View {
     var foreground: Color = .white
 
     @Environment(\.accessibilityReduceMotion) private var reducesMotion
-    @Environment(\.colorSchemeContrast) private var contrast
     @ScaledMetric private var scaledFontSize = AppleMusicLyricsTypographyProfile.iOS26_6.primaryFontSize
     @State private var browsing = false
     @State private var interacting = false
     @State private var resumeGeneration = 0
-    @State private var rowGeometry = LyricsRowGeometry()
+    @State private var position = ScrollPosition(idType: Int.self)
+    @State private var visibleIDs = Set<Int>()
+    @State private var rowGeometry: LyricsRowGeometry
     /// 上一次对齐到的行；与新行相邻时才用弹簧动画，跳转（拖进度条、点歌词）直接到位。
     @State private var lastFocusedID: Int?
     @State private var visibility = LyricsScrollInterfaceVisibilityTracker()
     private let motion = AppleMusicLyricsMotionProfile.iOS26_6
     private var fontSize: CGFloat { fixedFontSize ?? scaledFontSize }
+
+    init(lyrics: ReferenceLyrics, playerFrame: CGRect, activeID: Int?, bottomOverlayHeight: CGFloat,
+         isActive: Bool, isInterfaceHidden: Binding<Bool>, onSeek: @escaping (Double) -> Void,
+         playerCoordinateSpace: CoordinateSpace = .global, fixedFontSize: CGFloat? = nil,
+         foreground: Color = .white, rowGeometry: LyricsRowGeometry = LyricsRowGeometry()) {
+        self.lyrics = lyrics
+        self.playerFrame = playerFrame
+        self.activeID = activeID
+        self.bottomOverlayHeight = bottomOverlayHeight
+        self.isActive = isActive
+        _isInterfaceHidden = isInterfaceHidden
+        self.onSeek = onSeek
+        self.playerCoordinateSpace = playerCoordinateSpace
+        self.fixedFontSize = fixedFontSize
+        self.foreground = foreground
+        _rowGeometry = State(initialValue: rowGeometry)
+    }
 
     var body: some View {
         GeometryReader { viewport in
@@ -44,100 +62,82 @@ struct AppleMusicLocalLyricsView: View {
             let focusTop = min(max(preferredY - focusedHeight / 2, visibleHeight * 0.08),
                                max(visibleHeight * 0.08, visibleHeight * 0.84 - focusedHeight))
             let anchor = min(max(focusTop / max(height - focusedHeight, 1), 0), 1)
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: motion.lineSpacing) {
-                        ForEach(lyrics.lines) { line in
-                            lyricRow(line, focusTop: focusTop, stride: lineHeight + motion.lineSpacing)
-                                .id(line.id)
-                        }
-                    }
-                    .padding(.top, max(focusTop, motion.firstLineStartOffset))
-                    .padding(.bottom, max(height * (1 - anchor), 40))
-                }
-                .coordinateSpace(name: "localLyricsViewport")
-                .scrollIndicators(.hidden)
-                .scrollClipDisabled()
-                .mask(viewportMask(referenceRatio: referenceHeight / max(height, 1)))
-                .onScrollPhaseChange { _, phase in
-                    interacting = phase == .interacting || phase == .decelerating || phase == .tracking
-                    if phase == .interacting {
-                        browsing = true
-                        resumeGeneration += 1
-                        visibility.begin(isInterfaceVisible: !isInterfaceHidden)
-                    } else if phase == .idle {
-                        visibility.end()
-                        resumeGeneration += 1
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: motion.lineSpacing) {
+                    ForEach(lyrics.lines) { line in
+                        lyricRow(line, focusTop: focusTop, stride: lineHeight + motion.lineSpacing)
+                            .id(line.id)
                     }
                 }
-                .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { old, new in
-                    guard interacting else { return }
-                    if let visible = visibility.update(offsetDelta: new - old, hideThreshold: 120) {
-                        isInterfaceHidden = !visible
-                    }
+                .scrollTargetLayout()
+                .padding(.top, max(focusTop, motion.firstLineStartOffset))
+                .padding(.bottom, max(height * (1 - anchor), 40))
+            }
+            .scrollPosition($position, anchor: UnitPoint(x: 0.5, y: anchor))
+            .coordinateSpace(name: "localLyricsViewport")
+            .scrollIndicators(.hidden)
+            .scrollClipDisabled()
+            .mask(viewportMask(referenceRatio: referenceHeight / max(height, 1)))
+            .onScrollTargetVisibilityChange(idType: Int.self, threshold: 0.1) { visibleIDs = Set($0) }
+            .onScrollPhaseChange { _, phase in
+                interacting = phase == .interacting || phase == .decelerating || phase == .tracking
+                if phase == .interacting {
+                    browsing = true
+                    resumeGeneration += 1
+                    visibility.begin(isInterfaceVisible: !isInterfaceHidden)
+                } else if phase == .idle {
+                    visibility.end()
+                    resumeGeneration += 1
                 }
-                .task(id: resumeGeneration) {
-                    guard isActive, browsing, !interacting else { return }
-                    do {
-                        try await Task.sleep(for: .seconds(3))
-                        try Task.checkCancellation()
-                        browsing = false
-                    } catch { }
+            }
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { old, new in
+                guard interacting else { return }
+                if let visible = visibility.update(offsetDelta: new - old, hideThreshold: 120) {
+                    isInterfaceHidden = !visible
                 }
-                .onChange(of: isActive) { _, active in
-                    if active { browsing = false } else { resumeGeneration += 1 }
+            }
+            .task(id: LyricsBrowseResumeRequest(generation: resumeGeneration, isActive: isActive,
+                                                browsing: browsing, interacting: interacting)) {
+                guard isActive, browsing, !interacting else { return }
+                do {
+                    try await Task.sleep(for: .seconds(3))
+                    try Task.checkCancellation()
+                    browsing = false
+                } catch { }
+            }
+            .onChange(of: isActive) { _, active in
+                if active { browsing = false }
+                else {
+                    interacting = false
+                    visibility.end()
                 }
-                .onChange(of: activeID, initial: true) { _, id in
-                    rowGeometry.focus(on: id)
-                }
-                // 当前行、聚焦位置、页面是否显示或是否在手动浏览变化时，重新对齐；新请求会取消旧的。
-                .task(id: FocusRequest(id: activeID, focusTop: focusTop, isActive: isActive, browsing: browsing)) {
-                    await focus(proxy, anchor: anchor, focusTop: focusTop, viewportHeight: height)
-                }
+            }
+            .onChange(of: activeID, initial: true) { _, id in
+                rowGeometry.focus(on: id)
+            }
+            .onChange(of: FocusRequest(id: activeID, anchor: anchor, isActive: isActive,
+                                      browsing: browsing), initial: true) { _, request in
+                focus(request)
             }
         }
     }
 
     private func lyricRow(_ line: ReferenceLyricLine, focusTop: CGFloat, stride: CGFloat) -> some View {
-        let focused = line.id == activeID
-        let disablesBlur = focused || browsing || contrast == .increased || reducesMotion
-        let opacity = focused || browsing ? 1 : contrast == .increased
-            ? motion.increasedContrastDeselectedTextOpacity : motion.deselectedTextOpacity
-        return LyricPressInteraction(isSelected: false, allowsLongPress: false, onTap: {
+        LocalLyricsRow(line: line, fontSize: fontSize, foreground: foreground,
+                       focused: line.id == activeID, browsing: browsing, focusTop: focusTop,
+                       stride: stride, coordinateSpaceName: "localLyricsViewport") {
             onSeek(line.time)
             browsing = false
             resumeGeneration += 1
             isInterfaceHidden = false
-        }, onLongPress: {}) { pressProgress in
-            Text(line.text.isEmpty ? "♪" : line.text)
-                .font(.system(size: fontSize, weight: .bold))
-                .multilineTextAlignment(.leading)
-                .foregroundStyle(foreground.opacity(opacity))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(foreground.opacity(pressProgress * 0.12), in: .rect(cornerRadius: 12))
         }
-        .scaleEffect(focused ? 1 : motion.deselectedScale, anchor: .topLeading)
         .onGeometryChange(for: LyricsRowGeometry.Measurement.self) { geometry in
-            LyricsRowGeometry.Measurement(
-                height: geometry.size.height,
-                top: geometry.frame(in: .named("localLyricsViewport")).minY
-            )
+            LyricsRowGeometry.Measurement(height: geometry.size.height,
+                                          top: geometry.frame(in: .named("localLyricsViewport")).minY)
         } action: {
             rowGeometry.record($0, for: line.id)
         }
         .onDisappear { rowGeometry.discardPosition(for: line.id) }
-        .visualEffect { content, geometry in
-            let distance = abs(geometry.frame(in: .named("localLyricsViewport")).midY - focusTop)
-            let relativeDistance = max(distance / max(stride, 1), 0)
-            let blur = motion.nonFocusedBlurRadius + (motion.maximumNonFocusedBlurRadius - motion.nonFocusedBlurRadius)
-                * min(max(relativeDistance - 1, 0), 1)
-            return content.blur(radius: disablesBlur ? 0 : blur)
-        }
-        .animation(reducesMotion ? nil : .timingCurve(
-            motion.focusBlurTransitionControlPoint1X, motion.focusBlurTransitionControlPoint1Y,
-            motion.focusBlurTransitionControlPoint2X, motion.focusBlurTransitionControlPoint2Y,
-            duration: motion.focusBlurTransitionDuration), value: focused)
-        .accessibilityAddTraits(focused ? .isSelected : [])
     }
 
     private func viewportMask(referenceRatio: CGFloat) -> some View {
@@ -153,36 +153,73 @@ struct AppleMusicLocalLyricsView: View {
         .animation(reducesMotion ? nil : .smooth(duration: 0.35), value: isInterfaceHidden)
     }
 
-    /// 移植 MeloX 的 ensureFocusAlignment：LazyVStack 里还没排版的行只有估算高度，
-    /// 跳到较远的行时 scrollTo 会按估算位置停下，歌词就错位了。所以滚动后核对这一行的实际位置，
-    /// 不在聚焦位置就不带动画再滚一次，直到对齐。
-    private func focus(_ proxy: ScrollViewProxy, anchor: CGFloat, focusTop: CGFloat, viewportHeight: CGFloat) async {
-        guard isActive, !browsing, let id = activeID else { return }
-        // 相邻的行、或者已经在屏幕上的行（点了一句歌词）用弹簧滚过去；其余直接跳到位。
-        let isAdjacent = lastFocusedID.map { abs($0 - id) <= 1 } ?? false
-        let isOnScreen = lastFocusedID != nil && rowGeometry.top(for: id).map { abs($0 - focusTop) < viewportHeight } == true
+    /// Native identity-based scrolling retains the target as lazy rows acquire their real heights.
+    private func focus(_ request: FocusRequest) {
+        guard request.isActive, !request.browsing, let id = request.id else { return }
+        let adjacent = lastFocusedID.map { abs($0 - id) <= 1 } ?? false
+        let animated = lastFocusedID != nil && (adjacent || visibleIDs.contains(id)) && !reducesMotion
         lastFocusedID = id
         let spring = motion.lineChangeSpring
-        let animated = (isAdjacent || isOnScreen) && !reducesMotion
         withAnimation(animated ? .interpolatingSpring(
             mass: spring.mass, stiffness: spring.stiffness, damping: spring.damping) : nil) {
-            proxy.scrollTo(id, anchor: UnitPoint(x: 0.5, y: anchor))
-        }
-        // 动画中的位置还在变化，等弹簧基本停下再核对。
-        do { try await Task.sleep(for: .milliseconds(animated ? 700 : 32)) } catch { return }
-        for _ in 0..<8 {
-            if let top = rowGeometry.top(for: id), abs(top - focusTop) <= 2 { return }
-            var transaction = Transaction(animation: nil)
-            transaction.disablesAnimations = true
-            withTransaction(transaction) { proxy.scrollTo(id, anchor: UnitPoint(x: 0.5, y: anchor)) }
-            do { try await Task.sleep(for: .milliseconds(32)) } catch { return }
+            position.scrollTo(id: id, anchor: UnitPoint(x: 0.5, y: request.anchor))
         }
     }
 }
 
-private struct FocusRequest: Hashable {
+private struct FocusRequest: Equatable {
     let id: Int?
-    let focusTop: CGFloat
+    let anchor: CGFloat
     let isActive: Bool
     let browsing: Bool
+}
+
+private struct LyricsBrowseResumeRequest: Equatable {
+    let generation: Int
+    let isActive: Bool
+    let browsing: Bool
+    let interacting: Bool
+}
+
+/// Shared lyric appearance and native button feedback; scrolling belongs to each container.
+struct LocalLyricsRow: View {
+    let line: ReferenceLyricLine
+    let fontSize: CGFloat
+    let foreground: Color
+    let focused: Bool
+    let browsing: Bool
+    let focusTop: CGFloat
+    let stride: CGFloat
+    let coordinateSpaceName: String
+    let onTap: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reducesMotion
+    @Environment(\.colorSchemeContrast) private var contrast
+    private let motion = AppleMusicLyricsMotionProfile.iOS26_6
+
+    var body: some View {
+        let disablesBlur = focused || browsing || contrast == .increased || reducesMotion
+        let opacity = focused || browsing ? 1 : contrast == .increased
+            ? motion.increasedContrastDeselectedTextOpacity : motion.deselectedTextOpacity
+        LyricPressInteraction(isSelected: false, allowsLongPress: false, onTap: onTap, onLongPress: {}) { pressProgress in
+            Text(line.text.isEmpty ? "♪" : line.text)
+                .font(.system(size: fontSize, weight: .bold))
+                .multilineTextAlignment(.leading)
+                .foregroundStyle(foreground.opacity(opacity))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(foreground.opacity(pressProgress * 0.12), in: .rect(cornerRadius: 12))
+        }
+        .scaleEffect(focused ? 1 : motion.deselectedScale, anchor: .topLeading)
+        .visualEffect { content, geometry in
+            let distance = abs(geometry.frame(in: .named(coordinateSpaceName)).midY - focusTop)
+            let relativeDistance = max(distance / max(stride, 1), 0)
+            let blur = motion.nonFocusedBlurRadius + (motion.maximumNonFocusedBlurRadius - motion.nonFocusedBlurRadius)
+                * min(max(relativeDistance - 1, 0), 1)
+            return content.blur(radius: disablesBlur ? 0 : blur)
+        }
+        .animation(reducesMotion ? nil : .timingCurve(
+            motion.focusBlurTransitionControlPoint1X, motion.focusBlurTransitionControlPoint1Y,
+            motion.focusBlurTransitionControlPoint2X, motion.focusBlurTransitionControlPoint2Y,
+            duration: motion.focusBlurTransitionDuration), value: focused)
+        .accessibilityAddTraits(focused ? .isSelected : [])
+    }
 }

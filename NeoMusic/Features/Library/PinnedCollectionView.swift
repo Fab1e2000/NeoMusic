@@ -330,12 +330,16 @@ struct PinnedCollectionView: UIViewRepresentable {
                   let route = item.route, let latest, !latest.isEditing else { return nil }
             let environment = environment
             let tapAction = latest.tapActions[id] ?? .open
+            let traits = collectionView.traitCollection.modifyingTraits {
+                $0.preferredContentSizeCategory = UIContentSizeCategory(environment.dynamicTypeSize)
+            }
             let configuration = UIContextMenuConfiguration(identifier: id as NSString) {
-                let size = MenuPreviewCard.size(for: item.previewLines)
+                let size = MenuPreviewCard.size(for: item.previewLines, compatibleWith: traits)
                 let content = MenuPreviewCard(artwork: item.artwork, lines: item.previewLines)
                     .libraryHostedAppearance(environment)
                     .frame(width: size.width, height: size.height)
                 let preview = UIHostingController(rootView: content)
+                preview.traitOverrides.preferredContentSizeCategory = traits.preferredContentSizeCategory
                 preview.safeAreaRegions = []
                 preview.preferredContentSize = size
                 preview.view.backgroundColor = .clear

@@ -59,6 +59,7 @@ import Observation
     @ObservationIgnored private var likedCache: LikedCache?
     @ObservationIgnored private var quickActionTasks: [NeteaseHomeQuickAction: Task<NeteaseHomeQuickActionResult, Error>] = [:]
     @ObservationIgnored private var actionSongs: [NeteaseMusicSong] = []
+    @ObservationIgnored private var referencedSongs: [Int64: NeteaseMusicSong] = [:]
     @ObservationIgnored private var roamingTask: Task<RoamingCache, Error>?
     @ObservationIgnored private var roamingCache: RoamingCache?
     private struct RoamingCache: Codable, Sendable {
@@ -147,7 +148,7 @@ import Observation
             let oldActions = Array(quickActionTasks.values); quickActionTasks = [:]
             oldActions.forEach { $0.cancel() }
             let oldRoaming = roamingTask; roamingTask = nil; oldRoaming?.cancel(); roamingCache = nil
-            quickActionStates = [:]; likedContextReceived = false; likedPlaylistID = nil; likedSongIDs = []; likedSeedID = nil; likedSongs = [:]; likedCache = nil; actionSongs = []
+            quickActionStates = [:]; likedContextReceived = false; likedPlaylistID = nil; likedSongIDs = []; likedSeedID = nil; likedSongs = [:]; likedCache = nil; actionSongs = []; referencedSongs = [:]
             let oldDetails = Array(detailTasks.values); detailTasks = [:]
             oldDetails.forEach { $0.cancel() }
             let oldMigration = legacyMigration; legacyMigration = nil; oldMigration?.cancel()
@@ -507,6 +508,20 @@ import Observation
         return songs.filter { $0.id > 0 && !$0.unavailable && seen.insert($0.id).inserted }
     }
 
+    /// Keep referenced queue and local-playlist metadata when Home replaces its displayed content.
+    /// The integration publishes the updated catalog after accepting the batch into its queue.
+    @discardableResult
+    func retainReferencedSongs(ids: Set<Int64>, adding songs: [NeteaseMusicSong] = []) -> Bool {
+        guard userID != nil else { return false }
+        var retained = Dictionary(songCatalog.filter { ids.contains($0.id) }.map { ($0.id, $0) },
+                                  uniquingKeysWith: { first, _ in first })
+        for song in songs where ids.contains(song.id) { retained[song.id] = song }
+        guard referencedSongs != retained else { return false }
+        referencedSongs = retained
+        rebuildSongCatalog()
+        return true
+    }
+
     /// A cancelled queue-replacement confirmation leaves this batch available.
     func consumeRoamingBatch(id: UUID) {
         guard var value = roamingCache, value.id == id, !value.consumed else { return }
@@ -744,6 +759,7 @@ import Observation
     private func rebuildSongCatalog() {
         let songs = cache.details.values.flatMap(\.songs) + cache.snapshots.values.flatMap(\.songs)
             + displayFeedBlocks.flatMap { $0.resources.compactMap(\.song) } + actionSongs + (roamingCache?.songs ?? [])
+            + Array(referencedSongs.values)
         songCatalog = Dictionary(songs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }).values.sorted { $0.id < $1.id }
     }
     func dailySnapshot(id: String) -> NeteaseDailySnapshot? { cache.snapshots[id] }

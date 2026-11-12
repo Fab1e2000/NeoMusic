@@ -307,4 +307,113 @@ final class OnlinePlaybackTests: XCTestCase {
         model.shutdownPlayback()
         await model.flushQueuePersistence()
     }
+
+    func testSameTrackReloadKeepsClockAndLyricsMovingWhileResolverWaits() async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let url = try makeSeekAudio(in: root)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let resolving = expectation(description: "replacement resolver started")
+        var reply: CheckedContinuation<PlaybackResource, Never>?
+        var requests = 0
+        let model = NowPlayingModel(queue: [song("netease:12:34")], currentIndex: 0, isPlaying: true)
+        defer {
+            reply?.resume(returning: PlaybackResource(url: url, quality: "lossless"))
+            model.shutdownPlayback()
+        }
+        model.configurePlayback(resolveResource: { _ in
+            requests += 1
+            if requests == 1 { return PlaybackResource(url: url, quality: "exhigh") }
+            return await withCheckedContinuation { continuation in
+                reply = continuation
+                resolving.fulfill()
+            }
+        }, persistenceURL: root.appendingPathComponent("queue.json"))
+        model.startCurrent(at: 2)
+        await model.waitForResourceResolution()
+        try await waitForSeekState { !model.isLoading && model.elapsed > 2.1 }
+        let initial = model.elapsed
+        let lyrics = LyricsDocument(lines: [
+            .init(id: 0, time: 0, text: "first"),
+            .init(id: 1, time: initial + 0.3, text: "second")
+        ])
+        let presentation = ReferencePlayerState(model: model)
+        XCTAssertEqual(lyrics.activeLine(at: presentation.progress), 0)
+        model.reloadCurrentResource()
+        await fulfillment(of: [resolving], timeout: 2)
+        try await waitForSeekState { model.elapsed > initial + 0.5 }
+        XCTAssertTrue(model.isLoading)
+        XCTAssertTrue(model.isPlaying)
+        XCTAssertEqual(lyrics.activeLine(at: presentation.progress), 1)
+        model.togglePlayback()
+        let paused = model.elapsed
+        let completion = reply
+        reply = nil
+        completion?.resume(returning: PlaybackResource(url: url, quality: "lossless"))
+        await model.waitForResourceResolution()
+        try await waitForSeekState { !model.isLoading }
+        XCTAssertNil(model.errorMessage)
+        XCTAssertEqual(model.actualQuality, "lossless")
+        XCTAssertFalse(model.isPlaying)
+        XCTAssertEqual(model.elapsed, paused, accuracy: 0.002)
+        await model.flushQueuePersistence()
+    }
+
+    func testSeekDuringInitialResolutionUsesLatestPositionAndPersistsIt() async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let url = try makeSeekAudio(in: root)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let resolving = expectation(description: "initial resolver started")
+        var reply: CheckedContinuation<PlaybackResource, Never>?
+        let stateURL = root.appendingPathComponent("queue.json")
+        let model = NowPlayingModel(queue: [song("netease:12:34")], currentIndex: 0, isPlaying: false)
+        defer {
+            reply?.resume(returning: PlaybackResource(url: url, quality: "lossless"))
+            model.shutdownPlayback()
+        }
+        model.configurePlayback(resolveResource: { _ in
+            await withCheckedContinuation { continuation in
+                reply = continuation
+                resolving.fulfill()
+            }
+        }, persistenceURL: stateURL)
+        model.startCurrent(at: 2)
+        await fulfillment(of: [resolving], timeout: 2)
+        XCTAssertEqual(model.elapsed, 2)
+        model.elapsed = 6.375
+        let completion = reply
+        reply = nil
+        completion?.resume(returning: PlaybackResource(url: url, quality: "lossless"))
+        await model.waitForResourceResolution()
+        try await waitForSeekState { !model.isLoading }
+        let engine = try XCTUnwrap(Mirror(reflecting: model).children.first { $0.label == "_audio" }?.value as? LocalPlaybackEngine)
+        let native = try XCTUnwrap(Mirror(reflecting: engine).children.first { $0.label == "player" }?.value as? AVQueuePlayer)
+        XCTAssertNil(model.errorMessage)
+        XCTAssertFalse(model.isPlaying)
+        XCTAssertEqual(model.elapsed, 6.375, accuracy: 0.002)
+        XCTAssertEqual(native.currentTime().seconds, 6.375, accuracy: 0.002)
+        await model.flushQueuePersistence()
+        let saved = try JSONDecoder().decode(NowPlayingModel.SavedQueue.self, from: Data(contentsOf: stateURL))
+        XCTAssertEqual(saved.elapsed, 6.375, accuracy: 0.002)
+    }
+
+    private func makeSeekAudio(in root: URL) throws -> URL {
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let url = root.appendingPathComponent("seek.wav")
+        let format = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1)!
+        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 44100 * 12)!
+        buffer.frameLength = buffer.frameCapacity
+        memset(buffer.floatChannelData![0], 0, Int(buffer.frameLength) * MemoryLayout<Float>.size)
+        let file = try AVAudioFile(forWriting: url, settings: format.settings)
+        try file.write(from: buffer)
+        return url
+    }
+
+    private func waitForSeekState(_ condition: @MainActor () -> Bool) async throws {
+        for _ in 0..<150 {
+            if condition() { return }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTFail("Timed out waiting for native playback state")
+        throw CancellationError()
+    }
 }

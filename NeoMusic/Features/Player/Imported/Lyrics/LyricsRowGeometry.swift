@@ -1,8 +1,8 @@
 import Foundation
 import Observation
 
-/// Scroll positions are sampled by the focus task, not rendered. Keep them out
-/// of observable state; only the focused line's height affects viewport layout.
+/// Only the focused line's height affects viewport layout. Measured positions
+/// stay outside observable state and can be inspected without driving scrolling.
 @Observable
 final class LyricsRowGeometry {
     nonisolated struct Measurement: Equatable, Sendable {

@@ -24,8 +24,9 @@ final class NeteaseSearchStore {
     private(set) var categoryMoreError: String?
     private(set) var sessionID = UUID()
     @ObservationIgnored var onArtworkChange: ((Set<URL>) -> Void)?
-    @ObservationIgnored private let artworkCache = NeteaseArtworkCache.shared
+    @ObservationIgnored private let artworkCache: NeteaseArtworkCache
     @ObservationIgnored private var artworkTasks: [URL: Task<Void, Never>] = [:]
+    @ObservationIgnored private var artworkEvictionObserver: NSObjectProtocol?
     @ObservationIgnored private let client: NeteaseSearchClient
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private var owner = "guest"
@@ -41,9 +42,22 @@ final class NeteaseSearchStore {
     @ObservationIgnored private var categoryID = UUID()
     @ObservationIgnored private var categoryCache: [String: NeteaseSearchPage] = [:]
     @ObservationIgnored private var cache: [Request: NeteaseSearchPage] = [:]
-    init(client: NeteaseSearchClient = .init(), defaults: UserDefaults = .standard) {
-        self.client = client; self.defaults = defaults
+    init(client: NeteaseSearchClient = .init(), defaults: UserDefaults = .standard,
+         artworkCache: NeteaseArtworkCache = .shared) {
+        self.client = client; self.defaults = defaults; self.artworkCache = artworkCache
         history = defaults.stringArray(forKey: "search.history.guest.online") ?? []
+        artworkEvictionObserver = NotificationCenter.default.addObserver(forName: NeteaseArtworkCache.didEvictArtwork,
+            object: artworkCache, queue: .main) { [weak self] notification in
+                guard let event = NeteaseArtworkCache.eviction(in: notification) else { return }
+                MainActor.assumeIsolated {
+                    guard let self, self.sessionTask == nil,
+                          event.scope == (self.owner == "guest" ? "public" : self.owner) else { return }
+                    self.onArtworkChange?(event.urls)
+                }
+            }
+    }
+    isolated deinit {
+        if let artworkEvictionObserver { NotificationCenter.default.removeObserver(artworkEvictionObserver) }
     }
     func setSession(owner: Int64?, credential: NeteaseCredential?) async {
         guard !Task.isCancelled else { return }

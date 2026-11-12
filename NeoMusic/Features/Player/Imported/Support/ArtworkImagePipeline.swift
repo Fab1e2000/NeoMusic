@@ -4,6 +4,13 @@ import Nuke
 
 /// Shared image resource policy; providers still own their image URLs and authentication.
 enum ArtworkImagePipeline {
+    static func thumbnailRequest(for url: URL, pixels: Int) -> ImageRequest {
+        var request = ImageRequest(url: url)
+        request.thumbnail = .init(size: CGSize(width: pixels, height: pixels), unit: .pixels,
+                                  contentMode: .aspectFill)
+        return request
+    }
+
     static func prefetch(_ requests: [ImageRequest]) async {
         await withTaskGroup(of: Void.self) { group in
             for request in requests {

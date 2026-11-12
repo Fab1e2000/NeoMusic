@@ -6,6 +6,7 @@ import UIKit
 /// 长按菜单与“…”菜单共用的一项。同一份分组既生成系统长按菜单，也生成 SwiftUI 菜单内容，
 /// 所有入口显示一致。第一组是横向并排的快捷操作。
 struct LibraryMenuItem: Identifiable {
+    var identity: String? = nil
     let title: String
     var subtitle: String?
     let systemImage: String
@@ -18,7 +19,7 @@ struct LibraryMenuItem: Identifiable {
     /// 非空时为子菜单，点按展开这些项。
     var children: [LibraryMenuItem] = []
     var perform: () -> Void = {}
-    var id: String { title }
+    var id: String { identity ?? title }
 }
 
 typealias LibraryMenuSections = [[LibraryMenuItem]]
@@ -344,7 +345,7 @@ struct CollectionCardLink<Label: View>: View {
                                            .nativeMenu(firstSectionIsRow: firstSectionIsRow)
                                    },
                                    preview: { AnyView(MenuPreviewCard(artwork: item.artwork, lines: item.previewLines)) },
-                                   previewSize: MenuPreviewCard.size(for: item.previewLines),
+                                   previewSize: { MenuPreviewCard.size(for: item.previewLines, compatibleWith: $0) },
                                    commit: { NavigationDiagnostics.event("Card.commit", page: route.diagnosticPage); openLibraryRoute(item, sourceProvider: $0) }, tap: tap,
                                    drag: drag, drop: drop)
                 .padding(-8)
@@ -507,7 +508,7 @@ struct SongMenuActions {
             links.append(LibraryMenuItem(title: "前往专辑", systemImage: "music.note.square.stack") { open(.album(song.albumID)) })
         }
         links += song.artistReferences.map { artist in
-            LibraryMenuItem(title: artist.name, systemImage: "music.microphone") { open(.artist(artist.id)) }
+            LibraryMenuItem(identity: "artist:" + artist.id, title: artist.name, systemImage: "music.microphone") { open(.artist(artist.id)) }
         }
         if !links.isEmpty { groups.append(links) }
         return groups
@@ -546,14 +547,18 @@ private struct SongContextMenu: ViewModifier {
     let song: LibrarySongItem
     @Environment(\.songMenuActions) private var actions
     @Environment(\.openLibraryRoute) private var openLibraryRoute
+    @Environment(\.dynamicTypeSize) private var textSize
 
     func body(content: Content) -> some View {
         let lines = [song.title, song.artist, song.album]
         content.contextMenu {
             SongNavigationMenu(song: song)
         } preview: {
+            let traits = UITraitCollection(preferredContentSizeCategory: UIContentSizeCategory(textSize))
+            let size = MenuPreviewCard.size(for: lines, compatibleWith: traits)
             MenuPreviewCard(artwork: song.artwork, lines: lines)
-                .frame(width: MenuPreviewCard.size(for: lines).width, height: MenuPreviewCard.size(for: lines).height)
+                .dynamicTypeSize(textSize)
+                .frame(width: size.width, height: size.height)
         }
     }
 }
@@ -593,7 +598,7 @@ struct SongMenuContents: View {
 // MARK: - 预览卡片
 
 /// 长按时浮在菜单上方的横向卡片：封面、最多三行文字与箭头。
-/// Apple Music 实测：高 123pt、封面 92pt；宽度至少 249pt，文字更长时加宽到放得下最长一行。
+/// Apple Music 实测：基准高 123pt、封面 92pt；放大文字时按系统行高增加高度。
 struct MenuPreviewCard: View {
     let artwork: Artwork
     /// 第一行为标题，其余为次要信息（艺人、专辑）。
@@ -606,13 +611,17 @@ struct MenuPreviewCard: View {
     /// 测量不含中西文之间系统自动加的间距，留一点余量以免最长一行被截断。
     private static let textSlack: CGFloat = 6
 
-    static func size(for lines: [String]) -> CGSize {
-        let fonts = [UIFont.preferredFont(forTextStyle: .headline)]
-            + Array(repeating: UIFont.preferredFont(forTextStyle: .subheadline), count: max(lines.count - 1, 0))
+    static func size(for lines: [String], compatibleWith traits: UITraitCollection? = nil) -> CGSize {
+        let fonts = [UIFont.preferredFont(forTextStyle: .headline, compatibleWith: traits)]
+            + Array(repeating: UIFont.preferredFont(forTextStyle: .subheadline, compatibleWith: traits),
+                    count: max(lines.count - 1, 0))
         let textWidth = zip(lines, fonts).map { line, font in
             ceil((line as NSString).size(withAttributes: [.font: font]).width)
         }.max() ?? 0
-        return CGSize(width: min(max(chromeWidth + textWidth + textSlack, minWidth), maxWidth), height: 123)
+        let textHeight = lines.isEmpty ? 0 : fonts.reduce(0) { $0 + $1.lineHeight }
+            + CGFloat(max(lines.count - 1, 0)) * 2
+        return CGSize(width: min(max(chromeWidth + textWidth + textSlack, minWidth), maxWidth),
+                      height: max(123, ceil(textHeight + 32)))
     }
 
     var body: some View {

@@ -489,6 +489,82 @@ import XCTest
         XCTAssertEqual(player.queue.map(\.id), queued)
     }
 
+    func testClosedSearchPublishesLateArtworkToQueueAndRetainedPlaylistThenEvictsIt() async throws {
+        let remote = URL(string: "https://example.com/a.jpg")!
+        let replacement = URL(string: "https://example.com/next.jpg")!
+        let (client, network) = client(responses: [
+            "/eapi/search/get": [Data(#"{"code":200,"result":{"songs":[{"id":1,"name":"Song 1"}],"songCount":1}}"#.utf8),
+                                  Data(#"{"code":200,"result":{"songs":[],"songCount":0}}"#.utf8)],
+            "/eapi/v3/song/detail": [songs([1])],
+            "/eapi/playlist/catalogue": [Data(#"{"code":200,"sub":[]}"#.utf8)],
+            remote.path: [Data("first artwork".utf8)], replacement.path: [Data("next artwork".utf8)]
+        ])
+        let images = NeteaseArtworkCache(directory: directory(), session: network, countLimit: 1)
+        let suite = "search-artwork-test-\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        let store = NeteaseSearchStore(client: client, defaults: defaults, artworkCache: images)
+        let saved = NeteaseSavedSession(profile: .init(userID: 1, nickname: "Fixture", avatarURL: nil),
+            credential: try .init(musicU: "fixture"))
+        let account = NeteaseAccount(readSession: { saved }, saveSession: { _ in }, deleteSession: {},
+            validateCredential: { _ in saved.profile }, cachedAvatar: { _ in nil },
+            loadAvatar: { _ in Data() }, clearAvatarCache: {}, search: store)
+        await account.restoreCachedContent()
+        let player = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false)
+        player.restoreOnlineIdentity(ownerID: "1")
+        let playlists = PlaylistLibrary(playlists: [])
+        playlists.restoreOnlineIdentity(ownerID: "1")
+        let playlist = try XCTUnwrap(playlists.createPlaylist(named: "Retained", artwork: .playlist, in: nil))
+        let integration = SearchMusicIntegration(account: account, player: player, playlistLibrary: playlists)
+        let previousExternal = LocalLibrary.songLibrary.externalSongs
+        defer {
+            player.shutdownPlayback()
+            LocalLibrary.songLibrary.replaceExternalSongs([], source: "search")
+            LocalLibrary.songLibrary.replaceExternalSongs(previousExternal)
+            defaults.removePersistentDomain(forName: suite)
+            network.invalidateAndCancel()
+        }
+        integration.connect()
+        integration.model.kind = .song
+        integration.model.submit("First")
+        try await waitForPublication { integration.model.groups.first?.items.first?.song != nil }
+        let item = try XCTUnwrap(integration.model.groups.first?.items.first)
+        let song = try XCTUnwrap(item.song)
+        let loadID = try XCTUnwrap(song.artwork.loadID)
+        XCTAssertEqual(playlists.addSongs([song], to: playlist.id), 1)
+        integration.play(item)
+        XCTAssertEqual(player.current.id, song.id)
+        integration.model.cancel()
+        try await waitForPublication { integration.model.groups.isEmpty }
+
+        integration.requestArtwork(for: loadID)
+        try await waitForPublication { player.current.artworkURL != nil }
+        let file = try XCTUnwrap(player.current.artworkURL)
+        XCTAssertEqual(playlists.songs(in: playlist.id).first?.artworkURL, file)
+        XCTAssertEqual(LocalLibrary.songLibrary.song(id: song.id)?.artworkURL, file)
+
+        let local = LibrarySongItem(id: "local.flac", title: "Local", artist: "Artist", album: "Album", albumArtist: "Artist", trackNumber: 1, artwork: .missing)
+        player.play([local], from: "Local", shuffled: false)
+        integration.model.submit("Second")
+        try await waitForPublication { store.request?.query == "Second" && !store.isLoading }
+        _ = try await images.imageURL(for: replacement, scope: "1")
+        XCTAssertNil(playlists.songs(in: playlist.id).first?.artworkURL)
+        XCTAssertEqual(playlists.songs(in: playlist.id).first?.artwork.loadID, loadID)
+        XCTAssertNil(LocalLibrary.songLibrary.song(id: song.id)?.artworkURL)
+        XCTAssertEqual(player.current, local)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+        try await account.logout()
+        try await waitForPublication { integration.model.ownerID == nil }
+    }
+
+    private func waitForPublication(_ condition: @MainActor () -> Bool) async throws {
+        for _ in 0..<150 {
+            if condition() { return }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTFail("Timed out waiting for search publication")
+        throw URLError(.timedOut)
+    }
+
     private func resource(_ id: Int64, title: String? = nil) -> NeteaseSearchResource {
         NeteaseSearchClient.resource(.init(id: id, title: title ?? "Song \(id)", artist: "Artist", album: "Release", artworkURL: nil, duration: 60))
     }

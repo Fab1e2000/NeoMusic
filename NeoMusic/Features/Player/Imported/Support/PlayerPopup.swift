@@ -34,12 +34,16 @@ struct PlayerPopup: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .popup(isBarPresented: $isBarPresented, isPopupOpen: $isPresented, onClose: onClose) {
-                PlayerPopupContent(barImage: barImage,
-                                   barColorScheme: barColorScheme ?? colorScheme,
-                                   isActive: isPresented && scenePhase == .active,
-                                   isBarActive: isBarActive) { isPresented = false }
-                    .statusBarHidden(isImmersive)
+            .transaction { transaction in
+                if reducesMotion { transaction.disablesAnimations = true }
+            } body: { content in
+                content.popup(isBarPresented: $isBarPresented, isPopupOpen: $isPresented, onClose: onClose) {
+                    PlayerPopupContent(barImage: barImage,
+                                       barColorScheme: barColorScheme ?? colorScheme,
+                                       isActive: isPresented && scenePhase == .active,
+                                       isBarActive: isBarActive) { isPresented = false }
+                        .statusBarHidden(isImmersive)
+                }
             }
             .popupBarStyle(.floatingCompact)
             .popupBarCustomizer { bar in
@@ -71,17 +75,18 @@ struct PlayerPopup: ViewModifier {
             .task(id: player.currentTrack) {
                 let track = player.currentTrack
                 if artworkTrackID != track?.id {
-                    artwork = nil
+                    artwork = track?.coverURL.flatMap { Self.cachedArtwork(for: $0) }
                     artworkTrackID = track?.id
                 }
-                guard let url = track?.coverURL else { return }
-                if let cached = LocalArtworkImages.cached(url, pixels: 160) {
+                guard let url = track?.coverURL else {
+                    if track?.artworkLoadID == nil { artwork = nil }
+                    return
+                }
+                if let cached = Self.cachedArtwork(for: url) {
                     artwork = cached
                     return
                 }
-                var request = ImageRequest(url: url)
-                request.thumbnail = .init(size: CGSize(width: 160, height: 160), unit: .pixels,
-                                          contentMode: .aspectFill)
+                let request = ArtworkImagePipeline.thumbnailRequest(for: url, pixels: 160)
                 guard let image = try? await ImagePipeline.shared.image(for: request),
                       !Task.isCancelled else { return }
                 artwork = image
@@ -91,12 +96,7 @@ struct PlayerPopup: ViewModifier {
             }
             .task(id: prefetchURLs) {
                 let requests = prefetchURLs.flatMap { url in
-                    [160, 240].map { size in
-                        var request = ImageRequest(url: url)
-                        request.thumbnail = .init(size: CGSize(width: size, height: size), unit: .pixels,
-                                                  contentMode: .aspectFill)
-                        return request
-                    }
+                    [160, 240].map { ArtworkImagePipeline.thumbnailRequest(for: url, pixels: $0) }
                 }
                 await ArtworkImagePipeline.prefetch(requests)
             }
@@ -104,13 +104,27 @@ struct PlayerPopup: ViewModifier {
 
     private var barImage: PopupItemViewImage {
         PopupItemViewImage {
-            if let artwork, artworkTrackID == player.currentTrack?.id {
+            if let artwork = displayedArtwork {
                 NowPlayingBackdropImage(image: artwork, animated: !reducesMotion)
             } else {
                 ArtworkView(artwork: .missing, cornerRadius: 3)
                     .environment(\.nativeArtworkSurfaceEnabled, false)
             }
         }
+    }
+
+    private var displayedArtwork: UIImage? {
+        guard let track = player.currentTrack,
+              track.coverURL != nil || track.artworkLoadID != nil else { return nil }
+        if let url = player.currentTrack?.coverURL, let cached = Self.cachedArtwork(for: url) {
+            return cached
+        }
+        return artworkTrackID == player.currentTrack?.id ? artwork : nil
+    }
+
+    static func cachedArtwork(for url: URL) -> UIImage? {
+        ImagePipeline.shared.cache[ArtworkImagePipeline.thumbnailRequest(for: url, pixels: 160)]?.image
+            ?? LocalArtworkImages.cached(url, pixels: 160)
     }
 
 }

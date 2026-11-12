@@ -15,7 +15,7 @@ final class OnlineMusicIntegration {
         let likedAt: [Int64: Date]
     }
     private var published: Content?
-    private var artworkSongs: [URL: [Int64]] = [:]
+    private var artworkSongs: [URL: [NeteaseMusicSong]] = [:]
     init(account: NeteaseAccount) { self.account = account }
 
     func connect() {
@@ -23,6 +23,7 @@ final class OnlineMusicIntegration {
         music.onChange = { [weak self] in self?.publish() }
         music.onArtworkChange = { [weak self] in self?.publishArtwork($0) }
         music.onSessionInvalidated = { [weak self] in
+            self?.artworkSongs = [:]
             LocalLibrary.player.invalidateOnlinePlayback(ownerID: nil)
             LocalLibrary.songLibrary.replaceOnline([])
             LocalLibrary.playlistLibrary.replaceOnlinePlaylists(items: [], songs: [:], ownerID: nil)
@@ -101,10 +102,12 @@ final class OnlineMusicIntegration {
               !Task.isCancelled else { return }
         let home = account.home, artists = account.artists
         guard home == nil || home?.userID == owner, artists == nil || artists?.userID == owner else { return }
-        let localSongs = playlistLibrary.playlists.filter { !$0.isReadOnly && !$0.isSystem }
-            .flatMap { playlistLibrary.songs(in: $0.id) }
-        let ids = Set((player.queue + localSongs).compactMap { item -> Int64? in
-            guard item.unavailabilityReason != nil, let identity = Self.songIdentity(item.id), identity.owner == owner else { return nil }
+        let referenced = Self.referencedSongs(player: player, playlistLibrary: playlistLibrary)
+        let ids = Set(referenced.compactMap { item -> Int64? in
+            guard let identity = Self.songIdentity(item.id), identity.owner == owner else { return nil }
+            let needsArtwork = item.artworkData == nil && (item.artworkURL == nil
+                || item.artworkURL.map { !FileManager.default.fileExists(atPath: $0.path) } == true)
+            guard item.unavailabilityReason != nil || needsArtwork else { return nil }
             return identity.song
         })
         guard !ids.isEmpty else { return }
@@ -117,19 +120,48 @@ final class OnlineMusicIntegration {
               artistRevision == artists?.sessionRevision, music.userID == owner,
               home == nil || home?.userID == owner, artists == nil || artists?.userID == owner,
               account.profile?.userID == owner, !Task.isCancelled else { return }
-        let values = recovered.0 + (recovered.1 ?? []) + (recovered.2 ?? [])
-        guard !values.isEmpty else { return }
-        var merged = Dictionary(LocalLibrary.allSongs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var recoveredByID: [Int64: NeteaseMusicSong] = [:]
+        for value in recovered.0 + (recovered.1 ?? []) + (recovered.2 ?? []) where !value.unavailable {
+            if recoveredByID[value.id] == nil || recoveredByID[value.id]?.artworkURL == nil {
+                recoveredByID[value.id] = value
+            }
+        }
+        let unresolved = ids.filter { recoveredByID[$0]?.artworkURL == nil }
+        if !unresolved.isEmpty {
+            let resolved = await music.resolveReferencedSongs(ids: unresolved)
+            guard musicRevision == music.sessionRevision, homeRevision == home?.sessionRevision,
+                  artistRevision == artists?.sessionRevision, music.userID == owner,
+                  account.profile?.userID == owner, !Task.isCancelled else { return }
+            for value in resolved { recoveredByID[value.id] = value }
+        }
+        guard !recoveredByID.isEmpty else { return }
+        let currentReferences = Self.referencedSongs(player: player, playlistLibrary: playlistLibrary)
+        let currentIDs = Set(currentReferences.filter { $0.onlineOwnerID == String(owner) }.compactMap(\.onlineSongID))
+        let values = recoveredByID.values.filter { currentIDs.contains($0.id) }
+        updateArtworkIndex(Array(values), retainingIDs: currentIDs.union(music.songs.keys))
+        var merged = Dictionary((LocalLibrary.allSongs + currentReferences).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for value in values {
             let id = "netease:\(owner):\(value.id)"
-            if merged[id] == nil || merged[id]?.unavailabilityReason != nil {
-                merged[id] = song(value, owner: owner, music: music)
-            }
+            merged[id] = song(value, owner: owner, music: music).retainingArtwork(from: merged[id])
         }
         let songs = Array(merged.values)
         player.reconcileAvailability(songs: songs)
         playlistLibrary.reconcileOnlineSongs(songs)
         player.saveQueue()
+        let adjacent = Set([player.current.onlineSongID, player.previous?.onlineSongID, player.next?.onlineSongID].compactMap { $0 })
+        music.requestArtwork(values.filter { adjacent.contains($0.id) }.compactMap(\.artworkURL))
+    }
+
+    private static func referencedSongs(player: NowPlayingModel, playlistLibrary: PlaylistLibrary) -> [LibrarySongItem] {
+        player.queue + playlistLibrary.playlists.filter { !$0.isReadOnly && !$0.isSystem }
+            .flatMap { playlistLibrary.songs(in: $0.id) }
+    }
+
+    private func updateArtworkIndex(_ values: [NeteaseMusicSong], retainingIDs: Set<Int64>) {
+        let retained = artworkSongs.values.flatMap { $0 }.filter { retainingIDs.contains($0.id) }
+        var byID = Dictionary(retained.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        for value in values { byID[value.id] = value }
+        artworkSongs = Dictionary(grouping: byID.values.filter { $0.artworkURL != nil }, by: { $0.artworkURL! })
     }
 
     func connectLyrics() async {
@@ -210,10 +242,11 @@ final class OnlineMusicIntegration {
                               tracks: music.playlistTracks, liked: music.likedIDs, likedAt: music.likedAt)
         if published != content {
             let ownerChanged = published?.owner != owner
+            if ownerChanged { artworkSongs = [:] }
             published = content
-            artworkSongs = Dictionary(grouping: music.songs.values.compactMap { value in
-                value.artworkURL.map { ($0, value.id) }
-            }, by: { $0.0 }).mapValues { $0.map(\.1) }
+            let referenced = Self.referencedSongs(player: LocalLibrary.player, playlistLibrary: LocalLibrary.playlistLibrary)
+            let referencedIDs = Set(referenced.filter { $0.onlineOwnerID == ownerID }.compactMap(\.onlineSongID))
+            updateArtworkIndex(Array(music.songs.values), retainingIDs: referencedIDs)
             let favoritesID = music.playlists.first(where: \.isFavorites)?.id
             let favoritesOrder = favoritesID.flatMap { music.playlistTracks[$0] } ?? []
             var seen = Set<Int64>()
@@ -256,6 +289,11 @@ final class OnlineMusicIntegration {
     }
 
     private func song(_ value: NeteaseMusicSong, owner: Int64, music: NeteaseMusicStore) -> LibrarySongItem {
+        let item = makeSong(value, owner: owner, music: music)
+        return item.retainingArtwork(from: LocalLibrary.songLibrary.song(id: item.id))
+    }
+
+    private func makeSong(_ value: NeteaseMusicSong, owner: Int64, music: NeteaseMusicStore) -> LibrarySongItem {
         let artworkURL = value.artworkURL.flatMap { music.cachedArtworkURL($0) }
         return LibrarySongItem(id: "netease:\(owner):\(value.id)", title: value.title, artist: value.artist,
             album: value.album, albumArtist: value.artist, trackNumber: value.trackNumber ?? 0,
@@ -292,11 +330,9 @@ final class OnlineMusicIntegration {
               owner == account.profile?.userID, published?.owner == owner else { return }
         var songs: [String: LibrarySongItem] = [:]
         for url in urls {
-            for id in artworkSongs[url] ?? [] {
-                if let value = music.songs[id] {
-                    let updated = song(value, owner: owner, music: music)
-                    songs[updated.id] = updated
-                }
+            for value in artworkSongs[url] ?? [] {
+                let updated = makeSong(value, owner: owner, music: music)
+                songs[updated.id] = updated
             }
         }
         var covers: [String: Artwork] = [:]

@@ -371,7 +371,8 @@ actor LocalLibraryTrackCache {
            let snapshot = try? JSONDecoder().decode(StartupSnapshot.self, from: data),
            snapshot.version == 1, snapshot.source == (try Fingerprint(url)) {
             let colorURL = url.deletingLastPathComponent().appending(path: "artwork-backdrops.json")
-            let colors = (try? JSONDecoder().decode(SavedColors.self, from: Data(contentsOf: colorURL)))?.colors ?? [:]
+            let savedColors = try? JSONDecoder().decode(SavedColors.self, from: Data(contentsOf: colorURL))
+            let colors = savedColors?.version == AlbumArtworkBackdropPreparer.cacheVersion ? savedColors?.colors ?? [:] : [:]
             do {
                 let tracks = try snapshot.tracks.map { entry in
                 try Task.checkCancellation()
@@ -423,20 +424,32 @@ actor LocalLibraryTrackCache {
 
     private func externalizeArtwork(_ tracks: [LocalTrack], at url: URL) async throws -> [LocalTrack] {
         try Task.checkCancellation()
-        let pending = Dictionary(tracks.compactMap { track in track.artworkData.map { (track.id, $0) } },
+        var pending = Dictionary(tracks.compactMap { track in track.artworkData.map { (track.id, $0) } },
                                  uniquingKeysWith: { first, _ in first })
-        guard !pending.isEmpty else { return tracks }
+        let artworkKeys = Set(tracks.compactMap(\.artworkKey))
+        guard !pending.isEmpty || !artworkKeys.isEmpty else { return tracks }
         if backdropPreparer == nil {
             backdropPreparer = AlbumArtworkBackdropPreparer(cacheURL: url.deletingLastPathComponent().appending(path: "artwork-backdrops.json"))
         }
-        let colors = try await backdropPreparer!.prepare(pending)
         let directory = url.appendingPathExtension("startup")
+        let restoredColors = try await backdropPreparer!.cachedColors(for: artworkKeys)
+        for track in tracks where track.artworkData == nil {
+            guard let key = track.artworkKey, restoredColors.index(forKey: key) == nil else { continue }
+            try Task.checkCancellation()
+            // The source pixels are already externalized; an old derived palette
+            // must be refreshed here before the restored library becomes visible.
+            if let data = try? Data(contentsOf: directory.appending(path: key + ".image")) { pending[track.id] = data }
+        }
+        let colors = try await backdropPreparer!.prepareAdditionalArtwork(pending)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         var keys: [Data: String] = [:]
         return try tracks.map { track in
             try Task.checkCancellation()
-            guard let data = track.artworkData else { return track }
             var track = track
+            guard let data = pending[track.id] else {
+                if let key = track.artworkKey { track.artworkBackdrop = restoredColors[key] ?? nil }
+                return track
+            }
             let key: String
             if let existing = keys[data] { key = existing }
             else {

@@ -11,6 +11,7 @@ struct ArtistDetailBackdrop: View {
     private static let preparer = ArtistBackdropPreparer()
     @Environment(\.displayScale) private var displayScale
     @Environment(\.artworkLoadAction) private var loadArtwork
+    @Environment(\.accessibilityReduceMotion) private var reducesMotion
     private var artworkURL: URL? { if case .file(let url) = artwork { url } else { nil } }
 
     var body: some View {
@@ -43,7 +44,7 @@ struct ArtistDetailBackdrop: View {
             }
             .frame(width: geometry.size.width, height: extent, alignment: .top)
             .compositingGroup()
-            .blur(radius: 60 * imageProgress)
+            .blur(radius: reducesMotion ? 0 : 60 * imageProgress)
             .mask {
                 LinearGradient(stops: [
                     .init(color: .black, location: 0),
@@ -51,8 +52,8 @@ struct ArtistDetailBackdrop: View {
                     .init(color: .clear, location: 1)
                 ], startPoint: .top, endPoint: .bottom)
             }
-            .scaleEffect(magnification, anchor: .top)
-            .offset(y: upward * 0.6 - pull)
+            .scaleEffect(reducesMotion ? 1 : magnification, anchor: .top)
+            .offset(y: reducesMotion ? 0 : upward * 0.6 - pull)
             .opacity(1 - imageProgress)
             .task(id: request) {
                 guard let url = request.url else { return }

@@ -305,6 +305,8 @@ struct NowPlayingQueueRow: View {
                     HStack(spacing: 12) {
                         ArtworkImage(
                             url: entry.song.coverURL,
+                            contentID: entry.song.id,
+                            artworkLoadID: entry.song.artworkLoadID,
                             cornerRadius: 6
                         )
                         .frame(width: 48, height: 48)

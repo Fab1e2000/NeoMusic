@@ -4,6 +4,37 @@ import MetalKit
 import Synchronization
 @testable import NeoMusic
 
+private struct BackdropAlbumPage: Codable, Sendable {
+    let detail: NeteaseArtistAlbumDetail
+    let refreshedAt: Date?
+}
+
+private struct BackdropSubscriptions: Encodable, Sendable {
+    let artists: [NeteaseArtistReference] = []
+    let albums: [NeteaseArtistAlbum] = []
+    let refreshedAt: [String: Date] = [:]
+}
+
+private final class BackdropArtworkProtocol: URLProtocol, @unchecked Sendable {
+    struct State { var image = Data(); var requests: [URL] = [] }
+    static let state = Mutex(State())
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        guard let url = request.url else { return }
+        let data = Self.state.withLock { state in state.requests.append(url); return state.image }
+        guard url.pathExtension == "png" else {
+            client?.urlProtocol(self, didFailWithError: URLError(.unsupportedURL))
+            return
+        }
+        let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "image/png"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
+
 @MainActor
 final class AlbumArtworkBackdropTests: XCTestCase {
     private func imageData(_ color: UIColor) -> Data {
@@ -14,7 +45,7 @@ final class AlbumArtworkBackdropTests: XCTestCase {
         return image.pngData()!
     }
 
-    func testSystemAnalyzerProvidesBackgroundAndMatchingForeground() throws {
+    func testPublicExtractionProvidesBackgroundAndMatchingForeground() throws {
         let dark = try XCTUnwrap(AlbumArtworkBackdrop.extract(from: imageData(.black)))
         let light = try XCTUnwrap(AlbumArtworkBackdrop.extract(from: imageData(.white)))
         XCTAssertEqual(dark.red, 0, accuracy: 0.01)
@@ -26,6 +57,19 @@ final class AlbumArtworkBackdropTests: XCTestCase {
         XCTAssertEqual(light.blue, 1, accuracy: 0.01)
         XCTAssertEqual(light.colorScheme, .light)
         XCTAssertNil(AlbumArtworkBackdrop.extract(from: Data("invalid".utf8)))
+    }
+
+    func testPublicExtractionChoosesDominantColorOverMinorityAccent() throws {
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 100, height: 100)).image { context in
+            UIColor.red.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 100, height: 100))
+            UIColor.blue.setFill()
+            context.fill(CGRect(x: 80, y: 0, width: 20, height: 100))
+        }
+        let backdrop = try XCTUnwrap(AlbumArtworkBackdrop.extract(from: XCTUnwrap(image.pngData())))
+        XCTAssertEqual(backdrop.red, 1, accuracy: 0.02)
+        XCTAssertEqual(backdrop.green, 0, accuracy: 0.02)
+        XCTAssertEqual(backdrop.blue, 0, accuracy: 0.02)
     }
 
     func testMidGrayUsesReadableDarkForeground() throws {
@@ -264,6 +308,124 @@ final class AlbumArtworkBackdropTests: XCTestCase {
         }
         _ = try await third.prepare(["restored": artwork])
         XCTAssertEqual(calls.withLock { $0 }, [replacement, artwork], "Removed covers must leave the disk cache")
+    }
+
+    func testIncrementalImagePreparationKeepsPreviouslyPreparedColorsAcrossLaunches() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let first = Data("first cover".utf8), second = Data("second cover".utf8)
+        let color = AlbumArtworkBackdrop(red: 0.2, green: 0.3, blue: 0.4)
+        let preparer = AlbumArtworkBackdropPreparer(cacheURL: url) { _ in color }
+        _ = try await preparer.prepareAdditionalArtwork(["first": first])
+        _ = try await preparer.prepareAdditionalArtwork(["second": second])
+        let restored = AlbumArtworkBackdropPreparer(cacheURL: url) { _ in
+            XCTFail("Preparing a later image must retain the earlier image's persisted color")
+            return nil
+        }
+        let values = try await restored.prepareAdditionalArtwork(["first": first, "second": second])
+        XCTAssertEqual(values, ["first": color, "second": color])
+    }
+
+    func testDisplayedCachedArtworkAlreadyHasItsNavigationBackdrop() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".png")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try imageData(.black).write(to: url)
+        XCTAssertNil(LocalArtworkImages.cached(url, pixels: 0))
+        _ = await LocalArtworkImages.load(url, pixels: 128)
+        XCTAssertNotNil(LocalArtworkImages.cached(url, pixels: 128))
+        let color = try XCTUnwrap(LocalArtworkImages.cachedBackdrop(for: .file(url)))
+        XCTAssertEqual(color.colorScheme, .dark)
+        XCTAssertEqual(color.red, 0, accuracy: 0.01)
+        let route = LibraryRoute.album("catalog:album:812")
+        var captured: LibraryNavigationPreview?
+        let action = OpenLibraryRouteAction(handler: { _ in XCTFail("Expected a preview") },
+            previewSourceHandler: { _, preview, _ in captured = preview })
+        action(LibraryShelfItem(id: "catalog:album:812", title: "Cached album", artwork: .file(url), route: route),
+               sourceProvider: { nil })
+        let preview = try XCTUnwrap(captured)
+        guard case .image = preview.artwork else { return XCTFail("The source must retain its decoded pixels") }
+        XCTAssertEqual(preview.albumBackdrop, color)
+        XCTAssertEqual(LibraryNavigationPreview(route: route, ownerID: nil, title: "Search album", artwork: .file(url)).albumBackdrop, color)
+        XCTAssertNil(LibraryNavigationPreview(route: .playlist("playlist"), ownerID: nil, title: "Playlist", artwork: .file(url)).albumBackdrop)
+    }
+
+    func testOnlineAlbumFirstPublicationUsesAlreadyDisplayedCoverBackdrop() async throws {
+        let directory = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let previousAlbums = LocalLibrary.catalog.albums, previousArtists = LocalLibrary.catalog.artists
+        defer {
+            LocalLibrary.catalog.albums = previousAlbums
+            LocalLibrary.catalog.artists = previousArtists
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let remote = try XCTUnwrap(URL(string: "https://artwork.test/\(UUID().uuidString).png"))
+        let sourceData = imageData(.black)
+        BackdropArtworkProtocol.state.withLock { $0 = .init(image: sourceData) }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [BackdropArtworkProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let store = NeteaseArtistStore(client: NeteaseMusicClient(transport: NeteaseAccountClient(session: session)),
+            directory: directory, artworkSession: session)
+        let cache = NeteasePageCache(directory: directory.appendingPathComponent("Pages"))
+        try await cache.save(BackdropSubscriptions(), scope: "42", key: "subscriptions")
+        let album = NeteaseArtistAlbum(id: 8, title: "Album", artist: "Artist", artworkURL: remote,
+            publishTime: nil, type: "Album", trackCount: 0)
+        try await cache.save(BackdropAlbumPage(detail: .init(album: album, songs: []), refreshedAt: Date()),
+                             scope: "42", key: "album:8")
+        let saved = NeteaseSavedSession(profile: .init(userID: 42, nickname: "Test", avatarURL: nil),
+            credential: try .init(musicU: "fixture"))
+        let account = NeteaseAccount(readSession: { saved }, saveSession: { _ in }, deleteSession: {},
+            validateCredential: { _ in saved.profile }, cachedAvatar: { _ in nil }, loadAvatar: { _ in Data() },
+            clearAvatarCache: {}, artists: store)
+        await account.restoreCachedContent()
+        let imageReady = expectation(description: "Source artwork is cached")
+        store.onArtworkChange = { urls in if urls.contains(remote) { imageReady.fulfill() } }
+        store.requestArtwork([remote])
+        await fulfillment(of: [imageReady], timeout: 3)
+        let file = try XCTUnwrap(store.cachedArtworkURL(remote))
+        _ = await LocalArtworkImages.load(file, pixels: 128)
+        let expected = try XCTUnwrap(LocalArtworkImages.cachedBackdrop(for: .file(file)))
+        XCTAssertNil(store.albums[8], "The visible source does not need the full album page")
+        let integration = ArtistMusicIntegration(account: account)
+        integration.connect()
+        let publish = store.onContentChange
+        defer { store.onContentChange = publish }
+        var firstPublications: [AlbumArtworkBackdrop?] = []
+        store.onContentChange = { change in
+            publish?(change)
+            if case .album(8) = change { firstPublications.append(integration.albumDetail(8)?.albumBackdrop) }
+        }
+        await integration.load(.album("catalog:album:8"))
+        XCTAssertEqual(firstPublications, [expected], "The first metadata publication must already match the visible cover")
+        XCTAssertEqual(integration.albumDetail(8)?.artwork, .file(file))
+        XCTAssertEqual(BackdropArtworkProtocol.state.withLock { $0.requests }, [remote])
+        await store.invalidate()
+    }
+
+    func testPreviousPaletteVersionIsRecomputedAndPersisted() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let artwork = Data("artwork".utf8)
+        let previous = AlbumArtworkBackdrop(red: 0.1, green: 0.2, blue: 0.3)
+        let updated = AlbumArtworkBackdrop(red: 0.8, green: 0.2, blue: 0.1)
+        _ = try await AlbumArtworkBackdropPreparer(cacheURL: url) { _ in previous }.prepare(["song": artwork])
+        var snapshot = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        snapshot["version"] = 1
+        try JSONSerialization.data(withJSONObject: snapshot).write(to: url)
+
+        let calls = Mutex(0)
+        let preparer = AlbumArtworkBackdropPreparer(cacheURL: url) { _ in
+            calls.withLock { $0 += 1 }
+            return updated
+        }
+        let result = try await preparer.prepare(["song": artwork])
+        XCTAssertEqual(result, ["song": updated])
+        XCTAssertEqual(calls.withLock { $0 }, 1)
+        let restored = AlbumArtworkBackdropPreparer(cacheURL: url) { _ in
+            XCTFail("The new public palette should be reused across launches")
+            return nil
+        }
+        let restoredResult = try await restored.prepare(["song": artwork])
+        XCTAssertEqual(restoredResult, result)
     }
 
     func testMissingCorruptOrUnwritableColorCacheStillPreparesAppearance() async throws {

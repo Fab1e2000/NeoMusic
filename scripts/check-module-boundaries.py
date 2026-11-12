@@ -29,6 +29,7 @@ def check_source(relative: Path, text: str) -> list[str]:
             allowed |= relative in {
                 Path("NeoMusic/Features/Home/HomePlaylistArtwork.swift"),
                 Path("NeoMusic/Features/Library/ArtistDetailBackdrop.swift"),
+                Path("NeoMusic/Features/Library/AlbumArtworkBackdrop.swift"),
             } and module == "CoreImage"
             allowed |= account_ui and module == "WebKit"
             allowed |= relative == Path("NeoMusic/Core/Netease/NeteaseAvatarSnapshot.swift") and module == "ImageIO"

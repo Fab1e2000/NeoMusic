@@ -303,7 +303,7 @@ struct PlaylistDetailView: View {
             Text(playlist.subtitle ?? "我").font(.title3).padding(.top, 4)
             if externalActions == nil, let updatedAt = playlist.updatedAt {
                 Text("更新于 \(updatedAt, format: .relative(presentation: .named))")
-                    .font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary).padding(.top, 4 + 1.0 / 3)
+                    .font(.caption2.weight(.semibold)).foregroundStyle(.secondary).padding(.top, 4 + 1.0 / 3)
             }
             if !tracks.isEmpty || playlist.offersCollection {
                 HStack(spacing: 14) {

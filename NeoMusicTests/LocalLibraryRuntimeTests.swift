@@ -42,6 +42,7 @@ final class LocalLibraryAlbumProjectionTests: XCTestCase {
         XCTAssertEqual(album.addedOrder, 90)
         XCTAssertTrue(album.isFavorite)
         XCTAssertTrue(album.isPinned)
+        XCTAssertEqual(album.albumBackdrop, first.artworkBackdrop)
         if case .favorites = album.artwork {} else { XCTFail("The first track's artwork must remain the album cover") }
         let detail = try XCTUnwrap(LocalLibrary.albumDetail(first.albumID))
         XCTAssertEqual(detail.title, album.title)
@@ -102,6 +103,56 @@ final class LocalLibraryAlbumProjectionTests: XCTestCase {
 
 @MainActor
 final class LocalLibraryRuntimeTests: XCTestCase {
+    func testWarmExternalizedArtworkRefreshesOldPaletteBeforeFirstPublication() async throws {
+        let documents = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: documents) }
+        let store = documents.appendingPathComponent("state")
+        let metadataURL = store.appendingPathComponent("tracks.json")
+        let artworkDirectory = metadataURL.appendingPathExtension("startup")
+        try FileManager.default.createDirectory(at: artworkDirectory, withIntermediateDirectories: true)
+        let data = try XCTUnwrap(UIGraphicsImageRenderer(size: CGSize(width: 32, height: 32)).image { context in
+            UIColor.black.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 32, height: 32))
+        }.pngData())
+        let old = AlbumArtworkBackdrop(red: 1, green: 1, blue: 1)
+        let colorURL = store.appendingPathComponent("artwork-backdrops.json")
+        _ = try await AlbumArtworkBackdropPreparer(cacheURL: colorURL) { _ in old }.prepare(["cached": data])
+        var snapshot = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: colorURL)) as? [String: Any])
+        let colors = try XCTUnwrap(snapshot["colors"] as? [String: Any])
+        let key = try XCTUnwrap(colors.keys.first)
+        snapshot["version"] = 1
+        try JSONSerialization.data(withJSONObject: snapshot).write(to: colorURL)
+        let artworkURL = artworkDirectory.appendingPathComponent(key + ".image")
+        try data.write(to: artworkURL)
+        let track = LocalTrack(id: "cached.wav", title: "Cached", artist: "Artist", album: "Album", albumArtist: "Artist",
+            trackNumber: 1, duration: 10, artworkData: nil, addedDate: .distantPast, artworkKey: key, artworkBackdrop: old)
+        try JSONEncoder().encode([track]).write(to: metadataURL)
+        let suite = "WarmArtwork.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let songs = SongLibrary(songs: [], defaults: defaults)
+        let player = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false)
+        defer { player.shutdownPlayback() }
+        var publications: [[LibrarySongItem]] = []
+        let runtime = LocalLibraryRuntime(documents: documents, store: store,
+            songLibrary: songs, playlistLibrary: PlaylistLibrary(playlists: []), player: player,
+            favoriteAlbums: LibrarySelectionSet(ids: []), pinnedAlbums: LibrarySelectionSet(ids: []),
+            deletedAlbums: LibrarySelectionSet(ids: []), defaults: defaults,
+            onLocalSongsApplied: { publications.append($0) })
+        await runtime.restoreCachedState()
+        XCTAssertTrue(runtime.isInitialLibraryReady)
+        XCTAssertEqual(publications.count, 1)
+        let published = try XCTUnwrap(publications.first?.first)
+        let color = try XCTUnwrap(published.artworkBackdrop)
+        XCTAssertEqual(color.colorScheme, .dark)
+        XCTAssertEqual(color.red, 0, accuracy: 0.01)
+        XCTAssertEqual(songs.albumIndex.items.first?.albumBackdrop, color)
+        XCTAssertEqual(published.artworkURL, artworkURL)
+        XCTAssertEqual(try Data(contentsOf: artworkURL), data)
+        let persisted = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: colorURL)) as? [String: Any])
+        XCTAssertEqual(persisted["version"] as? Int, AlbumArtworkBackdropPreparer.cacheVersion)
+    }
+
     func testIndependentRuntimesPublishOnlyToTheirInjectedLibraries() async throws {
         let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let firstDocuments = root.appendingPathComponent("first")

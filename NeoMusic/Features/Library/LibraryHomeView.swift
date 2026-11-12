@@ -16,6 +16,7 @@ struct LibraryShelfItem: Identifiable, Equatable {
     var songID: String? = nil
     var year: Int?
     var sourceOwnerID: String?
+    var albumBackdrop: AlbumArtworkBackdrop? = nil
 }
 
 /// 资料库内的页面跳转。
@@ -41,6 +42,7 @@ struct LibraryHomeView: View {
     var songForMenu: (String) -> LibrarySongItem? = { _ in nil }
     @State private var isCreatingPlaylist = false
     @Environment(\.collectionMenuActions) private var actions
+    @Environment(\.dynamicTypeSize) private var textSize
     @State private var isEditingPinned = false
     /// 各置顶项的“轻点操作”，只保存在本次运行中。
     @State private var tapActions: [String: PinnedTapAction] = [:]
@@ -71,7 +73,7 @@ struct LibraryHomeView: View {
                 RecentlyAddedGrid(items: recentlyAdded, playSong: playSong, songForMenu: songForMenu)
                     .padding(.top, 17)
                     .padding(.bottom, 16)
-                    .frame(maxHeight: .infinity, alignment: .top)
+                    .frame(maxHeight: textSize.isAccessibilitySize ? nil : .infinity, alignment: .top)
                     .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
                     .listRowSeparator(.hidden)
             }
@@ -165,12 +167,13 @@ private struct LibraryCategoryRows: View {
     }
 }
 
-/// 最近添加：两列，最多三行。卡片放在不滚动的集合视图里，增删时由系统补位。
-/// 外层列表更新这一行时会关掉 SwiftUI 动画，所以这里按卡片身份自己播放差异动画。
+/// 最近添加最多六项；辅助功能字号使用内容自适应的单列。
+/// 常规字号保留两列集合视图，由系统按卡片身份播放增删补位动画。
 private struct RecentlyAddedGrid: View {
     let items: [LibraryShelfItem]
     var playSong: (String) -> Void = { _ in }
     var songForMenu: (String) -> LibrarySongItem? = { _ in nil }
+    @Environment(\.dynamicTypeSize) private var textSize
     private var visibleItems: [LibraryShelfItem] { Array(items.prefix(6)) }
 
     var body: some View {
@@ -178,8 +181,35 @@ private struct RecentlyAddedGrid: View {
             Text("最近添加")
                 .font(.title2.weight(.semibold))
                 .accessibilityAddTraits(.isHeader)
-            RecentlyAddedCollection(items: visibleItems, playSong: playSong, songForMenu: songForMenu)
+            if textSize.isAccessibilitySize {
+                LazyVStack(alignment: .leading, spacing: 20) {
+                    ForEach(visibleItems) { item in
+                        RecentlyAddedCard(item: item, playSong: playSong, songForMenu: songForMenu)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            } else {
+                RecentlyAddedCollection(items: visibleItems, playSong: playSong, songForMenu: songForMenu)
+            }
         }
+    }
+}
+
+private struct RecentlyAddedCard: View {
+    let item: LibraryShelfItem
+    let playSong: (String) -> Void
+    let songForMenu: (String) -> LibrarySongItem?
+
+    var body: some View {
+        Group {
+            if let songID = item.songID {
+                RecentSongCard(item: item, songID: songID, play: { playSong(songID) }, songForMenu: songForMenu)
+            } else {
+                CollectionCardLink(item: item) { AlbumCard(item: item) }
+                    .environment(\.nativeArtworkSurfaceEnabled, true)
+            }
+        }
+        .environment(\.nativeArtworkSurfaceEnabled, false)
     }
 }
 
@@ -322,21 +352,12 @@ private struct RecentlyAddedCollection: UIViewRepresentable {
             let songForMenu = latest.songForMenu
             cell.backgroundColor = .clear
             cell.contentConfiguration = UIHostingConfiguration {
-                Group {
-                    if let songID = item.songID {
-                        RecentSongCard(item: item, songID: songID, play: { playSong(songID) }, songForMenu: songForMenu)
-                    } else {
-                        // 与专辑页相同：系统缩放从这张封面起跳。
-                        CollectionCardLink(item: item) { AlbumCard(item: item) }
-                            .environment(\.nativeArtworkSurfaceEnabled, true)
-                    }
-                }
+                RecentlyAddedCard(item: item, playSong: playSong, songForMenu: songForMenu)
                 .libraryHostedAppearance(environment)
                 .environment(\.openLibraryRoute, environment.openLibraryRoute)
                 .environment(\.collectionMenuActions, environment.collectionMenuActions)
                 .environment(\.songMenuActions, environment.songMenuActions)
                 .environment(\.libraryZoomNamespace, environment.libraryZoomNamespace)
-                .environment(\.nativeArtworkSurfaceEnabled, false)
             }
             .margins(.all, 0)
         }
@@ -372,7 +393,7 @@ private struct RecentSongCard: View {
                     return actions.rowMenuSections(for: song) { open($0) }.nativeMenu(firstSectionIsRow: true)
                 },
                 preview: { AnyView(MenuPreviewCard(artwork: song?.artwork ?? item.artwork, lines: lines)) },
-                previewSize: MenuPreviewCard.size(for: lines),
+                previewSize: { MenuPreviewCard.size(for: lines, compatibleWith: $0) },
                 commit: { _ in play() },
                 tap: play
             )
