@@ -115,13 +115,9 @@ final class LocalLibraryRuntime {
 
     /// The local shelf can be presented independently of account-owned content.
     func completeInitialPresentation(songs: [LibrarySongItem]) {
-        var transaction = Transaction(animation: nil)
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            playlistLibrary.reconcileOnlineSongs(songs)
-            player.reconcileAvailability(songs: songs)
-            isInitialPresentationReady = true
-        }
+        playlistLibrary.reconcileOnlineSongs(songs)
+        player.reconcileAvailability(songs: songs)
+        isInitialPresentationReady = true
         PerformanceDiagnostics.event("LibraryContentPresented")
     }
 

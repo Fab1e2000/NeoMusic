@@ -36,6 +36,7 @@ struct LibraryHomeView: View {
     let recentlyAdded: [LibraryShelfItem]
     let playlistLibrary: PlaylistLibrary
     var isContentReady = true
+    var isPinnedReady = true
     var reorderPinned: ([LibraryRoute]) -> Bool = { _ in false }
     var playSong: (String) -> Void = { _ in }
     /// 最近添加单曲卡的长按菜单读取这一首的当前资料。
@@ -43,13 +44,14 @@ struct LibraryHomeView: View {
     @State private var isCreatingPlaylist = false
     @Environment(\.collectionMenuActions) private var actions
     @Environment(\.dynamicTypeSize) private var textSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isEditingPinned = false
     /// 各置顶项的“轻点操作”，只保存在本次运行中。
     @State private var tapActions: [String: PinnedTapAction] = [:]
     @Namespace private var playlistCreationTransition
 
     private var visiblePinned: [LibraryShelfItem] {
-        isContentReady ? pinned : []
+        isContentReady && isPinnedReady ? pinned : []
     }
 
     var body: some View {
@@ -67,10 +69,12 @@ struct LibraryHomeView: View {
             Section {
                 LibraryCategoryRows()
                     .disabled(!isContentReady)
+                    .animation(reduceMotion ? nil : .default, value: isContentReady)
             }
             .listSectionSeparator(.hidden, edges: .top)
             Section {
-                RecentlyAddedGrid(items: recentlyAdded, playSong: playSong, songForMenu: songForMenu)
+                RecentlyAddedGrid(items: recentlyAdded, animatesItemChanges: isContentReady && isPinnedReady,
+                                  playSong: playSong, songForMenu: songForMenu)
                     .padding(.top, 17)
                     .padding(.bottom, 16)
                     .frame(maxHeight: textSize.isAccessibilitySize ? nil : .infinity, alignment: .top)
@@ -80,7 +84,7 @@ struct LibraryHomeView: View {
             .listSectionSeparator(.hidden)
         }
         .listStyle(.plain)
-        .transaction(value: isContentReady) { $0.animation = nil; $0.disablesAnimations = true }
+        .animation(reduceMotion ? nil : .default, value: isContentReady && isPinnedReady)
         .navigationDiagnostics("library")
         .libraryHomeNavigation()
         .toolbar {
@@ -171,6 +175,7 @@ private struct LibraryCategoryRows: View {
 /// 常规字号保留两列集合视图，由系统按卡片身份播放增删补位动画。
 private struct RecentlyAddedGrid: View {
     let items: [LibraryShelfItem]
+    let animatesItemChanges: Bool
     var playSong: (String) -> Void = { _ in }
     var songForMenu: (String) -> LibrarySongItem? = { _ in nil }
     @Environment(\.dynamicTypeSize) private var textSize
@@ -189,7 +194,8 @@ private struct RecentlyAddedGrid: View {
                     }
                 }
             } else {
-                RecentlyAddedCollection(items: visibleItems, playSong: playSong, songForMenu: songForMenu)
+                RecentlyAddedCollection(items: visibleItems, animatesItemChanges: animatesItemChanges,
+                                        playSong: playSong, songForMenu: songForMenu)
             }
         }
     }
@@ -215,6 +221,7 @@ private struct RecentlyAddedCard: View {
 
 private struct RecentlyAddedCollection: UIViewRepresentable {
     let items: [LibraryShelfItem]
+    let animatesItemChanges: Bool
     let playSong: (String) -> Void
     let songForMenu: (String) -> LibrarySongItem?
 
@@ -236,11 +243,13 @@ private struct RecentlyAddedCollection: UIViewRepresentable {
     }
 
     func updateUIView(_ view: UICollectionView, context: Context) {
-        let animated = !context.environment.accessibilityReduceMotion
+        let animated = animatesItemChanges && !context.environment.accessibilityReduceMotion
         let animationsWereEnabled = UIView.areAnimationsEnabled
         UIView.setAnimationsEnabled(animated)
         defer { UIView.setAnimationsEnabled(animationsWereEnabled) }
-        context.coordinator.update(with: self, environment: context.environment, animated: animated)
+        context.animate {
+            context.coordinator.update(with: self, environment: context.environment, animated: animated)
+        }
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UICollectionView, context: Context) -> CGSize? {
@@ -331,17 +340,10 @@ private struct RecentlyAddedCollection: UIViewRepresentable {
             snapshot.appendSections([0])
             snapshot.appendItems(identifiers)
             snapshot.reconfigureItems(changed)
-            let fills = hasApplied && !previousIdentifiers.isEmpty && previousIdentifiers != identifiers
-            let shouldAnimate = fills && animated
-            let animationsWereEnabled = UIView.areAnimationsEnabled
-            CATransaction.begin()
-            CATransaction.setDisableActions(false)
-            UIView.setAnimationsEnabled(shouldAnimate)
+            let shouldAnimate = hasApplied && !previousIdentifiers.isEmpty && previousIdentifiers != identifiers && animated
             source.apply(snapshot, animatingDifferences: shouldAnimate) { [weak self] in
                 if needsLayout { self?.collectionView?.collectionViewLayout.invalidateLayout() }
             }
-            CATransaction.commit()
-            UIView.setAnimationsEnabled(animationsWereEnabled)
             hasApplied = true
         }
 

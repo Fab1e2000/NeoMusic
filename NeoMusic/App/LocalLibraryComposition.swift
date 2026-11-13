@@ -477,10 +477,12 @@ enum LocalLibrary {
 /// 在首页自己的 body 里读取置顶状态：置顶变化只刷新首页，不会让上层重建而重置首页的编辑状态。
 struct LocalLibraryHome: View {
     var body: some View {
-        let ready = LocalLibrary.runtime.isInitialPresentationReady && LocalLibrary.runtime.isInitialLibraryReady
-        LibraryHomeView(pinned: ready ? LocalLibrary.pinned : [], recentlyAdded: ready ? LocalLibrary.recentlyAdded : [],
+        let ready = LocalLibrary.runtime.isInitialLibraryReady
+        let pinnedReady = ready && LocalLibrary.runtime.isInitialPresentationReady
+        LibraryHomeView(pinned: pinnedReady ? LocalLibrary.pinned : [], recentlyAdded: ready ? LocalLibrary.recentlyAdded : [],
                         playlistLibrary: LocalLibrary.playlistLibrary,
                         isContentReady: ready,
+                        isPinnedReady: pinnedReady,
                         reorderPinned: LocalLibrary.reorderPinned,
                         playSong: LocalLibrary.playLibrarySong,
                         songForMenu: LocalLibrary.songForMenu)
