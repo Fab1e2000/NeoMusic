@@ -10,7 +10,6 @@ struct NowPlayingProgressControl: View {
     @ScaledMetric(relativeTo: .caption2) private var timeFontSize: CGFloat = 12.5
 
     @Environment(\.nowPlayingLayout) private var layout
-    @State private var scrub = NowPlayingProgressScrub()
     let song: ReferenceTrack
 
     var body: some View {
@@ -44,29 +43,11 @@ struct NowPlayingProgressControl: View {
     }
 
     private var progressSlider: some View {
-        // A page animation can write the slider binding. Seek only while the finger is down.
-        // https://developer.apple.com/documentation/swiftui/slider/init(value:in:oneditingchanged:)
-        Slider(value: Binding(get: { min(player.progress, progressMaximum) },
-                              set: { scrub.propose($0) { player.seek(to: $0) } }),
-               in: 0...progressMaximum,
-               onEditingChanged: { scrub.setEditing($0) })
-            .sliderThumbVisibility(.hidden)
-            .tint(.white)
-            .frame(height: 44)
-            .accessibilityLabel("播放进度")
-            .accessibilityValue("\(formatTime(player.progress))，共 \(formatTime(progressMaximum))")
+        NowPlayingProgressSlider(maximum: progressMaximum)
     }
 
     private var timeLabels: some View {
-        HStack {
-            Text(formatTime(player.progress))
-                .modifier(PlayerEDRControlAvailable(shape: .time(formatTime(player.progress), false, timeFontSize)))
-            Spacer()
-            Text("−\(formatTime(max(player.duration - player.progress, 0)))")
-                .modifier(PlayerEDRControlAvailable(shape: .time("−\(formatTime(max(player.duration - player.progress, 0)))", true, timeFontSize)))
-        }
-        .font(.system(size: timeFontSize, weight: .medium).monospacedDigit())
-        .foregroundStyle(.white.opacity(0.5))
+        NowPlayingTimeLabels(fontSize: timeFontSize)
     }
 
     private var timeLineHeight: CGFloat { max(18, timeFontSize * 1.3) }
@@ -92,11 +73,49 @@ struct NowPlayingProgressControl: View {
         max(player.duration, song.duration, 1)
     }
 
-    private func formatTime(_ value: TimeInterval) -> String {
-        guard value.isFinite else { return "0:00" }
-        let seconds = max(0, Int(value))
-        return String(format: "%d:%02d", seconds / 60, seconds % 60)
+}
+
+/// Only the slider and time readout subscribe to the periodic playback clock.
+/// The quality control and surrounding page layout retain their existing inputs.
+private struct NowPlayingProgressSlider: View {
+    let maximum: TimeInterval
+    @Environment(ReferencePlayerState.self) private var player
+    @State private var scrub = NowPlayingProgressScrub()
+
+    var body: some View {
+        Slider(value: Binding(get: { min(player.progress, maximum) },
+                              set: { scrub.propose($0) { player.seek(to: $0) } }),
+               in: 0...maximum,
+               onEditingChanged: { scrub.setEditing($0) })
+            .sliderThumbVisibility(.hidden)
+            .tint(.white)
+            .frame(height: 44)
+            .accessibilityLabel("播放进度")
+            .accessibilityValue("\(formatPlaybackTime(player.progress))，共 \(formatPlaybackTime(maximum))")
     }
+}
+
+private struct NowPlayingTimeLabels: View {
+    let fontSize: CGFloat
+    @Environment(ReferencePlayerState.self) private var player
+
+    var body: some View {
+        HStack {
+            Text(formatPlaybackTime(player.progress))
+                .modifier(PlayerEDRControlAvailable(shape: .time(formatPlaybackTime(player.progress), false, fontSize)))
+            Spacer()
+            Text("−\(formatPlaybackTime(max(player.duration - player.progress, 0)))")
+                .modifier(PlayerEDRControlAvailable(shape: .time("−\(formatPlaybackTime(max(player.duration - player.progress, 0)))", true, fontSize)))
+        }
+        .font(.system(size: fontSize, weight: .medium).monospacedDigit())
+        .foregroundStyle(.white.opacity(0.5))
+    }
+}
+
+private func formatPlaybackTime(_ value: TimeInterval) -> String {
+    guard value.isFinite else { return "0:00" }
+    let seconds = max(0, Int(value))
+    return String(format: "%d:%02d", seconds / 60, seconds % 60)
 }
 
 /// Forwards a slider value only while UIKit reports that the thumb is being dragged.

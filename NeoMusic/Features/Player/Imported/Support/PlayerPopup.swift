@@ -34,6 +34,7 @@ struct PlayerPopup: ViewModifier {
 
     func body(content: Content) -> some View {
         content
+            .environment(\.songPlaybackIndicatorsActive, !isPresented)
             .transaction { transaction in
                 if reducesMotion { transaction.disablesAnimations = true }
             } body: { content in

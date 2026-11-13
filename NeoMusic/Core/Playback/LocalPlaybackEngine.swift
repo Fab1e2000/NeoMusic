@@ -154,7 +154,7 @@ import Observation
                 let length = self.player.currentItem?.duration.seconds ?? 0
                 let duration = length.isFinite ? max(0, length) : 0
                 let durationChanged = self.duration != duration
-                self.duration = duration
+                if durationChanged { self.duration = duration }
                 if self.pendingSeek == nil { self.updateFade() }
                 // A newly resolved duration is metadata; ordinary time ticks only
                 // drive in-app progress. Now Playing extrapolates elapsed time.

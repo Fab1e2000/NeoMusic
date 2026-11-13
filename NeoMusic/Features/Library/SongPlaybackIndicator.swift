@@ -3,6 +3,7 @@ import UIKit
 
 extension EnvironmentValues {
     @Entry var songRowPlayback: NowPlayingModel? = nil
+    @Entry var songPlaybackIndicatorsActive = true
 }
 
 /// Only the small current-track slot observes transport state. Audio samples are
@@ -12,13 +13,14 @@ struct AlbumSongPosition: View {
     var foreground: Color? = nil
     @Environment(\.songRowPlayback) private var playback
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.songPlaybackIndicatorsActive) private var indicatorsActive
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ScaledMetric(relativeTo: .callout) private var positionWidth = 22.0
 
     var body: some View {
         Group {
             if let playback, playback.hasCurrent, playback.current.id == song.id {
-                SongPlaybackIndicator(active: playback.isPlaying && !playback.isLoading && scenePhase == .active && !reduceMotion,
+                SongPlaybackIndicator(active: indicatorsActive && playback.isPlaying && !playback.isLoading && scenePhase == .active && !reduceMotion,
                                       samples: { [weak playback] in playback?.spectrumLevels() ?? [] })
                     .frame(width: 16, height: 20)
                     .accessibilityLabel(playback.isPlaying ? "正在播放" : "已暂停")
@@ -40,6 +42,7 @@ struct PlaylistSongArtwork: View {
     var cornerRadius: CGFloat = 6
     @Environment(\.songRowPlayback) private var playback
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.songPlaybackIndicatorsActive) private var indicatorsActive
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -52,7 +55,7 @@ struct PlaylistSongArtwork: View {
                         .fill(.black.opacity(0.4))
                         .overlay {
                             SongPlaybackIndicator(
-                                active: playback.isPlaying && !playback.isLoading && scenePhase == .active && !reduceMotion,
+                                active: indicatorsActive && playback.isPlaying && !playback.isLoading && scenePhase == .active && !reduceMotion,
                                 samples: { [weak playback] in playback?.spectrumLevels() ?? [] },
                                 color: .white
                             )
@@ -86,6 +89,7 @@ final class SpectrumBarsView: UIView {
     var active = false { didSet { updateClock() } }
     private var levels = [CGFloat](repeating: 0, count: 5)
     private var displayLink: CADisplayLink?
+    var hasActiveDisplayLink: Bool { displayLink?.isPaused == false }
     private lazy var target = DisplayTarget(view: self)
 
     override init(frame: CGRect) {

@@ -6,6 +6,63 @@ import AVFoundation
 @testable import NeoMusic
 
 @MainActor final class NowPlayingProgressScrubTests: XCTestCase {
+    func testPlaybackTicksDoNotRebuildAudioQualityControl() async throws {
+        let songs = (0..<2_000).map { id in
+            LibrarySongItem(id: "song:\(id)", title: "Song", artist: "Artist", album: "Album", albumArtist: "Artist", trackNumber: 0, artwork: .missing, duration: 300)
+        }
+        let model = NowPlayingModel(queue: songs, currentIndex: 0, isPlaying: true)
+        let player = ReferencePlayerState(model: model)
+        var qualityReads = 0
+        let actions = ReferencePlayerActions(isFavorite: { _ in false }, toggleFavorite: { _ in },
+            addToPlaylist: { _ in }, openAlbum: { _ in }, openArtist: { _ in },
+            audioQuality: { _ in qualityReads += 1; return PlayerAudioQuality(title: "Lossless") })
+        let window = UIWindow(windowScene: try await applicationWindowScene())
+        window.rootViewController = UIHostingController(rootView:
+            NowPlayingProgressControl(song: try XCTUnwrap(player.currentTrack))
+                .frame(width: 390, height: 70)
+                .environment(player).environment(actions))
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        try await Task.sleep(for: .milliseconds(150))
+        let initialReads = qualityReads
+        XCTAssertGreaterThan(initialReads, 0)
+        for tick in 1...10 {
+            model.elapsed = Double(tick) * 0.2
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertEqual(qualityReads, initialReads, "Playback time must stay inside the slider and time readout")
+        XCTAssertEqual(player.progress, 2)
+    }
+
+    func testCoveredSongStopsSpectrumAndResumesWhenRevealed() async throws {
+        let song = LibrarySongItem(id: "song", title: "Song", artist: "Artist", album: "Album", albumArtist: "Artist", trackNumber: 1, artwork: .missing)
+        let model = NowPlayingModel(queue: [song], currentIndex: 0, isPlaying: true)
+        func content(_ visible: Bool) -> some View {
+            AlbumSongPosition(song: song)
+                .environment(\.songRowPlayback, model)
+                .environment(\.songPlaybackIndicatorsActive, visible)
+                .environment(\.scenePhase, .active)
+        }
+        func indicator(in view: UIView) -> SpectrumBarsView? {
+            if let result = view as? SpectrumBarsView { return result }
+            return view.subviews.lazy.compactMap { indicator(in: $0) }.first
+        }
+        let window = UIWindow(windowScene: try await applicationWindowScene())
+        let host = UIHostingController(rootView: content(true))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertTrue(try XCTUnwrap(indicator(in: host.view)).hasActiveDisplayLink)
+        host.rootView = content(false)
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertFalse(try XCTUnwrap(indicator(in: host.view)).hasActiveDisplayLink)
+        XCTAssertTrue(model.isPlaying)
+        host.rootView = content(true)
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertTrue(try XCTUnwrap(indicator(in: host.view)).hasActiveDisplayLink)
+    }
+
     func testScrubSeeksOnlyWhileTheFingerIsDown() {
         let scrub = NowPlayingProgressScrub()
         var sought: [Double] = []
