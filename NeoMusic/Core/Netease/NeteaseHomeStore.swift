@@ -794,7 +794,7 @@ import Observation
         return snapshot
     }
 
-    func restoreCachedDetail(id: Int64) async throws -> NeteasePlaylistDetail? {
+    func restoreCachedDetail(id: Int64, publish: Bool = true) async throws -> NeteasePlaylistDetail? {
         try Task.checkCancellation()
         if let cached = cache.details[id] { return cached }
         let revision = generation, owner = scope
@@ -812,26 +812,26 @@ import Observation
         guard let detail else { return nil }
         cache.details[id] = detail
         rebuildSongCatalog()
-        onDetailChange?(id)
+        if publish { onDetailChange?(id) }
         return detail
     }
 
     /// Browsing refreshes the displayed page; playback consumes the selected snapshot.
     func playlistArtworkFile(id: Int64) async throws -> URL? {
         let revision = generation
-        _ = try await restoreCachedDetail(id: id)
+        _ = try await restoreCachedDetail(id: id, publish: false)
         _ = try await joinDetail(id)
         let detail: NeteasePlaylistDetail
         if let cached = cache.details[id], cached.orderedTrackIDs.isEmpty || cached.nextOffset > 0 { detail = cached }
         else {
             let credential = credential
-            detail = try await fetchDetail(id: id, preloadArtwork: false) { [client] in
+            detail = try await fetchDetail(id: id, preloadArtwork: false, publish: false) { [client] in
                 try await client.detail(id: id, credential: credential, trackLimit: 1)
             }
         }
         try Task.checkCancellation()
         guard generation == revision, let remote = detail.displayArtworkURL(ownerID: userID) else { return nil }
-        let file = await cachedArtworkFile(remote)
+        let file = try await artworkCache.imageURL(for: remote, scope: scope)
         try Task.checkCancellation()
         guard generation == revision else { throw CancellationError() }
         return file
@@ -911,7 +911,7 @@ import Observation
         return value
     }
 
-    private func fetchDetail(id: Int64, refresh: Bool = false, preloadArtwork: Bool = true,
+    private func fetchDetail(id: Int64, refresh: Bool = false, preloadArtwork: Bool = true, publish: Bool = true,
                              operation: @escaping @MainActor () async throws -> NeteasePlaylistDetail) async throws -> NeteasePlaylistDetail {
         let revision = generation
         let task = Task { [self] in
@@ -929,7 +929,7 @@ import Observation
             if refresh { refreshedDetails[id] = Date() }
             rebuildSongCatalog()
             save(value, key: "playlist:\(id)")
-            onDetailChange?(id)
+            if publish { onDetailChange?(id) }
             if preloadArtwork { requestArtwork([value.playlist.artworkURL].compactMap { $0 } + value.songs.prefix(NeteaseArtworkPrefetch.detailSongs).compactMap(\.artworkURL)) }
             return value
         }

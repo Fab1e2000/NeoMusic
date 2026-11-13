@@ -1017,6 +1017,33 @@ import Synchronization
         await store.activate(nil, refresh: false)
     }
 
+    func testPlaylistCoverDownloadsOnCacheMissAndReusesFile() async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let network = try paginationNetwork(count: 1)
+        defer { network.invalidateAndCancel() }
+        let remote = URL(string: "https://fixture.test/first-cover")!
+        HomePaginationProtocol.state.withLock { $0.responses[remote.path] = Data("image".utf8) }
+        let pages = NeteasePageCache(directory: root.appendingPathComponent("home"))
+        let playlist = NeteaseMusicPlaylist(id: 12, title: "List", creator: "Other", creatorID: 99,
+            artworkURL: nil, trackCount: 1, isFavorites: false)
+        let song = NeteaseMusicSong(id: 1, title: "Song", artist: "Artist", album: "Album", artworkURL: remote, duration: 10)
+        try await pages.save(NeteasePlaylistDetail(playlist: playlist, songs: [song], addedTimes: [:]), scope: "42", key: "playlist:12")
+        let images = NeteaseArtworkCache(directory: root.appendingPathComponent("artwork"), session: network)
+        let store = NeteaseHomeStore(directory: root.appendingPathComponent("home"), artworkCache: images)
+        await store.activate(try savedSession(), refresh: false)
+        var publications = 0
+        store.onDetailChange = { _ in publications += 1 }
+        XCTAssertNil(store.cachedArtworkURL(remote: remote))
+        let first = try await store.playlistArtworkFile(id: 12)
+        XCTAssertNotNil(first)
+        let second = try await store.playlistArtworkFile(id: 12)
+        XCTAssertEqual(first, second)
+        XCTAssertEqual(HomePaginationProtocol.count(remote.path), 1)
+        XCTAssertEqual(publications, 0)
+        await store.activate(nil, refresh: false)
+    }
+
     func testArtworkIndexRestoresOnDemandAndPublishesAnAlreadyCachedCover() async throws {
         let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -1126,6 +1153,25 @@ import Synchronization
         XCTAssertEqual(loaded.nextOffset, 200)
         XCTAssertEqual(HomePaginationProtocol.count(path), 2)
         XCTAssertEqual(HomePaginationProtocol.count("/eapi/v3/song/detail"), 1)
+        await store.flush()
+        await store.activate(nil, refresh: false)
+    }
+
+    func testCoverLoadingDoesNotPublishPlaylistContent() async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let network = try paginationNetwork(count: 205)
+        defer { network.invalidateAndCancel() }
+        let store = NeteaseHomeStore(client: NeteaseMusicClient(transport: NeteaseAccountClient(session: network)), directory: root)
+        await store.activate(try savedSession(), refresh: false)
+        var publications = 0
+        store.onDetailChange = { _ in publications += 1 }
+        _ = try await store.playlistArtworkFile(id: 12)
+        XCTAssertEqual(publications, 0)
+        XCTAssertNotNil(store.cachedDetail(id: 12))
+        _ = try await store.detail(id: 12)
+        XCTAssertGreaterThan(publications, 0)
+        XCTAssertEqual(store.cachedDetail(id: 12)?.nextOffset, 100)
         await store.flush()
         await store.activate(nil, refresh: false)
     }

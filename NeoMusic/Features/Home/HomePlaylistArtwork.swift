@@ -6,6 +6,7 @@ import CoreImage
 struct HomePlaylistArtwork: View {
     let artwork: Artwork
     var onVisibleArtworkChange: (Bool) -> Void = { _ in }
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.displayScale) private var displayScale
     @State private var rendered: HomePlaylistArtworkRenderer.Images?
     @Environment(\.artworkLoadAction) private var loadArtwork
@@ -25,11 +26,14 @@ struct HomePlaylistArtwork: View {
     var body: some View {
         ZStack(alignment: .top) {
             if let rendered {
-                Image(uiImage: rendered.background).resizable()
-                Color.black.opacity(0.2)
-                Image(uiImage: rendered.cover).resizable()
-                    .frame(width: HomeMetrics.heroWidth, height: HomeMetrics.heroWidth)
-                    .mask(LinearGradient(gradient: Self.fade, startPoint: .top, endPoint: .bottom))
+                ZStack(alignment: .top) {
+                    Image(uiImage: rendered.background).resizable()
+                    Color.black.opacity(0.2)
+                    Image(uiImage: rendered.cover).resizable()
+                        .frame(width: HomeMetrics.heroWidth, height: HomeMetrics.heroWidth)
+                        .mask(LinearGradient(gradient: Self.fade, startPoint: .top, endPoint: .bottom))
+                }
+                .transition(.opacity)
             } else {
                 Color(.secondarySystemFill)
                 if case .image = artwork {
@@ -39,6 +43,7 @@ struct HomePlaylistArtwork: View {
                 }
             }
         }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: hasVisibleArtwork)
         .frame(width: HomeMetrics.heroWidth, height: HomeMetrics.heroHeight)
         .clipped()
         .onChange(of: hasVisibleArtwork, initial: true) { _, visible in

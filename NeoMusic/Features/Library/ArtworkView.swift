@@ -155,6 +155,7 @@ private struct LoadedArtworkView: View {
     let artwork: Artwork
     let retainsImageAcrossSources: Bool
     let loadImage: @MainActor (URL, Int) async -> UIImage?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.displayScale) private var displayScale
     @Environment(\.artworkLoadAction) private var loadArtwork
     @State private var image: UIImage?
@@ -195,27 +196,32 @@ private struct LoadedArtworkView: View {
         return retainsImageAcrossSources ? image : nil
     }
 
+    private var hasPreviewImage: Bool {
+        switch initialArtwork {
+        case .image, .file: true
+        default: false
+        }
+    }
+
     var body: some View {
         GeometryReader { geometry in
             let pixels = geometry.size.width > 0 ? LocalArtworkImages.pixelSize(geometry.size.width * displayScale) : 0
-            Group {
+            ZStack {
                 if let image = displayedImage(pixels: pixels) {
                     Image(uiImage: image).resizable().scaledToFill()
+                        .transition(.opacity)
                 } else if let initialArtwork {
                     ArtworkView(artwork: initialArtwork, cornerRadius: 0, loadImage: loadImage)
                         .environment(\.nativeArtworkSurfaceEnabled, false)
                 } else { ArtworkPlaceholderView(kind: currentPlaceholder) }
             }
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: displayedImage(pixels: pixels) != nil || hasPreviewImage)
             .task(id: (url?.absoluteString ?? "") + ":" + String(pixels)) {
                 guard let url, pixels > 0 else { return }
                 let loaded = await loadImage(url, pixels)
                 guard !Task.isCancelled, let loaded else { return }
-                var transaction = Transaction(animation: nil)
-                transaction.disablesAnimations = true
-                withTransaction(transaction) {
-                    image = loaded
-                    imageURL = url
-                }
+                image = loaded
+                imageURL = url
             }
         }
         .task(id: artwork.loadID) {
