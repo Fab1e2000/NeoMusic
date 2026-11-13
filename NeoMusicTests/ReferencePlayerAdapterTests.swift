@@ -108,6 +108,17 @@ private struct HitTarget: UIViewRepresentable {
     private func track(_ id: String) -> ReferenceTrack {
         ReferenceTrack(id: id, title: id, artists: "Artist", albumTitle: "Album", coverURL: nil, duration: 210)
     }
+    func testLocalFormatLabelsPreserveFormatWithoutInventingQuality() {
+        for ext in ["mp3", "wav", "flac", "aac", "alac", "aiff", "m4a"] {
+            let value = PlayerAudioQuality.localFile(URL(fileURLWithPath: "/music/track.\(ext.uppercased())"))
+            XCTAssertEqual(value?.title, ext.uppercased())
+            XCTAssertEqual(value?.isLocalFormat, true)
+            XCTAssertEqual(value?.isLossless, false)
+        }
+        XCTAssertEqual(PlayerAudioQuality.localFile(URL(fileURLWithPath: "/music/track.aif"))?.title, "AIFF")
+        XCTAssertNil(PlayerAudioQuality.localFile(URL(fileURLWithPath: "/music/track.txt")))
+    }
+
     func testAudioQualityLookupUsesCurrentTrackAndInjectedSettingsAction() {
         var resourceTrackID = "a"
         var resolvedQuality = PlayerAudioQuality(title: "无损", detail: "24 位 / 48 kHz", isLossless: true)

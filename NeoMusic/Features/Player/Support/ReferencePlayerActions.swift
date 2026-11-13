@@ -8,6 +8,13 @@ struct PlayerAudioQuality: Equatable, Sendable {
     let title: String
     var detail: String? = nil
     var isLossless = false
+    var isLocalFormat = false
+
+    static func localFile(_ url: URL) -> Self? {
+        let ext = url.pathExtension.lowercased()
+        guard ["mp3", "wav", "flac", "aac", "alac", "aiff", "aif", "m4a"].contains(ext) else { return nil }
+        return Self(title: ext == "aif" ? "AIFF" : ext.uppercased(), isLocalFormat: true)
+    }
 }
 
 /// All entry points use the same actions; platforms supply capabilities, never menu layouts.

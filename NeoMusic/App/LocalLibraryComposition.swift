@@ -188,8 +188,11 @@ enum LocalLibrary {
                 if song.isOnline { catalog.openSongArtist?(id, name, openRoute) }
                 else { openRoute(.artist(song.albumArtist)) }
             }, notify: { toasts.show($0) }, audioQuality: { id in
-                guard player.hasCurrent, player.current.id == id,
-                      let value = player.actualQuality,
+                guard player.hasCurrent, player.current.id == id else { return nil }
+                if !player.current.isOnline {
+                    return PlayerAudioQuality.localFile(runtime.root.appending(path: id))
+                }
+                guard let value = player.actualQuality,
                       let quality = NeteaseMusicQuality(rawValue: value) else { return nil }
                 return PlayerAudioQuality(title: quality.title,
                     isLossless: quality == .lossless || quality == .hiRes)

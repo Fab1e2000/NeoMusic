@@ -1,15 +1,16 @@
 import SwiftUI
 import UIKit
 
-/// Temporary playback information uses UIKit's native popover lifecycle.
+/// Temporary playback information uses a centered glass information card.
 struct NowPlayingAudioQualityControl: View {
     let quality: PlayerAudioQuality
     var openAudioQualitySettings: (() -> Void)?
-    @State private var isPresented = false
-    @State private var opensSettingsAfterDismiss = false
+    @State private var presenter = PlayerQualityPresentationController()
 
     var body: some View {
-        Button { isPresented = true } label: {
+        Button {
+            presenter.show(quality: quality, openSettings: quality.isLocalFormat ? nil : openAudioQualitySettings)
+        } label: {
             NowPlayingAudioQualityBadge(quality: quality)
                 .frame(minWidth: 44, minHeight: 28)
                 .contentShape(.rect)
@@ -18,115 +19,126 @@ struct NowPlayingAudioQualityControl: View {
         .accessibilityLabel("音频质量，\(quality.title)")
         .accessibilityValue(quality.detail ?? "")
         .accessibilityHint("显示当前播放资源的音频质量")
-        .background {
-            NowPlayingQualityPopover(isPresented: $isPresented, quality: quality,
-                                     canOpenSettings: openAudioQualitySettings != nil,
-                                     openSettings: {
-                opensSettingsAfterDismiss = true
-                isPresented = false
-            }, done: { isPresented = false }, didDismiss: openRequestedSettings)
-        }
-    }
-
-    private func openRequestedSettings() {
-        guard opensSettingsAfterDismiss else { return }
-        opensSettingsAfterDismiss = false
-        openAudioQualitySettings?()
+        .background { NowPlayingQualityPresentation(controller: presenter) }
     }
 }
 
-private struct NowPlayingQualityPopover: UIViewControllerRepresentable {
-    @Binding var isPresented: Bool
-    let quality: PlayerAudioQuality
-    let canOpenSettings: Bool
-    let openSettings: () -> Void
-    let done: () -> Void
-    let didDismiss: () -> Void
+private struct NowPlayingQualityPresentation: UIViewControllerRepresentable {
+    let controller: PlayerQualityPresentationController
 
-    func makeUIViewController(context: Context) -> PlayerQualityPopoverController {
-        PlayerQualityPopoverController()
-    }
+    func makeUIViewController(context: Context) -> PlayerQualityPresentationController { controller }
 
-    func updateUIViewController(_ controller: PlayerQualityPopoverController, context: Context) {
-        controller.didDismiss = {
-            isPresented = false
-            didDismiss()
-        }
-        let content = NowPlayingAudioQualityInfo(quality: quality, canOpenSettings: canOpenSettings,
-                                                openSettings: openSettings, done: done)
-        controller.update(content: content, isPresented: isPresented)
-    }
+    func updateUIViewController(_ controller: PlayerQualityPresentationController, context: Context) {}
 
-    static func dismantleUIViewController(_ controller: PlayerQualityPopoverController, coordinator: ()) {
-        let host = controller.presentedViewController as? UIHostingController<NowPlayingAudioQualityInfo>
-        host?.dismiss(animated: false)
+    static func dismantleUIViewController(_ controller: PlayerQualityPresentationController, coordinator: ()) {
+        controller.presentedViewController?.dismiss(animated: false)
     }
 }
 
-private final class PlayerQualityPopoverController: UIViewController, UIPopoverPresentationControllerDelegate {
-    var didDismiss: () -> Void = {}
-
-    func update(content: NowPlayingAudioQualityInfo, isPresented: Bool) {
-        if let host = presentedViewController as? UIHostingController<NowPlayingAudioQualityInfo> {
-            if isPresented {
-                host.rootView = content
-            } else if !host.isBeingDismissed {
-                dismiss(animated: true) { [weak self] in self?.didDismiss() }
-            }
-            return
-        }
-        guard isPresented, let window = view.window else { return }
+private final class PlayerQualityPresentationController: UIViewController, UIViewControllerTransitioningDelegate {
+    func show(quality: PlayerAudioQuality, openSettings: (() -> Void)?) {
+        guard presentedViewController == nil, let window = view.window else { return }
+        let content = PlayerQualityInformation(quality: quality, canOpenSettings: openSettings != nil,
+            openSettings: { [weak self] in self?.dismiss(animated: true, completion: openSettings) },
+            done: { [weak self] in self?.dismiss(animated: true) })
         let host = UIHostingController(rootView: content)
         host.overrideUserInterfaceStyle = .dark
         host.view.backgroundColor = .clear
-        host.modalPresentationStyle = .popover
+        host.modalPresentationStyle = .custom
+        host.transitioningDelegate = self
         host.sizingOptions = [.preferredContentSize]
-        host.preferredContentSize = host.sizeThatFits(in: CGSize(width: 320,
-                                                               height: window.safeAreaLayoutGuide.layoutFrame.height))
-        guard let popover = host.popoverPresentationController else { return }
-        popover.delegate = self
-        popover.permittedArrowDirections = []
-        popover.canOverlapSourceViewRect = true
-        popover.sourceView = window
-        let safeFrame = window.safeAreaLayoutGuide.layoutFrame
-        popover.sourceRect = CGRect(x: safeFrame.midX, y: safeFrame.midY, width: 0, height: 0)
+        host.preferredContentSize = host.sizeThatFits(in: CGSize(width: 320, height: window.bounds.height))
         present(host, animated: true)
     }
 
-    func adaptivePresentationStyle(for controller: UIPresentationController,
-                                   traitCollection: UITraitCollection) -> UIModalPresentationStyle {
-        .none
+    func presentationController(forPresented presented: UIViewController, presenting: UIViewController?,
+                                source: UIViewController) -> UIPresentationController? {
+        QualityCardPresentation(presentedViewController: presented, presenting: presenting)
     }
-
-    func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
-        didDismiss()
+    func animationController(forPresented presented: UIViewController, presenting: UIViewController,
+                             source: UIViewController) -> UIViewControllerAnimatedTransitioning? {
+        QualityCardTransition(isPresenting: true)
+    }
+    func animationController(forDismissed dismissed: UIViewController) -> UIViewControllerAnimatedTransitioning? {
+        QualityCardTransition(isPresenting: false)
     }
 }
 
-struct NowPlayingAudioQualityBadge: View {
-    let quality: PlayerAudioQuality
-    @ScaledMetric(relativeTo: .caption2) private var fontSize = 12
-    @ScaledMetric(relativeTo: .caption2) private var symbolWidth = 14
-    @ScaledMetric(relativeTo: .caption2) private var lineHeight = 18
+private final class QualityCardPresentation: UIPresentationController {
+    private let dimming = UIControl()
 
-    var body: some View {
-        HStack(spacing: 4) {
-            if quality.isLossless {
-                PlayerLosslessSymbol()
-                    .stroke(style: StrokeStyle(lineWidth: symbolWidth / 24, lineCap: .round, lineJoin: .round))
-                    .frame(width: symbolWidth, height: symbolWidth * 36 / 66)
-            }
-            Text(quality.title).font(.system(size: fontSize, weight: .medium))
+    override var frameOfPresentedViewInContainerView: CGRect {
+        guard let containerView else { return .zero }
+        let safe = containerView.bounds.inset(by: containerView.safeAreaInsets)
+        let size = presentedViewController.preferredContentSize
+        let width = min(size.width, safe.width - 32)
+        let height = min(size.height, safe.height - 32)
+        return CGRect(x: safe.midX - width / 2, y: safe.midY - height / 2, width: width, height: height)
+    }
+    override func presentationTransitionWillBegin() {
+        guard let containerView else { return }
+        dimming.frame = containerView.bounds
+        dimming.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        dimming.backgroundColor = UIColor.black.withAlphaComponent(0.18)
+        dimming.alpha = 0
+        dimming.addTarget(self, action: #selector(close), for: .touchUpInside)
+        dimming.accessibilityLabel = "关闭音频信息"
+        containerView.insertSubview(dimming, at: 0)
+        presentedViewController.transitionCoordinator?.animate(alongsideTransition: { _ in
+            self.dimming.alpha = 1
+        })
+    }
+    override func dismissalTransitionWillBegin() {
+        presentedViewController.transitionCoordinator?.animate(alongsideTransition: { _ in
+            self.dimming.alpha = 0
+        })
+    }
+    override func presentationTransitionDidEnd(_ completed: Bool) {
+        if !completed { dimming.removeFromSuperview() }
+    }
+    override func dismissalTransitionDidEnd(_ completed: Bool) {
+        if completed { dimming.removeFromSuperview() }
+    }
+    override func containerViewWillLayoutSubviews() {
+        presentedView?.bounds.size = frameOfPresentedViewInContainerView.size
+        presentedView?.center = CGPoint(x: frameOfPresentedViewInContainerView.midX,
+                                        y: frameOfPresentedViewInContainerView.midY)
+    }
+    @objc private func close() { presentedViewController.dismiss(animated: true) }
+}
+
+private final class QualityCardTransition: NSObject, UIViewControllerAnimatedTransitioning {
+    let isPresenting: Bool
+    init(isPresenting: Bool) { self.isPresenting = isPresenting }
+    func transitionDuration(using transitionContext: UIViewControllerContextTransitioning?) -> TimeInterval {
+        UIAccessibility.isReduceMotionEnabled ? 0.2 : (isPresenting ? 0.3 : 0.25)
+    }
+    func animateTransition(using context: UIViewControllerContextTransitioning) {
+        let key: UITransitionContextViewControllerKey = isPresenting ? .to : .from
+        guard let controller = context.viewController(forKey: key),
+              let view = context.view(forKey: isPresenting ? .to : .from) else {
+            context.completeTransition(false); return
         }
-        .foregroundStyle(.white.opacity(0.5))
-        .padding(.horizontal, 6)
-        .frame(minHeight: lineHeight)
-        .background(.white.opacity(0.08), in: .rect(cornerRadius: 4))
-        .accessibilityHidden(true)
+        let scale = UIAccessibility.isReduceMotionEnabled ? 1.0 : 1.08
+        if isPresenting {
+            context.containerView.addSubview(view)
+            view.frame = context.finalFrame(for: controller)
+            view.alpha = 0
+            view.transform = CGAffineTransform(scaleX: scale, y: scale)
+        }
+        UIView.animate(withDuration: transitionDuration(using: context), delay: 0,
+                       options: [.curveEaseOut, .beginFromCurrentState]) {
+            view.alpha = self.isPresenting ? 1 : 0
+            view.transform = self.isPresenting ? .identity : CGAffineTransform(scaleX: scale, y: scale)
+        } completion: { _ in
+            let completed = !context.transitionWasCancelled
+            if !completed || !self.isPresenting { view.alpha = 1; view.transform = .identity }
+            context.completeTransition(completed)
+        }
     }
 }
 
-private struct NowPlayingAudioQualityInfo: View {
+private struct PlayerQualityInformation: View {
     let quality: PlayerAudioQuality
     let canOpenSettings: Bool
     let openSettings: () -> Void
@@ -138,7 +150,15 @@ private struct NowPlayingAudioQualityInfo: View {
     var body: some View {
         VStack(spacing: 0) {
             Group {
-                if quality.isLossless {
+                if quality.isLocalFormat {
+                    VStack(spacing: 10) {
+                        Image(systemName: "waveform").font(.system(size: 26, weight: .medium))
+                        Text(quality.title).font(.system(size: 21, weight: .bold, design: .rounded)).tracking(1)
+                    }
+                    .frame(width: 104, height: 100)
+                    .overlay(RoundedRectangle(cornerRadius: 14).stroke(.pink.opacity(0.8), lineWidth: 2))
+                    .foregroundStyle(.pink)
+                } else if quality.isLossless {
                     PlayerLosslessSymbol()
                         .stroke(style: StrokeStyle(lineWidth: symbolWidth / 24, lineCap: .round, lineJoin: .round))
                 } else {
@@ -147,7 +167,7 @@ private struct NowPlayingAudioQualityInfo: View {
             }
             .foregroundStyle(LinearGradient(colors: [.white.opacity(0.5), Color(red: 1, green: 0.35, blue: 0.43)],
                                             startPoint: .leading, endPoint: .trailing))
-            .frame(width: symbolWidth, height: symbolWidth * 36 / 66)
+            .frame(width: quality.isLocalFormat ? 104 : symbolWidth, height: quality.isLocalFormat ? 100 : symbolWidth * 36 / 66)
             .accessibilityHidden(true)
             .padding(.top, 43)
             .padding(.bottom, 39)
@@ -174,6 +194,7 @@ private struct NowPlayingAudioQualityInfo: View {
         .padding(.bottom, 16)
         .frame(width: 320)
         .fixedSize(horizontal: false, vertical: true)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 28))
     }
 
     private var usesVerticalButtons: Bool {
@@ -252,7 +273,31 @@ private struct PlayerQualityDialogButton: UIViewRepresentable {
     }
 }
 
-/// Vector adaptation of the supplied lossless mark.
+struct NowPlayingAudioQualityBadge: View {
+    let quality: PlayerAudioQuality
+    @ScaledMetric(relativeTo: .caption2) private var fontSize = 12
+    @ScaledMetric(relativeTo: .caption2) private var symbolWidth = 14
+    @ScaledMetric(relativeTo: .caption2) private var lineHeight = 18
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if quality.isLocalFormat {
+                Image(systemName: "waveform").font(.system(size: 11))
+            } else if quality.isLossless {
+                PlayerLosslessSymbol()
+                    .stroke(style: StrokeStyle(lineWidth: symbolWidth / 24, lineCap: .round, lineJoin: .round))
+                    .frame(width: symbolWidth, height: symbolWidth * 36 / 66)
+            }
+            Text(quality.title).font(.system(size: fontSize, weight: .medium))
+        }
+        .foregroundStyle(.white.opacity(0.5))
+        .padding(.horizontal, 6)
+        .frame(minHeight: lineHeight)
+        .background(.white.opacity(0.08), in: .rect(cornerRadius: 4))
+        .accessibilityHidden(true)
+    }
+}
+
 private struct PlayerLosslessSymbol: Shape {
     func path(in rect: CGRect) -> Path {
         var path = Path()
