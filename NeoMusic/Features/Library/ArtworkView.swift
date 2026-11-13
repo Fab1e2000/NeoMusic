@@ -215,7 +215,8 @@ private struct LoadedArtworkView: View {
                         .environment(\.nativeArtworkSurfaceEnabled, false)
                 } else { ArtworkPlaceholderView(kind: currentPlaceholder) }
             }
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: displayedImage(pixels: pixels) != nil || hasPreviewImage)
+            .animation(!reduceMotion && (displayedImage(pixels: pixels) != nil || hasPreviewImage) ? .easeInOut(duration: 0.2) : nil,
+                       value: displayedImage(pixels: pixels) != nil || hasPreviewImage)
             .task(id: (url?.absoluteString ?? "") + ":" + String(pixels)) {
                 guard let url, pixels > 0 else { return }
                 let loaded = await loadImage(url, pixels)

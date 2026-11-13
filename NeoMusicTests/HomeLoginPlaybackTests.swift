@@ -253,21 +253,26 @@ import XCTest
         }
         home.consumeRoamingBatch(id: id)
     }
-    func testHomeNavigationSeedsVisibleArtworkBeforeLoadingAndRetainsItWithoutNewCover() async throws {
+    func testHomeNavigationSeedsVisibleArtworkBeforeResolvingFirstSongCover() async throws {
         try await withQuickActionIntegration { account, _, integration, _ in
             try await account.completeLogin(credential: .init(musicU: "test"))
             let route = LibraryRoute.playlist("home:playlist:12")
-            let cover = Artwork.file(URL(fileURLWithPath: "/tmp/home-visible-cover.jpg"))
+            let file = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".jpg")
+            try Data([1]).write(to: file)
+            defer { try? FileManager.default.removeItem(at: file) }
+            let cover = Artwork.file(file)
             let preview = LibraryNavigationPreview(route: route, ownerID: "42", title: "Visible title", subtitle: "Creator", artwork: cover)
             integration.model.prepareNavigation(preview)
             XCTAssertEqual(integration.detailLibrary.playlist("home:playlist:12")?.title, preview.title)
+            XCTAssertEqual(integration.detailLibrary.playlist("home:playlist:12")?.artwork, cover)
+            let pendingCover = Artwork.deferred(id: "home-playlist:\(account.home!.sessionRevision.uuidString):12", placeholder: .playlist)
             XCTAssertNotNil(integration.destination(for: route))
             // The hot-card prefetch has already supplied this playlist's actual title.
             XCTAssertEqual(integration.detailLibrary.playlist("home:playlist:12")?.title, "List")
-            XCTAssertEqual(integration.detailLibrary.playlist("home:playlist:12")?.artwork, cover)
+            XCTAssertEqual(integration.detailLibrary.playlist("home:playlist:12")?.artwork, pendingCover)
             await integration.detailLibrary.loadOnlinePlaylist?("home:playlist:12")
             XCTAssertEqual(integration.detailLibrary.playlist("home:playlist:12")?.title, "List")
-            XCTAssertEqual(integration.detailLibrary.playlist("home:playlist:12")?.artwork, cover)
+            XCTAssertEqual(integration.detailLibrary.playlist("home:playlist:12")?.artwork, pendingCover)
             XCTAssertEqual(integration.detailLibrary.songs(in: "home:playlist:12").map(\.id), ["netease:42:9"])
         }
     }

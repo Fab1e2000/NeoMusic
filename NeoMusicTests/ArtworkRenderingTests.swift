@@ -180,10 +180,11 @@ final class ArtworkRenderingTests: XCTestCase {
             XCTAssertTrue(decoder.hasPending(url))
             for frame in pending { XCTAssertEqual(frame.pixels, placeholder.pixels, "File readiness must not erase the placeholder") }
             decoder.finish(url, with: solid(.red))
-            let completed = await frames(host, count: 6)
+            let transition = await frames(host, count: 6)
+            let completed = transition + (await settledFrames(host, count: 2))
             let cover = try XCTUnwrap(completed.last)
             XCTAssertNotEqual(cover.pixels, placeholder.pixels)
-            assertSingleReplacement(completed, from: placeholder, to: cover)
+            assertFade(completed, from: placeholder, to: cover)
             if native { XCTAssertTrue(surface === nativeSurface(host.controller.view), "Keep the native zoom source") }
             attach(initial + pending + completed, name: native ? "Native placeholder to cover" : "Placeholder to cover")
         }
@@ -198,7 +199,7 @@ final class ArtworkRenderingTests: XCTestCase {
         _ = await frames(host, count: 3)
         XCTAssertTrue(decoder.hasPending(firstURL))
         decoder.finish(firstURL, with: solid(.red))
-        let loaded = await frames(host, count: 3)
+        let loaded = await settledFrames(host, count: 3)
         let old = try XCTUnwrap(loaded.last)
 
         state.artwork = .deferred(id: "updated-cover", placeholder: .playlist)
@@ -229,7 +230,7 @@ final class ArtworkRenderingTests: XCTestCase {
             let initial = await frames(host, count: 3)
             let placeholder = try XCTUnwrap(initial.last)
             decoder.finish(firstURL, with: solid(.red))
-            let loaded = await frames(host, count: 3)
+            let loaded = await settledFrames(host, count: 3)
             let old = try XCTUnwrap(loaded.last)
             XCTAssertNotEqual(old.pixels, placeholder.pixels)
 
@@ -261,7 +262,7 @@ final class ArtworkRenderingTests: XCTestCase {
         defer { host.window.isHidden = true; decoder.finishAll() }
         _ = await frames(host, count: 3)
         decoder.finish(url, with: solid(.red))
-        let loaded = await frames(host, count: 3)
+        let loaded = await settledFrames(host, count: 3)
         let small = try XCTUnwrap(loaded.last)
         state.side = 160
         let larger = await frames(host, count: 4)
@@ -324,6 +325,7 @@ final class ArtworkRenderingTests: XCTestCase {
             let format = UIGraphicsImageRendererFormat()
             format.scale = 1
             format.opaque = true
+            format.preferredRange = .standard
             let size = CGSize(width: 80, height: 80)
             let image = UIGraphicsImageRenderer(size: size, format: format).image { context in
                 context.cgContext.translateBy(x: 40 - view.bounds.midX, y: 40 - view.bounds.midY)
@@ -332,6 +334,27 @@ final class ArtworkRenderingTests: XCTestCase {
             result.append(ArtworkRenderedFrame(image: image))
         }
         return result
+    }
+
+    private func settledFrames(_ host: ArtworkRenderingHost, count: Int) async -> [ArtworkRenderedFrame] {
+        try? await Task.sleep(for: .milliseconds(250))
+        return await frames(host, count: count)
+    }
+
+    private func assertFade(_ frames: [ArtworkRenderedFrame], from old: ArtworkRenderedFrame,
+                            to new: ArtworkRenderedFrame, file: StaticString = #filePath, line: UInt = #line) {
+        func distance(_ pixels: Data) -> Double {
+            zip(pixels, new.pixels).reduce(0) { $0 + abs(Double($1.0) - Double($1.1)) } / Double(pixels.count)
+        }
+        var previous = distance(old.pixels)
+        XCTAssertTrue(frames.contains { $0.pixels != old.pixels && $0.pixels != new.pixels },
+                      "The placeholder must fade through intermediate pixels", file: file, line: line)
+        for frame in frames {
+            let remaining = distance(frame.pixels)
+            XCTAssertLessThanOrEqual(remaining, previous + 1, "The fade must advance toward the decoded cover", file: file, line: line)
+            previous = remaining
+        }
+        XCTAssertEqual(frames.last?.pixels, new.pixels, file: file, line: line)
     }
 
     private func assertSingleReplacement(_ frames: [ArtworkRenderedFrame], from old: ArtworkRenderedFrame,

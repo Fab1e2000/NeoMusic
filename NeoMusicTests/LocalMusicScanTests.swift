@@ -225,7 +225,7 @@ final class LocalLibraryTrackCacheTests: XCTestCase, @unchecked Sendable {
         let snapshot: [String: Any] = ["version": 1, "source": ["size": source.count, "modified": modified.timeIntervalSinceReferenceDate], "tracks": entries]
         try JSONSerialization.data(withJSONObject: snapshot).write(to: artworkDirectory.appendingPathComponent("snapshot.json"))
         let color = AlbumArtworkBackdrop(red: 0.1, green: 0.2, blue: 0.3)
-        let colors: [String: Any] = ["version": 1, "colors": ["shared-cover": ["red": color.red, "green": color.green, "blue": color.blue]]]
+        let colors: [String: Any] = ["version": AlbumArtworkBackdropPreparer.cacheVersion, "colors": ["shared-cover": ["red": color.red, "green": color.green, "blue": color.blue]]]
         try JSONSerialization.data(withJSONObject: colors).write(to: directory.appendingPathComponent("artwork-backdrops.json"))
         let cache = LocalLibraryTrackCache()
         let read = try await cache.read(from: url)

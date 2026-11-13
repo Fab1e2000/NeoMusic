@@ -552,8 +552,11 @@ import XCTest
         XCTAssertNil(LocalLibrary.songLibrary.song(id: song.id)?.artworkURL)
         XCTAssertEqual(player.current, local)
         XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+        integration.model.cancel()
+        await store.cancelQuery()
         try await account.logout()
         try await waitForPublication { integration.model.ownerID == nil }
+        await store.loadCategories()
     }
 
     private func waitForPublication(_ condition: @MainActor () -> Bool) async throws {
