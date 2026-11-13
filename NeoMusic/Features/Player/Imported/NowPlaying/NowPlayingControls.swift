@@ -385,7 +385,8 @@ struct NowPlayingPageSelector: View {
                 ReferenceAirPlayButton(opacity: 0.5)
                     .frame(width: 44, height: 44)
                     .position(x: proxy.size.width / 2, y: 25)
-                pageButton(page: .queue, systemImage: "list.bullet", accessibilityLabel: "继续播放")
+                pageButton(page: .queue, systemImage: "list.bullet", accessibilityLabel: "继续播放",
+                           badgeSystemImage: page == .queue ? nil : player.queueModeBadgeSystemImage)
                     .position(x: layout.x(315), y: 25)
             }
         }
@@ -396,24 +397,15 @@ struct NowPlayingPageSelector: View {
     private func pageButton(
         page destination: NowPlayingPage,
         systemImage: String,
-        accessibilityLabel: String
+        accessibilityLabel: String,
+        badgeSystemImage: String? = nil
     ) -> some View {
         let isSelected = page == destination
 
         return Button {
             let targetPage: NowPlayingPage =
                 isSelected ? .artwork : destination
-            withAnimation(
-                accessibilityReduceMotion
-                    ? nil
-                    : NowPlayingPageTransition
-                        .selectionAnimation(
-                            from: page,
-                            to: targetPage
-                        )
-            ) {
-                page = targetPage
-            }
+            page = targetPage
         } label: {
             ZStack(alignment: .topTrailing) {
                 Image(systemName: systemImage)
@@ -436,9 +428,19 @@ struct NowPlayingPageSelector: View {
                     }
                     .offset(y: isSelected && destination == .lyrics ? 1 : 0)
 
+                if let badgeSystemImage {
+                    Image(systemName: badgeSystemImage)
+                        .font(.system(size: 7, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.9))
+                        .frame(width: 20, height: 20)
+                        .background(.white.opacity(0.1), in: .circle)
+                        .offset(x: 8, y: -5)
+                        .accessibilityHidden(true)
+                }
             }
             .frame(width: 44, height: 44)
             .contentShape(.circle)
+            .animation(accessibilityReduceMotion ? nil : .easeOut(duration: 0.1), value: isSelected)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(accessibilityLabel)

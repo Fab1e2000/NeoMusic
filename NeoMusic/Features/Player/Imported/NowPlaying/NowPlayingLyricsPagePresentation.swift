@@ -3,6 +3,7 @@ import SwiftUI
 
 /// SwiftUI owns interpolation, retargeting and completion for the resident pages.
 struct NowPlayingPagePresentation: ViewModifier {
+    @Environment(\.nowPlayingLayout) private var layout
     let isVisible: Bool
     let presentationScale: CGFloat
     let hiddenOffset: CGFloat
@@ -13,9 +14,13 @@ struct NowPlayingPagePresentation: ViewModifier {
         content
             .animation(spatialAnimation) {
                 $0.scaleEffect(isVisible ? 1 : presentationScale)
-                    .offset(y: isVisible ? 0 : hiddenOffset)
+                    .offset(y: isVisible ? 0 : hiddenOffset * layout.verticalScale)
             }
             .animation(opacityAnimation) { $0.opacity(isVisible ? 1 : 0) }
+            .mask(alignment: .top) {
+                Rectangle()
+                    .frame(height: hiddenOffset == 0 ? nil : max(0, layout.pageY(557)))
+            }
     }
 }
 

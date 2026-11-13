@@ -3,7 +3,7 @@
 import SwiftUI
 
 struct NowPlayingArtworkPage: View {
-    static let pausedArtworkScale: CGFloat = 247.0 / 354.0
+    static let pausedArtworkScale: CGFloat = 247.0 / 338.0
 
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @Environment(\.displayScale) private var displayScale
@@ -131,7 +131,7 @@ struct NowPlayingArtworkPage: View {
                     handledBounceGeneration = bounceGeneration
                     await animateArtworkBounce()
                 }
-                .position(x: proxy.size.width / 2, y: layout.pageY(87) + artworkSize / 2)
+                .position(x: proxy.size.width / 2, y: layout.pageY(95) + artworkSize / 2)
 
                 // 左右滑动歌名切到上一首/下一首；相邻歌名在歌名这一栏的宽度之外淡入。
                 NowPlayingTrackSwipe(song: song, pageDistance: layout.width(227) + 24) { track, interactive in
@@ -216,7 +216,7 @@ struct NowPlayingArtworkFrameMeasurement: View {
                 .onGeometryChange(for: CGRect.self) {
                     $0.frame(in: .named(NowPlayingPortraitCoordinateSpace.name))
                 } action: { onFrameChange($0) }
-                .position(x: proxy.size.width / 2, y: layout.pageY(87) + artworkSize / 2)
+                .position(x: proxy.size.width / 2, y: layout.pageY(95) + artworkSize / 2)
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)

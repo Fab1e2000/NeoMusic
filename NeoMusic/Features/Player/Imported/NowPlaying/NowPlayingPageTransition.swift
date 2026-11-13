@@ -62,7 +62,7 @@ enum NowPlayingPageTransition {
                 offsetAndOpacity(y: motion.songHeaderTravel)
                 .animation(motion.songHeaderIncoming.animation),
             removal:
-                offsetAndOpacity(y: motion.songHeaderTravel)
+                offsetAndOpacity(y: -motion.artworkDetailsTravel)
                 .animation(motion.outgoing.animation)
         )
     }
@@ -77,7 +77,7 @@ enum NowPlayingPageTransition {
         ) {
             return motion.directAlternate.animation
         }
-        return animation
+        return source == .artwork ? motion.artworkCollapse.animation : animation
     }
 
     static func residentQueueAnimation(

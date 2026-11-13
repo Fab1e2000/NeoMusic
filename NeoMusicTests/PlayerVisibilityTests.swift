@@ -118,9 +118,9 @@ final class PlayerVisibilityTests: XCTestCase {
         host.view.layoutIfNeeded()
         await fulfillment(of: [measured], timeout: 2)
 
-        XCTAssertEqual(receivedFrame?.width ?? 0, 354, accuracy: 0.5)
-        XCTAssertEqual(receivedFrame?.height ?? 0, 354, accuracy: 0.5)
+        XCTAssertEqual(receivedFrame?.width ?? 0, 338, accuracy: 0.5)
+        XCTAssertEqual(receivedFrame?.height ?? 0, 338, accuracy: 0.5)
         XCTAssertEqual(receivedFrame?.midX ?? 0, 169, accuracy: 0.5)
-        XCTAssertEqual(receivedFrame?.minY ?? 0, 3, accuracy: 0.5)
+        XCTAssertEqual(receivedFrame?.minY ?? 0, 11, accuracy: 0.5)
     }
 }

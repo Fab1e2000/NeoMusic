@@ -65,9 +65,7 @@ struct NowPlayingAnimationSpec: Equatable, Sendable {
             initialVelocity
         ):
             .interpolatingSpring(
-                mass: mass,
-                stiffness: stiffness,
-                damping: damping,
+                Spring(mass: mass, stiffness: stiffness, damping: damping, allowOverDamping: true),
                 initialVelocity: initialVelocity
             )
         }
@@ -99,6 +97,7 @@ struct NowPlayingMotionSpec: Equatable, Sendable {
 
     struct PageMotion: Equatable, Sendable {
         let selection: NowPlayingAnimationSpec
+        let artworkCollapse: NowPlayingAnimationSpec
         let directAlternate: NowPlayingAnimationSpec
         let outgoing: NowPlayingAnimationSpec
         let incoming: NowPlayingAnimationSpec
@@ -181,8 +180,13 @@ struct NowPlayingMotionSpec: Equatable, Sendable {
     static let appleMusic26 = NowPlayingMotionSpec(
         page: PageMotion(
             selection: NowPlayingAnimationSpec(
-                .smooth,
-                duration: 0.30
+                .interpolatingSpring(mass: 1, stiffness: 475, damping: 45, initialVelocity: 0),
+                duration: 0.60
+            ),
+            // Fit to the supplied recording's cover bounds; SwiftUI owns retargeting.
+            artworkCollapse: NowPlayingAnimationSpec(
+                .interpolatingSpring(mass: 1, stiffness: 800, damping: 72, initialVelocity: 0),
+                duration: 0.60
             ),
             directAlternate: NowPlayingAnimationSpec(
                 .smooth,
@@ -193,14 +197,14 @@ struct NowPlayingMotionSpec: Equatable, Sendable {
                 duration: 0.24
             ),
             incoming: NowPlayingAnimationSpec(
-                .smooth,
-                duration: 0.22,
-                delay: 0.07
+                .easeInOut,
+                duration: 0.24,
+                delay: 0.15
             ),
             songHeaderIncoming: NowPlayingAnimationSpec(
-                .smooth,
-                duration: 0.40,
-                delay: 0.08
+                .easeInOut,
+                duration: 0.24,
+                delay: 0.20
             ),
             delayedResidentEntrance: NowPlayingAnimationSpec(
                 .smooth,
@@ -244,12 +248,13 @@ struct NowPlayingMotionSpec: Equatable, Sendable {
                 ),
                 duration: 0.18
             ),
-            // Regular Now Playing queue animator recovered from presentQueue.
+            // The recording's queue moves below the cover while fading, keeping
+            // the playback controls fixed outside the animated content.
             queueSpatialPresentation: NowPlayingAnimationSpec(
                 .interpolatingSpring(
                     mass: 1,
-                    stiffness: 350,
-                    damping: 40,
+                    stiffness: 475,
+                    damping: 45,
                     initialVelocity: 0
                 ),
                 duration: pageSpringSettlementDuration
@@ -267,8 +272,8 @@ struct NowPlayingMotionSpec: Equatable, Sendable {
             queueSpatialDismissal: NowPlayingAnimationSpec(
                 .interpolatingSpring(
                     mass: 1,
-                    stiffness: 350,
-                    damping: 40,
+                    stiffness: 475,
+                    damping: 45,
                     initialVelocity: 0
                 ),
                 duration: pageSpringSettlementDuration
@@ -292,7 +297,7 @@ struct NowPlayingMotionSpec: Equatable, Sendable {
             // The recovered lyrics-mode transform contains scale only. It
             // does not translate the presented lyrics view vertically.
             lyricsTravel: 0,
-            queueTravel: 0,
+            queueTravel: 470,
             artworkDetailsTravel: -300,
             songHeaderTravel: 40,
             lyricsPresentationDelay: 0.07
