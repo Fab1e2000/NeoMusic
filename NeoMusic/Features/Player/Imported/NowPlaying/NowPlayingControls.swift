@@ -84,7 +84,7 @@ private struct NowPlayingProgressSlider: UIViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(player: player) }
 
     func makeUIView(context: Context) -> UISlider {
-        let slider = UISlider()
+        let slider = NowPlayingScrubbingSlider()
         slider.sliderStyle = .thumbless
         slider.minimumTrackTintColor = UIColor.white.withAlphaComponent(0.5)
         slider.maximumTrackTintColor = UIColor.white.withAlphaComponent(0.25)
@@ -119,6 +119,33 @@ private struct NowPlayingProgressSlider: UIViewRepresentable {
             scrub.setEditing(true)
             scrub.propose(Double(slider.value)) { player.seek(to: $0) }
             if !slider.isTracking { scrub.setEditing(false) }
+        }
+    }
+}
+
+private final class NowPlayingScrubbingSlider: UISlider {
+    override func beginTracking(_ touch: UITouch, with event: UIEvent?) -> Bool {
+        let tracking = super.beginTracking(touch, with: event)
+        if tracking { updateTrackHighlight(true) }
+        return tracking
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        // Restore tint before UIKit starts the drag-release collapse animation.
+        updateTrackHighlight(false)
+        super.touchesEnded(touches, with: event)
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        updateTrackHighlight(false)
+        super.touchesCancelled(touches, with: event)
+    }
+
+    private func updateTrackHighlight(_ highlighted: Bool) {
+        UIView.animate(withDuration: 0.2, delay: 0,
+                       options: [.allowUserInteraction, .beginFromCurrentState]) {
+            self.minimumTrackTintColor = UIColor.white.withAlphaComponent(highlighted ? 1 : 0.5)
+            self.layoutIfNeeded()
         }
     }
 }
