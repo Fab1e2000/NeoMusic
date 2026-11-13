@@ -45,6 +45,19 @@ final class AlbumArtworkBackdropTests: XCTestCase {
         return image.pngData()!
     }
 
+    func testPlaylistPreviewUsesPreparedCoverColorBeforeNavigation() async throws {
+        let file = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".png")
+        try imageData(.blue).write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let id = "playlist-preview:" + UUID().uuidString
+        LocalArtworkImages.registerResolvedArtwork(id, url: file)
+        _ = await LocalArtworkImages.load(file, pixels: 128)
+        let cover = Artwork.deferred(id: id, placeholder: .playlist)
+        let preview = LibraryNavigationPreview(route: .playlist("test"), ownerID: nil, title: "Test", artwork: cover)
+        XCTAssertNotNil(preview.albumBackdrop)
+        XCTAssertEqual(preview.albumBackdrop, LocalArtworkImages.cachedBackdrop(for: .file(file)))
+    }
+
     func testPublicExtractionProvidesBackgroundAndMatchingForeground() throws {
         let dark = try XCTUnwrap(AlbumArtworkBackdrop.extract(from: imageData(.black)))
         let light = try XCTUnwrap(AlbumArtworkBackdrop.extract(from: imageData(.white)))
@@ -346,7 +359,7 @@ final class AlbumArtworkBackdropTests: XCTestCase {
         guard case .image = preview.artwork else { return XCTFail("The source must retain its decoded pixels") }
         XCTAssertEqual(preview.albumBackdrop, color)
         XCTAssertEqual(LibraryNavigationPreview(route: route, ownerID: nil, title: "Search album", artwork: .file(url)).albumBackdrop, color)
-        XCTAssertNil(LibraryNavigationPreview(route: .playlist("playlist"), ownerID: nil, title: "Playlist", artwork: .file(url)).albumBackdrop)
+        XCTAssertEqual(LibraryNavigationPreview(route: .playlist("playlist"), ownerID: nil, title: "Playlist", artwork: .file(url)).albumBackdrop, color)
     }
 
     func testOnlineAlbumFirstPublicationUsesAlreadyDisplayedCoverBackdrop() async throws {

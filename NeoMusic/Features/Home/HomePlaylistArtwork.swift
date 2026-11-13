@@ -9,7 +9,8 @@ struct HomePlaylistArtwork: View {
     @Environment(\.displayScale) private var displayScale
     @State private var rendered: HomePlaylistArtworkRenderer.Images?
     @Environment(\.artworkLoadAction) private var loadArtwork
-    private var url: URL? { if case .file(let url) = artwork { url } else { nil } }
+    @State private var resolvedURL: URL?
+    private var url: URL? { if case .file(let url) = artwork { url } else { resolvedURL } }
     private var hasVisibleArtwork: Bool {
         if rendered != nil { return true }
         if case .image = artwork { return true }
@@ -43,7 +44,13 @@ struct HomePlaylistArtwork: View {
         .onChange(of: hasVisibleArtwork, initial: true) { _, visible in
             onVisibleArtworkChange(visible)
         }
-        .task(id: artwork.loadID) { loadArtwork(artwork.loadID) }
+        .task(id: artwork.loadID) {
+            resolvedURL = nil
+            loadArtwork(artwork.loadID)
+            guard let id = artwork.loadID, let file = await loadArtwork.resolve?(id), !Task.isCancelled else { return }
+            LocalArtworkImages.registerResolvedArtwork(id, url: file)
+            resolvedURL = file
+        }
         .task(id: url) {
             guard let url else { return }
             let pixels = LocalArtworkImages.pixelSize(HomeMetrics.heroWidth * displayScale)

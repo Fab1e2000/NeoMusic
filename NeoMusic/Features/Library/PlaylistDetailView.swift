@@ -96,6 +96,7 @@ struct PlaylistDetailView: View {
     var externalArtwork: AnyView? = nil
     /// 宿主提供示例最近播放，不将资料库顺序当作播放历史。
     var recentlyPlayedSongs: [LibrarySongItem] = []
+    @Environment(\.artworkLoadAction) private var loadArtwork
     @Environment(\.displayScale) private var displayScale
     @Environment(\.dismiss) private var dismiss
     @Environment(\.closeLibraryDetail) private var closeLibraryDetail
@@ -104,6 +105,8 @@ struct PlaylistDetailView: View {
     @Environment(\.libraryDownloads) private var downloads
     @Environment(\.libraryNavigationPreview) private var navigationPreview
     @Environment(\.libraryNavigationChrome) private var chrome
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var backdrop: AlbumArtworkBackdrop?
     @State private var query = ""
     @State private var sort = DetailSort.order
     @State private var projection = LibraryListProjection<ProjectionInput, Projection>()
@@ -114,6 +117,19 @@ struct PlaylistDetailView: View {
     @State private var actionFeedback = 0
 
     private var playlist: LibraryPlaylistItem? { library.playlist(playlistID) }
+    private var backgroundArtwork: Artwork {
+        guard let playlist else { return .missing }
+        if playlist.artwork == .playlist, let preview = navigationPreview,
+           preview.route == .playlist(playlistID), preview.ownerID == playlist.sourceOwnerID {
+            return preview.artwork
+        }
+        return playlist.artwork
+    }
+    private var preparedBackdrop: AlbumArtworkBackdrop? {
+        LocalArtworkImages.cachedBackdrop(for: backgroundArtwork) ?? backdrop ??
+            navigationPreview.flatMap { $0.route == .playlist(playlistID) && $0.ownerID == playlist?.sourceOwnerID ? $0.albumBackdrop : nil }
+    }
+    private var pageBackground: Color { preparedBackdrop?.color ?? Color(.systemBackground) }
     private var tracks: [LibrarySongItem] { library.songs(in: playlistID) }
     private var displayed: Projection {
         let input = ProjectionInput(tracks: tracks, query: query, sort: sort)
@@ -153,6 +169,28 @@ struct PlaylistDetailView: View {
                 ContentUnavailableView("播放列表已删除", systemImage: "music.note.list")
             }
         }
+        .task(id: backgroundArtwork) {
+            if let cached = LocalArtworkImages.cachedBackdrop(for: backgroundArtwork) { backdrop = cached; return }
+            let data: Data?
+            switch backgroundArtwork {
+            case .file(let url):
+                data = await Task.detached(priority: .utility) { try? Data(contentsOf: url) }.value
+            case .deferred(let id, _):
+                if let url = await loadArtwork.resolve?(id), !Task.isCancelled {
+                    data = await Task.detached(priority: .utility) { try? Data(contentsOf: url) }.value
+                } else { data = nil }
+            case .image(let image):
+                let renderer = ImageRenderer(content: image.resizable().scaledToFill().frame(width: 128, height: 128).clipped())
+                data = renderer.uiImage?.pngData()
+            default:
+                data = nil
+            }
+            guard !Task.isCancelled, let data else { return }
+            let result = await Task.detached(priority: .utility) { AlbumArtworkBackdrop.extract(from: data) }.value
+            guard !Task.isCancelled else { return }
+            backdrop = result
+        }
+        .onChange(of: preparedBackdrop, initial: true) { _, value in chrome?.setAlbumBackdrop(value) }
         .task(id: playlistID) { if playlist?.isReadOnly == true { await library.loadOnlinePlaylist?(playlistID) } }
         .task(id: FullCollectionRequest(playlistID: playlistID, query: query, sort: sort,
                                         hasMore: library.onlineHasMore.contains(playlistID))) {
@@ -196,72 +234,77 @@ struct PlaylistDetailView: View {
         let visibleTracks = displayed.tracks
         let hasQuery = !query.isEmpty
         return List {
-            header(playlist)
-                .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: tracks.isEmpty ? 39 : 24, trailing: 20))
-                .listRowSeparator(.hidden, edges: .top)
-                .listRowSeparator(query.isEmpty || !visibleTracks.isEmpty ? .visible : .hidden, edges: .bottom)
-                .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
-                .alignmentGuide(.listRowSeparatorTrailing) { $0[.trailing] }
-            if let error = library.onlineErrors[playlistID] {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(error).font(.subheadline).foregroundStyle(.secondary)
-                    Button("重试") { Task { await library.loadOnlinePlaylist?(playlistID) } }
+            Group {
+                header(playlist)
+                    .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: tracks.isEmpty ? 39 : 24, trailing: 20))
+                    .listRowSeparator(.hidden, edges: .top)
+                    .listRowSeparator(query.isEmpty || !visibleTracks.isEmpty ? .visible : .hidden, edges: .bottom)
+                    .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
+                    .alignmentGuide(.listRowSeparatorTrailing) { $0[.trailing] }
+                if let error = library.onlineErrors[playlistID] {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(error).font(.subheadline).foregroundStyle(.secondary)
+                        Button("重试") { Task { await library.loadOnlinePlaylist?(playlistID) } }
+                    }
                 }
-            }
-            Section {
-                ForEach(visibleTracks) { song in
-                    trackRow(song, title: playlist.title)
-                        .task(id: visibleTracks.count) {
-                            guard song.id == visibleTracks.last?.id, query.isEmpty, sort == .order,
-                                  library.onlineHasMore.contains(playlistID), library.onlineErrors[playlistID] == nil else { return }
-                            await library.loadMoreOnlinePlaylist?(playlistID)
-                        }
-                        .listRowInsets(EdgeInsets(top: 4, leading: 20, bottom: 4, trailing: 20))
-                        .alignmentGuide(.listRowSeparatorLeading) { _ in
-                            hasQuery && song.id == visibleTracks.last?.id ? 0 : 60
-                        }
-                        .alignmentGuide(.listRowSeparatorTrailing) { $0.width }
-                        .swipeActions(edge: .leading) {
-                            Button("插播", systemImage: "text.line.first.and.arrowtriangle.forward") {
-                                songActions.playNext(song)
-                                songActions.notify(.playingNext)
+                Section {
+                    ForEach(visibleTracks) { song in
+                        trackRow(song, title: playlist.title)
+                            .task(id: visibleTracks.count) {
+                                guard song.id == visibleTracks.last?.id, query.isEmpty, sort == .order,
+                                      library.onlineHasMore.contains(playlistID), library.onlineErrors[playlistID] == nil else { return }
+                                await library.loadMoreOnlinePlaylist?(playlistID)
                             }
-                                .labelStyle(.iconOnly)
-                                .tint(.indigo)
-                        }
-                        .modifier(PlaylistTrailingSwipe(song: song, canRemove: !playlist.isReadOnly) {
-                            withAnimation { library.removeSong(song.id, from: playlistID) }
-                        })
+                            .listRowInsets(EdgeInsets(top: 4, leading: 20, bottom: 4, trailing: 20))
+                            .alignmentGuide(.listRowSeparatorLeading) { _ in
+                                hasQuery && song.id == visibleTracks.last?.id ? 0 : 60
+                            }
+                            .alignmentGuide(.listRowSeparatorTrailing) { $0.width }
+                            .swipeActions(edge: .leading) {
+                                Button("插播", systemImage: "text.line.first.and.arrowtriangle.forward") {
+                                    songActions.playNext(song)
+                                    songActions.notify(.playingNext)
+                                }
+                                    .labelStyle(.iconOnly)
+                                    .tint(.indigo)
+                            }
+                            .modifier(PlaylistTrailingSwipe(song: song, canRemove: !playlist.isReadOnly) {
+                                withAnimation { library.removeSong(song.id, from: playlistID) }
+                            })
+                    }
+                    if query.isEmpty && !playlist.isReadOnly {
+                        addMusicRow
+                            .listRowInsets(EdgeInsets(top: 4, leading: 20, bottom: 4, trailing: 20))
+                            .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
+                            .alignmentGuide(.listRowSeparatorTrailing) { $0.width }
+                    }
                 }
-                if query.isEmpty && !playlist.isReadOnly {
-                    addMusicRow
-                        .listRowInsets(EdgeInsets(top: 4, leading: 20, bottom: 4, trailing: 20))
-                        .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
-                        .alignmentGuide(.listRowSeparatorTrailing) { $0.width }
-                }
-            }
-            .listSectionSeparator(.hidden, edges: .top)
-            .listSectionSeparator(.visible, edges: .bottom)
-            if query.isEmpty {
-                if !tracks.isEmpty {
-                    Text(library.onlineHasMore.contains(playlistID)
-                         ? "\(library.onlineTrackCounts[playlistID] ?? tracks.count)首歌"
-                         : "\(tracks.count)首歌，\(displayed.totalDuration / 60)分钟")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .padding(.top, 14)
-                        .padding(.bottom, 30)
-                        .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
-                }
+                .listSectionSeparator(.hidden, edges: .top)
+                .listSectionSeparator(.visible, edges: .bottom)
+                if query.isEmpty {
+                    if !tracks.isEmpty {
+                        Text(library.onlineHasMore.contains(playlistID)
+                             ? "\(library.onlineTrackCounts[playlistID] ?? tracks.count)首歌"
+                             : "\(tracks.count)首歌，\(displayed.totalDuration / 60)分钟")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .padding(.top, 14)
+                            .padding(.bottom, 30)
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
+                    }
 
+                }
             }
+            .listRowBackground(pageBackground)
         }
         .listStyle(.plain)
         .listSectionSpacing(0)
         .environment(\.defaultMinListRowHeight, 0)
         .scrollContentBackground(.hidden)
-        .background(Color(.systemBackground))
+        .background(pageBackground)
+        .environment(\.colorScheme, preparedBackdrop?.colorScheme ?? colorScheme)
+        .toolbarColorScheme(preparedBackdrop?.colorScheme, for: .navigationBar)
         .libraryTitleDisplayMode(.inline)
         .modifier(PlaylistRootChrome(isRoot: chrome?.isRoot == true))
         .libraryRootAccountButton()

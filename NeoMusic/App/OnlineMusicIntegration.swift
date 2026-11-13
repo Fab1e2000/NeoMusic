@@ -256,7 +256,7 @@ final class OnlineMusicIntegration {
             let songsChanged = LocalLibrary.songLibrary.replaceOnline(songs)
             let playlists = music.playlists.filter { !$0.isFavorites }.enumerated().map { index, value in
                 var item = LibraryPlaylistItem(id: "netease-playlist:\(owner):\(value.id)", title: value.title,
-                    artwork: artwork(value.artworkURL, music: music, placeholder: .playlist), addedOrder: music.playlists.count - index,
+                    artwork: value.creatorID == owner ? artwork(value.artworkURL, music: music, placeholder: .playlist) : HomeMusicIntegration.playlistArtwork(id: value.id, home: account.home), addedOrder: music.playlists.count - index,
                     sourceOwnerID: ownerID, subtitle: value.creator)
                 item.addedAt = value.createTime
                 item.updatedAt = value.updateTime
@@ -336,7 +336,7 @@ final class OnlineMusicIntegration {
             }
         }
         var covers: [String: Artwork] = [:]
-        for item in music.playlists {
+        for item in music.playlists where item.creatorID == owner {
             if let remote = item.artworkURL, urls.contains(remote) {
                 covers["netease-playlist:\(owner):\(item.id)"] = artwork(remote, music: music, placeholder: .playlist)
             }

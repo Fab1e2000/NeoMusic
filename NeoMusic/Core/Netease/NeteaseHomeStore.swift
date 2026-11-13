@@ -817,6 +817,26 @@ import Observation
     }
 
     /// Browsing refreshes the displayed page; playback consumes the selected snapshot.
+    func playlistArtworkFile(id: Int64) async throws -> URL? {
+        let revision = generation
+        _ = try await restoreCachedDetail(id: id)
+        _ = try await joinDetail(id)
+        let detail: NeteasePlaylistDetail
+        if let cached = cache.details[id], cached.orderedTrackIDs.isEmpty || cached.nextOffset > 0 { detail = cached }
+        else {
+            let credential = credential
+            detail = try await fetchDetail(id: id, preloadArtwork: false) { [client] in
+                try await client.detail(id: id, credential: credential, trackLimit: 1)
+            }
+        }
+        try Task.checkCancellation()
+        guard generation == revision, let remote = detail.displayArtworkURL(ownerID: userID) else { return nil }
+        let file = await cachedArtworkFile(remote)
+        try Task.checkCancellation()
+        guard generation == revision else { throw CancellationError() }
+        return file
+    }
+
     func detail(id: Int64, force: Bool = false) async throws -> NeteasePlaylistDetail {
         try Task.checkCancellation()
         _ = try await restoreCachedDetail(id: id)

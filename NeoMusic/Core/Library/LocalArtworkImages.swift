@@ -31,8 +31,17 @@ import ImageIO
         images.object(forKey: url as NSURL)?.image(for: pixels, allowingSmaller: true)
     }
 
+    private static var resolvedArtwork: [String: URL] = [:]
+
+    static func registerResolvedArtwork(_ id: String, url: URL) { resolvedArtwork[id] = url }
+
     static func cachedBackdrop(for artwork: Artwork) -> AlbumArtworkBackdrop? {
-        guard case .file(let url) = artwork else { return nil }
+        let url: URL
+        switch artwork {
+        case .file(let file): url = file
+        case .deferred(let id, _): guard let file = resolvedArtwork[id] else { return nil }; url = file
+        default: return nil
+        }
         return images.object(forKey: url as NSURL)?.backdrop
     }
 

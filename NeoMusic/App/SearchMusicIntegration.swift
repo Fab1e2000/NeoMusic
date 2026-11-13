@@ -235,7 +235,7 @@ final class SearchMusicIntegration {
     private func mapItem(_ resource: NeteaseSearchResource, retainingPreviousArtwork: Bool) -> MusicSearchItem {
         resources[resource.id] = resource
         let kind = MusicSearchKind(rawValue: resource.kind.rawValue) ?? .song
-        let cover = artwork(resource.artworkURL, id: resource.id)
+        let cover = resource.kind == .playlist ? HomeMusicIntegration.playlistArtwork(id: resource.resourceID, home: account.home) : artwork(resource.artworkURL, id: resource.id)
         var song: LibrarySongItem?
         if let value = resource.song {
             let id = "netease:\(account.profile.map { String($0.userID) } ?? "search-guest"):\(value.id)"

@@ -175,6 +175,14 @@ import Observation
             }
         }
     }
+    static func playlistArtwork(id: Int64, home: NeteaseHomeStore?) -> Artwork {
+        guard let home else { return .playlist }
+        if let detail = home.cachedDetail(id: id),
+           let remote = detail.displayArtworkURL(ownerID: home.userID),
+           let file = home.cachedArtworkURL(remote: remote) { return .file(file) }
+        return .deferred(id: "home-playlist:\(home.sessionRevision.uuidString):\(id)", placeholder: .playlist)
+    }
+
     private func artwork(_ remote: URL?, placeholder: ArtworkPlaceholder = .playlist) -> Artwork {
         guard let remote, let home = account.home else { return placeholder == .playlist ? .playlist : .missing }
         if let file = home.cachedArtworkURL(remote: remote) { return .file(file) }
@@ -189,6 +197,10 @@ import Observation
     func cachedArtworkFile(for id: String) async -> URL? {
         guard let home = account.home, home.userID == account.profile?.userID, !Task.isCancelled else { return nil }
         let revision = home.sessionRevision, owner = home.userID
+        let playlistPrefix = "home-playlist:\(revision.uuidString):"
+        if id.hasPrefix(playlistPrefix), let number = Int64(id.dropFirst(playlistPrefix.count)) {
+            return try? await home.playlistArtworkFile(id: number)
+        }
         let prefix = "home:\(revision.uuidString):"
         guard id.hasPrefix(prefix), let url = URL(string: String(id.dropFirst(prefix.count))) else { return nil }
         let file = await home.cachedArtworkFile(url)
@@ -243,7 +255,7 @@ import Observation
         if model.featuredError != account.home?.dailyError { model.featuredError = account.home?.dailyError }
         if model.recommendationsError != account.home?.recommendationsError { model.recommendationsError = account.home?.recommendationsError }
         let recommendations: [HomeContentItem] = (account.home?.userID == account.profile?.userID ? account.home?.recommendations ?? [] : []).map {
-            .init(id: String($0.id), title: $0.title, subtitle: $0.creator, artwork: artwork($0.artworkURL), action: .navigate(.playlist("home:playlist:\($0.id)")))
+            .init(id: String($0.id), title: $0.title, subtitle: $0.creator, artwork: Self.playlistArtwork(id: $0.id, home: account.home), action: .navigate(.playlist("home:playlist:\($0.id)")))
         }
         if model.recommendations != recommendations { model.recommendations = recommendations }
         updateRecent()
@@ -302,7 +314,7 @@ import Observation
             case .onlinePlaylist:
                 let id = reference.id.split(separator: ":").last.map(String.init) ?? reference.id
                 route = .playlist("home:playlist:\(id)")
-                cover = Int64(id).flatMap { account.home?.cachedDetail(id: $0)?.playlist.artworkURL }.map { artwork($0) } ?? .playlist
+                cover = Int64(id).map { Self.playlistArtwork(id: $0, home: account.home) } ?? .playlist
             case .daily:
                 guard let owner = reference.ownerID else { return nil }
                 route = .playlist("home:daily:\(owner):\(reference.id)")
@@ -318,7 +330,12 @@ import Observation
     private func artworkAffectsVisibleHome(_ urls: Set<URL>) -> Bool {
         guard let home = account.home, home.userID == account.profile?.userID else { return false }
         if home.displayFeedBlocks.contains(where: { block in
-            block.resources.contains { $0.artworkURL.map(urls.contains) == true }
+            block.resources.contains {
+                if let id = $0.resourceID.flatMap(Int64.init), ["list", "playlist"].contains($0.resourceType ?? "") {
+                    return home.cachedDetail(id: id)?.displayArtworkURL(ownerID: home.userID).map(urls.contains) == true
+                }
+                return $0.artworkURL.map(urls.contains) == true
+            }
         }) { return true }
         return NeteaseHomeQuickAction.allCases.contains { action in
             home.quickActionArtwork(action).map(urls.contains) == true
@@ -328,7 +345,7 @@ import Observation
     private func publishArtwork(_ urls: Set<URL>) {
         guard let home = account.home, home.userID == account.profile?.userID,
               owner == account.profile.map({ String($0.userID) }) else { return }
-        let remoteByID = Dictionary(uniqueKeysWithValues: home.recommendations.map { (String($0.id), $0.artworkURL) })
+        let remoteByID = Dictionary(uniqueKeysWithValues: home.recommendations.map { (String($0.id), home.cachedDetail(id: $0.id)?.displayArtworkURL(ownerID: home.userID)) })
         for index in model.recommendations.indices {
             if let remote = remoteByID[model.recommendations[index].id] ?? nil, urls.contains(remote) {
                 let cover = artwork(remote)
@@ -346,7 +363,7 @@ import Observation
         var covers: [String: Artwork] = [:]
         for (id, value) in loaded {
             if id.hasPrefix("home:playlist:"), let number = Int64(id.split(separator: ":").last ?? ""),
-               let remote = home.cachedDetail(id: number)?.playlist.artworkURL, urls.contains(remote) {
+               let remote = home.cachedDetail(id: number)?.displayArtworkURL(ownerID: home.userID), urls.contains(remote) {
                 let cover = artwork(remote)
                 if value.0.artwork != cover { loaded[id]?.0.artwork = cover; covers[id] = cover }
             }
@@ -379,10 +396,10 @@ import Observation
         var songImages = songs
         for item in library.playlists where item.sourceOwnerID == owner && item.id.hasPrefix(prefix) {
             guard let number = Int64(item.id.dropFirst(prefix.count)), let detail = home.cachedDetail(id: number) else { continue }
-            let playlistMatches = detail.playlist.artworkURL.map { urls?.contains($0) != false } == true
+            let playlistMatches = detail.displayArtworkURL(ownerID: home.userID).map { urls?.contains($0) != false } == true
             let songMatches = detail.songs.contains { $0.artworkURL.map { urls?.contains($0) != false } == true }
             guard playlistMatches || songMatches else { continue }
-            if let remote = detail.playlist.artworkURL, urls?.contains(remote) != false {
+            if let remote = detail.displayArtworkURL(ownerID: home.userID), urls?.contains(remote) != false {
                 if let file = home.cachedArtworkURL(remote: remote) { covers[item.id] = .file(file) }
                 else if urls?.contains(remote) == true {
                     covers[item.id] = .deferred(id: "home:\(home.sessionRevision.uuidString):\(remote.absoluteString)", placeholder: .playlist)
@@ -408,7 +425,7 @@ import Observation
         let matches = home?.userID == account.profile?.userID
         let displayFeed = home.map { NeteaseHomeFeed(blocks: $0.displayFeedBlocks, hasMore: nil, cursor: nil) }
         let issues = matches ? Self.feedIssues(home) : []
-        let sections = Self.feedSections(matches ? displayFeed : nil, issues: issues, artwork: { self.artwork($0) })
+        let sections = Self.feedSections(matches ? displayFeed : nil, issues: issues, artwork: { self.artwork($0) }, playlistArtwork: { Self.playlistArtwork(id: $0, home: home) })
         if model.sections != sections { model.sections = sections }
         if model.feedIssues != issues { model.feedIssues = issues }
         publishQuickActions()
@@ -431,7 +448,7 @@ import Observation
         }
     }
 
-    static func feedSections(_ feed: NeteaseHomeFeed?, issues: [HomeFeedIssue] = [], artwork: (URL?) -> Artwork) -> [HomeContentSection] {
+    static func feedSections(_ feed: NeteaseHomeFeed?, issues: [HomeFeedIssue] = [], artwork: (URL?) -> Artwork, playlistArtwork: ((Int64) -> Artwork)? = nil) -> [HomeContentSection] {
         let sections: [HomeContentSection] = (feed?.blocks ?? []).compactMap { block in
             guard let category = block.category, !block.title.isEmpty else { return nil }
             var seen = Set<String>()
@@ -464,7 +481,7 @@ import Observation
                     case "list", "playlist":
                         seen.insert(resource.id)
                         return .init(id: resource.id, title: resource.title, subtitle: "",
-                                     artwork: artwork(resource.artworkURL), action: .navigate(.playlist("home:playlist:\(id)")))
+                                     artwork: playlistArtwork?(id) ?? artwork(resource.artworkURL), action: .navigate(.playlist("home:playlist:\(id)")))
                     default: return nil
                     }
                 }
@@ -743,9 +760,7 @@ import Observation
         detailLibrary.setExternalCollection(item: item, songs: songs.map(mapSong), error: clearError ? nil : detailLibrary.onlineErrors[id])
     }
     private func applyDetail(_ detail: NeteasePlaylistDetail, id: String, clearError: Bool) {
-        let existing = detailLibrary.playlist(id)
-        let cover = detail.playlist.artworkURL == nil && existing?.sourceOwnerID == owner
-            ? existing?.artwork ?? .playlist : artwork(detail.playlist.artworkURL)
+        let cover = Self.playlistArtwork(id: detail.playlist.id, home: account.home)
         var item = LibraryPlaylistItem(id: id, title: detail.playlist.title, artwork: cover, sourceOwnerID: owner, subtitle: detail.playlist.creator)
         item.isReadOnlyContent = true
         loaded[id] = (item, detail.songs)

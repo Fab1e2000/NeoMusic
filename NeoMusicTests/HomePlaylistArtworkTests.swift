@@ -4,6 +4,27 @@ import SwiftUI
 @testable import NeoMusic
 
 @MainActor final class HomePlaylistArtworkTests: XCTestCase {
+    func testPlaylistCoverUsesOriginalFirstTrackAndPreservesCreatorsCover() {
+        let cover = URL(string: "https://example.com/custom.jpg")!
+        let first = URL(string: "https://example.com/first.jpg")!
+        let second = URL(string: "https://example.com/second.jpg")!
+        let playlist = NeteaseMusicPlaylist(id: 12, title: "List", creator: "Owner", creatorID: 42,
+            artworkURL: cover, trackCount: 2, isFavorites: false)
+        let a = NeteaseMusicSong(id: 1, title: "A", artist: "Artist", album: "Album", artworkURL: first, duration: 10)
+        let b = NeteaseMusicSong(id: 2, title: "B", artist: "Artist", album: "Album", artworkURL: second, duration: 10)
+        var detail = NeteasePlaylistDetail(playlist: playlist, songs: [b, a], addedTimes: [:], trackIDs: [1, 2])
+        XCTAssertEqual(detail.displayArtworkURL(ownerID: 7), first)
+        XCTAssertEqual(detail.displayArtworkURL(ownerID: nil), first)
+        XCTAssertEqual(detail.displayArtworkURL(ownerID: 42), cover)
+        detail.trackIDs = [2, 1]
+        XCTAssertEqual(detail.displayArtworkURL(ownerID: 7), second)
+        detail.trackIDs = [3, 2]
+        XCTAssertNil(detail.displayArtworkURL(ownerID: 7))
+        detail.trackIDs = []
+        XCTAssertNil(detail.displayArtworkURL(ownerID: 7))
+        XCTAssertEqual(detail.displayArtworkURL(ownerID: 42), cover)
+    }
+
     func testQuickActionVisibilityTracksMissingWaitingFailedAndImmediateArtwork() async throws {
         let probe = HomeArtworkVisibilityProbe(artwork: nil)
         let window = try await makeVisibilityHost(probe)

@@ -34,6 +34,11 @@ struct NeteasePlaylistDetail: Codable, Sendable {
     var loadedTrackCount: Int? = nil
 
     var orderedTrackIDs: [Int64] { trackIDs ?? songs.map(\.id) }
+    func displayArtworkURL(ownerID: Int64?) -> URL? {
+        if playlist.creatorID == ownerID { return playlist.artworkURL }
+        guard let first = orderedTrackIDs.first else { return nil }
+        return songs.first(where: { $0.id == first })?.artworkURL
+    }
     var nextOffset: Int { min(loadedTrackCount ?? songs.count, orderedTrackIDs.count) }
     var isComplete: Bool { nextOffset >= orderedTrackIDs.count }
 }

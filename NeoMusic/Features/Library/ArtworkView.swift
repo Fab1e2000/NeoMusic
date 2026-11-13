@@ -25,6 +25,7 @@ enum ArtworkPlaceholder: Equatable { case missing, playlist }
 
 struct ArtworkLoadAction {
     var handler: (@MainActor (String) -> Void)?
+    var resolve: (@MainActor (String) async -> URL?)? = nil
     @MainActor func callAsFunction(_ id: String?) {
         guard let id else { return }
         handler?(id)
@@ -158,6 +159,7 @@ private struct LoadedArtworkView: View {
     @Environment(\.artworkLoadAction) private var loadArtwork
     @State private var image: UIImage?
     @State private var imageURL: URL?
+    @State private var resolvedURL: URL?
     @State private var placeholderKind: ArtworkPlaceholder
     @State private var initialArtwork: Artwork?
 
@@ -180,7 +182,7 @@ private struct LoadedArtworkView: View {
         }
     }
 
-    private var url: URL? { if case .file(let url) = artwork { url } else { nil } }
+    private var url: URL? { if case .file(let url) = artwork { url } else { resolvedURL } }
     private var currentPlaceholder: ArtworkPlaceholder {
         if case .deferred(_, let kind) = artwork { kind } else { placeholderKind }
     }
@@ -216,7 +218,13 @@ private struct LoadedArtworkView: View {
                 }
             }
         }
-        .task(id: artwork.loadID) { loadArtwork(artwork.loadID) }
+        .task(id: artwork.loadID) {
+            resolvedURL = nil
+            loadArtwork(artwork.loadID)
+            guard let id = artwork.loadID, let file = await loadArtwork.resolve?(id), !Task.isCancelled else { return }
+            LocalArtworkImages.registerResolvedArtwork(id, url: file)
+            resolvedURL = file
+        }
         .onChange(of: artwork) {
             if case .deferred(_, let kind) = artwork { placeholderKind = kind }
         }

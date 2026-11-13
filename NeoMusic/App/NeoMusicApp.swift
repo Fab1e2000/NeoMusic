@@ -84,12 +84,12 @@ struct NeoMusicApp: App {
             .environment(\.homeMusicIntegration, home)
             .environment(\.artistMusicIntegration, artists)
             .environment(\.searchMusicIntegration, search)
-            .environment(\.artworkLoadAction, ArtworkLoadAction { id in
+            .environment(\.artworkLoadAction, ArtworkLoadAction(handler: { id in
                 home.requestArtwork(for: id)
                 artists.requestArtwork(for: id)
                 integration.requestArtwork(for: id)
                 search.requestArtwork(for: id)
-            })
+            }, resolve: { id in await home.cachedArtworkFile(for: id) }))
     }
 
     #if DEBUG
