@@ -30,7 +30,6 @@ struct NowPlayingLyricsPage: View {
     let isActive: Bool
     let presentation: NowPlayingLyricsPresentation
     let isInterfaceHidden: Bool
-    let playerFrame: CGRect
     @Environment(ReferencePlayerState.self) private var player
     @State private var lastActiveLineID: Int?
     @State private var loadingFeedback = NowPlayingLyricsLoadingFeedback()
@@ -50,11 +49,9 @@ struct NowPlayingLyricsPage: View {
         artworkNamespace: Namespace.ID,
         usesArtworkTransition: Bool = true,
         showsSongHeader: Bool = true,
-        playerFrame: CGRect,
         onInterfaceInteraction: (() -> Void)? = nil,
         onInterfaceVisibilityChange: ((Bool) -> Void)? = nil
     ) {
-        self.playerFrame = playerFrame
         self.song = song
         self.lyrics = lyrics
         self.errorMessage = errorMessage
@@ -108,11 +105,10 @@ struct NowPlayingLyricsPage: View {
                     ContentUnavailableView("暂无歌词", systemImage: "quote.bubble")
                 } else if lyrics.isTimed {
                     AppleMusicLocalLyricsView(
-                        lyrics: lyrics, playerFrame: playerFrame, activeID: lastActiveLineID,
+                        lyrics: lyrics, activeID: lastActiveLineID,
                         bottomOverlayHeight: appleMusicBottomOverlayHeight, isActive: isActive,
                         isInterfaceHidden: Binding(get: { isInterfaceHidden }, set: { onInterfaceVisibilityChange?(!$0) }),
-                        onSeek: { player.seek(to: $0) },
-                        playerCoordinateSpace: .named(NowPlayingContentCoordinateSpace.name)
+                        onSeek: { player.seek(to: $0) }
                     )
                 } else {
                     ScrollView {

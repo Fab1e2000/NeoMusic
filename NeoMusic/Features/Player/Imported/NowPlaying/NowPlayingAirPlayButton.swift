@@ -5,21 +5,22 @@ import AVKit
 struct ReferenceAirPlayButton: View {
     var opacity: Double = 0.72
     @State private var route = ReferenceAudioOutputRoute()
-    @Environment(\.playerArtistEDREnabled) private var edrEnabled
-    @Environment(\.nowPlayingBackdropImage) private var backdrop
-    @Environment(\.nowPlayingUndimmedBackdropImage) private var undimmed
-    @Environment(\.nowPlayingBackdropAnchor) private var anchor
-    private var usesEDR: Bool { edrEnabled && (undimmed ?? backdrop) != nil && anchor != nil && !route.output.isAirPlay }
 
     var body: some View {
-        ZStack {
-            ReferenceAirPlayRoutePicker(opacity: opacity, hidesGlyph: usesEDR)
-            if usesEDR {
-                PlayerEDRControlLayer(shape: .symbol("airplayaudio", 18, 1), role: .buttons)
-                    .allowsHitTesting(false)
-                    .accessibilityHidden(true)
+        ReferenceAirPlayRoutePicker(opacity: opacity)
+            .scaleEffect(1.27)
+            .overlay(alignment: .top) {
+                if route.output.isExternal {
+                    Text(route.output.name)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white.opacity(opacity))
+                        .lineLimit(1)
+                        .frame(width: 180, height: 18)
+                        .offset(y: 47)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
             }
-        }
         .accessibilityLabel("音频输出")
         .accessibilityValue(route.output.name)
         .accessibilityHint("选择播放设备")
@@ -29,10 +30,12 @@ struct ReferenceAirPlayButton: View {
 struct ReferenceAudioOutput {
     let name: String
     let isAirPlay: Bool
+    let isExternal: Bool
 
     init(outputs: [(port: AVAudioSession.Port, name: String)]) {
         name = outputs.map(\.name).filter { !$0.isEmpty }.joined(separator: "，")
         isAirPlay = outputs.contains { $0.port == .airPlay }
+        isExternal = outputs.contains { $0.port != .builtInSpeaker && $0.port != .builtInReceiver }
     }
 }
 
@@ -64,8 +67,6 @@ private final class ReferenceAudioOutputRoute {
 
 private struct ReferenceAirPlayRoutePicker: UIViewRepresentable {
     let opacity: Double
-    /// EDR 图层负责绘制时，保留系统按钮的原有动作。
-    let hidesGlyph: Bool
 
     func makeUIView(context: Context) -> AVRoutePickerView {
         let picker = AVRoutePickerView()
@@ -75,7 +76,7 @@ private struct ReferenceAirPlayRoutePicker: UIViewRepresentable {
 
     /// 播放页固定深色，用主题色的深色档，不随窗口外观取浅色档。
     func updateUIView(_ picker: AVRoutePickerView, context: Context) {
-        picker.tintColor = hidesGlyph ? .clear : UIColor.white.withAlphaComponent(opacity)
-        picker.activeTintColor = hidesGlyph ? .clear : UIColor(DizzyPalette.accentOnDark)
+        picker.tintColor = UIColor.white.withAlphaComponent(opacity)
+        picker.activeTintColor = UIColor.white.withAlphaComponent(opacity)
     }
 }

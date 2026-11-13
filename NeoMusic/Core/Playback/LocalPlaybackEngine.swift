@@ -16,6 +16,7 @@ import Observation
     @ObservationIgnored private let activateSession: @Sendable () async throws -> Bool
     @ObservationIgnored private(set) var activation: Task<Void, Never>?
     @ObservationIgnored private var playRequested = false
+    @ObservationIgnored private var reportsActivationFailure = true
 
     enum SeekSource: String, Sendable {
         case interaction, remote, previous, load, restore, resource
@@ -125,14 +126,18 @@ import Observation
                 PerformanceDiagnostics.restoration("player.timeJump generation=\(self.generation) current=\(item.currentTime().seconds) seeking=\(self.pendingSeek != nil)")
             }
         })
-        notifications.append(NotificationCenter.default.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
-            let kind = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
-            let options = note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
+        let session = AVAudioSession.sharedInstance()
+        notifications.append(NotificationCenter.default.addObserver(forName: AVAudioSession.didBecomeInactiveNotification, object: session, queue: .main) { [weak self] note in
+            guard let context = note.userInfo?[AVAudioSession.deactivationContextKey] as? AVAudioSession.DeactivationContext,
+                  context.source == .system else { return }
             MainActor.assumeIsolated {
-                if kind == AVAudioSession.InterruptionType.began.rawValue { self?.handleInterruption(began: true) }
-                else if kind == AVAudioSession.InterruptionType.ended.rawValue {
-                    self?.handleInterruption(began: false, shouldResume: AVAudioSession.InterruptionOptions(rawValue: options).contains(.shouldResume))
-                }
+                self?.handleInterruption(began: true)
+            }
+        })
+        notifications.append(NotificationCenter.default.addObserver(forName: AVAudioSession.resumptionRecommendationNotification, object: session, queue: .main) { [weak self] note in
+            guard let context = note.userInfo?[AVAudioSession.resumptionContextKey] as? AVAudioSession.ResumptionContext else { return }
+            MainActor.assumeIsolated {
+                self?.handleInterruption(began: false, shouldResume: context.recommendation == .shouldResume)
             }
         })
         notifications.append(NotificationCenter.default.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] note in
@@ -277,18 +282,23 @@ import Observation
                 continuation.resume(returning: finished)
             }
             bindClock()
-            if playRequested && shouldResume() { play() }
+            if playRequested && shouldResume() { continuePlayback() }
             else { pause() }
         }
         guard generation == revision, !Task.isCancelled else { throw CancellationError() }
         // A later seek acts directly on the new player and owns its completion.
         guard seekRevision == replacementSeek else { return }
         guard finished else { throw URLError(.cannotDecodeContentData) }
-        if playRequested && shouldResume() { play() }
+        if playRequested && shouldResume() { continuePlayback() }
         else { pause() }
     }
 
     func play() {
+        reportsActivationFailure = true
+        continuePlayback()
+    }
+
+    private func continuePlayback() {
         guard player.currentItem != nil, error == nil else { return }
         playRequested = true
         if isPlaying {
@@ -307,8 +317,7 @@ import Observation
                 guard !Task.isCancelled, let self, self.generation == token, self.playRequested else { return }
                 self.activation = nil; self.isActivating = false
                 guard activated else {
-                    self.error = "无法激活音频会话"
-                    self.pause()
+                    self.activationDidFail()
                     return
                 }
                 self.isPlaying = true
@@ -318,11 +327,15 @@ import Observation
             } catch {
                 guard !Task.isCancelled, let self, self.generation == token, self.playRequested else { return }
                 self.activation = nil; self.isActivating = false
-                self.error = error.localizedDescription
-                self.pause()
+                self.activationDidFail()
             }
         }
         onStateChange?()
+    }
+
+    private func activationDidFail() {
+        if reportsActivationFailure { error = "暂时无法播放，请稍后再试" }
+        pause()
     }
 
     @concurrent private static func activateAudioSession() async throws -> Bool {
@@ -359,7 +372,10 @@ import Observation
         } else {
             let resume = interrupted && resumeAfterInterruption && shouldResume
             interrupted = false; resumeAfterInterruption = false
-            if resume { play() }
+            if resume {
+                reportsActivationFailure = false
+                continuePlayback()
+            }
         }
     }
 
@@ -380,7 +396,7 @@ import Observation
         observeStatus(item)
         if continuing {
             if isPlaying { player.play() }
-            else { play() }
+            else { continuePlayback() }
         }
         onAdvanced?()
         return true
@@ -427,7 +443,7 @@ import Observation
                 if length.isFinite { self.duration = max(0, length) }
                 self.isLoading = item.status == .unknown
                 if finished {
-                    if self.playRequested { self.play() }
+                    if self.playRequested { self.continuePlayback() }
                     else { self.onStateChange?() }
                 } else {
                     self.error = item.error?.localizedDescription ?? "无法定位到播放位置，请重试"

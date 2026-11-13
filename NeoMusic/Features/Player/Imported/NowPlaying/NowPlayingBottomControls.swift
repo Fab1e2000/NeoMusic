@@ -40,7 +40,7 @@ struct NowPlayingBottomControls: View {
                 }
                 .frame(height: 62)
             }
-            .padding(.top, max(0, layout.controlsY(587) - 26))
+            .padding(.top, max(0, layout.controlsY(571) - 26))
             .fixedSize(horizontal: false, vertical: true)
         } else {
             referenceLayout
@@ -53,22 +53,22 @@ struct NowPlayingBottomControls: View {
                 interfaceLayer(.progress) {
                     NowPlayingProgressControl(song: song)
                 }
-                .position(x: proxy.size.width / 2, y: layout.controlsY(587))
+                .position(x: proxy.size.width / 2, y: layout.controlsY(571))
 
                 interfaceLayer(.transport) {
                     NowPlayingTransportControls()
                 }
-                .position(x: proxy.size.width / 2, y: layout.controlsY(664))
+                .position(x: proxy.size.width / 2, y: layout.controlsY(652.5))
 
                 interfaceLayer(.volume) {
                     NowPlayingVolumeControl()
                 }
-                .position(x: proxy.size.width / 2, y: layout.controlsY(756.5))
+                .position(x: proxy.size.width / 2, y: layout.controlsY(744.5))
 
                 interfaceLayer(.pageSelector) {
                     NowPlayingPageSelector(page: $page, hasLyrics: hasLyrics)
                 }
-                .position(x: proxy.size.width / 2, y: layout.controlsY(811.23))
+                .position(x: proxy.size.width / 2, y: layout.controlsY(796))
             }
         }
         .frame(height: Self.overlayHeight)

@@ -189,7 +189,6 @@ private struct NativePlayerMotionContent: View {
         .transaction {
             if !animates { $0.animation = nil; $0.disablesAnimations = true }
         }
-        .onGeometryChange(for: CGSize.self) { $0.size } action: { geometry.contentSize = $0 }
         .task(id: visualsActive) {
             if visualsActive { await PlayerEDRResources.shared.prepare() }
         }
@@ -310,7 +309,6 @@ private struct NativePlayerMotionContent: View {
             errorMessage: simulatesLyricsLoading ? nil : lyrics.error,
             isActive: visualsActive && isVisible, isInterfaceHidden: hidesControls,
             artworkNamespace: artworkNamespace, showsSongHeader: false,
-            playerFrame: geometry.contentFrame,
             onInterfaceVisibilityChange: setLyricsControlsVisible
         )
         .id(song.id)

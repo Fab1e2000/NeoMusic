@@ -78,7 +78,6 @@ struct ReferenceNowPlayingView: View {
         .task(id: visualsActive) {
             if visualsActive { await PlayerEDRResources.shared.prepare() }
         }
-        .onGeometryChange(for: CGSize.self) { $0.size } action: { geometryState.contentSize = $0 }
         .task(id: "\(player.currentTrack?.id ?? "")/\(library.contentRevision)/\(lyricsModel.revision)") {
             guard let track = player.currentTrack else { return }
             await lyricsModel.load(track: track, library: library, player: player)
@@ -359,7 +358,6 @@ struct ReferenceNowPlayingView: View {
             song: song, lyrics: lyricsContent.lyrics, errorMessage: lyricsContent.error,
             isActive: visualsActive && page == .lyrics, isInterfaceHidden: hidesLyricsControls,
             artworkNamespace: pageArtworkNamespace, showsSongHeader: false,
-            playerFrame: geometryState.contentFrame,
             onInterfaceVisibilityChange: setAppleMusicLyricsControlsVisible
         )
         .accessibilityAction(named: lyricsInterfaceAccessibilityActionName) {

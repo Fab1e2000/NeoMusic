@@ -184,7 +184,8 @@ struct FavoriteButton: View {
             if playerStyle {
                 Image(systemName: liked ? "star.fill" : "star")
                     .resizable().scaledToFit()
-                    .frame(width: 19.14, height: 19.14)
+                    .frame(width: 22.5, height: 22.5)
+                    .offset(x: -0.333, y: -1)
                     .foregroundStyle(liked ? DizzyPalette.accentOnDark : .white)
                     .frame(width: 44, height: 44)
             } else { Label(liked ? "取消喜欢" : "喜欢", systemImage: "star.fill") }

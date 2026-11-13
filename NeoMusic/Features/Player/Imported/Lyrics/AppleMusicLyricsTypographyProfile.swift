@@ -11,6 +11,6 @@ nonisolated struct AppleMusicLyricsTypographyProfile: Equatable, Sendable {
     let primaryFontSize: Double
 
     static let iOS26_6 = Self(
-        primaryFontSize: 36
+        primaryFontSize: 34
     )
 }

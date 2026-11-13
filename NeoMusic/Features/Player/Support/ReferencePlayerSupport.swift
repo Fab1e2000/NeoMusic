@@ -36,7 +36,6 @@ actor ReferenceLyricsReader {
     }
 }
 
-enum LyricsFocus { static let storageKey = "preview.lyrics.focusPosition" }
 enum ImmersiveMode { static let storageKey = "preview.appearance.immersive" }
 
 /// Only the source palette entries actually consumed by the player are carried over.

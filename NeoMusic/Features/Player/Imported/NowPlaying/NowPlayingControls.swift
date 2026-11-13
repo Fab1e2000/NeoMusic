@@ -77,21 +77,49 @@ struct NowPlayingProgressControl: View {
 
 /// Only the slider and time readout subscribe to the periodic playback clock.
 /// The quality control and surrounding page layout retain their existing inputs.
-private struct NowPlayingProgressSlider: View {
+private struct NowPlayingProgressSlider: UIViewRepresentable {
     let maximum: TimeInterval
     @Environment(ReferencePlayerState.self) private var player
-    @State private var scrub = NowPlayingProgressScrub()
 
-    var body: some View {
-        Slider(value: Binding(get: { min(player.progress, maximum) },
-                              set: { scrub.propose($0) { player.seek(to: $0) } }),
-               in: 0...maximum,
-               onEditingChanged: { scrub.setEditing($0) })
-            .sliderThumbVisibility(.hidden)
-            .tint(.white)
-            .frame(height: 44)
-            .accessibilityLabel("播放进度")
-            .accessibilityValue("\(formatPlaybackTime(player.progress))，共 \(formatPlaybackTime(maximum))")
+    func makeCoordinator() -> Coordinator { Coordinator(player: player) }
+
+    func makeUIView(context: Context) -> UISlider {
+        let slider = UISlider()
+        slider.sliderStyle = .thumbless
+        slider.minimumTrackTintColor = UIColor.white.withAlphaComponent(0.5)
+        slider.maximumTrackTintColor = UIColor.white.withAlphaComponent(0.25)
+        slider.addTarget(context.coordinator, action: #selector(Coordinator.begin), for: .touchDown)
+        slider.addTarget(context.coordinator, action: #selector(Coordinator.changed), for: .valueChanged)
+        slider.addTarget(context.coordinator, action: #selector(Coordinator.end),
+                         for: [.touchUpInside, .touchUpOutside, .touchCancel])
+        slider.accessibilityLabel = "播放进度"
+        return slider
+    }
+
+    func updateUIView(_ slider: UISlider, context: Context) {
+        context.coordinator.player = player
+        slider.maximumValue = Float(maximum)
+        if !slider.isTracking { slider.value = Float(min(player.progress, maximum)) }
+        slider.accessibilityValue = "\(formatPlaybackTime(player.progress))，共 \(formatPlaybackTime(maximum))"
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UISlider, context: Context) -> CGSize? {
+        CGSize(width: proposal.width ?? 338, height: 44)
+    }
+
+    @MainActor final class Coordinator: NSObject {
+        var player: ReferencePlayerState
+        private let scrub = NowPlayingProgressScrub()
+        init(player: ReferencePlayerState) { self.player = player }
+        @objc func begin() { scrub.setEditing(true) }
+        @objc func end() { scrub.setEditing(false) }
+        @objc func changed(_ slider: UISlider) {
+            // UIKit emits valueChanged for user input, including VoiceOver;
+            // updating the control from the playback clock emits no event.
+            scrub.setEditing(true)
+            scrub.propose(Double(slider.value)) { player.seek(to: $0) }
+            if !slider.isTracking { scrub.setEditing(false) }
+        }
     }
 }
 
@@ -109,6 +137,7 @@ private struct NowPlayingTimeLabels: View {
         }
         .font(.system(size: fontSize, weight: .medium).monospacedDigit())
         .foregroundStyle(.white.opacity(0.5))
+        .opacity(0.85)
     }
 }
 
@@ -118,7 +147,7 @@ private func formatPlaybackTime(_ value: TimeInterval) -> String {
     return String(format: "%d:%02d", seconds / 60, seconds % 60)
 }
 
-/// Forwards a slider value only while UIKit reports that the thumb is being dragged.
+/// Forwards values only during a user-originated slider edit.
 @MainActor final class NowPlayingProgressScrub {
     private(set) var isEditing = false
 
@@ -156,7 +185,8 @@ struct NowPlayingTransportControls: View {
                     trigger: previousTrigger,
                     reducesMotion: accessibilityReduceMotion
                 )
-                .frame(width: 40.67, height: 27.39)
+                .frame(width: 40, height: 23)
+                .offset(y: -0.5)
                     .frame(width: 64, height: 64)
                     .contentShape(.circle)
             }
@@ -166,7 +196,7 @@ struct NowPlayingTransportControls: View {
                 )
             )
             .accessibilityLabel("上一首")
-            .position(x: layout.x(93.75), y: 41)
+            .position(x: layout.x(94.25), y: 41)
 
             Button {
                 player.togglePlayback()
@@ -176,7 +206,8 @@ struct NowPlayingTransportControls: View {
                         isPlaying: player.isPlaying,
                         reducesMotion: accessibilityReduceMotion
                     )
-                    .frame(width: 32, height: 40)
+                    .frame(width: player.isPlaying ? 32 : 31.67, height: player.isPlaying ? 40 : 35.67)
+                    .offset(x: player.isPlaying ? 0 : 1.8)
                     .opacity(showsLoadingIndicator ? 0 : 1)
                     .scaleEffect(showsLoadingIndicator ? 0.6 : 1)
 
@@ -222,7 +253,8 @@ struct NowPlayingTransportControls: View {
                     trigger: nextTrigger,
                     reducesMotion: accessibilityReduceMotion
                 )
-                .frame(width: 40.67, height: 27.39)
+                .frame(width: 40, height: 23)
+                .offset(y: -0.5)
                     .frame(width: 64, height: 64)
                     .contentShape(.circle)
             }
@@ -233,7 +265,7 @@ struct NowPlayingTransportControls: View {
             )
             .accessibilityLabel("下一首")
             .disabled(!player.canPlayNext)
-            .position(x: layout.x(308.25), y: 41)
+            .position(x: layout.x(307.75), y: 41)
             }
         }
         .frame(height: 82)
@@ -249,15 +281,15 @@ struct NowPlayingVolumeControl: View {
                 Image(systemName: "speaker.fill")
                     .resizable().scaledToFit()
                     .frame(width: 8, height: 13)
-                    .position(x: layout.x(39.5), y: 21)
+                    .position(x: layout.x(38.25), y: 21)
                 SystemVolumeSlider()
                     .frame(width: layout.width(279), height: 44)
-                    .position(x: proxy.size.width / 2, y: 21)
+                    .position(x: layout.x(196.5), y: 21)
                     .accessibilityLabel("系统音量")
                 Image(systemName: "speaker.wave.3.fill")
                     .resizable().scaledToFit()
                     .frame(width: 18, height: 14)
-                    .position(x: layout.x(362.5), y: 21)
+                    .position(x: layout.x(358.5), y: 21)
             }
         }
         .foregroundStyle(.white.opacity(0.65))
@@ -269,8 +301,6 @@ final class AlignedSystemVolumeView: MPVolumeView {
     // MPVolumeView can restore its own thumb after the inner UISlider lays out.
     // Configure its public appearance API as well, including the pressed state.
     private let hiddenThumb = UIGraphicsImageRenderer(size: CGSize(width: 1, height: 1)).image { _ in }
-    private let filledTrack = AlignedSystemVolumeView.trackImage(alpha: 1)
-    private let emptyTrack = AlignedSystemVolumeView.trackImage(alpha: 0.22)
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -282,18 +312,9 @@ final class AlignedSystemVolumeView: MPVolumeView {
         configureAppearance()
     }
 
-    private static func trackImage(alpha: CGFloat) -> UIImage {
-        UIGraphicsImageRenderer(size: CGSize(width: 8, height: 7)).image { _ in
-            UIColor.white.withAlphaComponent(alpha).setFill()
-            UIBezierPath(roundedRect: CGRect(x: 0, y: 0, width: 8, height: 7), cornerRadius: 3.5).fill()
-        }.resizableImage(withCapInsets: UIEdgeInsets(top: 0, left: 3.5, bottom: 0, right: 3.5))
-    }
-
     private func configureAppearance() {
         for state: UIControl.State in [.normal, .highlighted, .disabled, .selected] {
             setVolumeThumbImage(hiddenThumb, for: state)
-            setMinimumVolumeSliderImage(filledTrack, for: state)
-            setMaximumVolumeSliderImage(emptyTrack, for: state)
         }
     }
 
@@ -301,6 +322,8 @@ final class AlignedSystemVolumeView: MPVolumeView {
         super.layoutSubviews()
         for slider in subviews.compactMap({ $0 as? UISlider }) {
             if slider.sliderStyle != .thumbless { slider.sliderStyle = .thumbless }
+            slider.minimumTrackTintColor = UIColor.white.withAlphaComponent(0.5)
+            slider.maximumTrackTintColor = UIColor.white.withAlphaComponent(0.25)
             for state: UIControl.State in [.normal, .highlighted, .disabled, .selected] {
                 if slider.thumbImage(for: state) !== hiddenThumb { slider.setThumbImage(hiddenThumb, for: state) }
             }
@@ -358,14 +381,12 @@ struct NowPlayingPageSelector: View {
                 pageButton(page: .lyrics, systemImage: "quote.bubble", accessibilityLabel: "歌词")
                     .disabled(!hasLyrics && page != .lyrics)
                     .opacity(hasLyrics || page == .lyrics ? 1 : 0.32)
-                    .position(x: layout.x(86.75), y: 25)
-                ReferenceAirPlayButton(opacity: 0.72)
+                    .position(x: layout.x(87), y: 25)
+                ReferenceAirPlayButton(opacity: 0.5)
                     .frame(width: 44, height: 44)
-                    .scaleEffect(1.27)
                     .position(x: proxy.size.width / 2, y: 25)
-                pageButton(page: .queue, systemImage: "list.bullet", accessibilityLabel: "继续播放",
-                           badgeSystemImage: page == .queue ? nil : player.queueModeBadgeSystemImage)
-                    .position(x: layout.x(315.25), y: 25)
+                pageButton(page: .queue, systemImage: "list.bullet", accessibilityLabel: "继续播放")
+                    .position(x: layout.x(315), y: 25)
             }
         }
         .frame(height: 50)
@@ -375,8 +396,7 @@ struct NowPlayingPageSelector: View {
     private func pageButton(
         page destination: NowPlayingPage,
         systemImage: String,
-        accessibilityLabel: String,
-        badgeSystemImage: String? = nil
+        accessibilityLabel: String
     ) -> some View {
         let isSelected = page == destination
 
@@ -400,39 +420,22 @@ struct NowPlayingPageSelector: View {
                     .resizable()
                     .symbolVariant(isSelected ? .fill : .none)
                     .scaledToFit()
-                    .frame(width: 22.5, height: 23.5)
+                    .frame(width: destination == .queue ? 20.67 : 22.5,
+                           height: destination == .queue ? 15.33 : 23.5)
                     .frame(width: 44, height: 44)
                     .foregroundStyle(
                         isSelected
                             ? .black.opacity(0.68)
-                            : .white.opacity(0.72)
+                            : .white.opacity(0.6)
                     )
-                    .modifier(PlayerEDRControlAvailable(shape: .symbol(systemImage, 22.5, 1), role: .buttons, isEnabled: !isSelected))
                     .background {
                         if isSelected {
-                            Circle().fill(.white.opacity(0.68))
-                                .modifier(PlayerEDRControlAvailable(shape: .circle(44), role: .buttons))
+                            Circle().fill(.white.opacity(0.5))
+                                .frame(width: 38, height: 38)
                         }
                     }
-                    .scaleEffect(isSelected && destination == .queue ? 38.0 / 44.0 : 1)
+                    .offset(y: isSelected && destination == .lyrics ? 1 : 0)
 
-                if let badgeSystemImage {
-                    Image(systemName: badgeSystemImage)
-                        .font(.system(size: 7, weight: .bold))
-                        .foregroundStyle(
-                            isSelected
-                                ? .white.opacity(0.9)
-                                : .black.opacity(0.74)
-                        )
-                        .frame(width: 15, height: 15)
-                        .background(
-                            isSelected
-                                ? .black.opacity(0.58)
-                                : .white.opacity(0.82),
-                            in: .circle
-                        )
-                        .offset(x: 3, y: 1)
-                }
             }
             .frame(width: 44, height: 44)
             .contentShape(.circle)

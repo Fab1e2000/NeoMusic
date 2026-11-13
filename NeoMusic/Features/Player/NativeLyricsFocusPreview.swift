@@ -10,15 +10,10 @@ struct NativeLyricsFocusPreview: View {
     private var activeID: Int? { lyrics.activeLine(at: time) }
 
     var body: some View {
-        GeometryReader { geometry in
-            let frame = CGRect(origin: .zero, size: geometry.size)
-            AppleMusicLocalLyricsView(lyrics: lyrics, playerFrame: frame, activeID: activeID,
-                                      bottomOverlayHeight: 0, isActive: true,
-                                      isInterfaceHidden: $isInterfaceHidden, onSeek: { time = $0 },
-                                      playerCoordinateSpace: .named("LyricsFocusPreviewPlayer"))
+        AppleMusicLocalLyricsView(lyrics: lyrics, activeID: activeID,
+                                  bottomOverlayHeight: 0, isActive: true,
+                                  isInterfaceHidden: $isInterfaceHidden, onSeek: { time = $0 })
             .padding(.horizontal, 32)
-        }
-        .coordinateSpace(name: "LyricsFocusPreviewPlayer")
         .background(.black)
         .foregroundStyle(.white)
         .preferredColorScheme(.dark)

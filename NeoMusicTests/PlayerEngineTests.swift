@@ -206,7 +206,11 @@ actor SessionActivation {
     func testFailedAndDeclinedSessionActivationStayPaused() async throws {
         let url = try audioFile(seconds: 4)
         defer { try? FileManager.default.removeItem(at: url) }
-        let results: [Result<Bool, Error>] = [.success(false), .failure(URLError(.cannotConnectToHost))]
+        let results: [Result<Bool, Error>] = [
+            .success(false),
+            .failure(URLError(.cannotConnectToHost)),
+            .failure(NSError(domain: NSOSStatusErrorDomain, code: AVAudioSession.ErrorCode.insufficientPriority.rawValue))
+        ]
         for result in results {
             let activation = SessionActivation()
             let engine = LocalPlaybackEngine(activateSession: { try await activation.activate() })
@@ -216,8 +220,93 @@ actor SessionActivation {
             try await activation.complete(with: result)
             try await waitUntil({ !engine.isActivating })
             XCTAssertFalse(engine.isPlaying)
-            XCTAssertNotNil(engine.error)
+            XCTAssertEqual(engine.error, "暂时无法播放，请稍后再试")
         }
+    }
+
+    func testAutomaticResumeFailureStaysPausedWithoutErrorAndAllowsManualRetry() async throws {
+        let url = try audioFile(seconds: 4)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let results: [Result<Bool, Error>] = [
+            .success(false),
+            .failure(NSError(domain: NSOSStatusErrorDomain, code: AVAudioSession.ErrorCode.insufficientPriority.rawValue))
+        ]
+        for result in results {
+            let activation = SessionActivation()
+            let engine = LocalPlaybackEngine(activateSession: { try await activation.activate() })
+            defer { engine.shutdown() }
+            engine.load(url: url, position: 1.25, autoplay: true)
+            try await waitUntil({ await activation.count == 1 })
+            try await activation.complete()
+            try await waitUntil({ engine.isPlaying && !engine.isLoading })
+            engine.handleInterruption(began: true)
+            let paused = engine.elapsed
+            engine.handleInterruption(began: false, shouldResume: true)
+            let automaticResume = engine.activation
+            try await waitUntil({ await activation.count == 2 })
+            try await activation.complete(1, with: result)
+            await automaticResume?.value
+            XCTAssertFalse(engine.isPlaying)
+            XCTAssertFalse(engine.isActivating)
+            XCTAssertNil(engine.error)
+            XCTAssertEqual(engine.elapsed, paused, accuracy: 0.05)
+            XCTAssertEqual(try nativePlayer(in: engine).rate, 0)
+
+            engine.play()
+            try await waitUntil({ await activation.count == 3 })
+            try await activation.complete(2)
+            try await waitUntil({ engine.isPlaying })
+            XCTAssertNil(engine.error)
+        }
+    }
+
+    func testManualPlayDuringAutomaticResumeReportsActivationFailure() async throws {
+        let url = try audioFile(seconds: 4)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let activation = SessionActivation()
+        let engine = LocalPlaybackEngine(activateSession: { try await activation.activate() })
+        defer { engine.shutdown() }
+        engine.load(url: url, autoplay: true)
+        try await waitUntil({ await activation.count == 1 })
+        try await activation.complete()
+        try await waitUntil({ engine.isPlaying && !engine.isLoading })
+        engine.handleInterruption(began: true)
+        engine.handleInterruption(began: false, shouldResume: true)
+        try await waitUntil({ await activation.count == 2 })
+        let automaticResume = engine.activation
+        engine.play()
+        try await activation.complete(1, with: .success(false))
+        await automaticResume?.value
+        XCTAssertFalse(engine.isPlaying)
+        XCTAssertFalse(engine.isActivating)
+        XCTAssertEqual(engine.error, "暂时无法播放，请稍后再试")
+        let requests = await activation.count
+        XCTAssertEqual(requests, 2)
+    }
+
+    func testUserPauseCancelsAutomaticResumeWithoutPublishingLateFailure() async throws {
+        let url = try audioFile(seconds: 4)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let activation = SessionActivation()
+        let engine = LocalPlaybackEngine(activateSession: { try await activation.activate() })
+        defer { engine.shutdown() }
+        engine.load(url: url, autoplay: true)
+        try await waitUntil({ await activation.count == 1 })
+        try await activation.complete()
+        try await waitUntil({ engine.isPlaying && !engine.isLoading })
+        engine.handleInterruption(began: true)
+        engine.handleInterruption(began: false, shouldResume: true)
+        try await waitUntil({ await activation.count == 2 })
+        let automaticResume = engine.activation
+        engine.pause()
+        try await activation.complete(1, with: .failure(URLError(.cancelled)))
+        await automaticResume?.value
+        engine.handleInterruption(began: false, shouldResume: true)
+        XCTAssertFalse(engine.isPlaying)
+        XCTAssertFalse(engine.isActivating)
+        XCTAssertNil(engine.error)
+        let requests = await activation.count
+        XCTAssertEqual(requests, 2)
     }
 
     func testCancelledSessionActivationCannotResumeAfterUserOrSystemStop() async throws {

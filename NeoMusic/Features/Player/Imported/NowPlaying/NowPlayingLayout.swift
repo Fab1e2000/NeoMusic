@@ -8,10 +8,7 @@ nonisolated enum NowPlayingContentCoordinateSpace {
 
 @Observable
 final class NowPlayingGeometry {
-    var contentSize: CGSize = .zero
     var backdropFrame: CGRect = .zero
-
-    var contentFrame: CGRect { CGRect(origin: .zero, size: contentSize) }
 }
 
 /// User-adjusted portrait layout, exported 2026-10-24 at 20:45.

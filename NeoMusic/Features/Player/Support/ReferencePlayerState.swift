@@ -44,7 +44,9 @@ struct UpcomingQueueVersion: Equatable, Sendable {
     let isDiscovery = false
     let canAutomaticallyContinue = false
     let isAutomaticContinuationEnabled = false
-    var automaticContinuationDescription: String { "接下来播放的歌曲" }
+    var automaticContinuationDescription: String {
+        model.sourceTitle.flatMap { $0.isEmpty ? nil : "来自\($0)" } ?? "接下来播放的歌曲"
+    }
     var currentQueueIndex: Int { model.currentIndex }
     var currentTrack: ReferenceTrack? { item(at: currentQueueIndex)?.track }
     var duration: Double { model.duration }

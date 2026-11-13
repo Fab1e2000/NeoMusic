@@ -44,9 +44,9 @@ extension View {
 struct NowPlayingSongHeader: View {
     static let referenceHeight: CGFloat = 72
     /// 竖屏共用头部离页面顶部（收起把手下方）的留白，参照系统音乐。
-    static let topInset: CGFloat = 11.25
+    static let topInset: CGFloat = -2.75
     /// 「继续播放」页里头部下沿到模式按钮之间多留的距离。
-    static let bottomSpacing: CGFloat = 11.75
+    static let bottomSpacing: CGFloat = 4.75
     static let height = referenceHeight
 
     /// 头部往上滚时的透明度：一开始滚就变淡，滚 30pt 淡完，几乎不会盖到顶部的收起把手。
@@ -95,6 +95,7 @@ struct NowPlayingSongHeader: View {
                         )
                         .foregroundStyle(Color.white)
                         .lineLimit(1)
+                        .offset(y: usesReferenceLayout ? 5 : 0)
 
                     NowPlayingArtistButton(track: track, interactive: interactive, lineHeight: usesReferenceLayout ? 18 : 26, fontSize: 15)
                         .font(.subheadline)

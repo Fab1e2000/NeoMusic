@@ -3,7 +3,7 @@
 import SwiftUI
 
 struct NowPlayingArtworkPage: View {
-    static let pausedArtworkScale: CGFloat = 0.74
+    static let pausedArtworkScale: CGFloat = 247.0 / 354.0
 
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @Environment(\.displayScale) private var displayScale
@@ -131,7 +131,7 @@ struct NowPlayingArtworkPage: View {
                     handledBounceGeneration = bounceGeneration
                     await animateArtworkBounce()
                 }
-                .position(x: proxy.size.width / 2, y: layout.pageY(112) + artworkSize / 2)
+                .position(x: proxy.size.width / 2, y: layout.pageY(87) + artworkSize / 2)
 
                 // 左右滑动歌名切到上一首/下一首；相邻歌名在歌名这一栏的宽度之外淡入。
                 NowPlayingTrackSwipe(song: song, pageDistance: layout.width(227) + 24) { track, interactive in
@@ -144,14 +144,14 @@ struct NowPlayingArtworkPage: View {
                             .lineLimit(1)
                             .frame(width: layout.width(227), height: 27 * textScale, alignment: .leading)
                             .contentShape(.rect)
-                            .position(x: layout.x(145.5), y: layout.pageY(503.5) - 39.5 * (textScale - 1) - controlsOverflow)
+                            .position(x: layout.x(145.5), y: layout.pageY(488.833) - 39.5 * (textScale - 1) - controlsOverflow)
 
                         NowPlayingArtistButton(track: track, interactive: interactive, lineHeight: 26 * textScale,
                                                fontSize: informationFontSize, fontSizeIsScaled: true)
                             .font(.system(size: informationFontSize))
                             .lineLimit(1)
                             .frame(width: layout.width(215), height: 26 * textScale, alignment: .leading)
-                            .position(x: layout.x(139.5), y: layout.pageY(528.5) - 13 * (textScale - 1) - controlsOverflow)
+                            .position(x: layout.x(139.5), y: layout.pageY(512.5) - 13 * (textScale - 1) - controlsOverflow)
                     }
                     .frame(width: proxy.size.width, height: proxy.size.height)
                 }
@@ -160,7 +160,7 @@ struct NowPlayingArtworkPage: View {
                     .fixedSize()
                     .frame(width: 92.25, height: 44, alignment: .trailing)
                     .contentShape(.rect)
-                    .position(x: layout.x(329.875), y: layout.pageY(517.25) - extraInformationHeight / 2 - controlsOverflow)
+                    .position(x: layout.x(329.875), y: layout.pageY(501) - extraInformationHeight / 2 - controlsOverflow)
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
             .task(id: ArtworkPrefetchKey(urls: visualsActive ? player.adjacentArtworkURLs : [], size: displayedArtworkSize, scale: displayScale)) {
@@ -216,7 +216,7 @@ struct NowPlayingArtworkFrameMeasurement: View {
                 .onGeometryChange(for: CGRect.self) {
                     $0.frame(in: .named(NowPlayingPortraitCoordinateSpace.name))
                 } action: { onFrameChange($0) }
-                .position(x: proxy.size.width / 2, y: layout.pageY(112) + artworkSize / 2)
+                .position(x: proxy.size.width / 2, y: layout.pageY(87) + artworkSize / 2)
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)

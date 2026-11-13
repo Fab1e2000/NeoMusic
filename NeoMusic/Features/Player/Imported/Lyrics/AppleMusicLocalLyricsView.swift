@@ -1,20 +1,17 @@
 // Adapted from MeloX AppleMusicLyricsView (GPL-3.0), commit
 // 1fe5fbab3f554e8529c4847fc54281a472b7b61a. Uses its default typography,
-// focus geometry, distance blur, viewport mask and press interaction.
+// distance blur, viewport mask and press interaction. Typography and focus
+// geometry follow the supplied Music references.
 // The data adapter accepts local line timestamps; no network lyric provider.
 import SwiftUI
 
 struct AppleMusicLocalLyricsView: View {
     let lyrics: ReferenceLyrics
-    let playerFrame: CGRect
-    @AppStorage(LyricsFocus.storageKey) private var focusPosition = 0.5
     let activeID: Int?
     let bottomOverlayHeight: CGFloat
     let isActive: Bool
     @Binding var isInterfaceHidden: Bool
     let onSeek: (Double) -> Void
-    /// Must match playerFrame; a movable presentation should use its own space.
-    var playerCoordinateSpace: CoordinateSpace = .global
     /// macOS 侧边歌词面板使用较小的固定字号和随系统外观变化的文字颜色；iOS 播放页保持默认值。
     var fixedFontSize: CGFloat? = nil
     var foreground: Color = .white
@@ -35,18 +32,16 @@ struct AppleMusicLocalLyricsView: View {
     private let motion = AppleMusicLyricsMotionProfile.iOS26_6
     private var fontSize: CGFloat { fixedFontSize ?? scaledFontSize }
 
-    init(lyrics: ReferenceLyrics, playerFrame: CGRect, activeID: Int?, bottomOverlayHeight: CGFloat,
+    init(lyrics: ReferenceLyrics, activeID: Int?, bottomOverlayHeight: CGFloat,
          isActive: Bool, isInterfaceHidden: Binding<Bool>, onSeek: @escaping (Double) -> Void,
-         playerCoordinateSpace: CoordinateSpace = .global, fixedFontSize: CGFloat? = nil,
+         fixedFontSize: CGFloat? = nil,
          foreground: Color = .white, rowGeometry: LyricsRowGeometry = LyricsRowGeometry()) {
         self.lyrics = lyrics
-        self.playerFrame = playerFrame
         self.activeID = activeID
         self.bottomOverlayHeight = bottomOverlayHeight
         self.isActive = isActive
         _isInterfaceHidden = isInterfaceHidden
         self.onSeek = onSeek
-        self.playerCoordinateSpace = playerCoordinateSpace
         self.fixedFontSize = fixedFontSize
         self.foreground = foreground
         _rowGeometry = State(initialValue: rowGeometry)
@@ -59,13 +54,13 @@ struct AppleMusicLocalLyricsView: View {
             let lineHeight = LyricsFontMetrics.boldLineHeight(size: fontSize)
             let focusedHeight = rowGeometry.height(for: activeID) ?? lineHeight
             let visibleHeight = isInterfaceHidden ? height : referenceHeight
-            let preferredY = playerFrame.minY + playerFrame.height * min(max(focusPosition.isFinite ? focusPosition : 0.5, 0.05), 0.8)
-                - viewport.frame(in: playerCoordinateSpace).minY
-            let focusTop = min(max(preferredY - focusedHeight / 2, visibleHeight * 0.08),
+            // The reference places the leading line near the upper quarter of the
+            // visible lyrics, with wrapped lines continuing below that position.
+            let preferredTop = visibleHeight * 0.233 - lineHeight / 2
+            let focusTop = min(max(preferredTop, visibleHeight * 0.08),
                                max(visibleHeight * 0.08, visibleHeight * 0.84 - focusedHeight))
             let anchor = min(max(focusTop / max(height - focusedHeight, 1), 0), 1)
-            // The player coordinate space sits outside the page scale. While this page
-            // is inactive, keep the last active focus so shrinking does not move the line.
+            // Keep the last active focus while the outgoing page shrinks.
             let appliedFocusTop = isActive ? focusTop : restingFocusTop
             let scrollAnchor = isActive ? anchor : restingAnchor
             ScrollView {

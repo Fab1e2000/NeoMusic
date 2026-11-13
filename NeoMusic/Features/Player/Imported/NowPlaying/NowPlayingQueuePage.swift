@@ -92,7 +92,7 @@ struct NowPlayingQueuePage: View {
         // Leave a small gap above the progress track, halfway between the
         // original fixed inset and the track-aligned version.
         presentation == .portrait
-            ? max(0, layout.contentSize.height - 3 - layout.contentY(573)) + controlsOverflow
+            ? max(0, layout.contentSize.height - 3 - layout.contentY(557)) + controlsOverflow
             : 12
     }
 
@@ -258,7 +258,7 @@ private struct NowPlayingQueueModeControls: View {
                 .contentTransition(
                     .symbolEffect(.replace.downUp.wholeSymbol)
                 )
-                .font(.title3.weight(.semibold))
+                .font(.system(size: 16, weight: .semibold))
                 .frame(maxWidth: .infinity)
                 .frame(height: 38)
                 .foregroundStyle(

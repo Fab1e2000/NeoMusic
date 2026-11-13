@@ -80,6 +80,7 @@ struct NowPlayingVibrantLabel: View {
                     .mask { glyphs }
                 }
             }
+            .opacity(0.65)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(text)
             .allowsHitTesting(false)

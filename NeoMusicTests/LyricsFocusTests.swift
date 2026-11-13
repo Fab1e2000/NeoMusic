@@ -78,13 +78,8 @@ final class LyricsFocusTests: XCTestCase {
     }
 
     private func mount(_ state: LyricsFocusTestState, size: DynamicTypeSize) async throws -> UIWindow {
-        let suite = "LyricsFocusTests.\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        defaults.set(0.5, forKey: LyricsFocus.storageKey)
-        addTeardownBlock { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
         let content = LyricsFocusTestContent(state: state)
             .dynamicTypeSize(size)
-            .defaultAppStorage(defaults)
         let host = UIHostingController(rootView: content)
         host.traitOverrides.preferredContentSizeCategory = size == .large
             ? .large : .accessibilityExtraExtraExtraLarge
@@ -154,7 +149,8 @@ private final class LyricsFocusTestState {
 
     func expectedTop(forRowHeight height: CGFloat) -> CGFloat {
         let visibleHeight = isInterfaceHidden ? viewportHeight : viewportHeight - 120
-        return min(max(viewportHeight * 0.5 - height / 2, visibleHeight * 0.08),
+        let leadingLineHeight = geometry.height(for: 40) ?? height
+        return min(max(visibleHeight * 0.233 - leadingLineHeight / 2, visibleHeight * 0.08),
                    max(visibleHeight * 0.08, visibleHeight * 0.84 - height))
     }
 }
@@ -164,14 +160,14 @@ private struct LyricsFocusTestContent: View {
 
     var body: some View {
         AppleMusicLocalLyricsView(
-            lyrics: state.lyrics, playerFrame: CGRect(x: 0, y: 0, width: 338, height: 600),
+            lyrics: state.lyrics,
             activeID: state.activeID, bottomOverlayHeight: 120, isActive: state.isActive,
             isInterfaceHidden: $state.isInterfaceHidden,
             onSeek: {
                 state.seekCount += 1
                 state.activeID = state.lyrics.activeLine(at: $0) ?? 0
             },
-            playerCoordinateSpace: .named("LyricsFocusTests"), rowGeometry: state.geometry
+            rowGeometry: state.geometry
         )
         .id(state.trackIdentity)
         .scaleEffect(state.presentationScale, anchor: .center)

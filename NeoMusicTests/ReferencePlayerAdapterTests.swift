@@ -6,6 +6,38 @@ import AVFoundation
 @testable import NeoMusic
 
 @MainActor final class NowPlayingProgressScrubTests: XCTestCase {
+    func testNativeProgressUpdatesDoNotSeekAndControlEditsUseTheSamePlayer() async throws {
+        let song = ReferenceTrack(id: "native-progress", title: "Song", artists: "Artist", albumTitle: "Album", coverURL: nil, duration: 300)
+        let owner = PlayerTestFixtures.owner(tracks: [song])
+        owner.elapsed = 10
+        let player = ReferencePlayerState(model: owner)
+        let content = NowPlayingProgressControl(song: song)
+            .frame(width: 338, height: 70)
+            .environment(player).environment(PlayerTestFixtures.actions())
+        let window = UIWindow(windowScene: try await applicationWindowScene())
+        window.rootViewController = UIHostingController(rootView: content)
+        window.isHidden = false
+        defer { window.isHidden = true }
+        try await Task.sleep(for: .milliseconds(100))
+        func slider(in view: UIView) -> UISlider? {
+            if let slider = view as? UISlider, slider.accessibilityLabel == "播放进度" { return slider }
+            return view.subviews.lazy.compactMap { slider(in: $0) }.first
+        }
+        let control = try XCTUnwrap(slider(in: window))
+        control.value = 90
+        XCTAssertEqual(player.progress, 10)
+        control.sendActions(for: .touchDown)
+        control.sendActions(for: .valueChanged)
+        control.sendActions(for: .touchUpInside)
+        XCTAssertEqual(player.progress, 90)
+        owner.elapsed = 42
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(control.value, 42)
+        control.value = 85
+        control.sendActions(for: .valueChanged)
+        XCTAssertEqual(player.progress, 85, "Accessibility control edits also use UIKit's valueChanged event")
+    }
+
     func testPlaybackTicksDoNotRebuildAudioQualityControl() async throws {
         let songs = (0..<2_000).map { id in
             LibrarySongItem(id: "song:\(id)", title: "Song", artist: "Artist", album: "Album", albumArtist: "Artist", trackNumber: 0, artwork: .missing, duration: 300)
