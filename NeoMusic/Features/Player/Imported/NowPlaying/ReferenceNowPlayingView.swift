@@ -544,6 +544,7 @@ private struct QueueLinkedArtwork: View {
                     NowPlayingQueueTopFade(height: fadeHeight)
                     Rectangle()
                 }
+                .padding(.top, page == .queue ? NowPlayingSongHeader.topInset : 0)
                 .padding(page == .queue ? 0 : -max(geometry.size.width, geometry.size.height))
             }
         }
