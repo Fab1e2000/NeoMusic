@@ -9,15 +9,21 @@ enum LibraryRecentAdditions {
         var ranked: [(item: LibraryShelfItem, date: Date?, order: Int)] = collections.map { item, date in
             (item, date, item.addedOrder)
         }
-        var songsByID: [String: (LibrarySongItem, Date?)] = [:]
-        for (song, added) in songs {
+        var songsByID: [String: (song: LibrarySongItem, addedAt: Date?)] = [:]
+        for (song, addedAt) in songs {
             let previous = songsByID[song.id]
-            let addedAt = [previous?.1, added].compactMap { $0 }.max()
-            let chosen = song.isFavorite ? song : (previous?.0.isFavorite == true ? previous!.0 : song)
-            songsByID[song.id] = (chosen, addedAt)
+            let latestAddedAt = [previous?.addedAt, addedAt].compactMap { $0 }.max()
+            let preferredSong: LibrarySongItem
+            if !song.isFavorite, let previous, previous.song.isFavorite {
+                preferredSong = previous.song
+            } else {
+                preferredSong = song
+            }
+            songsByID[song.id] = (preferredSong, latestAddedAt)
         }
         for (song, date) in songsByID.values {
-            ranked.append((songShelfItem(song, date: date), date, date.map { Int($0.timeIntervalSince1970) } ?? 0))
+            let item = songShelfItem(song, date: date)
+            ranked.append((item, date, item.addedOrder))
         }
         return ranked.sorted { lhs, rhs in
             switch (lhs.date, rhs.date) {

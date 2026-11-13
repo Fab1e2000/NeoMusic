@@ -83,9 +83,9 @@ xcodebuild -project NeoMusic.xcodeproj -scheme NeoMusic -configuration Release \
   -only-testing:NeoMusicTests test
 ```
 
-按修改范围缩小到具体测试类即可。重包装的重点是播放器适配、队列、歌词、资料库恢复、持久化及导航；原预览 target 的有效测试已迁入 `NeoMusicTests`，直接使用正式组件。单元测试的歌曲和图片在测试中生成，部分 Metal 与系统 zoom 用例有运行环境要求。
+按修改范围缩小到具体测试类即可。主要覆盖播放器适配、队列、歌词、资料库恢复、持久化及导航；原预览 target 的有效测试已迁入 `NeoMusicTests`，直接使用正式组件。单元测试的歌曲和图片在测试中生成，部分 Metal 与系统 zoom 用例有运行环境要求。
 
-上述关闭签名的命令适用于注入凭据存储的账户单元测试。验证正式账户入口及真实 Keychain 读写时，模拟器构建须启用代码签名，移除 `CODE_SIGNING_ALLOWED=NO`；本轮已通过签名模拟器构建确认 Keychain 读取正常。
+上述关闭签名的命令适用于注入凭据存储的账户单元测试。验证正式账户入口及真实 Keychain 读写时，模拟器构建须启用代码签名，移除 `CODE_SIGNING_ALLOWED=NO`；
 
 导航 UI 测试需要既有的模拟器资料库。例如 `testNativeAlbumRowPlaybackMenusAndSwipes` 使用“塌陷于38°C的蓝”专辑及“湖畔、二人歌”；部分置顶测试需要 Sunrise 专辑。音乐文件不随仓库提供，全新模拟器不能直接视为具备这些测试条件。功能对照 scheme 还需要另外安装基线应用。测试时不要删除或替换用户的真机资料库。
 
@@ -142,7 +142,7 @@ git tag vX.Y.Z
 git push origin vX.Y.Z
 ```
 
-公开构建包含正式账户入口，不带个人素材、已登录会话或签名凭据；IPA 需自行签名后安装。流程不提供 App Store / TestFlight 发布，也不改变当前私有取色实现。源码及依赖版本与对应标签一起保留，第三方许可和来源清单随应用打包。
+公开构建包含正式账户入口，不带个人素材、已登录会话或签名凭据；IPA 需自行签名后安装。流程不提供 App Store / TestFlight 发布，源码及依赖版本与对应标签一起保留，第三方许可和来源清单随应用打包。
 
 ## 本地数据与签名
 
@@ -176,13 +176,6 @@ xcrun simctl launch <模拟器 UUID> com.elsterlee.NeoMusic -neteaseAccountPrevi
 
 定向回归按影响选择 `NeteaseAccountTests`、`NeteaseAvatarSnapshotTests`、`NeteaseAvatarClientTests`、`NeteaseAccountClientTests` 与 `NeteaseCredentialStoreTests`；边界规则回归运行 `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/tests`。
 
-账户相关累计 63 项回归已有通过结果：最新 32 项账户回归通过，复用显示快照 7 项结果，本轮共 39 项；另复用头像客户端 9 项、账户客户端 8 项及凭据存储 7 项的通过结果。21 项入口／导航回归复用既有通过结果，覆盖 109 个源文件的模块边界扫描及 6 项边界规则回归通过，0 失败、0 跳过。回归覆盖 Keychain 等待期间的原生头像渲染、快照身份核对、192 px 缩略图持久化、退出／切换等待快照写入，以及同用户 CDN 地址轮换时保留头像、加载失败后的重试和旧 URL 迟到结果丢弃。显示快照版已通过真机 Release 构建、验签、覆盖安装和启动；App Launch 记录显示 75,227 字节快照在首帧前读取，读取耗时约 0.22 ms。前后各一次采样的系统初始化至首帧区间为 203.51 ms 和 196.14 ms，证据位于忽略目录 `build/netease-avatar-startup-20261103/`。
+## 状态与追溯
 
-## 当前限制与后续准备
-
-- 网易云账户、歌单、推荐、艺人／专辑、搜索、在线播放及下载已接入正式入口，整体处于用户体验验收阶段。各功能的真机、真实账号及待验收范围以 [roadmap](roadmap.md) 为准。
-- 主页、资料库、搜索的头像入口已接入。挂到标签栏的喜爱歌曲、普通歌单、播放列表、专辑、艺人和歌曲，在作为根页面时也使用同一头像入口。普通歌单作为标签根页面时不显示标题。新发现和广播不再出现在底部标签栏。搜索主体仍随现有搜索页。显示哪些标签以及顺序，在账户页的「标签页」里调整。
-- 专辑封面取色仍包含私有 `MPArtworkColorAnalyzer` 实验；本次整理不修改其实现，也不代表完成 App Store 发布验收。
-- 播放器连续交互、不同封面可读性及完整系统媒体能力仍按 [roadmap](roadmap.md) 的状态验收。
-- 首次公开从清理后的当前快照开始，旧开发历史仅保留在本地归档分支，不推送到公开仓库；根许可证为 [GPL-3.0](../LICENSE)。
-- 创建仓库及提交代码不代表完整发布体验验收；正式版本通过上述 Release 草稿流程另行发布。
+当前能力、验收与已知缺口统一见 [路线图](roadmap.md)。历史验证数和采样记录按需查阅路线图中的证据入口；本指南只维护开发方法。

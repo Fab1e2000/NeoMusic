@@ -33,7 +33,7 @@ SwiftUI 与 UIKit 原生构建 · iOS 27 · AVFoundation 播放
 <p align="center"><sub>截图同时展示浅色与深色外观。</sub></p>
 
 > [!IMPORTANT]
-> NeoMusic 是个人开发的非官方第三方客户端，与网易云音乐及 Apple 均无关联，项目用于学习与交流，代码按 GPL v3.0 授权。项目正在开发中：网易云账户、歌单、搜索、下载与在线播放已接入、待体验验收，尚未发布正式版本。
+> NeoMusic 是个人开发的非官方第三方客户端，与网易云音乐及 Apple 均无关联，项目用于学习与交流，代码按 GPL v3.0 授权。项目正在开发中：网易云账户、歌单、搜索、下载与在线播放已接入、待体验验收，当前状态见阶段计划。
 
 ## 为什么做 NeoMusic
 
@@ -78,7 +78,7 @@ SwiftUI 与 UIKit 原生构建 · iOS 27 · AVFoundation 播放
 
 ## 获取应用
 
-当前公开版本是 [v0.0.1](https://github.com/Fab1e2000/NeoMusic/releases/tag/v0.0.1)。没有 App Store 或 TestFlight 构建。
+公开构建见 [Releases](https://github.com/Fab1e2000/NeoMusic/releases)。没有 App Store 或 TestFlight 构建。
 
 1. **自行签名安装**：在该 Release 下载未签名 IPA 与 `SHA256SUMS.txt`，核对校验值后，用自己的开发者证书或 SideStore、AltStore、Sideloadly 等工具签名安装。
 2. **从源码构建**：见下一节，真机签名自行配置。
@@ -124,7 +124,7 @@ scripts/            # 本机检查、推送门禁与发布脚本
 
 - 网易云接口为非官方能力，服务端变更可能导致功能失效；音质与部分内容受账号、版权与地区限制。
 - 在线能力整体仍在体验验收中；模拟器与单元测试通过不替代真机、真实账号的体验验收。
-- 专辑取色使用私有 `MPArtworkColorAnalyzer`，LN 播放器容器也使用私有 UIKit 接口；系统升级兼容性与 App Store 分发需专项评估。
+- 专辑取色使用 Core Image；LN 播放器容器仍使用未文档化 UIKit 接口，系统升级兼容性与 App Store 分发需专项评估。
 - 面向 iPhone；iPad 适配与 macOS 开发未开始。
 - 项目不承担旧项目数据、账号或偏好迁移。
 
