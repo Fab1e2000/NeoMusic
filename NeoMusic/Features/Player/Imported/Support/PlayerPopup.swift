@@ -22,6 +22,7 @@ struct PlayerPopup: ViewModifier {
     @State private var artwork: UIImage?
     @State private var artworkTrackID: String?
     @State private var interactionDelegate = PlayerPopupInteractionDelegate()
+    @State private var volumeHUDRefreshID = 0
 
     private var shouldShowBar: Bool { player.currentTrack != nil && !isSuppressed }
     private var isBarActive: Bool { shouldShowBar && !isPresented && scenePhase == .active }
@@ -38,11 +39,14 @@ struct PlayerPopup: ViewModifier {
             .transaction { transaction in
                 if reducesMotion { transaction.disablesAnimations = true }
             } body: { content in
-                content.popup(isBarPresented: $isBarPresented, isPopupOpen: $isPresented, onClose: onClose) {
+                content.popup(isBarPresented: $isBarPresented, isPopupOpen: $isPresented, onOpen: {
+                    volumeHUDRefreshID &+= 1
+                }, onClose: onClose) {
                     PlayerPopupContent(barImage: barImage,
                                        barColorScheme: barColorScheme ?? colorScheme,
                                        isActive: isPresented && scenePhase == .active,
                                        isBarActive: isBarActive) { isPresented = false }
+                        .environment(\.playerVolumeHUDRefreshID, volumeHUDRefreshID)
                         .statusBarHidden(isImmersive)
                 }
             }

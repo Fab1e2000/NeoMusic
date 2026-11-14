@@ -106,6 +106,68 @@ import AVFoundation
         scrub.propose(96) { sought.append($0) }
         XCTAssertEqual(sought, [64])
     }
+
+    func testPressVisualFeedbackSynchronizesTrackAndTimeLabelsWithoutRebuildingQualityControl() async throws {
+        let song = ReferenceTrack(id: "press-feedback", title: "Song", artists: "Artist", albumTitle: "Album", coverURL: nil, duration: 291)
+        let owner = PlayerTestFixtures.owner(tracks: [song])
+        owner.elapsed = 13
+        let player = ReferencePlayerState(model: owner)
+        var qualityReads = 0
+        let actions = ReferencePlayerActions(
+            isFavorite: { _ in false },
+            toggleFavorite: { _ in },
+            addToPlaylist: { _ in },
+            openAlbum: { _ in },
+            openArtist: { _ in },
+            audioQuality: { _ in
+                qualityReads += 1
+                return PlayerAudioQuality(title: "无损")
+            }
+        )
+        let window = UIWindow(windowScene: try await applicationWindowScene())
+        window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        window.backgroundColor = .black
+        let host = UIHostingController(
+            rootView: ZStack(alignment: .top) {
+                Color.black.ignoresSafeArea()
+                NowPlayingProgressControl(song: song)
+                    .padding(.horizontal, 32)
+                    .padding(.top, 545)
+            }
+            .ignoresSafeArea()
+            .frame(width: 402, height: 874)
+            .environment(player)
+            .environment(actions)
+        )
+        host.view.backgroundColor = .black
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        try await Task.sleep(for: .milliseconds(150))
+
+        func findSlider(in view: UIView) -> NowPlayingScrubbingSlider? {
+            if let slider = view as? NowPlayingScrubbingSlider { return slider }
+            return view.subviews.lazy.compactMap { findSlider(in: $0) }.first
+        }
+
+        let slider = try XCTUnwrap(findSlider(in: window))
+        slider.layoutIfNeeded()
+        XCTAssertEqual(slider.alpha, 0.02, accuracy: 0.001)
+        XCTAssertEqual(slider.sliderStyle, .thumbless)
+
+        let initialQualityReads = qualityReads
+        XCTAssertFalse(slider.isTrackHighlighted)
+
+        slider.setTrackHighlightedForTesting(true)
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertTrue(slider.isTrackHighlighted)
+        XCTAssertEqual(qualityReads, initialQualityReads)
+
+        slider.touchesEnded([], with: nil)
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertFalse(slider.isTrackHighlighted)
+        XCTAssertEqual(qualityReads, initialQualityReads)
+    }
 }
 
 @MainActor final class LyricsControlSurfaceHitShieldTests: XCTestCase {

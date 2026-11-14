@@ -27,12 +27,18 @@ struct PlayerEDRControlAvailable: ViewModifier {
     let shape: PlayerEDRMask
     var role: PlayerEDRRole = .controls
     var isEnabled = true
+    var isHighlighted = false
 
     func body(content: Content) -> some View {
         let active = isEnabled && enabled && (undimmed ?? backdrop) != nil && anchor != nil
         content
-            .opacity(active ? 0.02 : 1)
-            .overlay { if active { PlayerEDRControlLayer(shape: shape, role: role) } }
+            .opacity(active ? (isHighlighted ? 1 : 0.02) : 1)
+            .overlay {
+                if active {
+                    PlayerEDRControlLayer(shape: shape, role: role)
+                        .opacity(isHighlighted ? 0 : 1)
+                }
+            }
     }
 }
 

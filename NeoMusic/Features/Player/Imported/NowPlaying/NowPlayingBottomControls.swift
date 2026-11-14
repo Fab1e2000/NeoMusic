@@ -32,7 +32,7 @@ struct NowPlayingBottomControls: View {
                 }
                 .frame(height: 82)
                 interfaceLayer(.volume) {
-                    NowPlayingVolumeControl()
+                    NowPlayingVolumeControl(isInterfaceHidden: isInterfaceHidden)
                 }
                 .frame(height: 52)
                 interfaceLayer(.pageSelector) {
@@ -61,7 +61,7 @@ struct NowPlayingBottomControls: View {
                 .position(x: proxy.size.width / 2, y: layout.controlsY(652.5))
 
                 interfaceLayer(.volume) {
-                    NowPlayingVolumeControl()
+                    NowPlayingVolumeControl(isInterfaceHidden: isInterfaceHidden)
                 }
                 .position(x: proxy.size.width / 2, y: layout.controlsY(744.5))
 
@@ -86,7 +86,7 @@ struct NowPlayingBottomControls: View {
                     )
                     : 0
             )
-            .opacity(isInterfaceHidden ? 0 : 1)
+            .opacity(layer == .volume || !isInterfaceHidden ? 1 : 0)
             .animation(
                 NowPlayingInterfaceTransition.controlAnimation(
                     for: layer,
