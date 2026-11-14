@@ -52,12 +52,13 @@ struct NowPlayingQueuePage: View {
                 onMove: moveQueueItems,
                 onScroll: updateSongHeaderState
             )
-            // 页面外层有 32pt 的水平内边距；列表自己向两侧多出同样的宽度，行内容再缩进回来。
+            // 先将遮罩范围扩到通栏，包含列表两侧溢出的原生滚动条。
+            .padding(.horizontal, Self.contentHorizontalInset)
             .mask {
                 QueueViewportMask(scroll: headerScroll, headerHeight: songHeaderHeight,
-                                  horizontalInset: Self.contentHorizontalInset,
                                   bottomFadeHeight: NowPlayingQueueList.bottomFadeHeight)
             }
+            .padding(.horizontal, -Self.contentHorizontalInset)
             .overlay(alignment: .top) {
                 QueueHeaderControls(scroll: headerScroll, headerHeight: songHeaderHeight)
             }
@@ -122,7 +123,6 @@ private final class QueueHeaderScrollState {
 private struct QueueViewportMask: View {
     let scroll: QueueHeaderScrollState
     let headerHeight: CGFloat
-    let horizontalInset: CGFloat
     let bottomFadeHeight: CGFloat
 
     var body: some View {
@@ -137,7 +137,6 @@ private struct QueueViewportMask: View {
             ], startPoint: .top, endPoint: .bottom)
             .frame(height: bottomFadeHeight)
         }
-        .padding(.horizontal, -horizontalInset)
         .padding(.top, max(headerHeight - scroll.offset, 0) + 44)
     }
 }

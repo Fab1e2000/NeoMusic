@@ -337,10 +337,9 @@ struct ReferenceNowPlayingView: View {
                 if queueHeaderOffset.points != offset { queueHeaderOffset.points = offset }
             }
         )
-        // 列表通栏，超出外层水平内边距；先放宽再裁剪，再收回，裁剪范围才是整屏宽度。
+        // 列表及切页遮罩均使用整屏宽度，保留边缘的原生滚动条。
         .padding(.horizontal, Self.portraitHorizontalPadding)
         .clipped()
-        .padding(.horizontal, -Self.portraitHorizontalPadding)
         .modifier(NowPlayingPagePresentation(
             isVisible: isVisible, presentationScale: motion.queuePresentationScale,
             hiddenOffset: motion.queueTravel,
@@ -348,6 +347,7 @@ struct ReferenceNowPlayingView: View {
             opacityAnimation: pageAnimation(isVisible ? motion.queueOpacityPresentation : motion.queueOpacityDismissal,
                                             includesDelay: pageChange?.startsFromRest == true)
         ))
+        .padding(.horizontal, -Self.portraitHorizontalPadding)
         .allowsHitTesting(isVisible)
         .accessibilityHidden(!isVisible)
         .environment(\.playerVisualsActive, visualsActive && (isVisible || pageChange?.source == .queue))

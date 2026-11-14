@@ -288,7 +288,6 @@ private struct NativePlayerMotionContent: View {
         )
         .padding(.horizontal, Self.horizontalPadding)
         .clipped()
-        .padding(.horizontal, -Self.horizontalPadding)
         .modifier(NowPlayingPagePresentation(
             isVisible: isVisible, presentationScale: motion.queuePresentationScale,
             hiddenOffset: motion.queueTravel,
@@ -296,6 +295,7 @@ private struct NativePlayerMotionContent: View {
             opacityAnimation: animation(isVisible ? motion.queueOpacityPresentation : motion.queueOpacityDismissal,
                                         includesDelay: change?.startsFromRest == true)
         ))
+        .padding(.horizontal, -Self.horizontalPadding)
         .allowsHitTesting(isVisible)
         .accessibilityHidden(!isVisible)
         .environment(\.playerVisualsActive, visualsActive && (isVisible || change?.source == .queue))
