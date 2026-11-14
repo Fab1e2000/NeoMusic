@@ -35,18 +35,29 @@ struct NowPlayingMarqueeText: View {
             .truncationMode(.tail)
             .opacity(scrolls ? 0 : 1)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { containerWidth = $0 }
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+                guard containerWidth != width else { return }
+                var transaction = Transaction(animation: nil)
+                transaction.disablesAnimations = true
+                withTransaction(transaction) { containerWidth = width }
+            }
             .background(alignment: .leading) {
                 // 量文字完整宽度用，不显示。
                 Text(text)
                     .lineLimit(1)
                     .fixedSize()
                     .hidden()
-                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { textWidth = $0 }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+                        guard textWidth != width else { return }
+                        var transaction = Transaction(animation: nil)
+                        transaction.disablesAnimations = true
+                        withTransaction(transaction) { textWidth = width }
+                    }
             }
             .overlay(alignment: .leading) {
                 if scrolls {
                     scrollingText
+                        .transition(.identity)
                 }
             }
             .onChange(of: text) { startDate = .now }

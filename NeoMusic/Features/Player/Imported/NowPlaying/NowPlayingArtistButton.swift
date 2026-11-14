@@ -27,9 +27,16 @@ struct NowPlayingArtistButton: View {
 
     var body: some View {
         if interactive {
-            NowPlayingArtistMenuButton(track: track, lineHeight: resolvedLineHeight)
-                .background(alignment: .leading) {
-                    label.accessibilityHidden(true)
+            label
+                .accessibilityHidden(true)
+                .frame(
+                    maxWidth: .infinity,
+                    minHeight: max(28, resolvedLineHeight),
+                    maxHeight: max(28, resolvedLineHeight),
+                    alignment: .leading
+                )
+                .overlay {
+                    NowPlayingArtistMenuButton(track: track, lineHeight: resolvedLineHeight)
                 }
         } else {
             label.frame(height: resolvedLineHeight)

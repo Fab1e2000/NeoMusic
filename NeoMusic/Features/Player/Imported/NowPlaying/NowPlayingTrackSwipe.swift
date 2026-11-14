@@ -498,6 +498,8 @@ struct NowPlayingTrackSwipe<Title: View, Artist: View>: View {
     var rowSpacing: CGFloat? = 2
     /// 视口边缘羽化与溢出距离。
     var viewportInsets: TrackSwipeViewportInsets = .header
+    /// 已知视口宽度时可直接传入，避免切页入场首帧从 0 度量再触发遮罩分支切换。
+    var viewportWidth: CGFloat? = nil
     /// LN hosts title content in a separate controller; give that slot an explicit touch surface.
     var usesUIKitTouchSurface = false
     /// `marqueeActive` controls scrolling title; `interactive` controls button clicks on current track.
@@ -524,10 +526,14 @@ struct NowPlayingTrackSwipe<Title: View, Artist: View>: View {
         rowSpacing == nil ? 0 : 8
     }
 
+    private var activeWidth: CGFloat {
+        viewportWidth ?? measuredWidth
+    }
+
     var body: some View {
         let previous = player.previousInOrder
         let next = player.nextInOrder
-        let distance = max(pageDistance ?? (measuredWidth + Self.spacing), 1)
+        let distance = max(pageDistance ?? (activeWidth + Self.spacing), 1)
         let pinnedArtist = controller.isArtistPinned(
             at: CGFloat(controller.offsetSign),
             song: song,
@@ -585,7 +591,12 @@ struct NowPlayingTrackSwipe<Title: View, Artist: View>: View {
                     }
                 )
             ))
-            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { measuredWidth = $0 }
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+                guard viewportWidth == nil, measuredWidth != width else { return }
+                var transaction = Transaction(animation: nil)
+                transaction.disablesAnimations = true
+                withTransaction(transaction) { measuredWidth = width }
+            }
             .onChange(of: "\(player.currentQueueIndex):\(song.id)", initial: true) { _, _ in
                 controller.syncTrack(song: song, queueIndex: player.currentQueueIndex)
             }
@@ -626,7 +637,7 @@ struct NowPlayingTrackSwipe<Title: View, Artist: View>: View {
                                 baseOffset: slot.baseOffset,
                                 isPinned: slotPinned || hidden,
                                 isActive: controller.isActive,
-                                slotWidth: measuredWidth,
+                                slotWidth: activeWidth,
                                 insets: viewportInsets
                             )
                     )
@@ -673,7 +684,7 @@ struct NowPlayingTrackSwipe<Title: View, Artist: View>: View {
             .padding(.trailing, viewportInsets.trailingBleed)
             .modifier(ReferenceTrackSwipeEdgeFade(
                 enabled: true,
-                slotWidth: measuredWidth,
+                slotWidth: activeWidth,
                 insets: viewportInsets,
                 verticalOverflow: verticalMaskOverflow,
                 motion: viewportInsets.fadesOnlyWhenSliding ? controller.motion : nil,
@@ -975,34 +986,32 @@ private struct ReferenceTrackSwipeEdgeFade: ViewModifier {
     var motion: TrackSwipeOffsetModel? = nil
     var isStationary = false
 
-    @ViewBuilder func body(content: Content) -> some View {
+    func body(content: Content) -> some View {
         let totalWidth = insets.leadingBleed + slotWidth + insets.trailingBleed
-        if !enabled || slotWidth <= 1 || totalWidth <= 1 {
-            content
-        } else {
-            let strength: Double = {
-                guard insets.fadesOnlyWhenSliding else { return 1.0 }
-                guard !isStationary, let motion else { return 0.0 }
-                return motion.edgeStrength
-            }()
-            let leadStop = min(Double(insets.leadingFade / totalWidth), 0.45)
-            let trailStop = max(1.0 - min(Double(insets.trailingFade / totalWidth), 0.45), leadStop)
-            let edgeAlpha = 1.0 - strength
-            content
-                .padding(.vertical, verticalOverflow)
-                .mask {
-                    LinearGradient(
-                        stops: [
-                            .init(color: .black.opacity(edgeAlpha), location: 0),
-                            .init(color: .black, location: leadStop),
-                            .init(color: .black, location: trailStop),
-                            .init(color: .black.opacity(edgeAlpha), location: 1)
-                        ],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                }
-                .padding(.vertical, -verticalOverflow)
-        }
+        let hasValidBounds = enabled && slotWidth > 1 && totalWidth > 1
+        let strength: Double = {
+            guard hasValidBounds else { return 0.0 }
+            guard insets.fadesOnlyWhenSliding else { return 1.0 }
+            guard !isStationary, let motion else { return 0.0 }
+            return motion.edgeStrength
+        }()
+        let leadStop = hasValidBounds ? min(Double(insets.leadingFade / totalWidth), 0.45) : 0.0
+        let trailStop = hasValidBounds ? max(1.0 - min(Double(insets.trailingFade / totalWidth), 0.45), leadStop) : 1.0
+        let edgeAlpha = 1.0 - strength
+        content
+            .padding(.vertical, verticalOverflow)
+            .mask {
+                LinearGradient(
+                    stops: [
+                        .init(color: .black.opacity(edgeAlpha), location: 0),
+                        .init(color: .black, location: leadStop),
+                        .init(color: .black, location: trailStop),
+                        .init(color: .black.opacity(edgeAlpha), location: 1)
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            }
+            .padding(.vertical, -verticalOverflow)
     }
 }

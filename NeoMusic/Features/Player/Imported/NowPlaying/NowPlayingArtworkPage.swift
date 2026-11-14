@@ -157,7 +157,8 @@ struct NowPlayingArtworkPage: View {
                     song: song,
                     pageDistance: max(layout.width(278), slotWidth + 24),
                     rowSpacing: nil,
-                    viewportInsets: swipeInsets
+                    viewportInsets: swipeInsets,
+                    viewportWidth: slotWidth
                 ) { track, marqueeActive in
                     // 放不下时滚动显示（相邻曲目的预览不滚）；滑动期间保持当前歌滚动。
                     NowPlayingMarqueeText(text: track.title, isActive: marqueeActive)
