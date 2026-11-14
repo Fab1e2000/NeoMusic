@@ -467,7 +467,7 @@ struct NowPlayingTransportControls: View {
                     reducesMotion: accessibilityReduceMotion
                 )
                 .nowPlayingPrimary()
-                .frame(width: 40, height: 23)
+                .frame(width: 40.67, height: 27.39)
                 .offset(y: -0.5)
                     .frame(width: 64, height: 64)
                     .contentShape(.circle)
@@ -489,8 +489,7 @@ struct NowPlayingTransportControls: View {
                         reducesMotion: accessibilityReduceMotion
                     )
                     .nowPlayingPrimary()
-                    .frame(width: player.isPlaying ? 32 : 31.67, height: player.isPlaying ? 40 : 35.67)
-                    .offset(x: player.isPlaying ? 0 : 1.8)
+                    .frame(width: 32, height: 40)
                     .opacity(showsLoadingIndicator ? 0 : 1)
                     .scaleEffect(showsLoadingIndicator ? 0.6 : 1)
 
@@ -537,7 +536,7 @@ struct NowPlayingTransportControls: View {
                     reducesMotion: accessibilityReduceMotion
                 )
                 .nowPlayingPrimary()
-                .frame(width: 40, height: 23)
+                .frame(width: 40.67, height: 27.39)
                 .offset(y: -0.5)
                     .frame(width: 64, height: 64)
                     .contentShape(.circle)

@@ -4,9 +4,9 @@ import SwiftUI
 
 struct NowPlayingTransportButtonStyle: ButtonStyle {
     let reducesMotion: Bool
-    /// 松手时图标用带过冲的弹簧弹回（播放/暂停按钮用），否则平缓回到原大。
+    /// 松手时图标用带单次轻微过冲的弹簧弹回（播放/暂停按钮用），否则平缓回到原大。
     var springsBack = false
-    var diameter: CGFloat = 64
+    var diameter: CGFloat = 62
     var showsHighlight = true
 
     func makeBody(configuration: Configuration) -> some View {
@@ -30,8 +30,7 @@ private struct NowPlayingTransportButtonStyleBody<Label: View>: View {
     let showsHighlight: Bool
 
     @State private var iconScale: CGFloat = 1
-    @State private var highlightScale =
-        NowPlayingTransportButtonAnimation.pressedHighlightScale
+    @State private var highlightScale: CGFloat = 1
     @State private var highlightOpacity = 0.0
 
     var body: some View {
@@ -90,12 +89,12 @@ private struct NowPlayingTransportButtonStyleBody<Label: View>: View {
         }
 
         if isPressed {
-            var transaction = Transaction(animation: nil)
-            transaction.disablesAnimations = true
-            withTransaction(transaction) {
-                highlightScale =
-                    NowPlayingTransportButtonAnimation
-                    .pressedHighlightScale
+            withAnimation(
+                .easeOut(
+                    duration: NowPlayingTransportButtonAnimation.highlightAppearDuration
+                )
+            ) {
+                highlightOpacity = 1
             }
 
             withAnimation(
@@ -105,12 +104,13 @@ private struct NowPlayingTransportButtonStyleBody<Label: View>: View {
             ) {
                 iconScale =
                     NowPlayingTransportButtonAnimation.pressedIconScale
-                highlightOpacity = 1
+                highlightScale =
+                    NowPlayingTransportButtonAnimation.pressedHighlightScale
             }
         } else {
             withAnimation(
                 springsBack
-                    ? .spring(duration: 0.45, bounce: 0.5)
+                    ? .spring(duration: 0.34, bounce: 0.34)
                     : .easeInOut(
                         duration: NowPlayingTransportButtonAnimation.releaseDuration
                     )
@@ -126,8 +126,8 @@ private struct NowPlayingTransportButtonStyleBody<Label: View>: View {
                 highlightScale = 1
             }
             withAnimation(
-                .easeIn(
-                    duration: NowPlayingTransportButtonAnimation.releaseDuration
+                .easeOut(
+                    duration: NowPlayingTransportButtonAnimation.highlightFadeDuration
                 )
             ) {
                 highlightOpacity = 0
@@ -137,10 +137,12 @@ private struct NowPlayingTransportButtonStyleBody<Label: View>: View {
 }
 
 private enum NowPlayingTransportButtonAnimation {
-    static let pressedIconScale: CGFloat = 0.8
-    static let pressedHighlightScale: CGFloat = 0.86
+    static let pressedIconScale: CGFloat = 0.82
+    static let pressedHighlightScale: CGFloat = 0.94
     static let highlightOpacity = 0.1
     static let pressDuration: TimeInterval = 0.16
     static let releaseDuration: TimeInterval = 0.4
-    static let highlightExpansionDuration: TimeInterval = 0.18
+    static let highlightAppearDuration: TimeInterval = 0.03
+    static let highlightExpansionDuration: TimeInterval = 0.16
+    static let highlightFadeDuration: TimeInterval = 0.34
 }

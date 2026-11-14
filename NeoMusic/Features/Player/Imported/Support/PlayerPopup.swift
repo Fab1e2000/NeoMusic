@@ -225,7 +225,8 @@ struct MiniPlayerControls: View {
         HStack(spacing: 0) {
             Button(action: togglePlayback) {
                 ZStack {
-                    NowPlayingPlayPauseIcon(isPlaying: isPlaying, reducesMotion: reducesMotion)
+                    NowPlayingPlayPauseIcon(isPlaying: isPlaying, reducesMotion: reducesMotion,
+                                            playOffsetX: 0.8)
                         .frame(width: 14, height: 17)
                         .opacity(showsLoadingIndicator ? 0 : 1)
                         .scaleEffect(showsLoadingIndicator ? 0.6 : 1)
@@ -254,7 +255,7 @@ struct MiniPlayerControls: View {
                 next()
             } label: {
                 NowPlayingSkipIcon(direction: .forward, trigger: nextTrigger,
-                                   reducesMotion: reducesMotion)
+                                   reducesMotion: reducesMotion, cornerRadius: 1.3)
                     .frame(width: 24, height: 17)
                     .offset(x: 8)
                     .frame(width: 44, height: 44)
