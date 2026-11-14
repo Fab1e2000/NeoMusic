@@ -12,6 +12,7 @@ extension EnvironmentValues {
 struct NowPlayingArtworkBackdrop: View {
     let artworkURL: URL?
     var trackID: String? = nil
+    var isPlaying: Bool = true
     var ignoresSafeArea = true
     /// 作为背景副本画在别的视图底下：没有封面时完全透明（露出真背景），不画黑色打底和压暗。
     var isUnderlay = false
@@ -22,12 +23,16 @@ struct NowPlayingArtworkBackdrop: View {
     var anchor: NowPlayingBackdropAnchor?
 
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+    @Environment(\.scenePhase) private var scenePhase
+    private var edrResources = PlayerEDRResources.shared
     @State private var image: UIImage?
+    @State private var fluidSource: NowPlayingFluidBackdropSource?
     @State private var renderedTrackID: String?
 
     init(
         artworkURL: URL?,
         trackID: String? = nil,
+        isPlaying: Bool = true,
         ignoresSafeArea: Bool = true,
         isUnderlay: Bool = false,
         onFrameChange: ((CGRect) -> Void)? = nil,
@@ -37,6 +42,7 @@ struct NowPlayingArtworkBackdrop: View {
     ) {
         self.artworkURL = artworkURL
         self.trackID = trackID
+        self.isPlaying = isPlaying
         _renderedTrackID = State(initialValue: trackID)
         self.ignoresSafeArea = ignoresSafeArea
         self.isUnderlay = isUnderlay
@@ -47,6 +53,9 @@ struct NowPlayingArtworkBackdrop: View {
         // 已经缓存的封面直接拿来用，第一次出现就有图，不会先黑一下再淡入。
         _image = State(initialValue: artworkURL.flatMap {
             NowPlayingBackdropRenderer.shared.cached(for: $0)?.dimmed
+        })
+        _fluidSource = State(initialValue: artworkURL.flatMap {
+            NowPlayingFluidBackdropCache.shared.cached(for: $0)
         })
     }
 
@@ -77,7 +86,16 @@ struct NowPlayingArtworkBackdrop: View {
                         .frame(width: proxy.size.width, height: proxy.size.height)
                 }
 
-
+                if let fluidSource, let pipelines = edrResources.resources?.backdropPipelines {
+                    NowPlayingFluidBackdropRepresentable(
+                        source: fluidSource,
+                        isPlaying: isPlaying && scenePhase != .background,
+                        reduceMotion: accessibilityReduceMotion,
+                        pipelines: pipelines,
+                        anchor: anchor
+                    )
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+                }
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
             .clipped()
@@ -93,26 +111,46 @@ struct NowPlayingArtworkBackdrop: View {
         .ignoresSafeArea(edges: ignoresSafeArea ? .all : [])
         .accessibilityHidden(true)
         .onChange(of: image, initial: true) { _, value in onImageChange?(value) }
+        .task { await edrResources.prepare() }
         .task(id: BackdropRequestID(url: artworkURL, trackID: trackID)) {
             // Retain the backdrop while loading, but never attribute another song's cover to a missing image.
             guard let artworkURL, let request = Self.request(for: artworkURL) else {
                 if trackID == nil || renderedTrackID != trackID {
-                    image = nil; onUndimmedImageChange?(nil)
+                    image = nil
+                    fluidSource = nil
+                    onUndimmedImageChange?(nil)
                 }
                 return
             }
             let renderer = NowPlayingBackdropRenderer.shared
+            let fluidCache = NowPlayingFluidBackdropCache.shared
+            let cached = renderer.cached(for: artworkURL)
+            let cachedFluid = fluidCache.cached(for: artworkURL)
+
             let rendered: NowPlayingBackdropRenderer.Images?
-            if let cached = renderer.cached(for: artworkURL) {
+            let nextFluid: NowPlayingFluidBackdropSource?
+            if let cached, let cachedFluid {
                 rendered = cached
+                nextFluid = cachedFluid
             } else if let loaded = try? await ImagePipeline.shared.image(for: request), !Task.isCancelled {
-                rendered = await renderer.render(loaded, for: artworkURL)
+                async let renderedTask: NowPlayingBackdropRenderer.Images? = {
+                    if let cached { return cached }
+                    return await renderer.render(loaded, for: artworkURL)
+                }()
+                async let fluidTask: NowPlayingFluidBackdropSource? = {
+                    if let cachedFluid { return cachedFluid }
+                    return await fluidCache.prepare(loaded, for: artworkURL)
+                }()
+                rendered = await renderedTask
+                nextFluid = await fluidTask
             } else {
-                rendered = nil
+                rendered = cached
+                nextFluid = cachedFluid
             }
             guard !Task.isCancelled else { return }
             if rendered == nil, trackID != nil, renderedTrackID == trackID { return }
             renderedTrackID = trackID
+            fluidSource = nextFluid
             onUndimmedImageChange?(rendered?.undimmed)
             guard rendered?.dimmed !== image else { return }
             // The image view owns the overlay fade; the opaque base stays in place.

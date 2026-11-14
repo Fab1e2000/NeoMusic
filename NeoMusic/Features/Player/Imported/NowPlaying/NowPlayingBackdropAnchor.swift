@@ -1,11 +1,19 @@
+import MetalKit
 import SwiftUI
 import UIKit
+
+@MainActor
+protocol NowPlayingLiveBackdropSource: AnyObject {
+    var liveBackdropTexture: MTLTexture? { get }
+    var liveBackdropFrameToken: UInt64 { get }
+}
 
 /// UIKit conversion crosses UIHostingConfiguration roots without publishing window
 /// movement into SwiftUI. Both ends move together during popup dismissal.
 @MainActor
 final class NowPlayingBackdropAnchor {
     weak var view: UIView?
+    weak var liveSource: (any NowPlayingLiveBackdropSource)?
     private let readers = NSHashTable<NowPlayingAlignedBackdrop.AlignedView>.weakObjects()
 
     func register(_ reader: NowPlayingAlignedBackdrop.AlignedView) { readers.add(reader) }

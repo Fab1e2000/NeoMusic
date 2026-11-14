@@ -66,6 +66,7 @@ final class PlayerEDRMetalResources: @unchecked Sendable {
     let queue: MTLCommandQueue
     let pipeline: MTLRenderPipelineState
     let loader: MTKTextureLoader
+    let backdropPipelines: NowPlayingBackdropMetalPipelines?
 
     init?() {
         guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue(),
@@ -79,6 +80,7 @@ final class PlayerEDRMetalResources: @unchecked Sendable {
         descriptor.colorAttachments[0].pixelFormat = .rgba16Float
         guard let pipeline = try? device.makeRenderPipelineState(descriptor: descriptor) else { return nil }
         self.pipeline = pipeline
+        self.backdropPipelines = NowPlayingBackdropMetalPipelines(device: device, queue: queue, library: library)
     }
 }
 
@@ -118,6 +120,8 @@ final class PlayerEDRGlyphView: UIView {
     private(set) var isRenderingActive = false
     var hasActiveDisplayLink: Bool { displayLink?.isPaused == false }
     private var lastRect = CGRect.null
+    private var lastLiveToken: UInt64 = 0
+    private var lastUsedLiveTexture = false
     private var dirty = true
     private var lastLayout: LayoutInput?
 
@@ -224,8 +228,13 @@ final class PlayerEDRGlyphView: UIView {
     func stop() { displayLink?.invalidate(); displayLink = nil }
 
     private func renderIfNeeded() {
+        let liveSource = isWhite ? nil : anchor?.liveSource
+        let liveTexture = liveSource?.liveBackdropTexture
+        let liveToken = liveSource?.liveBackdropFrameToken ?? 0
+        let fallbackCGImage = image?.cgImage
         guard isRenderingActive, let resources, let window,
-              let image = image?.cgImage, bounds.width > 0, bounds.height > 0 else { return }
+              bounds.width > 0, bounds.height > 0,
+              (liveTexture != nil || fallbackCGImage != nil) else { return }
         let rect: CGRect
         var uv: SIMD4<Float>
         if isWhite {
@@ -240,13 +249,18 @@ final class PlayerEDRGlyphView: UIView {
             uv = SIMD4<Float>(Float(rect.minX / source.bounds.width), Float(rect.minY / source.bounds.height),
                               Float(rect.width / source.bounds.width), Float(rect.height / source.bounds.height))
         }
-        guard dirty || (!isWhite && rect != lastRect) else { return }
+        let usingLive = liveTexture != nil
+        let backdropChanged = usingLive ? (liveToken != lastLiveToken || !lastUsedLiveTexture) : lastUsedLiveTexture
+        guard dirty || (!isWhite && (rect != lastRect || backdropChanged)) else { return }
         dirty = false
         lastRect = rect
+        lastLiveToken = liveToken
+        lastUsedLiveTexture = usingLive
         let scale = window.screen.scale
         metalLayer.contentsScale = scale
         metalLayer.drawableSize = CGSize(width: bounds.width * scale, height: bounds.height * scale)
-        guard let textures = preparedTextures(backdrop: image, scale: scale),
+        guard let maskTexture = preparedMaskTexture(scale: scale),
+              let backdropTexture = liveTexture ?? fallbackCGImage.flatMap({ preparedBackdropTexture(cgImage: $0) }),
               let drawable = metalLayer.nextDrawable(), let command = resources.queue.makeCommandBuffer() else { dirty = true; return }
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = drawable.texture
@@ -255,8 +269,8 @@ final class PlayerEDRGlyphView: UIView {
         pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0)
         guard let encoder = command.makeRenderCommandEncoder(descriptor: pass) else { dirty = true; return }
         encoder.setRenderPipelineState(resources.pipeline)
-        encoder.setFragmentTexture(textures.mask, index: 0)
-        encoder.setFragmentTexture(textures.backdrop, index: 1)
+        encoder.setFragmentTexture(maskTexture, index: 0)
+        encoder.setFragmentTexture(backdropTexture, index: 1)
         encoder.setFragmentBytes(&uv, length: MemoryLayout<SIMD4<Float>>.size, index: 0)
         var options = SIMD2<Float>(brightness, isWhite ? 1 : 0)
         encoder.setFragmentBytes(&options, length: MemoryLayout<SIMD2<Float>>.size, index: 1)
@@ -266,28 +280,33 @@ final class PlayerEDRGlyphView: UIView {
 
     /// Keep the current view's pixels while position and brightness continue to update every draw.
     func preparedTextures(backdrop: CGImage, scale: CGFloat) -> (mask: MTLTexture, backdrop: MTLTexture)? {
+        guard let mask = preparedMaskTexture(scale: scale),
+              let backdropTexture = preparedBackdropTexture(cgImage: backdrop) else { return nil }
+        return (mask, backdropTexture)
+    }
+
+    private func preparedMaskTexture(scale: CGFloat) -> MTLTexture? {
         guard let resources, bounds.width > 0, bounds.height > 0 else { return nil }
         let input = MaskInput(text: text, fontSize: fontSize, fontWeight: fontWeight, isWhite: isWhite,
                               fontSizeIsScaled: fontSizeIsScaled, shape: shape, bounds: bounds, scale: scale, traits: traitCollection,
                               currentTraits: UITraitCollection.current)
-        let maskTexture: MTLTexture
         if let cachedMask, cachedMask.input == input {
-            maskTexture = cachedMask.texture
-        } else {
-            guard let cgMask = makeMask(scale: scale).cgImage,
-                  let texture = try? resources.loader.newTexture(cgImage: cgMask, options: [.SRGB: false]) else { return nil }
-            cachedMask = (input, texture)
-            maskTexture = texture
+            return cachedMask.texture
         }
-        let backdropTexture: MTLTexture
-        if let cachedBackdrop, cachedBackdrop.image === backdrop {
-            backdropTexture = cachedBackdrop.texture
-        } else {
-            guard let texture = try? resources.loader.newTexture(cgImage: backdrop, options: [.SRGB: true]) else { return nil }
-            cachedBackdrop = (backdrop, texture)
-            backdropTexture = texture
+        guard let cgMask = makeMask(scale: scale).cgImage,
+              let texture = try? resources.loader.newTexture(cgImage: cgMask, options: [.SRGB: false]) else { return nil }
+        cachedMask = (input, texture)
+        return texture
+    }
+
+    private func preparedBackdropTexture(cgImage: CGImage) -> MTLTexture? {
+        guard let resources else { return nil }
+        if let cachedBackdrop, cachedBackdrop.image === cgImage {
+            return cachedBackdrop.texture
         }
-        return (maskTexture, backdropTexture)
+        guard let texture = try? resources.loader.newTexture(cgImage: cgImage, options: [.SRGB: true]) else { return nil }
+        cachedBackdrop = (cgImage, texture)
+        return texture
     }
 
     private func makeMask(scale: CGFloat) -> UIImage {

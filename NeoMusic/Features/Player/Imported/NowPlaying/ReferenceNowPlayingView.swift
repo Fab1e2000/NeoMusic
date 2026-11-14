@@ -51,6 +51,7 @@ struct ReferenceNowPlayingView: View {
                 NowPlayingArtworkBackdrop(
                     artworkURL: player.currentTrack?.coverURL,
                     trackID: player.currentTrack?.id,
+                    isPlaying: player.isPlaying,
                     onFrameChange: { geometryState.backdropFrame = $0 },
                     onImageChange: { backdropImage = $0 },
                     onUndimmedImageChange: { undimmedBackdropImage = $0 },
