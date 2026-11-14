@@ -52,13 +52,6 @@ struct NowPlayingQueuePage: View {
                 onMove: moveQueueItems,
                 onScroll: updateSongHeaderState
             )
-            // 先将遮罩范围扩到通栏，包含列表两侧溢出的原生滚动条。
-            .padding(.horizontal, Self.contentHorizontalInset)
-            .mask {
-                QueueViewportMask(scroll: headerScroll, headerHeight: songHeaderHeight,
-                                  bottomFadeHeight: NowPlayingQueueList.bottomFadeHeight)
-            }
-            .padding(.horizontal, -Self.contentHorizontalInset)
             .overlay(alignment: .top) {
                 QueueHeaderControls(scroll: headerScroll, headerHeight: songHeaderHeight)
             }
@@ -114,31 +107,10 @@ struct NowPlayingQueuePage: View {
     }
 }
 
-/// Scroll motion invalidates the header and mask, not the queue's data projection.
+/// Scroll motion invalidates the header controls; edge fading runs inside the collection view.
 @MainActor @Observable
 private final class QueueHeaderScrollState {
     var offset: CGFloat = 0
-}
-
-private struct QueueViewportMask: View {
-    let scroll: QueueHeaderScrollState
-    let headerHeight: CGFloat
-    let bottomFadeHeight: CGFloat
-
-    var body: some View {
-        VStack(spacing: 0) {
-            NowPlayingQueueTopFade(height: NowPlayingQueueList.topFadeHeight)
-            Rectangle()
-            LinearGradient(stops: [
-                .init(color: .black, location: 0),
-                .init(color: .black.opacity(0.8), location: 0.35),
-                .init(color: .black.opacity(0.35), location: 0.7),
-                .init(color: .clear, location: 1)
-            ], startPoint: .top, endPoint: .bottom)
-            .frame(height: bottomFadeHeight)
-        }
-        .padding(.top, max(headerHeight - scroll.offset, 0) + 44)
-    }
 }
 
 private struct QueueHeaderControls: View {
@@ -245,32 +217,32 @@ private struct NowPlayingQueueModeControls: View {
     ) -> some View {
         Button(action: action) {
             Group {
-                if systemImage == "circle.lefthalf.filled.righthalf.striped.horizontal" {
-                    HStack(spacing: -7) {
-                        Circle().stroke(lineWidth: 2.5)
-                        Circle().fill()
-                    }.frame(width: 22, height: 13)
+                if isSelected {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 22)
+                            .fill(.white.opacity(NowPlayingVisualHierarchy.bottomButtonSelectedFillOpacity))
+                        modeIcon(systemImage: systemImage)
+                            .blendMode(.destinationOut)
+                    }
+                    .compositingGroup()
+                    .blendMode(.plusLighter)
                 } else {
-                    Image(systemName: systemImage)
+                    modeIcon(systemImage: systemImage)
+                        .nowPlayingPlusLighter(0.75)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background {
+                            RoundedRectangle(cornerRadius: 22)
+                                .fill(.white.opacity(0.12))
+                                .blendMode(.plusLighter)
+                        }
                 }
             }
-                .contentTransition(
-                    .symbolEffect(.replace.downUp.wholeSymbol)
-                )
-                .font(.system(size: 16, weight: .semibold))
-                .frame(maxWidth: .infinity)
-                .frame(height: 38)
-                .foregroundStyle(
-                    isSelected
-                        ? .black.opacity(0.62)
-                        : .white.opacity(0.86)
-                )
-                .opacity(isEnabled ? 1 : 0.25)
-                .background(
-                    .white.opacity(isSelected ? 0.7 : 0.12),
-                    in: .rect(cornerRadius: 22)
-                )
-                .contentShape(.rect(cornerRadius: 22))
+            .contentTransition(.symbolEffect(.replace.downUp.wholeSymbol))
+            .font(.system(size: 16, weight: .semibold))
+            .frame(maxWidth: .infinity)
+            .frame(height: 38)
+            .opacity(isEnabled ? 1 : 0.25)
+            .contentShape(.rect(cornerRadius: 22))
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled)
@@ -281,6 +253,18 @@ private struct NowPlayingQueueModeControls: View {
     private func toggleShuffle() {
         withAnimation(.smooth(duration: 0.34)) {
             player.toggleShuffle()
+        }
+    }
+
+    @ViewBuilder
+    private func modeIcon(systemImage: String) -> some View {
+        if systemImage == "circle.lefthalf.filled.righthalf.striped.horizontal" {
+            HStack(spacing: -7) {
+                Circle().stroke(lineWidth: 2.5)
+                Circle().fill()
+            }.frame(width: 22, height: 13)
+        } else {
+            Image(systemName: systemImage)
         }
     }
 
@@ -311,13 +295,12 @@ struct NowPlayingQueueRow: View {
                         .frame(width: 48, height: 48)
 
                         VStack(alignment: .leading, spacing: 2) {
-                            PlayerWhiteEDRText(text: entry.song.title, fontSize: 17, fontWeight: .regular)
+                            Text(entry.song.title)
                                 .font(.body)
-                                .foregroundStyle(.white)
+                                .nowPlayingPrimary()
                                 .lineLimit(1)
 
-                            // 与头部共用原生 Vibrancy。
-                            NowPlayingVibrantLabel(text: entry.song.artists, fontSize: 13, role: .queueArtist)
+                            NowPlayingVibrantLabel(text: entry.song.artists, fontSize: 13)
                         }
 
                         Spacer(minLength: 4)

@@ -553,7 +553,6 @@ private struct HitTarget: UIViewRepresentable {
                     .environment(player)
                     .environment(actions)
                     .environment(\.playerVisualsActive, false)
-                    .environment(\.playerArtistEDREnabled, false)
                     .dynamicTypeSize(size)
                     .onGeometryChange(for: CGSize.self) { $0.size } action: { measured in
                         guard !reportedLayout, measured.width > 0, measured.height > 0 else { return }

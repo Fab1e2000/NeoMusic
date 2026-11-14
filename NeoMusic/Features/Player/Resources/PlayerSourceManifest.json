@@ -69,11 +69,6 @@
       "destination": "NeoMusic/Features/Player/Imported/NowPlaying/NowPlayingArtworkPage.swift"
     },
     {
-      "source": "NeoDizzy/Features/Player/NowPlaying/NowPlayingBackdropAnchor.swift",
-      "sha256": "ffd732a7c5e09840852b7ef6ea0ca4b04072902508e5281d11d55dc8d90f1b5f",
-      "destination": "NeoMusic/Features/Player/Imported/NowPlaying/NowPlayingBackdropAnchor.swift"
-    },
-    {
       "source": "NeoDizzy/Features/Player/NowPlaying/NowPlayingBackdropImage.swift",
       "sha256": "d7253c11be9bb11015f1564ccfedc8a4f164fa992db4105e32951a1f637fc6f6",
       "destination": "NeoMusic/Features/Player/Imported/NowPlaying/NowPlayingBackdropImage.swift"

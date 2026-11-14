@@ -55,10 +55,11 @@ final class PlayerVisibilityTests: XCTestCase {
         }
     }
 
-    func testCompiledEDRResourcesAndVisibilityPauseDisplayLink() async throws {
+    func testCompiledFluidBackdropResourcesAndVisibilityPauseDisplayLink() async throws {
         guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("Metal is unavailable on this destination") }
-        await PlayerEDRResources.shared.prepare()
-        XCTAssertTrue(PlayerEDRResources.shared.isReady, "The app must contain the compiled EDR shader library")
+        await NowPlayingFluidBackdropResources.shared.prepare()
+        let pipelines = try XCTUnwrap(NowPlayingFluidBackdropResources.shared.pipelines,
+                                      "The app must contain the compiled fluid backdrop Metal library")
 
         let controller = UIViewController()
         let scene = try await applicationWindowScene()
@@ -67,33 +68,38 @@ final class PlayerVisibilityTests: XCTestCase {
         window.rootViewController = controller
         window.isHidden = false
         defer { window.isHidden = true }
-        let glyph = PlayerEDRGlyphView(frame: CGRect(x: 20, y: 20, width: 200, height: 30))
-        controller.view.addSubview(glyph)
 
-        XCTAssertFalse(glyph.hasActiveDisplayLink)
-        glyph.setRenderingActive(true)
-        XCTAssertTrue(glyph.hasActiveDisplayLink)
-        glyph.setRenderingActive(false)
-        XCTAssertFalse(glyph.hasActiveDisplayLink)
-        glyph.setRenderingActive(true)
-        XCTAssertTrue(glyph.hasActiveDisplayLink)
-        glyph.update(text: "Queue title", fontSize: 17, image: nil, anchor: nil,
-                     brightness: 0.7, isWhite: true, fontWeight: .regular)
-        XCTAssertFalse(glyph.hasActiveDisplayLink, "Position-independent title pixels need no continuous draw loop")
-        glyph.layoutIfNeeded()
-        XCTAssertFalse(glyph.layer.needsLayout())
-        glyph.update(text: "Queue title", fontSize: 17, image: nil, anchor: nil,
-                     brightness: 0.7, isWhite: true, fontWeight: .regular)
-        XCTAssertFalse(glyph.layer.needsLayout(), "Unchanged hosting content must not request another Metal layout")
-        glyph.frame.origin.y += 100
-        glyph.setRenderingActive(false)
-        glyph.setRenderingActive(true)
-        XCTAssertFalse(glyph.hasActiveDisplayLink)
-        glyph.update(text: "Queue artist", fontSize: 13, image: nil, anchor: nil,
-                     brightness: 0.35, isWhite: false, fontWeight: .regular)
-        XCTAssertTrue(glyph.hasActiveDisplayLink, "Backdrop-dependent artist glyphs still follow scrolling")
-        glyph.removeFromSuperview()
-        XCTAssertFalse(glyph.hasActiveDisplayLink)
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 32, height: 32)).image { ctx in
+            UIColor.systemTeal.setFill()
+            ctx.fill(CGRect(x: 0, y: 0, width: 32, height: 32))
+        }
+        let source = try XCTUnwrap(NowPlayingFluidBackdropSource.make(from: image))
+        let view = NowPlayingFluidBackdropView(pipelines: pipelines)
+        view.frame = controller.view.bounds
+        XCTAssertFalse(view.hasActiveDisplayLink)
+
+        controller.view.addSubview(view)
+        view.update(source: source, isPlaying: true, reduceMotion: false)
+        view.layoutIfNeeded()
+        XCTAssertTrue(view.hasActiveDisplayLink)
+
+        view.update(source: source, isPlaying: false, reduceMotion: true)
+        for _ in 0..<30 where view.hasActiveDisplayLink {
+            try await Task.sleep(for: .milliseconds(15))
+        }
+        XCTAssertFalse(view.hasActiveDisplayLink, "Static reduce-motion backdrop must stop displayLink once frame draws")
+
+        view.update(source: source, isPlaying: true, reduceMotion: false)
+        XCTAssertTrue(view.hasActiveDisplayLink)
+
+        view.removeFromSuperview()
+        XCTAssertFalse(view.hasActiveDisplayLink)
+
+        controller.view.addSubview(view)
+        XCTAssertTrue(view.hasActiveDisplayLink)
+
+        view.stop()
+        XCTAssertFalse(view.hasActiveDisplayLink)
     }
 
     func testArtworkMeasurementNeedsNoPlayerAndMatchesPresentedCoverFrame() async throws {

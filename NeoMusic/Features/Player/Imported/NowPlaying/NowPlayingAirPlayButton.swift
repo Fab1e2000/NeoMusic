@@ -9,11 +9,12 @@ struct ReferenceAirPlayButton: View {
     var body: some View {
         ReferenceAirPlayRoutePicker(opacity: opacity)
             .scaleEffect(1.27)
+            .blendMode(.plusLighter)
             .overlay(alignment: .top) {
                 if route.output.isExternal {
                     Text(route.output.name)
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(.white.opacity(opacity))
+                        .nowPlayingPlusLighter(opacity)
                         .lineLimit(1)
                         .frame(width: 180, height: 18)
                         .offset(y: 47)

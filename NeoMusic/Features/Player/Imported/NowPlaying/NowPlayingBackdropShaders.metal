@@ -233,18 +233,18 @@ fragment float4 fluidBackdropConditionFragment(
     // Center perceptual lightness around the cover's calibrated target with balanced local contrast.
     float targetCenterL = u.tone.x;
     float spread = u.tone.y * 0.96f * contrastFactor;
-    float finalL = clamp(targetCenterL + (lab.x - avgLab.x) * spread, 0.14f, 0.58f);
+    float finalL = clamp(targetCenterL + (lab.x - avgLab.x) * spread, 0.14f, 0.74f);
 
-    // Boost chroma subtly in Oklab; infuse lifted blacks and darkened whites with the cover's accent hue
-    // so extreme dark/light covers never render as flat muddy gray unless genuinely monochrome.
-    float2 ab = lab.yz * 1.18f;
+    // Boost chroma subtly in Oklab on rich covers, while softening stray color wash on mostly-white covers.
+    float chromaScale = mix(1.18f, 0.75f, clamp((avgLab.x - 0.70f) / 0.20f, 0.0f, 1.0f));
+    float2 ab = lab.yz * chromaScale;
     float localC = length(ab);
     float accentStrength = u.tone.z;
     float2 accentAB = u.coverStats.zw;
     float accentC = length(accentAB);
     if (accentStrength > 0.08f && accentC > 0.004f) {
         float2 accentDir = accentAB / accentC;
-        float floorC = min(accentC, 0.11f) * 0.52f * accentStrength;
+        float floorC = min(accentC, 0.11f) * 0.52f * accentStrength * clamp((0.78f - avgLab.x) / 0.18f, 0.0f, 1.0f);
         if (localC < floorC) {
             ab += accentDir * (floorC - localC);
         }
@@ -260,20 +260,6 @@ fragment float4 fluidBackdropConditionFragment(
     }
 
     return float4(conditioned, 1.0f);
-}
-
-// Builds a brighter, more saturated texture for EDR foreground glyphs without vertical dimming.
-fragment float4 fluidBackdropEDRExtractFragment(
-    BackdropVarying in [[stage_in]],
-    texture2d<float> conditioned [[texture(0)]],
-    constant BackdropPresentUniforms &u [[buffer(0)]]
-) {
-    constexpr sampler s(filter::linear, address::clamp_to_edge);
-    float3 lin = conditioned.sample(s, in.uv).rgb;
-    float3 lab = linearToOklab(lin);
-    lab.x = clamp(lab.x * 1.32f + 0.10f, 0.20f, 0.78f);
-    lab.yz *= 1.25f;
-    return float4(oklabToLinearSafe(lab), 1.0f);
 }
 
 static inline float3 linearToSRGB(float3 c) {
@@ -306,4 +292,22 @@ fragment float4 fluidBackdropPresentFragment(
     float n2 = ignNoise(in.position.xy + float2(17.0f, 31.0f));
     float dither = (n1 + n2 - 1.0f) * u.params.w;
     return float4(clamp(srgb + dither, 0.0f, 1.0f), 1.0f);
+}
+
+[[stitchable]] half4 lyricsViewportFade(
+    float2 position,
+    half4 color,
+    float4 viewportMap,
+    float bottomEnd
+) {
+    float viewportY = viewportMap.x + position.y * viewportMap.y;
+    if (viewportY <= 0.0f || viewportY >= bottomEnd) {
+        return half4(0.0h);
+    }
+    float topEnd = viewportMap.z;
+    float bottomStart = viewportMap.w;
+    float topAlpha = topEnd > 0.0f ? clamp(viewportY / topEnd, 0.0f, 1.0f) : 1.0f;
+    float bottomSpan = bottomEnd - bottomStart;
+    float bottomAlpha = bottomSpan > 0.0f ? clamp((bottomEnd - viewportY) / bottomSpan, 0.0f, 1.0f) : 1.0f;
+    return color * half(min(topAlpha, bottomAlpha));
 }

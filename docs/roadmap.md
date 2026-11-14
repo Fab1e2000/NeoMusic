@@ -17,6 +17,8 @@
 
 ## 已确认的近期验收
 
+- 2026-11-14：全屏播放器前景亮度层级、`.plusLighter` 叠加与队列／歌词边缘渐隐通过手机体验验收（版本 65）。移除定制 `PlayerEDR*` 双层反射／曝光增强与全页超亮增益，统一改回标准白 `.nowPlayingPrimary()`（含取消收藏按钮默认高亮并稳定图标切换）与 `.plusLighter` 配角透明度；保留全屏背景过渡稳定性并修复 `.compositingGroup()` 导致的展开后次级文字发灰；移除队列列表与歌词视图的外层 `.mask` 隔离（队列改用 `NeoMusicEdgeFadedCollectionView` 对叶子／高光层局部渐变遮罩并以 `@objc` 命名避开 `LNPopupController` 对 `"Queu"` 私有翻页视图的误判闪退；歌词将 `lyricsViewportFade` 边缘淡出着色器与失焦模糊移入 `.blendMode(.plusLighter)` 内层）。按用户要求在真机确认前精简验证，最终改动后执行 172 个源码文件边界检查与 `PlayerVisibilityTests/testPortraitPlayerReferenceScreenshots`（1/1）通过，Release 真机构建、`codesign --verify --deep --strict` 验签（版本 65）及真机安装启动通过；用户确认本地提交，完整全量回归留待阶段结束统一运行。
+
 - 2026-11-14：全屏播放器 2D 流体 Metal 背景通过手机体验验收（版本 59）。以多图层极坐标扭曲、Dual Kawase 模糊金字塔（160×320 ↔ 10×20 兼 1×1 全局均值）与线性光 Oklab 明度／色度校准替换原 1D 渐变背景（保留既有渲染与静态回调路径作为不可用／测试预置缓存回退），实现三角形抖动防色带、0.6s 可打断切歌交叉淡化、封面／歌词／继续播放三页统一背景外观、一倍逻辑尺寸线性呈现、前置 EDR 控件 GPU 共享纹理与刷新令牌节流（稳态 2Hz／切歌 8Hz），消除切页外观跳变与掉帧。176 个源码文件边界检查、XcodeGen、5 个相关 Release 测试集共 40 项、Release 三页截图一致性核对、Release 真机构建、`codesign --verify --deep --strict` 验签（版本 59）及真机安装启动通过；用户确认本地提交。
 
 - 2026-11-14：全屏播放器「继续播放」右侧原生滚动条修复通过用户体验验收。列表渐隐与切页遮罩均覆盖整屏宽度，保留歌曲行间距及系统滚动条显示／淡出行为。Release 模拟器与真机构建、174 个源码文件边界检查、正式入口上下滚动验证及真机验签通过；版本 46 已沿用原应用身份覆盖安装到手机并启动。证据位于 `build/player-queue-indicator-20261114/`。

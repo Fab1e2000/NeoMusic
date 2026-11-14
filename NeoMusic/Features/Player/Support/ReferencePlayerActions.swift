@@ -178,17 +178,29 @@ struct FavoriteButton: View {
     let track: ReferenceTrack
     var playerStyle = false
     @Environment(ReferencePlayerActions.self) private var actions
+    @Environment(\.accessibilityReduceMotion) private var reducesMotion
     private var liked: Bool { actions.isFavorite(track) }
     var body: some View {
-        Button { actions.toggleFavorite(track) } label: {
-            if playerStyle {
+        if playerStyle {
+            Button { actions.toggleFavorite(track) } label: {
                 Image(systemName: liked ? "star.fill" : "star")
                     .resizable().scaledToFit()
                     .frame(width: 22.5, height: 22.5)
                     .offset(x: -0.333, y: -1)
-                    .foregroundStyle(liked ? DizzyPalette.accentOnDark : .white)
-                    .frame(width: 44, height: 44)
-            } else { Label(liked ? "取消喜欢" : "喜欢", systemImage: "star.fill") }
-        }.accessibilityLabel(liked ? "取消喜欢" : "喜欢")
+                    .nowPlayingPrimary()
+                    .contentTransition(.identity)
+            }
+            .buttonStyle(NowPlayingTransportButtonStyle(
+                reducesMotion: reducesMotion,
+                diameter: 44,
+                showsHighlight: false
+            ))
+            .accessibilityLabel(liked ? "取消喜欢" : "喜欢")
+        } else {
+            Button { actions.toggleFavorite(track) } label: {
+                Label(liked ? "取消喜欢" : "喜欢", systemImage: "star.fill")
+            }
+            .accessibilityLabel(liked ? "取消喜欢" : "喜欢")
+        }
     }
 }

@@ -290,10 +290,14 @@ struct NowPlayingAudioQualityBadge: View {
             }
             Text(quality.title).font(.system(size: fontSize, weight: .medium))
         }
-        .foregroundStyle(.white.opacity(0.5))
+        .nowPlayingPlusLighter(NowPlayingVisualHierarchy.audioQualityTextOpacity)
         .padding(.horizontal, 6)
         .frame(minHeight: lineHeight)
-        .background(.white.opacity(0.08), in: .rect(cornerRadius: 4))
+        .background {
+            RoundedRectangle(cornerRadius: 4)
+                .fill(.white.opacity(NowPlayingVisualHierarchy.audioQualityBackgroundOpacity))
+                .blendMode(.plusLighter)
+        }
         .accessibilityHidden(true)
     }
 }

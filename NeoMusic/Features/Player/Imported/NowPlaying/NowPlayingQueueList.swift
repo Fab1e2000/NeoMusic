@@ -15,11 +15,6 @@ struct NowPlayingQueueList: UIViewRepresentable {
     @Environment(ReferencePlayerActions.self) private var actions
     @Environment(ReferencePlayerState.self) private var player
     @Environment(ReferenceLibrary.self) private var library
-    @Environment(\.nowPlayingBackdropImage) private var backdropImage
-    @Environment(\.nowPlayingUndimmedBackdropImage) private var undimmedBackdropImage
-    @Environment(\.nowPlayingBackdropAnchor) private var backdropAnchor
-    @Environment(\.playerArtistEDREnabled) private var edrEnabled
-    @Environment(\.playerEDRLevels) private var edrLevels
     @Environment(\.playerVisualsActive) private var visualsActive
     @Environment(\.artworkLoadAction) private var loadArtwork
     let entries: [UpcomingQueueEntry]
@@ -46,7 +41,8 @@ struct NowPlayingQueueList: UIViewRepresentable {
         }
         let layout = UICollectionViewCompositionalLayout.list(using: configuration)
 
-        let collectionView = UICollectionView(frame: .zero, collectionViewLayout: layout)
+        let collectionView = EdgeFadedCollectionView(frame: .zero, collectionViewLayout: layout)
+        collectionView.headerHeight = headerHeight
         // 收起手势由播放器的显式区域接收，列表区域始终只处理滚动和排序。
         collectionView.alwaysBounceVertical = true
         collectionView.backgroundColor = .clear
@@ -67,6 +63,199 @@ struct NowPlayingQueueList: UIViewRepresentable {
             container.collectionView.contentInset.bottom = bottomInset
         }
         context.coordinator.update(with: self)
+    }
+
+    private final class QueueEdgeMaskLayer: CAGradientLayer {}
+
+    @objc(NeoMusicEdgeFadedListCell)
+    private final class EdgeFadedListCell: UICollectionViewListCell {
+        weak var edgeFadeCollectionView: EdgeFadedCollectionView?
+
+        override func prepareForReuse() {
+            super.prepareForReuse()
+            edgeFadeCollectionView?.clearEdgeMasks(for: self)
+        }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            edgeFadeCollectionView?.updateEdgeMask(for: self)
+        }
+
+        override func layoutSublayers(of layer: CALayer) {
+            super.layoutSublayers(of: layer)
+            if layer === self.layer {
+                edgeFadeCollectionView?.updateEdgeMask(for: self)
+            }
+        }
+    }
+
+    /// Directly masks individual leaves and `.plusLighter` layers at top/bottom fade zones
+    /// without wrapping the list in an ancestor `CALayer.mask` that would isolate `.plusLighter`.
+    @objc(NeoMusicEdgeFadedCollectionView)
+    final class EdgeFadedCollectionView: UICollectionView {
+        var headerHeight: CGFloat = 0 {
+            didSet {
+                guard abs(oldValue - headerHeight) > 0.5 else { return }
+                setNeedsLayout()
+            }
+        }
+
+        private let maskedCells = NSHashTable<UICollectionViewCell>.weakObjects()
+        private var isUpdatingEdgeMasks = false
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            updateEdgeMasks()
+        }
+
+        func updateEdgeMasks() {
+            guard !isUpdatingEdgeMasks, bounds.height > 0 else { return }
+            isUpdatingEdgeMasks = true
+            defer { isUpdatingEdgeMasks = false }
+
+            let metrics = edgeFadeMetrics()
+            for cell in visibleCells {
+                applyEdgeMask(to: cell, metrics: metrics)
+            }
+        }
+
+        func updateEdgeMask(for cell: UICollectionViewCell) {
+            guard !isUpdatingEdgeMasks, bounds.height > 0, cell.superview != nil else { return }
+            isUpdatingEdgeMasks = true
+            defer { isUpdatingEdgeMasks = false }
+            applyEdgeMask(to: cell, metrics: edgeFadeMetrics())
+        }
+
+        fileprivate func clearEdgeMasks(for cell: UICollectionViewCell) {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            clearEdgeMasks(in: cell.layer)
+            CATransaction.commit()
+            maskedCells.remove(cell)
+        }
+
+        private struct EdgeFadeMetrics {
+            let fadeTop: CGFloat
+            let fadeTopEnd: CGFloat
+            let fadeBottomStart: CGFloat
+            let fadeBottomEnd: CGFloat
+            let viewportRect: CGRect
+            let colors: [CGColor]
+            let locations: [NSNumber]
+        }
+
+        private func edgeFadeMetrics() -> EdgeFadeMetrics {
+            let scrollOffset = min(max(contentOffset.y + adjustedContentInset.top, 0), headerHeight)
+            let fadeTop = bounds.minY + max(headerHeight - scrollOffset, 0) + 44
+            let fadeTopEnd = fadeTop + NowPlayingQueueList.topFadeHeight
+            let fadeBottomEnd = bounds.maxY
+            let fadeBottomStart = fadeBottomEnd - NowPlayingQueueList.bottomFadeHeight
+            let viewportRect = CGRect(
+                x: bounds.minX - 64,
+                y: fadeTop,
+                width: bounds.width + 128,
+                height: max(fadeBottomEnd - fadeTop, 0)
+            )
+            let totalHeight = max(fadeBottomEnd - fadeTop, 1)
+            let topEndLoc = Double(min(max((fadeTopEnd - fadeTop) / totalHeight, 0), 1))
+            let bottomStartLoc = Double(min(max((fadeBottomStart - fadeTop) / totalHeight, topEndLoc), 1))
+            let bottomSpan = 1.0 - bottomStartLoc
+            let locations: [NSNumber] = [
+                0.0,
+                NSNumber(value: 0.3 * topEndLoc),
+                NSNumber(value: 0.65 * topEndLoc),
+                NSNumber(value: topEndLoc),
+                NSNumber(value: bottomStartLoc),
+                NSNumber(value: bottomStartLoc + 0.35 * bottomSpan),
+                NSNumber(value: bottomStartLoc + 0.7 * bottomSpan),
+                1.0
+            ]
+            let clear = UIColor.clear.cgColor
+            let alpha35 = UIColor.black.withAlphaComponent(0.35).cgColor
+            let alpha80 = UIColor.black.withAlphaComponent(0.8).cgColor
+            let opaque = UIColor.black.cgColor
+            let colors = [clear, alpha35, alpha80, opaque, opaque, alpha80, alpha35, clear]
+            return EdgeFadeMetrics(
+                fadeTop: fadeTop,
+                fadeTopEnd: fadeTopEnd,
+                fadeBottomStart: fadeBottomStart,
+                fadeBottomEnd: fadeBottomEnd,
+                viewportRect: viewportRect,
+                colors: colors,
+                locations: locations
+            )
+        }
+
+        private func applyEdgeMask(to cell: UICollectionViewCell, metrics: EdgeFadeMetrics) {
+            let cellFrame = convert(cell.bounds, from: cell)
+            if cellFrame.minY >= metrics.fadeTopEnd && cellFrame.maxY <= metrics.fadeBottomStart {
+                if maskedCells.contains(cell) {
+                    CATransaction.begin()
+                    CATransaction.setDisableActions(true)
+                    clearEdgeMasks(in: cell.layer)
+                    CATransaction.commit()
+                    maskedCells.remove(cell)
+                }
+                return
+            }
+
+            maskedCells.add(cell)
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            applyEdgeMasks(in: cell.layer, metrics: metrics)
+            CATransaction.commit()
+        }
+
+        private func clearEdgeMasks(in layer: CALayer) {
+            if layer.mask is QueueEdgeMaskLayer {
+                layer.mask = nil
+            }
+            for sublayer in layer.sublayers ?? [] {
+                clearEdgeMasks(in: sublayer)
+            }
+        }
+
+        private func subtreeHasCompositingFilter(_ layer: CALayer) -> Bool {
+            if layer.compositingFilter != nil { return true }
+            return layer.sublayers?.contains(where: subtreeHasCompositingFilter) ?? false
+        }
+
+        private func applyEdgeMasks(in layer: CALayer, metrics: EdgeFadeMetrics) {
+            let hasCustomMask = layer.mask != nil && !(layer.mask is QueueEdgeMaskLayer)
+            if (layer.compositingFilter != nil || !subtreeHasCompositingFilter(layer)) && !hasCustomMask {
+                for sublayer in layer.sublayers ?? [] {
+                    clearEdgeMasks(in: sublayer)
+                }
+                setEdgeMask(on: layer, metrics: metrics)
+                return
+            }
+
+            if layer.mask is QueueEdgeMaskLayer {
+                layer.mask = nil
+            }
+            for sublayer in layer.sublayers ?? [] {
+                applyEdgeMasks(in: sublayer, metrics: metrics)
+            }
+        }
+
+        private func setEdgeMask(on targetLayer: CALayer, metrics: EdgeFadeMetrics) {
+            let maskLayer = (targetLayer.mask as? QueueEdgeMaskLayer) ?? QueueEdgeMaskLayer()
+            let localRect = targetLayer.convert(metrics.viewportRect, from: self.layer)
+            let topY = targetLayer.convert(CGPoint(x: 0, y: metrics.fadeTop), from: self.layer).y
+            let bottomY = targetLayer.convert(CGPoint(x: 0, y: metrics.fadeBottomEnd), from: self.layer).y
+            let isFlippedY = topY > bottomY
+            let startPoint = CGPoint(x: 0.5, y: isFlippedY ? 1 : 0)
+            let endPoint = CGPoint(x: 0.5, y: isFlippedY ? 0 : 1)
+            let scale = window?.screen.scale ?? traitCollection.displayScale
+
+            if maskLayer.frame != localRect { maskLayer.frame = localRect }
+            if maskLayer.startPoint != startPoint { maskLayer.startPoint = startPoint }
+            if maskLayer.endPoint != endPoint { maskLayer.endPoint = endPoint }
+            if maskLayer.contentsScale != scale { maskLayer.contentsScale = scale }
+            maskLayer.colors = metrics.colors
+            if maskLayer.locations != metrics.locations { maskLayer.locations = metrics.locations }
+            if targetLayer.mask !== maskLayer { targetLayer.mask = maskLayer }
+        }
     }
 
     /// 布局上只占页面的宽度，列表本身向左右各多出 `overflow`，高亮才能通栏。
@@ -138,8 +327,9 @@ struct NowPlayingQueueList: UIViewRepresentable {
         func attach(to collectionView: UICollectionView, initial: NowPlayingQueueList) {
             latest = initial
             self.collectionView = collectionView
-            let registration = UICollectionView.CellRegistration<UICollectionViewListCell, Item> {
+            let registration = UICollectionView.CellRegistration<EdgeFadedListCell, Item> {
                 [weak self] cell, _, item in
+                cell.edgeFadeCollectionView = self?.collectionView as? EdgeFadedCollectionView
                 self?.configure(cell, item: item)
             }
             let dataSource = UICollectionViewDiffableDataSource<Section, Item>(
@@ -169,17 +359,13 @@ struct NowPlayingQueueList: UIViewRepresentable {
             guard let dataSource else { return false }
             let previousList = latest
             latest = list
+            (collectionView as? EdgeFadedCollectionView)?.headerHeight = list.headerHeight
             let entriesChanged = !hasApplied || previousList?.version != list.version
             let insetChanged = previousList?.horizontalInset != list.horizontalInset
             let headerChanged = previousList?.headerHeight != list.headerHeight
             let subtitleChanged = previousList?.subtitle != list.subtitle
             let appearanceChanged = previousList.map {
-                $0.backdropImage !== list.backdropImage
-                    || $0.undimmedBackdropImage !== list.undimmedBackdropImage
-                    || $0.edrEnabled != list.edrEnabled
-                    || $0.edrLevels != list.edrLevels
-                    || $0.backdropAnchor !== list.backdropAnchor
-                    || $0.visualsActive != list.visualsActive
+                $0.visualsActive != list.visualsActive
             } ?? false
             let dependenciesChanged = previousList.map {
                 $0.player !== list.player || $0.actions !== list.actions || $0.library !== list.library
@@ -298,19 +484,14 @@ struct NowPlayingQueueList: UIViewRepresentable {
             case .title:
                 cell.contentConfiguration = UIHostingConfiguration {
                     VStack(alignment: .leading, spacing: 0) {
-                        PlayerWhiteEDRText(text: "继续播放", fontSize: 17, fontWeight: .bold)
+                        Text("继续播放")
                             .font(.headline.bold())
-                            .foregroundStyle(Color.white)
-                        NowPlayingVibrantLabel(text: latest.subtitle, fontSize: 13, role: .subtitle)
+                            .nowPlayingPrimary()
+                        NowPlayingVibrantLabel(text: latest.subtitle, fontSize: 13)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .listRowSeparator(.hidden)
-                    .environment(\.nowPlayingBackdropImage, latest.backdropImage)
-                    .environment(\.nowPlayingUndimmedBackdropImage, latest.undimmedBackdropImage)
-                    .environment(\.nowPlayingBackdropAnchor, latest.backdropAnchor)
-                    .environment(\.playerArtistEDREnabled, latest.edrEnabled)
-                    .environment(\.playerEDRLevels, latest.edrLevels)
                     .environment(\.playerVisualsActive, latest.visualsActive)
                     .environment(\.artworkLoadAction, latest.loadArtwork)
                 }
@@ -346,11 +527,6 @@ struct NowPlayingQueueList: UIViewRepresentable {
                     .environment(latest.actions)
                     .environment(latest.library)
                     .listRowSeparator(.hidden)
-                    .environment(\.nowPlayingBackdropImage, latest.backdropImage)
-                    .environment(\.nowPlayingUndimmedBackdropImage, latest.undimmedBackdropImage)
-                    .environment(\.nowPlayingBackdropAnchor, latest.backdropAnchor)
-                    .environment(\.playerArtistEDREnabled, latest.edrEnabled)
-                    .environment(\.playerEDRLevels, latest.edrLevels)
                     .environment(\.playerVisualsActive, latest.visualsActive)
                     .environment(\.artworkLoadAction, latest.loadArtwork)
                     .task(id: latest.visualsActive ? entry.song.artworkLoadID : nil) {
@@ -366,7 +542,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
                 if cell.accessories.count != 1 || cell.accessories.first?.accessoryType != .reorder {
                     cell.accessories = [
                         .reorder(displayed: .always,
-                                 options: .init(tintColor: UIColor.white.withAlphaComponent(0.45)))
+                                 options: .init(tintColor: UIColor.white.withAlphaComponent(NowPlayingVisualHierarchy.queueReorderTintAlpha)))
                     ]
                 }
             }
@@ -413,7 +589,6 @@ struct NowPlayingQueueList: UIViewRepresentable {
         }
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
-            latest?.backdropAnchor?.refresh()
             guard let latest else { return }
             // 保持现有顶部边界，头部滚动与吸附不额外叠加橡皮筋位移。
             let top = -scrollView.adjustedContentInset.top
@@ -421,6 +596,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
                 scrollView.contentOffset.y = top
             }
             updateScrollIndicatorInsets()
+            (scrollView as? EdgeFadedCollectionView)?.updateEdgeMasks()
             let offset = scrollView.contentOffset.y + scrollView.adjustedContentInset.top
             latest.onScroll(min(max(offset, 0), latest.headerHeight))
             // 手指按着往下拉列表时不振。

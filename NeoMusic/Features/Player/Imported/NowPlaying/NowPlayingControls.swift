@@ -119,9 +119,11 @@ struct NowPlayingProgressControl: View {
         ) {
             Group {
                 if player.isPreview {
-                    Text("试听").foregroundStyle(.white.opacity(0.8))
+                    Text("试听")
+                        .nowPlayingPlusLighter(0.65)
                 } else if player.issue != nil {
                     Image(systemName: "exclamationmark.circle")
+                        .nowPlayingPlusLighter(NowPlayingVisualHierarchy.audioQualityTextOpacity)
                 } else if let quality = actions.audioQuality(for: song) {
                     NowPlayingAudioQualityControl(quality: quality,
                         openAudioQualitySettings: actions.canOpenAudioQualitySettings
@@ -130,7 +132,6 @@ struct NowPlayingProgressControl: View {
                 }
             }
             .font(.system(size: timeFontSize, weight: .medium).monospacedDigit())
-            .foregroundStyle(.white.opacity(0.5))
         }
     }
 
@@ -148,6 +149,8 @@ private struct NowPlayingCapsuleTrack: View {
     let isPressed: Bool
     let allowsSpatialExpansion: Bool
     let highlightFeedback: NowPlayingHighlightFeedback
+    var filledOpacity: Double = NowPlayingVisualHierarchy.progressFilledOpacity
+    var filledActiveOpacity: Double = NowPlayingVisualHierarchy.progressFilledActiveOpacity
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
 
     var body: some View {
@@ -162,16 +165,28 @@ private struct NowPlayingCapsuleTrack: View {
             ? NowPlayingProgressFeedbackSpec.pressedBarHeight
             : NowPlayingProgressFeedbackSpec.restBarHeight
         let clampedFraction = min(max(fraction, 0), 1)
+        let deltaOpacity = max(0, (isPressed ? filledActiveOpacity : filledOpacity) - NowPlayingVisualHierarchy.trackUnfilledOpacity)
 
         ZStack(alignment: .leading) {
-            Color.white.opacity(0.25)
-            Color.white
-                .opacity(isPressed ? 1 : 0.5)
-                .animation(highlightAnimation, value: isPressed)
-                .frame(width: baseWidth * clampedFraction)
+            Capsule(style: .circular)
+                .fill(.white.opacity(NowPlayingVisualHierarchy.trackUnfilledOpacity))
+                .blendMode(.plusLighter)
+
+            if clampedFraction > 0 {
+                Capsule(style: .circular)
+                    .fill(.white.opacity(deltaOpacity))
+                    .blendMode(.plusLighter)
+                    .animation(highlightAnimation, value: isPressed)
+                    .mask {
+                        HStack(spacing: 0) {
+                            Rectangle()
+                                .frame(width: baseWidth * clampedFraction)
+                            Spacer(minLength: 0)
+                        }
+                    }
+            }
         }
         .frame(width: baseWidth, height: currentHeight)
-        .clipShape(Capsule(style: .circular))
         .animation(spatialAnimation, value: isPressed)
         .scaleEffect(x: expandsSpatially ? NowPlayingProgressFeedbackSpec.pressedHorizontalScale : 1, y: 1)
         .animation(spatialAnimation, value: isPressed)
@@ -388,24 +403,13 @@ private struct NowPlayingTimeLabels: View {
 
         HStack {
             Text(elapsedText)
-                .modifier(
-                    PlayerEDRControlAvailable(
-                        shape: .time(elapsedText, false, fontSize),
-                        isHighlighted: isPressed
-                    )
-                )
             Spacer()
             Text(remainingText)
-                .modifier(
-                    PlayerEDRControlAvailable(
-                        shape: .time(remainingText, true, fontSize),
-                        isHighlighted: isPressed
-                    )
-                )
         }
         .font(.system(size: fontSize, weight: .medium).monospacedDigit())
-        .foregroundStyle(.white.opacity(isPressed ? 1 : 0.5))
-        .opacity(isPressed ? 1 : 0.85)
+        .nowPlayingPlusLighter(
+            isPressed ? NowPlayingVisualHierarchy.timeLabelActiveOpacity : NowPlayingVisualHierarchy.timeLabelOpacity
+        )
         .animation(
             accessibilityReduceMotion
                 ? nil : NowPlayingProgressFeedbackSpec.progressHighlight.timing(highlighted: isPressed).animation,
@@ -462,6 +466,7 @@ struct NowPlayingTransportControls: View {
                     trigger: previousTrigger,
                     reducesMotion: accessibilityReduceMotion
                 )
+                .nowPlayingPrimary()
                 .frame(width: 40, height: 23)
                 .offset(y: -0.5)
                     .frame(width: 64, height: 64)
@@ -483,6 +488,7 @@ struct NowPlayingTransportControls: View {
                         isPlaying: player.isPlaying,
                         reducesMotion: accessibilityReduceMotion
                     )
+                    .nowPlayingPrimary()
                     .frame(width: player.isPlaying ? 32 : 31.67, height: player.isPlaying ? 40 : 35.67)
                     .offset(x: player.isPlaying ? 0 : 1.8)
                     .opacity(showsLoadingIndicator ? 0 : 1)
@@ -491,7 +497,7 @@ struct NowPlayingTransportControls: View {
                     if showsLoadingIndicator {
                         ProgressView()
                             .controlSize(.large)
-                            .tint(.white)
+                            .tint(NowPlayingVisualHierarchy.primaryColor)
                             .transition(.opacity)
                     }
                 }
@@ -530,6 +536,7 @@ struct NowPlayingTransportControls: View {
                     trigger: nextTrigger,
                     reducesMotion: accessibilityReduceMotion
                 )
+                .nowPlayingPrimary()
                 .frame(width: 40, height: 23)
                 .offset(y: -0.5)
                     .frame(width: 64, height: 64)
@@ -582,7 +589,9 @@ struct NowPlayingVolumeControl: View {
                             .frame(width: 18, height: 14)
                             .position(x: layout.x(358.5), y: 21)
                     }
-                    .foregroundStyle(.white.opacity(isPressed ? 1 : 0.65))
+                    .nowPlayingPlusLighter(
+                        isPressed ? NowPlayingVisualHierarchy.volumeIconActiveOpacity : NowPlayingVisualHierarchy.volumeIconOpacity
+                    )
                     .animation(
                         accessibilityReduceMotion
                             ? nil : NowPlayingProgressFeedbackSpec.volumeHighlight.timing(highlighted: isPressed).animation,
@@ -597,7 +606,9 @@ struct NowPlayingVolumeControl: View {
                         baseWidth: trackWidth,
                         isPressed: isPressed,
                         allowsSpatialExpansion: true,
-                        highlightFeedback: NowPlayingProgressFeedbackSpec.volumeHighlight
+                        highlightFeedback: NowPlayingProgressFeedbackSpec.volumeHighlight,
+                        filledOpacity: NowPlayingVisualHierarchy.volumeFilledOpacity,
+                        filledActiveOpacity: NowPlayingVisualHierarchy.volumeFilledActiveOpacity
                     )
                     .position(x: layout.x(196.5), y: 21)
                 }
@@ -1099,7 +1110,7 @@ struct NowPlayingPageSelector: View {
                     .disabled(!hasLyrics && page != .lyrics)
                     .opacity(hasLyrics || page == .lyrics ? 1 : 0.32)
                     .position(x: layout.x(87), y: 25)
-                ReferenceAirPlayButton(opacity: 0.5)
+                ReferenceAirPlayButton(opacity: NowPlayingVisualHierarchy.airPlayOpacity)
                     .frame(width: 44, height: 44)
                     .position(x: proxy.size.width / 2, y: 25)
                 pageButton(page: .queue, systemImage: "list.bullet", accessibilityLabel: "继续播放",
@@ -1125,32 +1136,46 @@ struct NowPlayingPageSelector: View {
             page = targetPage
         } label: {
             ZStack(alignment: .topTrailing) {
-                Image(systemName: systemImage)
-                    .resizable()
-                    .symbolVariant(isSelected ? .fill : .none)
-                    .scaledToFit()
-                    .frame(width: destination == .queue ? 20.67 : 22.5,
-                           height: destination == .queue ? 15.33 : 23.5)
-                    .frame(width: 44, height: 44)
-                    .foregroundStyle(
-                        isSelected
-                            ? .black.opacity(0.68)
-                            : .white.opacity(0.6)
-                    )
-                    .background {
-                        if isSelected {
-                            Circle().fill(.white.opacity(0.5))
+                Group {
+                    if isSelected {
+                        ZStack {
+                            Circle()
+                                .fill(.white.opacity(NowPlayingVisualHierarchy.bottomButtonSelectedFillOpacity))
                                 .frame(width: 38, height: 38)
+                            Image(systemName: systemImage)
+                                .resizable()
+                                .symbolVariant(.fill)
+                                .scaledToFit()
+                                .frame(width: destination == .queue ? 20.67 : 22.5,
+                                       height: destination == .queue ? 15.33 : 23.5)
+                                .blendMode(.destinationOut)
                         }
+                        .compositingGroup()
+                        .blendMode(.plusLighter)
+                        .frame(width: 44, height: 44)
+                    } else {
+                        Image(systemName: systemImage)
+                            .resizable()
+                            .symbolVariant(.none)
+                            .scaledToFit()
+                            .frame(width: destination == .queue ? 20.67 : 22.5,
+                                   height: destination == .queue ? 15.33 : 23.5)
+                            .frame(width: 44, height: 44)
+                            .nowPlayingPlusLighter(NowPlayingVisualHierarchy.bottomButtonUnselectedOpacity)
                     }
-                    .offset(y: isSelected && destination == .lyrics ? 1 : 0)
+                }
+                .offset(y: isSelected && destination == .lyrics ? 1 : 0)
 
                 if let badgeSystemImage {
                     Image(systemName: badgeSystemImage)
                         .font(.system(size: 7, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.9))
+                        .nowPlayingPlusLighter(0.85)
                         .frame(width: 20, height: 20)
-                        .background(.white.opacity(0.1), in: .circle)
+                        .background {
+                            Circle()
+                                .fill(.white.opacity(NowPlayingVisualHierarchy.repeatBadgeOpacity))
+                                .blendMode(.plusLighter)
+                        }
                         .offset(x: 8, y: -5)
                         .accessibilityHidden(true)
                 }

@@ -97,7 +97,8 @@ struct NowPlayingBackdropColorProfile: Equatable, Sendable {
 
         // Calibrate target brightness to stay calm over bright covers and subtly luminous over black covers.
         let tonalL = min(max(meanL * 0.65 + p85L * 0.35, 0), 1)
-        let targetCenterL = min(max(0.19 + tonalL * 0.26, 0.19), 0.45)
+        let highKeyLift = pow(max(tonalL - 0.62, 0) / 0.38, 1.5) * 0.21
+        let targetCenterL = min(max(0.19 + tonalL * 0.32 + highKeyLift, 0.19), 0.71)
 
         let range = max(p85L - p10L, 0.05)
         let lSpreadScale = min(max(0.32 / range, 0.45), 1.35)
@@ -218,6 +219,10 @@ final class NowPlayingFluidBackdropCache: @unchecked Sendable {
         cache.object(forKey: url as NSURL)?.source
     }
 
+    func removeCached(for url: URL) {
+        cache.removeObject(forKey: url as NSURL)
+    }
+
     func prepare(_ image: UIImage, for url: URL) async -> NowPlayingFluidBackdropSource? {
         if let existing = cached(for: url) { return existing }
         let source = await Task.detached(priority: .userInitiated) {
@@ -229,6 +234,28 @@ final class NowPlayingFluidBackdropCache: @unchecked Sendable {
     }
 }
 
+@Observable @MainActor
+final class NowPlayingFluidBackdropResources {
+    static let shared = NowPlayingFluidBackdropResources()
+    private(set) var pipelines: NowPlayingBackdropMetalPipelines?
+    @ObservationIgnored private var preparation: Task<NowPlayingBackdropMetalPipelines?, Never>?
+
+    var isReady: Bool { pipelines != nil }
+
+    func prepare() async {
+        if pipelines != nil { return }
+        let task: Task<NowPlayingBackdropMetalPipelines?, Never>
+        if let existing = preparation {
+            task = existing
+        } else {
+            task = Task.detached(priority: .userInitiated) { NowPlayingBackdropMetalPipelines() }
+            preparation = task
+        }
+        let compiled = await task.value
+        if pipelines == nil { pipelines = compiled }
+    }
+}
+
 /// Precompiled Metal pipelines shared across player backdrop rendering passes.
 final class NowPlayingBackdropMetalPipelines: @unchecked Sendable {
     let device: MTLDevice
@@ -237,7 +264,6 @@ final class NowPlayingBackdropMetalPipelines: @unchecked Sendable {
     let downsamplePipeline: MTLRenderPipelineState
     let upsamplePipeline: MTLRenderPipelineState
     let conditionPipeline: MTLRenderPipelineState
-    let edrExtractPipeline: MTLRenderPipelineState
     let presentPipeline: MTLRenderPipelineState
 
     convenience init?(device: MTLDevice? = MTLCreateSystemDefaultDevice(), queue: MTLCommandQueue? = nil) {
@@ -253,7 +279,6 @@ final class NowPlayingBackdropMetalPipelines: @unchecked Sendable {
               let downsample = Self.makePipeline(device: device, vertex: vertex, fragmentName: "kawaseDownsampleFragment", pixelFormat: .rgba16Float, library: library),
               let upsample = Self.makePipeline(device: device, vertex: vertex, fragmentName: "kawaseUpsampleFragment", pixelFormat: .rgba16Float, library: library),
               let condition = Self.makePipeline(device: device, vertex: vertex, fragmentName: "fluidBackdropConditionFragment", pixelFormat: .rgba16Float, library: library),
-              let edrExtract = Self.makePipeline(device: device, vertex: vertex, fragmentName: "fluidBackdropEDRExtractFragment", pixelFormat: .rgba16Float, library: library),
               let present = Self.makePipeline(device: device, vertex: vertex, fragmentName: "fluidBackdropPresentFragment", pixelFormat: .bgra8Unorm, library: library)
         else { return nil }
 
@@ -263,7 +288,6 @@ final class NowPlayingBackdropMetalPipelines: @unchecked Sendable {
         self.downsamplePipeline = downsample
         self.upsamplePipeline = upsample
         self.conditionPipeline = condition
-        self.edrExtractPipeline = edrExtract
         self.presentPipeline = present
     }
 
@@ -311,7 +335,6 @@ final class NowPlayingFluidBackdropEngine {
     static let canvasHeight = 320
 
     let pipelines: NowPlayingBackdropMetalPipelines
-    let edrTexture: MTLTexture
 
     private var artworkTexture: MTLTexture
     private var uploadedSourceID: UUID?
@@ -340,8 +363,7 @@ final class NowPlayingFluidBackdropEngine {
               let u1 = Self.makeTexture(device: device, width: 80, height: 160, format: .rgba16Float, usage: [.renderTarget, .shaderRead]),
               let u0 = Self.makeTexture(device: device, width: w, height: h, format: .rgba16Float, usage: [.renderTarget, .shaderRead]),
               let conditioned = Self.makeTexture(device: device, width: w, height: h, format: .rgba16Float, usage: [.renderTarget, .shaderRead]),
-              let frozen = Self.makeTexture(device: device, width: w, height: h, format: .rgba16Float, usage: [.shaderRead]),
-              let edr = Self.makeTexture(device: device, width: w, height: h, format: .rgba16Float, usage: [.renderTarget, .shaderRead])
+              let frozen = Self.makeTexture(device: device, width: w, height: h, format: .rgba16Float, usage: [.shaderRead])
         else { return nil }
 
         self.pipelines = pipelines
@@ -352,7 +374,6 @@ final class NowPlayingFluidBackdropEngine {
         self.upTextures = [u3, u2, u1, u0]
         self.conditionedTexture = conditioned
         self.frozenTexture = frozen
-        self.edrTexture = edr
     }
 
     func captureFrozenFrame(using commandBuffer: MTLCommandBuffer) {
@@ -448,21 +469,12 @@ final class NowPlayingFluidBackdropEngine {
             uniforms: &conditionUniforms
         ) else { return false }
 
-        // Pass 5: Build bright linear texture shared on GPU with foreground EDR buttons/labels.
+        // Pass 5: Present final vertically shaded, linear->sRGB encoded, dithered image.
         let topShade: Float = 1.03
         let bottomShade: Float = 0.76
         var presentUniforms = BackdropPresentUniforms(
             params: SIMD4<Float>(0, topShade, bottomShade, 1.0 / 255.0)
         )
-        guard encodeQuad(
-            commandBuffer: commandBuffer,
-            pipeline: pipelines.edrExtractPipeline,
-            target: edrTexture,
-            textures: [conditionedTexture],
-            uniforms: &presentUniforms
-        ) else { return false }
-
-        // Pass 6: Present final vertically shaded, linear->sRGB encoded, dithered image.
         guard encodeQuad(
             commandBuffer: commandBuffer,
             pipeline: pipelines.presentPipeline,
@@ -544,7 +556,7 @@ final class NowPlayingFluidBackdropEngine {
 
 /// Live Metal layer driving ambient fluid playback, 0.6s interruptible track crossfades,
 /// and page-aware contrast between Artwork and Lyrics/Queue pages.
-final class NowPlayingFluidBackdropView: UIView, NowPlayingLiveBackdropSource {
+final class NowPlayingFluidBackdropView: UIView {
     override class var layerClass: AnyClass { CAMetalLayer.self }
     private var metalLayer: CAMetalLayer { layer as! CAMetalLayer }
 
@@ -557,7 +569,6 @@ final class NowPlayingFluidBackdropView: UIView, NowPlayingLiveBackdropSource {
     private let engine: NowPlayingFluidBackdropEngine?
     private var source: NowPlayingFluidBackdropSource?
     private var currentSourceID: UUID?
-    private weak var anchor: NowPlayingBackdropAnchor?
 
     private var targetMoving: Bool = true
     private var currentSpeed: Float = 1
@@ -566,23 +577,18 @@ final class NowPlayingFluidBackdropView: UIView, NowPlayingLiveBackdropSource {
     private var hasRenderedFrame = false
     private var hasFrozenTrack = false
     private var captureFrozenOnNextRender = false
-    private var edrNeedsImmediateSync = true
     private var crossfadeStartTimestamp: CFTimeInterval = 0
     private var lastTickTimestamp: CFTimeInterval?
-    private var lastEDRTokenTimestamp: CFTimeInterval = 0
     private var phaseTime: Double = 0
     private var needsRender = true
-
-    private(set) var liveBackdropFrameToken: UInt64 = 0
-    var liveBackdropTexture: MTLTexture? { hasRenderedFrame ? engine?.edrTexture : nil }
 
     private var displayLink: CADisplayLink?
     private var lastDrawableSize: CGSize = .zero
 
+    var hasActiveDisplayLink: Bool { displayLink != nil && displayLink?.isPaused == false }
+
     private static let crossfadeDuration: CFTimeInterval = 0.60
     private static let motionScale: Double = 0.45
-    private static let steadyEDRTokenInterval: CFTimeInterval = 0.50
-    private static let crossfadeEDRTokenInterval: CFTimeInterval = 0.125
 
     init(pipelines: NowPlayingBackdropMetalPipelines) {
         self.engine = NowPlayingFluidBackdropEngine(pipelines: pipelines)
@@ -593,6 +599,8 @@ final class NowPlayingFluidBackdropView: UIView, NowPlayingLiveBackdropSource {
 
         metalLayer.device = pipelines.device
         metalLayer.pixelFormat = .bgra8Unorm
+        // 着色器最终输出 linearToSRGB 编码像素，显式声明 sRGB 避免无标签图层与屏幕直出管线色彩失配。
+        metalLayer.colorspace = CGColorSpace(name: CGColorSpace.sRGB)
         metalLayer.framebufferOnly = false
         metalLayer.isOpaque = true
         metalLayer.contentsScale = 1.0
@@ -604,20 +612,13 @@ final class NowPlayingFluidBackdropView: UIView, NowPlayingLiveBackdropSource {
     func update(
         source: NowPlayingFluidBackdropSource,
         isPlaying: Bool,
-        reduceMotion: Bool,
-        anchor: NowPlayingBackdropAnchor?
+        reduceMotion: Bool
     ) {
-        if self.anchor !== anchor {
-            self.anchor = anchor
-        }
-        anchor?.liveSource = self
-
         let newSourceID = source.id
         if currentSourceID != newSourceID {
             let hadPrevious = currentSourceID != nil && hasRenderedFrame
             currentSourceID = newSourceID
             self.source = source
-            edrNeedsImmediateSync = true
             if hadPrevious && !reduceMotion {
                 captureFrozenOnNextRender = true
                 crossfadeStartTimestamp = CACurrentMediaTime()
@@ -651,7 +652,6 @@ final class NowPlayingFluidBackdropView: UIView, NowPlayingLiveBackdropSource {
             stopDisplayLink()
             lastTickTimestamp = nil
         } else {
-            anchor?.liveSource = self
             needsRender = true
             updateDisplayLink()
             setNeedsLayout()
@@ -701,9 +701,6 @@ final class NowPlayingFluidBackdropView: UIView, NowPlayingLiveBackdropSource {
 
     func stop() {
         stopDisplayLink()
-        if anchor?.liveSource === self {
-            anchor?.liveSource = nil
-        }
     }
 
     private func stopDisplayLink() {
@@ -763,7 +760,6 @@ final class NowPlayingFluidBackdropView: UIView, NowPlayingLiveBackdropSource {
         commandBuffer.present(drawable)
         commandBuffer.commit()
 
-        let wasRendered = hasRenderedFrame
         let finishedCrossfade = hasFrozenTrack && crossfade >= 0.999
         if finishedCrossfade {
             hasFrozenTrack = false
@@ -771,13 +767,6 @@ final class NowPlayingFluidBackdropView: UIView, NowPlayingLiveBackdropSource {
 
         hasRenderedFrame = true
         needsRender = false
-
-        let tokenInterval = hasFrozenTrack ? Self.crossfadeEDRTokenInterval : Self.steadyEDRTokenInterval
-        if !wasRendered || edrNeedsImmediateSync || finishedCrossfade || (timestamp - lastEDRTokenTimestamp) >= tokenInterval {
-            liveBackdropFrameToken &+= 1
-            lastEDRTokenTimestamp = timestamp
-            edrNeedsImmediateSync = false
-        }
         updateDisplayLink()
     }
 }
@@ -787,16 +776,15 @@ struct NowPlayingFluidBackdropRepresentable: UIViewRepresentable {
     let isPlaying: Bool
     let reduceMotion: Bool
     let pipelines: NowPlayingBackdropMetalPipelines
-    let anchor: NowPlayingBackdropAnchor?
 
     func makeUIView(context: Context) -> NowPlayingFluidBackdropView {
         let view = NowPlayingFluidBackdropView(pipelines: pipelines)
-        view.update(source: source, isPlaying: isPlaying, reduceMotion: reduceMotion, anchor: anchor)
+        view.update(source: source, isPlaying: isPlaying, reduceMotion: reduceMotion)
         return view
     }
 
     func updateUIView(_ view: NowPlayingFluidBackdropView, context: Context) {
-        view.update(source: source, isPlaying: isPlaying, reduceMotion: reduceMotion, anchor: anchor)
+        view.update(source: source, isPlaying: isPlaying, reduceMotion: reduceMotion)
     }
 
     static func dismantleUIView(_ view: NowPlayingFluidBackdropView, coordinator: ()) {

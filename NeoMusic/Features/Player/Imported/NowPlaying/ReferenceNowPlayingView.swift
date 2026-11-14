@@ -20,9 +20,6 @@ struct ReferenceNowPlayingView: View {
     @State private var isQueueSongHeaderHidden = false
     @State private var queueHeaderOffset = QueueHeaderOffset()
     @State private var geometryState: NowPlayingGeometry
-    @State private var backdropAnchor = NowPlayingBackdropAnchor()
-    @State private var backdropImage: UIImage?
-    @State private var undimmedBackdropImage: UIImage?
     @State private var artworkPageFrame = CGRect.zero
     @State private var lyricsModel = NowPlayingLyricsModel()
     @State private var controlsHeight = NowPlayingBottomControls.overlayHeight
@@ -52,10 +49,7 @@ struct ReferenceNowPlayingView: View {
                     artworkURL: player.currentTrack?.coverURL,
                     trackID: player.currentTrack?.id,
                     isPlaying: player.isPlaying,
-                    onFrameChange: { geometryState.backdropFrame = $0 },
-                    onImageChange: { backdropImage = $0 },
-                    onUndimmedImageChange: { undimmedBackdropImage = $0 },
-                    anchor: backdropAnchor
+                    onFrameChange: { geometryState.backdropFrame = $0 }
                 )
                 // iPhone 只支持竖屏（见 project.yml 的 UISupportedInterfaceOrientations），不保留横屏布局。
                 if let song = player.currentTrack {
@@ -64,20 +58,17 @@ struct ReferenceNowPlayingView: View {
                     ContentUnavailableView("当前没有播放歌曲", systemImage: "music.note").foregroundStyle(.white)
                 }
             }
+            .compositingGroup()
             .environment(\.nowPlayingLayout, layout)
             .environment(\.nowPlayingControlsOverflow, textSize.isAccessibilitySize
                          ? max(0, controlsHeight - NowPlayingBottomControls.overlayHeight) : 0)
-            .environment(\.nowPlayingBackdropAnchor, backdropAnchor)
-            .environment(\.nowPlayingBackdropImage, backdropImage)
-            .environment(\.nowPlayingUndimmedBackdropImage, undimmedBackdropImage)
         }
         .coordinateSpace(.named(NowPlayingContentCoordinateSpace.name))
         .foregroundStyle(.white)
         .environment(\.colorScheme, .dark)
         .environment(\.playerVisualsActive, visualsActive)
-        .environment(\.playerArtistEDREnabled, PlayerEDRResources.shared.isReady)
         .task(id: visualsActive) {
-            if visualsActive { await PlayerEDRResources.shared.prepare() }
+            if visualsActive { await NowPlayingFluidBackdropResources.shared.prepare() }
         }
         .task(id: "\(player.currentTrack?.id ?? "")/\(library.contentRevision)/\(lyricsModel.revision)") {
             guard let track = player.currentTrack else { return }
@@ -214,7 +205,8 @@ struct ReferenceNowPlayingView: View {
     private func dismissalHandle(layout: ReferenceNowPlayingLayout) -> some View {
         ZStack(alignment: .top) {
             Capsule()
-                .fill(.white.opacity(0.58))
+                .fill(.white.opacity(NowPlayingVisualHierarchy.grabberOpacity))
+                .blendMode(.plusLighter)
                 .frame(width: layout.width(60), height: 3.8)
                 .padding(.top, layout.contentY(69))
         }

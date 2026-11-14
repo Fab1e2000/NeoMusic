@@ -240,13 +240,17 @@ nonisolated private struct ReferenceTrackSwipeEdgeFade: ViewModifier, Animatable
         let fadeWidth = min(CGFloat(10), safeWidth / 4)
         let travel = abs(displacement - (displacement / pageDistance).rounded() * pageDistance)
         let edgeOpacity = 1 - min(travel / fadeWidth, 1)
-        content.mask {
-            LinearGradient(stops: [
-                .init(color: .black.opacity(edgeOpacity), location: 0),
-                .init(color: .black, location: fadeWidth / safeWidth),
-                .init(color: .black, location: 1 - fadeWidth / safeWidth),
-                .init(color: .black.opacity(edgeOpacity), location: 1)
-            ], startPoint: .leading, endPoint: .trailing)
+        if edgeOpacity < 0.999 {
+            content.mask {
+                LinearGradient(stops: [
+                    .init(color: .black.opacity(edgeOpacity), location: 0),
+                    .init(color: .black, location: fadeWidth / safeWidth),
+                    .init(color: .black, location: 1 - fadeWidth / safeWidth),
+                    .init(color: .black.opacity(edgeOpacity), location: 1)
+                ], startPoint: .leading, endPoint: .trailing)
+            }
+        } else {
+            content
         }
     }
 }

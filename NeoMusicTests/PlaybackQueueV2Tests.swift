@@ -123,7 +123,7 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
         XCTAssertEqual(reconfiguredCells(marked), [.title])
 
         marked = try markConfigurations(in: host.view, source: source)
-        inputs.backdrop = UIGraphicsImageRenderer(size: CGSize(width: 2, height: 2)).image { _ in UIColor.red.setFill(); UIRectFill(CGRect(x: 0, y: 0, width: 2, height: 2)) }
+        inputs.visualsActive = false
         try await settle(host)
         XCTAssertEqual(reconfiguredCells(marked),
                        Set([.title] + inputs.entries.map { Coordinator.Item.track($0.id) }))
@@ -301,7 +301,6 @@ private final class QueueListTestInputs {
     } { didSet { revision &+= 1 } }
     var headerHeight: CGFloat = 40
     var subtitle = "Next songs"
-    var backdrop: UIImage?
     var visualsActive = true
     var actions = PlayerTestFixtures.actions()
     var player = PlayerTestFixtures.state(tracks: [])
@@ -320,8 +319,6 @@ private struct QueueListTestView: View {
             .environment(inputs.player)
             .environment(inputs.actions)
             .environment(inputs.library)
-            .environment(\.nowPlayingBackdropImage, inputs.backdrop)
-            .environment(\.playerArtistEDREnabled, false)
             .environment(\.playerVisualsActive, inputs.visualsActive)
     }
 }

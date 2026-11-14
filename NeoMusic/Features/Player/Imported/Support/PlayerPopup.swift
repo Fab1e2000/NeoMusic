@@ -56,6 +56,7 @@ struct PlayerPopup: ViewModifier {
             }
             .popupContentViewCustomizer { view in
                 view.overrideUserInterfaceStyle = .dark
+                view.isTranslucent = false
                 view.popupInteractionGestureRecognizer.delegate = interactionDelegate
             }
             .popupInteractionStyle(.automatic)

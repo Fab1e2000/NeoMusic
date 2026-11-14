@@ -6,8 +6,6 @@ import SwiftUI
 struct NowPlayingMarqueeText: View {
     let text: String
     var isActive = true
-    var edrFontSize: CGFloat? = nil
-    var edrFontSizeIsScaled = false
 
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @Environment(\.playerVisualsActive) private var visualsActive
@@ -31,15 +29,8 @@ struct NowPlayingMarqueeText: View {
             && containerWidth > 0 && textWidth > containerWidth + 0.5
     }
 
-    @ViewBuilder private var titleText: some View {
-        if let edrFontSize {
-            PlayerWhiteEDRText(text: text, fontSize: edrFontSize, fontSizeIsScaled: edrFontSizeIsScaled)
-        }
-        else { Text(text) }
-    }
-
     var body: some View {
-        titleText
+        Text(text)
             .lineLimit(1)
             .truncationMode(.tail)
             .opacity(scrolls ? 0 : 1)
@@ -74,8 +65,8 @@ struct NowPlayingMarqueeText: View {
             let offset = -CGFloat(progress) * distance
             let isMoving = phase > Self.pause
             HStack(spacing: Self.gap) {
-                titleText.lineLimit(1).fixedSize()
-                titleText.lineLimit(1).fixedSize()
+                Text(text).lineLimit(1).fixedSize()
+                Text(text).lineLimit(1).fixedSize()
             }
             .offset(x: offset)
             .frame(width: containerWidth, alignment: .leading)

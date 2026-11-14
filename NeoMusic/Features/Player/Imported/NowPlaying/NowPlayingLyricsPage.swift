@@ -112,8 +112,12 @@ struct NowPlayingLyricsPage: View {
                     )
                 } else {
                     ScrollView {
-                        Text(lyrics.plainText).font(.system(size: plainLyricsFontSize, weight: .bold)).lineSpacing(plainLyricsLineSpacing)
-                            .frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
+                        Text(lyrics.plainText)
+                            .font(.system(size: plainLyricsFontSize, weight: .bold))
+                            .lineSpacing(plainLyricsLineSpacing)
+                            .nowPlayingPrimary()
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .textSelection(.enabled)
                     }
                     .padding(.bottom, appleMusicBottomOverlayHeight)
                 }

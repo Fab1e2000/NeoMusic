@@ -119,9 +119,6 @@ private struct NativePlayerMotionContent: View {
     @State private var page: NowPlayingPage
     @State private var change: NowPlayingPageChange?
     @State private var geometry = NowPlayingGeometry()
-    @State private var backdropAnchor = NowPlayingBackdropAnchor()
-    @State private var backdropImage: UIImage?
-    @State private var undimmedBackdropImage: UIImage?
     @State private var artworkFrame = CGRect.zero
     @State private var lyricsModel = NowPlayingLyricsModel()
     @State private var controlsHeight = NowPlayingBottomControls.overlayHeight
@@ -159,10 +156,7 @@ private struct NativePlayerMotionContent: View {
                     artworkURL: player.currentTrack?.coverURL,
                     trackID: player.currentTrack?.id,
                     isPlaying: player.isPlaying,
-                    onFrameChange: { geometry.backdropFrame = $0 },
-                    onImageChange: { backdropImage = $0 },
-                    onUndimmedImageChange: { undimmedBackdropImage = $0 },
-                    anchor: backdropAnchor
+                    onFrameChange: { geometry.backdropFrame = $0 }
                 )
                 if let song = player.currentTrack {
                     VStack(spacing: 0) {
@@ -178,20 +172,16 @@ private struct NativePlayerMotionContent: View {
             .environment(\.nowPlayingLayout, layout)
             .environment(\.nowPlayingControlsOverflow, textSize.isAccessibilitySize
                          ? max(0, controlsHeight - NowPlayingBottomControls.overlayHeight) : 0)
-            .environment(\.nowPlayingBackdropAnchor, backdropAnchor)
-            .environment(\.nowPlayingBackdropImage, backdropImage)
-            .environment(\.nowPlayingUndimmedBackdropImage, undimmedBackdropImage)
         }
         .coordinateSpace(.named(NowPlayingContentCoordinateSpace.name))
         .foregroundStyle(.white)
         .environment(\.colorScheme, .dark)
         .environment(\.playerVisualsActive, visualsActive)
-        .environment(\.playerArtistEDREnabled, PlayerEDRResources.shared.isReady)
         .transaction {
             if !animates { $0.animation = nil; $0.disablesAnimations = true }
         }
         .task(id: visualsActive) {
-            if visualsActive { await PlayerEDRResources.shared.prepare() }
+            if visualsActive { await NowPlayingFluidBackdropResources.shared.prepare() }
         }
         .task(id: "\(player.currentTrack?.id ?? "")/\(library.contentRevision)/\(lyricsModel.revision)") {
             guard let track = player.currentTrack else { return }
@@ -214,7 +204,9 @@ private struct NativePlayerMotionContent: View {
 
     private func dismissalHandle(layout: ReferenceNowPlayingLayout) -> some View {
         ZStack(alignment: .top) {
-            Capsule().fill(.white.opacity(0.58))
+            Capsule()
+                .fill(.white.opacity(NowPlayingVisualHierarchy.grabberOpacity))
+                .blendMode(.plusLighter)
                 .frame(width: layout.width(60), height: 3.8)
                 .padding(.top, layout.contentY(69))
         }

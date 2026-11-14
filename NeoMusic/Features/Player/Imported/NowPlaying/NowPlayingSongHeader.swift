@@ -87,13 +87,13 @@ struct NowPlayingSongHeader: View {
             NowPlayingTrackSwipe(song: song) { track, interactive in
                 VStack(alignment: .leading, spacing: 2) {
                     // 放不下时滚动显示（相邻曲目的预览不滚）。
-                    NowPlayingMarqueeText(text: track.title, isActive: interactive, edrFontSize: 17)
+                    NowPlayingMarqueeText(text: track.title, isActive: interactive)
                         .font(
                             usesReferenceLayout
                                 ? .headline
                                 : .headline
                         )
-                        .foregroundStyle(Color.white)
+                        .nowPlayingPrimary()
                         .lineLimit(1)
                         .offset(y: usesReferenceLayout ? 5 : 0)
 

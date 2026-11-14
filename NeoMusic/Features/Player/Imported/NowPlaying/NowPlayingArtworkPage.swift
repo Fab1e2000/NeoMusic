@@ -137,10 +137,9 @@ struct NowPlayingArtworkPage: View {
                 NowPlayingTrackSwipe(song: song, pageDistance: layout.width(227) + 24) { track, interactive in
                     ZStack {
                         // 放不下时滚动显示（相邻曲目的预览不滚）。
-                        NowPlayingMarqueeText(text: track.title, isActive: interactive,
-                                              edrFontSize: informationFontSize, edrFontSizeIsScaled: true)
+                        NowPlayingMarqueeText(text: track.title, isActive: interactive)
                             .font(.system(size: informationFontSize, weight: .semibold))
-                            .foregroundStyle(Color.white)
+                            .nowPlayingPrimary()
                             .lineLimit(1)
                             .frame(width: layout.width(227), height: 27 * textScale, alignment: .leading)
                             .contentShape(.rect)

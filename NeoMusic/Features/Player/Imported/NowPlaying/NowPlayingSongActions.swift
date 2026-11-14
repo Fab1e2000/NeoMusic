@@ -24,7 +24,7 @@ struct NowPlayingSongActions: View {
 /// 由 UIKit 负责按下、滑动、松开整个过程：播放器每秒刷新 SwiftUI，用 SwiftUI 的 Menu 会在手指还按着时被打断。
 struct NowPlayingMenuButton: UIViewRepresentable {
     var track: ReferenceTrack? = nil
-    var iconColor: UIColor = .white
+    var iconColor: UIColor = NowPlayingVisualHierarchy.primaryUIColor
     @Environment(ReferencePlayerActions.self) private var actions
     var items: () -> [UIMenuElement]
 

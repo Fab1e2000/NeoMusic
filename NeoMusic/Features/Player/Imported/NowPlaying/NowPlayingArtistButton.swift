@@ -43,74 +43,42 @@ struct NowPlayingArtistButton: View {
     }
 }
 
-/// Shares the page's rendered image: no extra artwork requests or palette calculation.
-/// The brighter copy is confined to glyphs; the page background is untouched.
+/// 使用 `.plusLighter` 混合呈现副标题文字，透明按钮保留原有点击和菜单。
 struct NowPlayingVibrantLabel: View {
     let text: String
     let fontSize: CGFloat
-    var role: PlayerEDRRole = .artist
     var fontSizeIsScaled = false
-    @Environment(\.playerEDRLevels) private var edrLevels
-    @Environment(\.nowPlayingBackdropImage) private var image
-    @Environment(\.nowPlayingUndimmedBackdropImage) private var undimmedImage
-    @Environment(\.nowPlayingBackdropAnchor) private var backdropAnchor
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.playerArtistEDREnabled) private var edrEnabled
+    var opacity: Double = NowPlayingVisualHierarchy.subtitleOpacity
+    @ScaledMetric private var scaledFontSize: CGFloat
 
-    private var glyphs: some View {
-        NowPlayingGlyphMask(text: text, fontSize: fontSize, fontSizeIsScaled: fontSizeIsScaled)
+    init(
+        text: String,
+        fontSize: CGFloat,
+        fontSizeIsScaled: Bool = false,
+        opacity: Double = NowPlayingVisualHierarchy.subtitleOpacity
+    ) {
+        self.text = text
+        self.fontSize = fontSize
+        self.fontSizeIsScaled = fontSizeIsScaled
+        self.opacity = opacity
+        _scaledFontSize = ScaledMetric(
+            wrappedValue: fontSize,
+            relativeTo: fontSize == 13 ? .footnote : .subheadline
+        )
+    }
+
+    private var resolvedFontSize: CGFloat {
+        (fontSizeIsScaled || fontSize == 20) ? fontSize : scaledFontSize
     }
 
     var body: some View {
-        glyphs.hidden()
-            .overlay {
-                if edrEnabled, let image = undimmedImage ?? image, let backdropAnchor {
-                    PlayerEDRArtistLabel(text: text, fontSize: fontSize, image: image, anchor: backdropAnchor,
-                                         brightness: edrLevels.value(for: role), fontSizeIsScaled: fontSizeIsScaled)
-                } else {
-                    ZStack {
-                        Color(white: 0.88)
-                        if let image, let backdropAnchor {
-                            NowPlayingAlignedBackdrop(image: image, anchor: backdropAnchor,
-                                                      animated: !reduceMotion)
-                                .brightness(0.65)
-                        }
-                    }
-                    .clipped()
-                    .mask { glyphs }
-                }
-            }
-            .opacity(0.65)
-            .accessibilityElement(children: .ignore)
+        Text(text)
+            .font(.system(size: resolvedFontSize, weight: .regular))
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .nowPlayingPlusLighter(opacity)
             .accessibilityLabel(text)
             .allowsHitTesting(false)
-    }
-}
-
-/// Retain the existing UIKit font metrics and truncation for the glyph mask.
-private struct NowPlayingGlyphMask: UIViewRepresentable {
-    let text: String
-    let fontSize: CGFloat
-    let fontSizeIsScaled: Bool
-
-    func makeUIView(context: Context) -> UILabel {
-        let label = UILabel()
-        label.textColor = .white
-        label.numberOfLines = 1
-        label.lineBreakMode = .byTruncatingTail
-        label.isAccessibilityElement = false
-        return label
-    }
-
-    func updateUIView(_ label: UILabel, context: Context) {
-        label.text = text
-        label.font = PlayerEDRGlyphView.textFont(fontSize: fontSize, weight: .regular, isWhite: false,
-                                               fontSizeIsScaled: fontSizeIsScaled, traits: label.traitCollection)
-    }
-
-    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UILabel, context: Context) -> CGSize? {
-        CGSize(width: proposal.width ?? uiView.intrinsicContentSize.width,
-               height: uiView.font.lineHeight)
     }
 }
 

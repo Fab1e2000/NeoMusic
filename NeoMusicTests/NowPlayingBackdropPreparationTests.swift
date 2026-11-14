@@ -5,64 +5,14 @@ import XCTest
 
 @MainActor
 final class NowPlayingBackdropPreparationTests: XCTestCase {
-    func testPreparedPairPreservesCalibratedSolidColorPixels() async throws {
-        let renderer = NowPlayingBackdropRenderer()
-        let examples: [(UIColor, [[UInt8]], [UInt8])] = [
-            (.black, [[10, 10, 10, 255], [17, 17, 17, 255], [14, 14, 14, 255]], [0, 0, 0, 255]),
-            (.white, [[173, 173, 173, 255], [178, 178, 178, 255], [105, 105, 105, 255]], [255, 255, 255, 255]),
-            (.red, [[214, 0, 0, 255], [243, 0, 0, 255], [143, 4, 4, 255]], [255, 0, 0, 255])
-        ]
-        for (index, example) in examples.enumerated() {
-            let value = await renderer.render(image(example.0), for: URL(fileURLWithPath: "/backdrop/\(index).png"))
-            let pair = try XCTUnwrap(value)
-            XCTAssertEqual(pair.dimmed.cgImage?.width, 1)
-            XCTAssertEqual(pair.dimmed.cgImage?.height, 256)
-            for (position, row) in [0, 107, 255].enumerated() {
-                XCTAssertEqual(try pixel(pair.dimmed, row: row), example.1[position])
-                XCTAssertEqual(try pixel(pair.undimmed, row: row), example.2)
-            }
-        }
-    }
-
-    func testCacheReusesBothResultsWithoutRetainingSourceCover() async throws {
-        let renderer = NowPlayingBackdropRenderer()
-        let url = URL(fileURLWithPath: "/backdrop/reused.png")
-        weak var source: UIImage?
-        let first: NowPlayingBackdropRenderer.Images?
-        do {
-            let input = UIImage(cgImage: image(.red).cgImage!)
-            source = input
-            first = await renderer.render(input, for: url)
-        }
-        XCTAssertNil(source, "Derived background caching must not hold decoded source artwork")
-        let expected = try XCTUnwrap(first)
-        let cached = try XCTUnwrap(renderer.cached(for: url))
-        XCTAssertTrue(cached.dimmed === expected.dimmed)
-        XCTAssertTrue(cached.undimmed === expected.undimmed)
-        let repeated = await renderer.render(image(.red), for: url)
-        XCTAssertTrue(repeated?.dimmed === expected.dimmed)
-        XCTAssertTrue(repeated?.undimmed === expected.undimmed)
-        XCTAssertEqual(renderer.cache.countLimit, 32)
-        XCTAssertEqual(renderer.cache.totalCostLimit, 64 * 1_024)
-        renderer.cache.removeAllObjects()
-        XCTAssertNil(renderer.cached(for: url))
-    }
-
-    func testDifferentArtworkIdentityAndCancelledWorkDoNotReuseOrPublishWrongBackground() async throws {
-        let renderer = NowPlayingBackdropRenderer()
-        let redURL = URL(fileURLWithPath: "/backdrop/red.png")
-        let whiteURL = URL(fileURLWithPath: "/backdrop/white.png")
-        let first = await renderer.render(image(.red), for: redURL)
-        let second = await renderer.render(image(.white), for: whiteURL)
-        XCTAssertNotEqual(try pixel(XCTUnwrap(first).dimmed, row: 0), try pixel(XCTUnwrap(second).dimmed, row: 0))
-        let cancelledURL = URL(fileURLWithPath: "/backdrop/cancelled.png")
-        let task = Task {
-            withUnsafeCurrentTask { $0?.cancel() }
-            return await renderer.render(image(.black), for: cancelledURL)
-        }
-        let result = await task.value
-        XCTAssertNil(result)
-        XCTAssertNil(renderer.cached(for: cancelledURL))
+    func testFluidCacheDeduplicatesWithoutRetainingSourceArtwork() async throws {
+        let cache = NowPlayingFluidBackdropCache()
+        let url = URL(fileURLWithPath: "/fluid-backdrop/dedup.png")
+        let first = await cache.prepare(image(.systemRed), for: url)
+        let second = await cache.prepare(image(.systemBlue), for: url)
+        XCTAssertTrue(first === second)
+        cache.removeCached(for: url)
+        XCTAssertNil(cache.cached(for: url))
     }
 
     private func image(_ color: UIColor) -> UIImage {
@@ -99,14 +49,15 @@ final class NowPlayingBackdropPreparationTests: XCTestCase {
         XCTAssertEqual(source.rgba8SRGBData.count, 128 * 128 * 4)
         XCTAssertGreaterThan(source.profile.accentStrength, 0.35)
         XCTAssertGreaterThanOrEqual(source.profile.targetCenterL, 0.19)
-        XCTAssertLessThanOrEqual(source.profile.targetCenterL, 0.45)
+        XCTAssertLessThanOrEqual(source.profile.targetCenterL, 0.71)
 
         let darkSource = try XCTUnwrap(NowPlayingFluidBackdropSource.make(from: image(.black)))
         let whiteSource = try XCTUnwrap(NowPlayingFluidBackdropSource.make(from: image(.white)))
         XCTAssertLessThan(darkSource.profile.accentStrength, 0.05)
         XCTAssertLessThan(whiteSource.profile.accentStrength, 0.05)
         XCTAssertLessThan(darkSource.profile.targetCenterL, whiteSource.profile.targetCenterL)
-        XCTAssertLessThanOrEqual(whiteSource.profile.targetCenterL, 0.45)
+        XCTAssertGreaterThan(whiteSource.profile.targetCenterL, 0.58)
+        XCTAssertLessThanOrEqual(whiteSource.profile.targetCenterL, 0.71)
         XCTAssertTrue(cache.cached(for: url) === source)
     }
 
@@ -154,9 +105,35 @@ final class NowPlayingBackdropPreparationTests: XCTestCase {
         let blended = pixelBGRA(readBGRA(from: crossfadeTarget), x: 80, y: 120, width: crossfadeTarget.width)
         XCTAssertGreaterThan(blended[2], 30, "Crossfade toward red track should gain red energy")
         XCTAssertGreaterThan(blended[0], 5, "Mid-crossfade should retain cool energy from frozen blue/orange track")
+
+        // Mostly-white cover with a small red corner accent must keep light neutral top without pink wash.
+        let whiteRedCorner = UIGraphicsImageRenderer(size: CGSize(width: 64, height: 64), format: {
+            let f = UIGraphicsImageRendererFormat()
+            f.scale = 1
+            f.preferredRange = .standard
+            return f
+        }()).image { ctx in
+            UIColor.white.setFill()
+            ctx.fill(CGRect(x: 0, y: 0, width: 64, height: 64))
+            UIColor.red.setFill()
+            let path = UIBezierPath()
+            path.move(to: .zero)
+            path.addLine(to: CGPoint(x: 38, y: 0))
+            path.addLine(to: CGPoint(x: 0, y: 38))
+            path.close()
+            path.fill()
+        }
+        let whiteRedSource = try XCTUnwrap(NowPlayingFluidBackdropSource.make(from: whiteRedCorner))
+        XCTAssertGreaterThan(whiteRedSource.profile.targetCenterL, 0.52)
+        try renderSync(engine: engine, target: backdropTarget, source: whiteRedSource, time: 0.0, crossfade: 1, hasFrozen: false)
+        let wrPixels = readBGRA(from: backdropTarget)
+        let wrTopRight = pixelBGRA(wrPixels, x: 132, y: 20, width: backdropTarget.width)
+        let wrSpread = max(abs(Int(wrTopRight[2]) - Int(wrTopRight[1])), abs(Int(wrTopRight[1]) - Int(wrTopRight[0])))
+        XCTAssertGreaterThanOrEqual(Int(wrTopRight[1]), 135)
+        XCTAssertLessThanOrEqual(wrSpread, 22, "Mostly-white cover should not wash neutral regions pink: \(wrTopRight)")
     }
 
-    func testLiveBackdropAnchorExposesTokenAfterRendering() throws {
+    func testFluidBackdropViewRendersSynchronouslyAndStopsCleanly() async throws {
         guard let pipelines = NowPlayingBackdropMetalPipelines() else {
             throw XCTSkip("Metal pipelines unavailable on this destination")
         }
@@ -165,24 +142,21 @@ final class NowPlayingBackdropPreparationTests: XCTestCase {
         window.addSubview(view)
         view.frame = window.bounds
 
-        let anchor = NowPlayingBackdropAnchor()
-        anchor.view = view
         let source = try XCTUnwrap(NowPlayingFluidBackdropSource.make(from: image(.systemTeal)))
-        view.update(source: source, isPlaying: false, reduceMotion: true, anchor: anchor)
+        view.update(source: source, isPlaying: true, reduceMotion: false)
         view.layoutIfNeeded()
 
         XCTAssertEqual(view.layer.contentsScale, 1.0)
-        XCTAssertTrue(anchor.liveSource === view)
-        let initialToken = view.liveBackdropFrameToken
-        XCTAssertGreaterThan(initialToken, 0)
-        XCTAssertNotNil(view.liveBackdropTexture)
+        XCTAssertTrue(view.hasActiveDisplayLink)
 
-        // Redundant SwiftUI updates during page switches should not force synchronous redraws.
-        view.update(source: source, isPlaying: false, reduceMotion: true, anchor: anchor)
-        XCTAssertEqual(view.liveBackdropFrameToken, initialToken)
+        view.update(source: source, isPlaying: false, reduceMotion: true)
+        for _ in 0..<30 where view.hasActiveDisplayLink {
+            try await Task.sleep(for: .milliseconds(15))
+        }
+        XCTAssertFalse(view.hasActiveDisplayLink)
 
         view.stop()
-        XCTAssertNil(anchor.liveSource)
+        XCTAssertFalse(view.hasActiveDisplayLink)
     }
 
     func testRealCoversRenderSideBySideFluidBackdrops() throws {
@@ -207,7 +181,7 @@ final class NowPlayingBackdropPreparationTests: XCTestCase {
             samples.append(("ref-cover", refCover))
         }
         for name in ["AlbumSample01", "AlbumSample05", "AlbumSample08", "AlbumSample12"] {
-            if let img = UIImage(named: name, in: Bundle(for: NowPlayingBackdropRenderer.self), compatibleWith: nil) {
+            if let img = UIImage(named: name, in: Bundle(for: NowPlayingFluidBackdropSource.self), compatibleWith: nil) {
                 samples.append((name, img))
             }
         }
@@ -227,7 +201,7 @@ final class NowPlayingBackdropPreparationTests: XCTestCase {
                 let center = pixelBGRA(initBytes, x: 80, y: 160, width: cellW)
                 let channelSpread = max(abs(Int(center[0]) - Int(center[1])), abs(Int(center[1]) - Int(center[2])))
                 XCTAssertLessThanOrEqual(channelSpread, 4, "Pure white cover must stay neutral even after prior chromatic tracks")
-                XCTAssertLessThanOrEqual(Int(center[2]), 120, "White cover must stay dimmed enough for legible white controls")
+                XCTAssertTrue((135...188).contains(Int(center[2])), "White cover should match calibrated bright neutral gray, got \(center[2])")
             }
             let initImg = try XCTUnwrap(imageFromBGRA(initBytes, width: cellW, height: cellH))
             let driftImg = try XCTUnwrap(imageFromBGRA(driftBytes, width: cellW, height: cellH))

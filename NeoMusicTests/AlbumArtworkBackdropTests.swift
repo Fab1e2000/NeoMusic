@@ -467,29 +467,29 @@ final class AlbumArtworkBackdropTests: XCTestCase {
 final class PlayerTextMetricsTests: XCTestCase {
     func testScaledGlyphFontUsesTheProvidedSizeExactlyOnce() {
         let traits = UITraitCollection(preferredContentSizeCategory: .accessibilityExtraExtraExtraLarge)
-        let white = PlayerEDRGlyphView.textFont(fontSize: 54, weight: .semibold, isWhite: true,
-                                              fontSizeIsScaled: true, traits: traits)
-        let artist = PlayerEDRGlyphView.textFont(fontSize: 54, weight: .regular, isWhite: false,
-                                               fontSizeIsScaled: true, traits: traits)
+        let white = NowPlayingVisualHierarchy.textFont(fontSize: 54, weight: .semibold, isWhite: true,
+                                                       fontSizeIsScaled: true, traits: traits)
+        let artist = NowPlayingVisualHierarchy.textFont(fontSize: 54, weight: .regular, isWhite: false,
+                                                        fontSizeIsScaled: true, traits: traits)
         XCTAssertEqual(white.pointSize, 54)
         XCTAssertEqual(artist.pointSize, 54)
     }
 
     func testBaseGlyphFontsRetainTheirExistingTextStyleScaling() {
         let traits = UITraitCollection(preferredContentSizeCategory: .accessibilityExtraExtraExtraLarge)
-        let artist = PlayerEDRGlyphView.textFont(fontSize: 13, weight: .regular, isWhite: false,
-                                               fontSizeIsScaled: false, traits: traits)
+        let artist = NowPlayingVisualHierarchy.textFont(fontSize: 13, weight: .regular, isWhite: false,
+                                                        fontSizeIsScaled: false, traits: traits)
         let expectedArtist = UIFontMetrics(forTextStyle: .footnote)
             .scaledFont(for: .systemFont(ofSize: 13), compatibleWith: traits)
         XCTAssertEqual(artist.pointSize, expectedArtist.pointSize)
 
-        let title = PlayerEDRGlyphView.textFont(fontSize: 17, weight: .semibold, isWhite: true,
-                                              fontSizeIsScaled: false, traits: traits)
+        let title = NowPlayingVisualHierarchy.textFont(fontSize: 17, weight: .semibold, isWhite: true,
+                                                       fontSizeIsScaled: false, traits: traits)
         let expectedTitle = UIFontMetrics(forTextStyle: .headline)
             .scaledFont(for: .systemFont(ofSize: 17, weight: .semibold), compatibleWith: traits)
         XCTAssertEqual(title.pointSize, expectedTitle.pointSize)
-        let fixed = PlayerEDRGlyphView.textFont(fontSize: 20, weight: .regular, isWhite: false,
-                                              fontSizeIsScaled: false, traits: traits)
+        let fixed = NowPlayingVisualHierarchy.textFont(fontSize: 20, weight: .regular, isWhite: false,
+                                                       fontSizeIsScaled: false, traits: traits)
         XCTAssertEqual(fixed.pointSize, 20)
     }
 
@@ -504,149 +504,5 @@ final class PlayerTextMetricsTests: XCTestCase {
         XCTAssertEqual(NowPlayingArtworkPage.artworkSide(layout: layout, textScale: 3, controlsOverflow: 140),
                        layout.artworkSide - 106 - 140)
         XCTAssertEqual(NowPlayingArtworkPage.artworkSide(layout: layout, textScale: 3, controlsOverflow: 400), 0)
-    }
-}
-
-@MainActor
-final class PlayerEDRTextureReuseTests: XCTestCase {
-    private func backdrop(_ color: UIColor) -> CGImage {
-        // Production backdrops are sRGB RGBA8; UIGraphicsImageRenderer may store solid gray as monochrome.
-        let context = CGContext(data: nil, width: 1, height: 256, bitsPerComponent: 8,
-                                bytesPerRow: 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
-                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-        context.setFillColor(color.cgColor)
-        context.fill(CGRect(x: 0, y: 0, width: 1, height: 256))
-        let image = context.makeImage()!
-        XCTAssertEqual(image.colorSpace?.model, .rgb)
-        XCTAssertEqual(image.bitsPerComponent, 8)
-        XCTAssertEqual(image.bitsPerPixel, 32)
-        return image
-    }
-
-    private func view() async throws -> PlayerEDRGlyphView {
-        try XCTSkipIf(MTLCreateSystemDefaultDevice() == nil, "Metal texture creation is unavailable on this test destination")
-        await PlayerEDRResources.shared.prepare()
-        XCTAssertTrue(PlayerEDRResources.shared.isReady)
-        return PlayerEDRGlyphView(frame: CGRect(x: 0, y: 0, width: 180, height: 28))
-    }
-
-    private func update(_ view: PlayerEDRGlyphView, text: String = "Artist", size: CGFloat = 13,
-                        weight: UIFont.Weight = .regular, isWhite: Bool = false, brightness: Double = 0.35) {
-        view.update(text: text, fontSize: size, image: nil, anchor: nil,
-                    brightness: brightness, isWhite: isWhite, fontWeight: weight)
-    }
-
-    private func textures(_ view: PlayerEDRGlyphView, _ image: CGImage, scale: CGFloat = 3,
-                          file: StaticString = #filePath, line: UInt = #line) throws
-        -> (mask: MTLTexture, backdrop: MTLTexture) {
-        try XCTUnwrap(view.preparedTextures(backdrop: image, scale: scale), file: file, line: line)
-    }
-
-    func testMovementAndBrightnessReuseTexturesWhileNewImageReplacesOnlyBackdrop() async throws {
-        let view = try await view()
-        let image = backdrop(.red)
-        update(view)
-        let first = try textures(view, image)
-
-        update(view)
-        view.frame.origin = CGPoint(x: 50, y: 120)
-        update(view, brightness: 0.7)
-        let moved = try textures(view, image)
-        XCTAssertTrue(first.mask === moved.mask)
-        XCTAssertTrue(first.backdrop === moved.backdrop)
-
-        let changed = try textures(view, backdrop(.blue))
-        XCTAssertTrue(first.mask === changed.mask)
-        XCTAssertFalse(first.backdrop === changed.backdrop)
-    }
-
-    func testTextShapeAndFontChangesReplaceMaskWithoutReloadingBackdrop() async throws {
-        let view = try await view()
-        let image = backdrop(.gray)
-        update(view)
-        var previous = try textures(view, image)
-        let textChanges: [() -> Void] = [
-            { self.update(view, text: "Other artist") },
-            { self.update(view, text: "Other artist", size: 17) },
-            { self.update(view, text: "Other artist", size: 17, weight: .semibold) },
-            { self.update(view, text: "Other artist", size: 17, weight: .semibold, isWhite: true) }
-        ]
-        for change in textChanges {
-            change()
-            let current = try textures(view, image)
-            XCTAssertFalse(previous.mask === current.mask)
-            XCTAssertTrue(previous.backdrop === current.backdrop)
-            previous = current
-        }
-
-        let shapes: [PlayerEDRMask] = [
-            .symbol("airplayaudio", 18, 1), .symbol("airplayaudio", 22.5, 1),
-            .symbol("airplayaudio", 22.5, 0.5), .symbol("speaker.wave.2", 22.5, 0.5),
-            .circle(20), .circle(22), .time("0:01", false), .time("0:02", false), .time("0:02", true)
-        ]
-        for shape in shapes {
-            view.update(shape: shape, image: nil, anchor: nil, brightness: 0.35)
-            let current = try textures(view, image)
-            XCTAssertFalse(previous.mask === current.mask)
-            XCTAssertTrue(previous.backdrop === current.backdrop)
-            let repeated = try textures(view, image)
-            XCTAssertTrue(current.mask === repeated.mask)
-            previous = current
-        }
-
-        // The stored text/font fields still match the earlier text: changing modes must invalidate it.
-        update(view, text: "Other artist", size: 17, weight: .semibold)
-        let restoredText = try textures(view, image)
-        XCTAssertFalse(previous.mask === restoredText.mask)
-        XCTAssertTrue(previous.backdrop === restoredText.backdrop)
-    }
-
-    func testGeometryScaleAndFontTraitsInvalidateOnlyMask() async throws {
-        let view = try await view()
-        let image = backdrop(.gray)
-        update(view)
-        var previous = try textures(view, image)
-        let geometryChanges: [() -> Void] = [
-            { view.bounds.size.width = 140 },
-            { view.bounds.size.height = 32 },
-            { view.bounds.origin = CGPoint(x: 2, y: 1) },
-            {
-                let previousCategory = view.traitCollection.preferredContentSizeCategory
-                let category: UIContentSizeCategory = previousCategory == .accessibilityExtraExtraExtraLarge ? .large : .accessibilityExtraExtraExtraLarge
-                view.traitOverrides.preferredContentSizeCategory = category
-                view.updateTraitsIfNeeded()
-                XCTAssertEqual(view.traitCollection.preferredContentSizeCategory, category)
-                XCTAssertNotEqual(view.traitCollection.preferredContentSizeCategory, previousCategory)
-            },
-            {
-                let previousWeight = view.traitCollection.legibilityWeight
-                let weight: UILegibilityWeight = previousWeight == .bold ? .regular : .bold
-                view.traitOverrides.legibilityWeight = weight
-                view.updateTraitsIfNeeded()
-                XCTAssertEqual(view.traitCollection.legibilityWeight, weight)
-                XCTAssertNotEqual(view.traitCollection.legibilityWeight, previousWeight)
-            }
-        ]
-        for change in geometryChanges {
-            change()
-            let current = try textures(view, image)
-            XCTAssertFalse(previous.mask === current.mask)
-            XCTAssertTrue(previous.backdrop === current.backdrop)
-            previous = current
-        }
-
-        let rescaled = try textures(view, image, scale: 2)
-        XCTAssertFalse(previous.mask === rescaled.mask)
-        XCTAssertTrue(previous.backdrop === rescaled.backdrop)
-        XCTAssertEqual(rescaled.mask.width, 280)
-        XCTAssertEqual(rescaled.mask.height, 64)
-
-        let bounds = view.bounds
-        view.bounds = .zero
-        XCTAssertNil(view.preparedTextures(backdrop: image, scale: 2))
-        view.bounds = bounds
-        let restored = try textures(view, image, scale: 2)
-        XCTAssertTrue(rescaled.mask === restored.mask)
-        XCTAssertTrue(rescaled.backdrop === restored.backdrop)
     }
 }
