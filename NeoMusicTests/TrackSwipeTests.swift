@@ -353,4 +353,93 @@ import XCTest
         XCTAssertTrue(controller.allowsOppositePreviousSlot)
         XCTAssertTrue(controller.allowsOppositeNextSlot)
     }
+
+    func testPostCommitDisplayLinkStallAbsorbsInitialHitchAndAnimatesSmoothly() {
+        let controller = TrackSwipeController()
+        var now = Date(timeIntervalSinceReferenceDate: 1000)
+        controller.nowProvider = { now }
+        let prev = makeEntry(0, artist: "Artist A")
+        let current = makeEntry(1, artist: "Artist B")
+        let next = makeEntry(2, artist: "Artist C")
+        var selected: [Int] = []
+
+        controller.panBegan(translation: 0, distance: 180, previous: prev, next: next)
+        controller.panChanged(translation: -72, distance: 180, previous: prev, next: next)
+        controller.panEnded(
+            translation: -72,
+            velocity: -150,
+            distance: 180,
+            song: current.track,
+            previous: prev,
+            next: next,
+            reduceMotion: false
+        ) { selected.append($0) }
+
+        XCTAssertEqual(selected, [2])
+        XCTAssertTrue(controller.isSettling)
+        XCTAssertEqual(controller.exitingSlot?.track.id, current.track.id)
+        XCTAssertEqual(controller.motion.value, 108, accuracy: 0.01)
+
+        // Simulate a 90ms synchronous main-thread stall across select + SwiftUI/LNPopup commit
+        // before the first CADisplayLink frame renders.
+        now = now.addingTimeInterval(0.090)
+        controller.stepSpringFrame(at: now, frameDuration: 1.0 / 60.0)
+        XCTAssertTrue(controller.isSettling)
+        let frame1 = controller.motion.value
+        XCTAssertGreaterThan(frame1, 80, "Initial post-commit stall must not skip the majority of the release settle (got \(frame1))")
+
+        now = now.addingTimeInterval(1.0 / 60.0)
+        controller.stepSpringFrame(at: now, frameDuration: 1.0 / 60.0)
+        let frame2 = controller.motion.value
+
+        now = now.addingTimeInterval(1.0 / 60.0)
+        controller.stepSpringFrame(at: now, frameDuration: 1.0 / 60.0)
+        let frame3 = controller.motion.value
+
+        XCTAssertLessThan(frame2, frame1)
+        XCTAssertLessThan(frame3, frame2)
+        XCTAssertGreaterThan(frame3, 20)
+
+        for _ in 0..<45 where controller.isSettling {
+            now = now.addingTimeInterval(1.0 / 60.0)
+            controller.stepSpringFrame(at: now, frameDuration: 1.0 / 60.0)
+        }
+        XCTAssertFalse(controller.isSettling)
+        XCTAssertNil(controller.exitingSlot)
+        XCTAssertEqual(controller.motion.value, 0)
+    }
+
+    func testUnstalledSpringPreservesRealTimelineAndExtendedStallFinishesCleanly() {
+        let controller = TrackSwipeController()
+        var now = Date(timeIntervalSinceReferenceDate: 2000)
+        controller.nowProvider = { now }
+        let prev = makeEntry(0, artist: "Artist A")
+        let current = makeEntry(1, artist: "Artist B")
+        let next = makeEntry(2, artist: "Artist C")
+
+        controller.panBegan(translation: 0, distance: 180, previous: prev, next: next)
+        controller.panChanged(translation: -20, distance: 180, previous: prev, next: next)
+        controller.panEnded(
+            translation: -20,
+            velocity: 0,
+            distance: 180,
+            song: current.track,
+            previous: prev,
+            next: next,
+            reduceMotion: false
+        ) { _ in }
+
+        let expectedAtTwoFrames = controller.currentOffset(at: now.addingTimeInterval(2.0 / 60.0))
+        now = now.addingTimeInterval(1.0 / 60.0)
+        controller.stepSpringFrame(at: now, frameDuration: 1.0 / 60.0)
+        now = now.addingTimeInterval(1.0 / 60.0)
+        controller.stepSpringFrame(at: now, frameDuration: 1.0 / 60.0)
+        XCTAssertEqual(controller.motion.value, expectedAtTwoFrames, accuracy: 0.001)
+
+        // A long interruption (e.g. backgrounding) must complete immediately rather than replaying stale motion.
+        now = now.addingTimeInterval(1.2)
+        controller.stepSpringFrame(at: now, frameDuration: 1.0 / 60.0)
+        XCTAssertFalse(controller.isSettling)
+        XCTAssertEqual(controller.motion.value, 0)
+    }
 }

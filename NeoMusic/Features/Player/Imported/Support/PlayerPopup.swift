@@ -154,7 +154,7 @@ private struct PlayerPopupContent: View {
                         PopupItem(id: track.id, image: barImage,
                                   accessibilityLabel: [track.title, track.artists, "迷你播放器"].filter { !$0.isEmpty }.joined(separator: "，"),
                                   accessibilityHint: "打开正在播放", title: {
-                            MiniPlayerTitle(track: track, isActive: isBarActive)
+                            MiniPlayerTitle(fallbackTrack: track, isActive: isBarActive)
                                 .environment(player)
                                 .environment(\.colorScheme, barColorScheme)
                                 .accessibilityIdentifier("mini.trackTitle")
@@ -174,7 +174,7 @@ private struct PlayerPopupContent: View {
 
 /// Placement invalidates only the title host, leaving the popup item and full-screen root intact.
 private struct MiniPlayerTitle: View {
-    let track: ReferenceTrack
+    let fallbackTrack: ReferenceTrack
     let isActive: Bool
     @Environment(ReferencePlayerState.self) private var player
     @Environment(\.popupBarPlacement) private var placement
@@ -185,7 +185,8 @@ private struct MiniPlayerTitle: View {
 
     var body: some View {
         let compact = placement == .inline
-        ReferenceMiniPlayerTitlePager(height: compact ? compactHeight : regularHeight, song: track) { song, marqueeActive in
+        let activeTrack = player.currentTrack ?? fallbackTrack
+        ReferenceMiniPlayerTitlePager(height: compact ? compactHeight : regularHeight, song: activeTrack) { song, marqueeActive in
             NowPlayingMarqueeText(text: song.title, isActive: isActive && marqueeActive && !compact)
                 .font(.system(size: titleSize, weight: .medium))
                 .foregroundStyle(.primary)

@@ -278,6 +278,8 @@ final class TrackSwipeController {
 
     func finishSettling() {
         stopSpringDrivers()
+        lastSpringSampleDate = nil
+        absorbedHitchDuration = 0
         isSettling = false
         exitingSlot = nil
         pinnedArtistDuringTransition = nil
@@ -341,7 +343,10 @@ final class TrackSwipeController {
         let clampedVelocity = max(-Self.maxSpringVelocity, min(Self.maxSpringVelocity, velocity))
         springStartOffset = offset
         springVelocity = clampedVelocity
-        springStartDate = nowProvider()
+        let startDate = nowProvider()
+        springStartDate = startDate
+        lastSpringSampleDate = startDate
+        absorbedHitchDuration = 0
         springSettlingDuration = max(
             Self.spring.settlingDuration(target: -offset, initialVelocity: clampedVelocity, epsilon: 0.1),
             0.05
@@ -349,10 +354,13 @@ final class TrackSwipeController {
         isSettling = true
         updateMotionOutput(offset: offset)
         startDisplayLink()
+        scheduleSettleTask(after: springSettlingDuration + 0.05)
+    }
 
-        let duration = springSettlingDuration + 0.05
+    private func scheduleSettleTask(after delay: TimeInterval) {
+        settleTask?.cancel()
         settleTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(duration))
+            try? await Task.sleep(for: .seconds(delay))
             guard !Task.isCancelled else { return }
             self?.finishSettling()
         }
@@ -360,6 +368,8 @@ final class TrackSwipeController {
 
     func cancelMotion() {
         stopSpringDrivers()
+        lastSpringSampleDate = nil
+        absorbedHitchDuration = 0
         isSettling = false
         isDragging = false
         rawDragOffset = 0
@@ -387,6 +397,9 @@ final class TrackSwipeController {
         displayLink = nil
     }
 
+    private var lastSpringSampleDate: Date?
+    private var absorbedHitchDuration: TimeInterval = 0
+
     fileprivate func stepDisplayLink(_ displayLink: CADisplayLink) {
         guard isSettling else {
             displayLink.invalidate()
@@ -394,13 +407,39 @@ final class TrackSwipeController {
             return
         }
         let lookahead = min(max(displayLink.targetTimestamp - CACurrentMediaTime(), 0), 0.05)
+        let frameDuration = max(displayLink.targetTimestamp - displayLink.timestamp, 1.0 / 120.0)
         let sampleDate = nowProvider().addingTimeInterval(lookahead)
-        let dt = max(0, sampleDate.timeIntervalSince(springStartDate))
+        stepSpringFrame(at: sampleDate, frameDuration: frameDuration)
+    }
+
+    func stepSpringFrame(at sampleDate: Date, frameDuration: TimeInterval = 1.0 / 60.0) {
+        guard isSettling else { return }
+        let nominalStep = min(max(frameDuration, 1.0 / 120.0), 1.0 / 30.0)
+        let previousSample = lastSpringSampleDate ?? springStartDate
+        let effectiveSample = max(previousSample, sampleDate)
+        let stepDelta = effectiveSample.timeIntervalSince(previousSample)
+        let hitchThreshold = max(nominalStep * 2.2, 0.022)
+        // Synchronous track-switch commits (AVPlayerItem load, NowPlaying sync, SwiftUI/LNPopup
+        // layout) can briefly stall the main thread after touch-up. Absorb that initial commit gap
+        // rather than burning through the spring before the post-switch frames render.
+        let remainingBudget = max(0, 0.5 - absorbedHitchDuration)
+        let maxSingleHitch = max(0.35, springSettlingDuration * 0.85)
+        if stepDelta > hitchThreshold, stepDelta < maxSingleHitch, remainingBudget > 0 {
+            let excess = min(stepDelta - nominalStep, remainingBudget)
+            springStartDate = springStartDate.addingTimeInterval(excess)
+            absorbedHitchDuration += excess
+            let dt = max(0, effectiveSample.timeIntervalSince(springStartDate))
+            let remaining = max(0.05, springSettlingDuration - dt)
+            scheduleSettleTask(after: remaining + 0.05)
+        }
+        lastSpringSampleDate = effectiveSample
+        let dt = max(0, effectiveSample.timeIntervalSince(springStartDate))
         if dt >= springSettlingDuration {
             finishSettling()
             return
         }
-        updateMotionOutput(offset: currentOffset(at: sampleDate))
+        let nextOffset = currentOffset(at: effectiveSample)
+        updateMotionOutput(offset: nextOffset)
     }
 
     private func updateMotionOutput(offset: CGFloat) {
@@ -745,15 +784,28 @@ private struct NowPlayingHorizontalPan: UIGestureRecognizerRepresentable {
     }
 
     func handle(_ recognizer: UIPanGestureRecognizer) {
-        let translation = recognizer.translation(in: recognizer.view).x
-        switch recognizer.state {
+        handle(
+            recognizer.state,
+            translation: recognizer.translation(in: recognizer.view).x,
+            velocity: recognizer.velocity(in: recognizer.view).x,
+            from: recognizer.view
+        )
+    }
+
+    func handle(
+        _ state: UIGestureRecognizer.State,
+        translation: CGFloat,
+        velocity: CGFloat = 0,
+        from view: UIView? = nil
+    ) {
+        switch state {
         case .began:
-            Self.cancelPopupBarHighlight(from: recognizer.view)
+            Self.cancelPopupBarHighlight(from: view)
             onStart(translation)
         case .changed:
             onChange(translation)
         case .ended:
-            onEnd(translation, recognizer.velocity(in: recognizer.view).x)
+            onEnd(translation, velocity)
         case .cancelled, .failed:
             onCancel()
         default:
@@ -821,8 +873,8 @@ private struct TrackSwipeGestureModifier: ViewModifier {
 }
 
 /// Gives mini-bar title slots a dedicated UIKit pan surface that cooperates with LNPopup gestures.
-private struct TrackSwipeTouchSurface: UIViewRepresentable {
-    let pan: NowPlayingHorizontalPan
+struct TrackSwipeTouchSurface: UIViewRepresentable {
+    fileprivate let pan: NowPlayingHorizontalPan
 
     func makeCoordinator() -> Coordinator { Coordinator(pan: pan) }
 
@@ -835,18 +887,45 @@ private struct TrackSwipeTouchSurface: UIViewRepresentable {
         gesture.cancelsTouchesInView = true
         gesture.delaysTouchesBegan = false
         gesture.delaysTouchesEnded = false
-        gesture.delegate = context.coordinator.directionDelegate
+        gesture.delegate = context.coordinator
         view.addGestureRecognizer(gesture)
         return view
     }
 
     func updateUIView(_ view: UIView, context: Context) { context.coordinator.pan = pan }
 
-    @MainActor final class Coordinator: NSObject {
-        var pan: NowPlayingHorizontalPan
-        let directionDelegate = NowPlayingHorizontalPan.Coordinator()
-        init(pan: NowPlayingHorizontalPan) { self.pan = pan }
+    @MainActor final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        fileprivate var pan: NowPlayingHorizontalPan
+        private let directionDelegate = NowPlayingHorizontalPan.Coordinator()
+        fileprivate init(pan: NowPlayingHorizontalPan) { self.pan = pan }
         @objc func handle(_ gesture: UIPanGestureRecognizer) { pan.handle(gesture) }
+
+        func handle(
+            _ state: UIGestureRecognizer.State,
+            translation: CGFloat,
+            velocity: CGFloat = 0,
+            from view: UIView? = nil
+        ) {
+            pan.handle(state, translation: translation, velocity: velocity, from: view)
+        }
+
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            directionDelegate.gestureRecognizerShouldBegin(gestureRecognizer)
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            directionDelegate.gestureRecognizer(gestureRecognizer, shouldBeRequiredToFailBy: otherGestureRecognizer)
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            directionDelegate.gestureRecognizer(gestureRecognizer, shouldRecognizeSimultaneouslyWith: otherGestureRecognizer)
+        }
     }
 }
 

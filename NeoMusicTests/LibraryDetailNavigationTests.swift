@@ -1,5 +1,6 @@
 import XCTest
 import SwiftUI
+import UIKit.UIGestureRecognizerSubclass
 import LNPopupController
 import Synchronization
 @testable import NeoMusic
@@ -1855,6 +1856,99 @@ final class LibraryDetailNavigationTests: XCTestCase {
         XCTAssertEqual(page.navigationItem.navigationBarMinimization.minimizationBehavior, .onScrollDown)
         XCTAssertEqual(page.navigationItem.navigationBarMinimization.restorationBehavior, .atScrollEdge)
         XCTAssertEqual(page.navigationItem.navigationBarMinimization.safeAreaAdjustment, .disabled)
+    }
+
+    func testMiniPlayerTrackSwipeCommitPreservesSpringReleaseAcrossPopupUpdate() async throws {
+        let scene = try await applicationWindowScene()
+        let window = UIWindow(windowScene: scene)
+        defer { window.isHidden = true }
+        let tracks = [
+            ReferenceTrack(id: "mini-0", title: "Track Alpha", artists: "Artist First", albumTitle: "Album", coverURL: nil, duration: 60),
+            ReferenceTrack(id: "mini-1", title: "Track Omega", artists: "Artist Second", albumTitle: "Album", coverURL: nil, duration: 60)
+        ]
+        let player = PlayerTestFixtures.state(tracks: tracks)
+        window.rootViewController = UIHostingController(rootView: AppShell(
+            library: { TestRoot() }, detailDestination: { AnyView(TestDetail(route: $0)) },
+            nowPlaying: nil, playlistLibrary: PlaylistLibrary(playlists: []), toasts: LibraryToastCenter(),
+            referencePlayer: player, referenceLibrary: PlayerTestFixtures.library(),
+            makePlayerActions: { _, _ in PlayerTestFixtures.actions() })
+            .environment(account)
+            .environment(\.scenePhase, .active)
+            .dynamicTypeSize(.large))
+        window.makeKeyAndVisible()
+        try await settle()
+
+        func findTabs(in controller: UIViewController) -> UITabBarController? {
+            if let tabs = controller as? UITabBarController { return tabs }
+            return controller.children.lazy.compactMap { findTabs(in: $0) }.first
+        }
+        func renderView(_ view: UIView) -> UIImage {
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 1
+            return UIGraphicsImageRenderer(bounds: view.bounds, format: format).image { _ in
+                XCTAssertTrue(view.drawHierarchy(in: view.bounds, afterScreenUpdates: true))
+            }
+        }
+        func diffPixels(_ lhs: UIImage, _ rhs: UIImage) throws -> Int {
+            let leftCG = try XCTUnwrap(lhs.cgImage)
+            let rightCG = try XCTUnwrap(rhs.cgImage)
+            XCTAssertEqual(leftCG.width, rightCG.width)
+            XCTAssertEqual(leftCG.height, rightCG.height)
+            let count = leftCG.width * leftCG.height * 4
+            var a = [UInt8](repeating: 0, count: count)
+            var b = [UInt8](repeating: 0, count: count)
+            let space = CGColorSpace(name: CGColorSpace.sRGB)!
+            let info = CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
+            a.withUnsafeMutableBytes {
+                let ctx = CGContext(data: $0.baseAddress, width: leftCG.width, height: leftCG.height,
+                                    bitsPerComponent: 8, bytesPerRow: leftCG.width * 4, space: space, bitmapInfo: info)!
+                ctx.draw(leftCG, in: CGRect(x: 0, y: 0, width: leftCG.width, height: leftCG.height))
+            }
+            b.withUnsafeMutableBytes {
+                let ctx = CGContext(data: $0.baseAddress, width: rightCG.width, height: rightCG.height,
+                                    bitsPerComponent: 8, bytesPerRow: rightCG.width * 4, space: space, bitmapInfo: info)!
+                ctx.draw(rightCG, in: CGRect(x: 0, y: 0, width: rightCG.width, height: rightCG.height))
+            }
+            return stride(from: 0, to: count, by: 4).count { idx in
+                (0..<3).contains { abs(Int(a[idx + $0]) - Int(b[idx + $0])) > 12 }
+            }
+        }
+
+        let tabs = try XCTUnwrap(findTabs(in: window.rootViewController!))
+        let popupBar = tabs.popupBar
+        let pager = try XCTUnwrap(descendants(of: UIView.self, in: popupBar).first {
+            $0.gestureRecognizers?.contains(where: { $0.name == "NeoDizzy.NowPlayingTrackSwipe" }) == true
+        })
+        let pan = try XCTUnwrap(pager.gestureRecognizers?.first { $0.name == "NeoDizzy.NowPlayingTrackSwipe" } as? UIPanGestureRecognizer)
+        let coordinator = try XCTUnwrap(pan.delegate as? TrackSwipeTouchSurface.Coordinator)
+
+        let settledInitial = renderView(popupBar)
+
+        let swipeX = -max(95, pager.bounds.width * 0.65)
+        coordinator.handle(.began, translation: 0, from: pager)
+        coordinator.handle(.changed, translation: swipeX, from: pager)
+        XCTAssertEqual(player.currentTrack?.id, "mini-0")
+
+        coordinator.handle(.ended, translation: swipeX, velocity: -150, from: pager)
+        // Allow immediate selection and async .popupItem preference delivery to complete.
+        try await Task.sleep(for: .milliseconds(25))
+        XCTAssertEqual(player.currentTrack?.id, "mini-1")
+        let frame1 = renderView(popupBar)
+
+        try await Task.sleep(for: .milliseconds(45))
+        let frame2 = renderView(popupBar)
+
+        try await Task.sleep(for: .milliseconds(650))
+        let settledFinal = renderView(popupBar)
+
+        XCTAssertGreaterThan(try diffPixels(settledInitial, settledFinal), 40,
+                             "Mini player track change must update displayed track")
+        XCTAssertGreaterThan(try diffPixels(frame1, settledFinal), 40,
+                             "Mini player release after .popupItem delivery must remain mid-transition instead of cancelling to rest")
+        XCTAssertGreaterThan(try diffPixels(frame1, frame2), 20,
+                             "Mini player release must keep progressing across post-commit display frames")
+        XCTAssertGreaterThan(try diffPixels(frame2, settledFinal), 20,
+                             "Mini player should still be completing its spring settle before resting")
     }
 }
 
