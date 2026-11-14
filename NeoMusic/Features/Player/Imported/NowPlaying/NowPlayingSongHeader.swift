@@ -84,25 +84,23 @@ struct NowPlayingSongHeader: View {
                 .frame(width: artworkSize, height: artworkSize)
 
             // 左右滑动歌名切到上一首/下一首。
-            NowPlayingTrackSwipe(song: song) { track, interactive in
-                VStack(alignment: .leading, spacing: 2) {
-                    // 放不下时滚动显示（相邻曲目的预览不滚）。
-                    NowPlayingMarqueeText(text: track.title, isActive: interactive)
-                        .font(
-                            usesReferenceLayout
-                                ? .headline
-                                : .headline
-                        )
-                        .nowPlayingPrimary()
-                        .lineLimit(1)
-                        .offset(y: usesReferenceLayout ? 5 : 0)
-
-                    NowPlayingArtistButton(track: track, interactive: interactive, lineHeight: usesReferenceLayout ? 18 : 26, fontSize: 15)
-                        .font(.subheadline)
-                        .lineLimit(1)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(.rect)
+            NowPlayingTrackSwipe(song: song, rowSpacing: 2, viewportInsets: .header) { track, marqueeActive in
+                // 放不下时滚动显示（相邻曲目的预览不滚）；滑动期间保持当前歌滚动。
+                NowPlayingMarqueeText(text: track.title, isActive: marqueeActive)
+                    .font(
+                        usesReferenceLayout
+                            ? .headline
+                            : .headline
+                    )
+                    .nowPlayingPrimary()
+                    .lineLimit(1)
+                    .offset(y: usesReferenceLayout ? 5 : 0)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } artist: { track, interactive in
+                NowPlayingArtistButton(track: track, interactive: interactive, lineHeight: usesReferenceLayout ? 18 : 26, fontSize: 15)
+                    .font(.subheadline)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 

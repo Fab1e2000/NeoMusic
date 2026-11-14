@@ -1,9 +1,11 @@
+import Observation
+import os
 import SwiftUI
 import XCTest
 @testable import NeoMusic
 
 @MainActor final class TrackSwipeTests: XCTestCase {
-    private typealias Swipe = NowPlayingTrackSwipe<Text>
+    private typealias Swipe = NowPlayingTrackSwipe<Text, EmptyView>
 
     private func entry(_ index: Int) -> ReferenceUpcomingTrack {
         ReferenceUpcomingTrack(index: index, track: ReferenceTrack(id: "song-\(index)",
@@ -70,5 +72,285 @@ import XCTest
             next: entry(currentIndex + 1), distance: 100, select: select)
         XCTAssertEqual(currentIndex, 3)
         XCTAssertEqual(selections, [1, 2, 3])
+    }
+
+    private func makeEntry(_ index: Int, artist: String = "Artist") -> ReferenceUpcomingTrack {
+        ReferenceUpcomingTrack(
+            index: index,
+            track: ReferenceTrack(
+                id: "song-\(index)",
+                title: "Song \(index)",
+                artists: artist,
+                albumTitle: "Album",
+                coverURL: nil,
+                duration: 60
+            )
+        )
+    }
+
+    func testThresholdHapticFiresDuringDragUponCrossingCommitPointAndDoesNotDoubleFireOnRelease() {
+        let controller = TrackSwipeController()
+        var hapticCount = 0
+        controller.feedbackHandler = { hapticCount += 1 }
+        controller.prepareFeedbackHandler = {}
+
+        let current = makeEntry(1)
+        let prev = makeEntry(0)
+        let next = makeEntry(2)
+        controller.syncTrack(song: current.track, queueIndex: current.index)
+
+        controller.panBegan(translation: 0, distance: 100, previous: prev, next: next)
+        controller.panChanged(translation: -29, distance: 100, previous: prev, next: next)
+        XCTAssertEqual(hapticCount, 0)
+
+        controller.panChanged(translation: -30, distance: 100, previous: prev, next: next)
+        XCTAssertEqual(hapticCount, 1)
+
+        controller.panChanged(translation: -65, distance: 100, previous: prev, next: next)
+        XCTAssertEqual(hapticCount, 1)
+
+        // Small pullback still within hysteresis band should not re-arm prematurely.
+        controller.panChanged(translation: -25, distance: 100, previous: prev, next: next)
+        controller.panChanged(translation: -35, distance: 100, previous: prev, next: next)
+        XCTAssertEqual(hapticCount, 1)
+
+        // Pulling well inside re-arm band allows crossing threshold to tick again.
+        controller.panChanged(translation: -10, distance: 100, previous: prev, next: next)
+        controller.panChanged(translation: -35, distance: 100, previous: prev, next: next)
+        XCTAssertEqual(hapticCount, 2)
+
+        var selected: Int?
+        controller.panEnded(
+            translation: -35,
+            velocity: 0,
+            distance: 100,
+            song: current.track,
+            previous: prev,
+            next: next,
+            reduceMotion: true
+        ) { selected = $0 }
+        XCTAssertEqual(selected, 2)
+        XCTAssertEqual(hapticCount, 2)
+    }
+
+    func testFastFlickFiresFallbackHapticOnceAtCommitWhenStaticThresholdWasNotReached() {
+        let controller = TrackSwipeController()
+        var hapticCount = 0
+        controller.feedbackHandler = { hapticCount += 1 }
+        controller.prepareFeedbackHandler = {}
+
+        let current = makeEntry(1)
+        let prev = makeEntry(0)
+        let next = makeEntry(2)
+        controller.syncTrack(song: current.track, queueIndex: current.index)
+
+        controller.panBegan(translation: 0, distance: 100, previous: prev, next: next)
+        controller.panChanged(translation: -15, distance: 100, previous: prev, next: next)
+        XCTAssertEqual(hapticCount, 0)
+
+        var selected: Int?
+        controller.panEnded(
+            translation: -15,
+            velocity: -800,
+            distance: 100,
+            song: current.track,
+            previous: prev,
+            next: next,
+            reduceMotion: true
+        ) { selected = $0 }
+        XCTAssertEqual(selected, 2)
+        XCTAssertEqual(hapticCount, 1)
+    }
+
+    func testSameArtistPinsArtistDuringDragAndPreservesPinAcrossSettleOvershoot() {
+        let controller = TrackSwipeController()
+        let baseDate = Date(timeIntervalSinceReferenceDate: 1_000)
+        var now = baseDate
+        controller.nowProvider = { now }
+        controller.feedbackHandler = {}
+        controller.prepareFeedbackHandler = {}
+
+        let song0 = makeEntry(0, artist: "Same Artist")
+        let song1 = makeEntry(1, artist: "Same Artist")
+        let song2 = makeEntry(2, artist: "Other Artist")
+        controller.syncTrack(song: song0.track, queueIndex: song0.index)
+
+        controller.panBegan(translation: -20, distance: 278, previous: nil, next: song1)
+        XCTAssertTrue(controller.isArtistPinned(at: controller.dragOffset, song: song0.track, previous: nil, next: song1))
+
+        controller.panEnded(
+            translation: -100,
+            velocity: -500,
+            distance: 278,
+            song: song0.track,
+            previous: nil,
+            next: song1,
+            reduceMotion: false
+        ) { _ in }
+
+        XCTAssertTrue(controller.isSettling)
+        // Find an overshoot frame where offset dips slightly negative even though next song (song2) has a different artist.
+        let samples = (0...30).map { controller.currentOffset(at: baseDate.addingTimeInterval(Double($0) / 60.0)) }
+        let overshootOffset = try? XCTUnwrap(samples.first { $0 < -0.5 })
+        XCTAssertNotNil(overshootOffset)
+        XCTAssertTrue(
+            controller.isArtistPinned(at: overshootOffset ?? -2, song: song1.track, previous: song0, next: song2)
+        )
+
+        now = baseDate.addingTimeInterval(0.6)
+        controller.finishSettling()
+
+        controller.panBegan(translation: -20, distance: 278, previous: song0, next: song2)
+        XCTAssertFalse(controller.isArtistPinned(at: controller.dragOffset, song: song1.track, previous: song0, next: song2))
+    }
+
+    func testInterruptedMidFlightSwipePreservesLiveOffsetAcrossConsecutiveReleases() {
+        let controller = TrackSwipeController()
+        let baseDate = Date(timeIntervalSinceReferenceDate: 2_000)
+        var now = baseDate
+        controller.nowProvider = { now }
+        controller.feedbackHandler = {}
+        controller.prepareFeedbackHandler = {}
+
+        let song0 = makeEntry(0, artist: "A")
+        let song1 = makeEntry(1, artist: "B")
+        let song2 = makeEntry(2, artist: "C")
+        controller.syncTrack(song: song0.track, queueIndex: song0.index)
+
+        var selected: [Int] = []
+        controller.panBegan(translation: -95, distance: 278, previous: nil, next: song1)
+        controller.panEnded(
+            translation: -95,
+            velocity: -400,
+            distance: 278,
+            song: song0.track,
+            previous: nil,
+            next: song1,
+            reduceMotion: false
+        ) { selected.append($0) }
+
+        now = baseDate.addingTimeInterval(0.05)
+        let liveOffset = controller.currentOffset(at: now)
+        XCTAssertGreaterThan(liveOffset, 20)
+
+        controller.panBegan(translation: 0, distance: 278, previous: song0, next: song2)
+        XCTAssertEqual(controller.dragOffset, liveOffset, accuracy: 0.001)
+
+        controller.panChanged(translation: -(liveOffset + 90), distance: 278, previous: song0, next: song2)
+        XCTAssertEqual(controller.dragOffset, -90, accuracy: 0.001)
+
+        controller.panEnded(
+            translation: -(liveOffset + 90),
+            velocity: -500,
+            distance: 278,
+            song: song1.track,
+            previous: song0,
+            next: song2,
+            reduceMotion: false
+        ) { selected.append($0) }
+
+        XCTAssertEqual(selected, [1, 2])
+        XCTAssertEqual(controller.currentStep, 2)
+    }
+
+    func testUnavailableDirectionAppliesRubberBandAndDoesNotTriggerHaptic() {
+        let controller = TrackSwipeController()
+        var hapticCount = 0
+        controller.feedbackHandler = { hapticCount += 1 }
+        controller.prepareFeedbackHandler = {}
+
+        let current = makeEntry(0)
+        controller.syncTrack(song: current.track, queueIndex: current.index)
+
+        controller.panBegan(translation: 0, distance: 200, previous: nil, next: nil)
+        controller.panChanged(translation: 150, distance: 200, previous: nil, next: nil)
+        XCTAssertLessThan(controller.dragOffset, 90)
+        XCTAssertGreaterThan(controller.dragOffset, 0)
+        XCTAssertEqual(hapticCount, 0)
+
+        var selected: [Int] = []
+        controller.panEnded(
+            translation: 150,
+            velocity: 900,
+            distance: 200,
+            song: current.track,
+            previous: nil,
+            next: nil,
+            reduceMotion: true
+        ) { selected.append($0) }
+        XCTAssertTrue(selected.isEmpty)
+        XCTAssertEqual(hapticCount, 0)
+    }
+
+    func testMotionOffsetUpdatesContinuouslyWithoutDiscreteSlotChurn() {
+        let controller = TrackSwipeController()
+        controller.feedbackHandler = {}
+        controller.prepareFeedbackHandler = {}
+
+        let song0 = makeEntry(0, artist: "A")
+        let song1 = makeEntry(1, artist: "B")
+        controller.syncTrack(song: song0.track, queueIndex: song0.index)
+
+        XCTAssertEqual(controller.motion.value, 0)
+        XCTAssertEqual(controller.motion.edgeStrength, 0)
+        XCTAssertEqual(controller.offsetSign, 0)
+        XCTAssertFalse(controller.showsPreviousSlot)
+        XCTAssertFalse(controller.showsNextSlot)
+
+        controller.panBegan(translation: -20, distance: 280, previous: nil, next: song1)
+        XCTAssertEqual(controller.motion.value, -20, accuracy: 0.001)
+        XCTAssertEqual(controller.motion.edgeStrength, 1.0, accuracy: 0.001)
+        XCTAssertEqual(controller.offsetSign, -1)
+        XCTAssertTrue(controller.showsNextSlot)
+        XCTAssertFalse(controller.showsPreviousSlot)
+
+        let discreteInvalidations = OSAllocatedUnfairLock(initialState: 0)
+        withObservationTracking {
+            _ = controller.isDragging
+            _ = controller.isSettling
+            _ = controller.currentStep
+            _ = controller.exitingSlot?.step
+            _ = controller.pinnedArtistDuringTransition
+            _ = controller.offsetSign
+            _ = controller.showsPreviousSlot
+            _ = controller.showsNextSlot
+            _ = controller.allowsOppositePreviousSlot
+            _ = controller.allowsOppositeNextSlot
+        } onChange: {
+            discreteInvalidations.withLock { $0 += 1 }
+        }
+
+        controller.panChanged(translation: -40, distance: 280, previous: nil, next: song1)
+        controller.panChanged(translation: -60, distance: 280, previous: nil, next: song1)
+        controller.panChanged(translation: -100, distance: 280, previous: nil, next: song1)
+
+        XCTAssertEqual(controller.motion.value, -100, accuracy: 0.001)
+        XCTAssertEqual(discreteInvalidations.withLock { $0 }, 0)
+
+        var selected: [Int] = []
+        controller.panEnded(
+            translation: -100,
+            velocity: -450,
+            distance: 280,
+            song: song0.track,
+            previous: nil,
+            next: song1,
+            reduceMotion: false
+        ) { selected.append($0) }
+
+        XCTAssertEqual(selected, [1])
+        XCTAssertEqual(controller.motion.value, 180, accuracy: 0.001)
+        XCTAssertEqual(controller.offsetSign, 1)
+        XCTAssertTrue(controller.showsPreviousSlot)
+        XCTAssertFalse(controller.showsNextSlot)
+
+        controller.finishSettling()
+        XCTAssertEqual(controller.motion.value, 0)
+        XCTAssertEqual(controller.motion.edgeStrength, 0)
+        XCTAssertEqual(controller.offsetSign, 0)
+        XCTAssertFalse(controller.showsPreviousSlot)
+        XCTAssertFalse(controller.showsNextSlot)
+        XCTAssertTrue(controller.allowsOppositePreviousSlot)
+        XCTAssertTrue(controller.allowsOppositeNextSlot)
     }
 }

@@ -311,3 +311,21 @@ fragment float4 fluidBackdropPresentFragment(
     float bottomAlpha = bottomSpan > 0.0f ? clamp((bottomEnd - viewportY) / bottomSpan, 0.0f, 1.0f) : 1.0f;
     return color * half(min(topAlpha, bottomAlpha));
 }
+
+[[stitchable]] half4 trackSwipeHorizontalFade(
+    float2 position,
+    half4 color,
+    float4 edgeBounds,
+    float rightEnd
+) {
+    // edgeBounds: (slotOffsetX, leftStart, fadeInEnd, fadeOutStart)
+    float x = position.x + edgeBounds.x;
+    if (x <= edgeBounds.y || x >= rightEnd) {
+        return half4(0.0h);
+    }
+    float leadSpan = edgeBounds.z - edgeBounds.y;
+    float trailSpan = rightEnd - edgeBounds.w;
+    float leadAlpha = leadSpan > 0.0f ? clamp((x - edgeBounds.y) / leadSpan, 0.0f, 1.0f) : 1.0f;
+    float trailAlpha = trailSpan > 0.0f ? clamp((rightEnd - x) / trailSpan, 0.0f, 1.0f) : 1.0f;
+    return color * half(min(leadAlpha, trailAlpha));
+}

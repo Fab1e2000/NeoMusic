@@ -19,10 +19,27 @@ struct OnlineLibraryShellPreview: View {
         ], folders: [.init(id: "preview-folder", name: "test", addedOrder: 1)])
         library.move(playlistID: "preview-child", to: "preview-folder")
         _library = State(initialValue: library)
-        let song = LibrarySongItem(id: "preview-track", title: "物語りのワルツ", artist: "Isekaijoucho",
-                                  album: "", albumArtist: "Isekaijoucho", trackNumber: 1,
-                                  artwork: .image(Image("AlbumSample17")), duration: 240)
-        _player = State(initialValue: NowPlayingModel(queue: [song], currentIndex: 0, isPlaying: false, elapsed: 0))
+        let songs: [LibrarySongItem]
+        if ProcessInfo.processInfo.arguments.contains("-playerSwipeQueue") {
+            songs = [
+                LibrarySongItem(id: "preview-track-0", title: "物語りのワルツ", artist: "Isekaijoucho",
+                                album: "Album", albumArtist: "Isekaijoucho", trackNumber: 1,
+                                artwork: .image(Image("AlbumSample01")), duration: 240),
+                LibrarySongItem(id: "preview-track-1", title: "Midnight Echo Across The Harbor", artist: "Isekaijoucho",
+                                album: "Album", albumArtist: "Isekaijoucho", trackNumber: 2,
+                                artwork: .image(Image("AlbumSample04")), duration: 240),
+                LibrarySongItem(id: "preview-track-2", title: "Sunburst Skyline", artist: "Different Artist",
+                                album: "Second Album", albumArtist: "Different Artist", trackNumber: 3,
+                                artwork: .image(Image("AlbumSample08")), duration: 240)
+            ]
+        } else {
+            songs = [
+                LibrarySongItem(id: "preview-track", title: "物語りのワルツ", artist: "Isekaijoucho",
+                                album: "", albumArtist: "Isekaijoucho", trackNumber: 1,
+                                artwork: .image(Image("AlbumSample17")), duration: 240)
+            ]
+        }
+        _player = State(initialValue: NowPlayingModel(queue: songs, currentIndex: 0, isPlaying: false, elapsed: 0))
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("NeoMusicOnlinePreview", isDirectory: true)
         lyrics = ReferenceLibrary(reader: ReferenceLyricsReader(storageDirectory: root, root: root, resolveAudioURL: { _ in nil }))
     }

@@ -386,8 +386,8 @@ final class LibraryDetailNavigationTests: XCTestCase {
         let item = try XCTUnwrap(tabs.popupBar.popupItem)
         XCTAssertEqual(item.accessibilityLabel, "Track 0，Artist，迷你播放器")
         XCTAssertEqual(item.accessibilityHint, "打开正在播放")
-        let pager = try XCTUnwrap(descendants(of: UIScrollView.self, in: tabs.popupBar).first {
-            $0.panGestureRecognizer.name == "NeoDizzy.NowPlayingTrackSwipe"
+        let pager = try XCTUnwrap(descendants(of: UIView.self, in: tabs.popupBar).first {
+            $0.gestureRecognizers?.contains(where: { $0.name == "NeoDizzy.NowPlayingTrackSwipe" }) == true
         })
         // Finish the initial native display before measuring placement-only updates.
         XCTAssertTrue(pager.window === window)
@@ -431,6 +431,100 @@ final class LibraryDetailNavigationTests: XCTestCase {
         try await settle()
         XCTAssertEqual(tabs.popupBar.popupItem?.accessibilityLabel, "Track 1，Artist，迷你播放器")
         XCTAssertEqual(tabs.popupBar.popupItem?.accessibilityHint, "打开正在播放")
+    }
+
+    func testMiniPlayerTrackSwipeHitTestAndPopupGestureCoordination() async throws {
+        let scene = try await applicationWindowScene()
+        let window = UIWindow(windowScene: scene)
+        defer { window.isHidden = true }
+        let tracks = [
+            ReferenceTrack(id: "mini-0", title: "Alpha Long Song Title For Marquee", artists: "Shared Artist", albumTitle: "Album", coverURL: nil, duration: 60),
+            ReferenceTrack(id: "mini-1", title: "Beta Track", artists: "Shared Artist", albumTitle: "Album", coverURL: nil, duration: 60),
+            ReferenceTrack(id: "mini-2", title: "Gamma Track", artists: "Different Artist", albumTitle: "Album", coverURL: nil, duration: 60)
+        ]
+        let player = PlayerTestFixtures.state(tracks: tracks)
+        window.rootViewController = UIHostingController(rootView: AppShell(
+            library: { TestRoot() }, detailDestination: { AnyView(TestDetail(route: $0)) },
+            nowPlaying: nil, playlistLibrary: PlaylistLibrary(playlists: []), toasts: LibraryToastCenter(),
+            referencePlayer: player, referenceLibrary: PlayerTestFixtures.library(),
+            makePlayerActions: { _, _ in PlayerTestFixtures.actions() })
+            .environment(account)
+            .environment(\.scenePhase, .active)
+            .dynamicTypeSize(.large))
+        window.makeKeyAndVisible()
+        try await settle()
+
+        func findTabs(in controller: UIViewController) -> UITabBarController? {
+            if let tabs = controller as? UITabBarController { return tabs }
+            return controller.children.lazy.compactMap { findTabs(in: $0) }.first
+        }
+        func collectRecognizers(in view: UIView) -> [UIGestureRecognizer] {
+            (view.gestureRecognizers ?? []) + view.subviews.flatMap { collectRecognizers(in: $0) }
+        }
+
+        let tabs = try XCTUnwrap(findTabs(in: window.rootViewController!))
+        let popupBar = tabs.popupBar
+        let content = try XCTUnwrap(tabs.popupContent)
+        let pager = try XCTUnwrap(descendants(of: UIView.self, in: popupBar).first {
+            $0.gestureRecognizers?.contains(where: { $0.name == "NeoDizzy.NowPlayingTrackSwipe" }) == true
+        })
+        let pan = try XCTUnwrap(pager.gestureRecognizers?.first {
+            $0.name == "NeoDizzy.NowPlayingTrackSwipe"
+        } as? UIPanGestureRecognizer)
+        let panDelegate = try XCTUnwrap(pan.delegate)
+        let openTap = try XCTUnwrap(popupBar.popupOpenGestureRecognizer)
+        let highlight = try XCTUnwrap(popupBar.barHighlightGestureRecognizer)
+        let interactionPan = collectRecognizers(in: tabs.view).first {
+            NSStringFromClass(type(of: $0)).contains("LNPopupInteractionPanGestureRecognizer")
+        }
+
+        // Verify UIKit hit testing inside regular LNPopupBar actually lands on TrackSwipeTouchSurface.
+        XCTAssertGreaterThan(pager.bounds.width, 100)
+        XCTAssertEqual(pager.bounds.height, 36, accuracy: 1)
+        let titlePoint = CGPoint(x: pager.bounds.midX, y: pager.bounds.minY + 9)
+        let artistPoint = CGPoint(x: pager.bounds.midX, y: pager.bounds.maxY - 9)
+        for localPoint in [titlePoint, artistPoint] {
+            let pointInPopupBar = pager.convert(localPoint, to: popupBar)
+            let pointInWindow = pager.convert(localPoint, to: window)
+            XCTAssertTrue(popupBar.hitTest(pointInPopupBar, with: nil) === pager,
+                          "Mini player hitTest at \(localPoint) returned \(String(describing: popupBar.hitTest(pointInPopupBar, with: nil))) instead of swipe surface")
+            XCTAssertTrue(window.hitTest(pointInWindow, with: nil) === pager,
+                          "Window hitTest at \(localPoint) returned \(String(describing: window.hitTest(pointInWindow, with: nil))) instead of swipe surface")
+        }
+
+        // Verify gesture delegation matches native coordination rules.
+        XCTAssertEqual(panDelegate.gestureRecognizer?(pan, shouldRecognizeSimultaneouslyWith: highlight), true)
+        XCTAssertEqual(panDelegate.gestureRecognizer?(pan, shouldRecognizeSimultaneouslyWith: openTap), false)
+        XCTAssertEqual(panDelegate.gestureRecognizer?(pan, shouldBeRequiredToFailBy: openTap), true)
+        if let interactionPan {
+            let interactionDelegate = try XCTUnwrap(interactionPan.delegate)
+            XCTAssertEqual(interactionDelegate.gestureRecognizer?(interactionPan, shouldRecognizeSimultaneouslyWith: pan), false)
+            XCTAssertEqual(panDelegate.gestureRecognizer?(pan, shouldRecognizeSimultaneouslyWith: interactionPan), false)
+            XCTAssertEqual(panDelegate.gestureRecognizer?(pan, shouldBeRequiredToFailBy: interactionPan), true)
+        } else {
+            XCTFail("Expected LNPopupInteractionPanGestureRecognizer on tabs.view")
+        }
+
+        let regularBar = UIGraphicsImageRenderer(bounds: popupBar.bounds).image { _ in
+            XCTAssertTrue(popupBar.drawHierarchy(in: popupBar.bounds, afterScreenUpdates: true))
+        }
+        let regularSnapshot = XCTAttachment(image: regularBar)
+        regularSnapshot.name = "mini-player-swipe-regular"
+        regularSnapshot.lifetime = .keepAlways
+        add(regularSnapshot)
+
+        // Verify inline placement shrinks cleanly and check hit testing / visual appearance.
+        content.traitOverrides[LNPopupBar.EnvironmentTrait.self] = LNPopupBar.Environment.inline
+        popupBar.traitOverrides[LNPopupBar.EnvironmentTrait.self] = LNPopupBar.Environment.inline
+        try await Task.sleep(for: .milliseconds(350))
+        XCTAssertEqual(pager.bounds.height, 18, accuracy: 1)
+        let inlineBar = UIGraphicsImageRenderer(bounds: popupBar.bounds).image { _ in
+            XCTAssertTrue(popupBar.drawHierarchy(in: popupBar.bounds, afterScreenUpdates: true))
+        }
+        let inlineSnapshot = XCTAttachment(image: inlineBar)
+        inlineSnapshot.name = "mini-player-swipe-inline"
+        inlineSnapshot.lifetime = .keepAlways
+        add(inlineSnapshot)
     }
 
     func testPlayerTransitionGlassRetainsAlbumAppearanceAcrossRepeatedCloses() async throws {

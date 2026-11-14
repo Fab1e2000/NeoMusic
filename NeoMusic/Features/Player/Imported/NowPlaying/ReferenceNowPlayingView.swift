@@ -232,7 +232,9 @@ struct ReferenceNowPlayingView: View {
                     maxWidth: .infinity,
                     maxHeight: .infinity
                 )
+                .padding(.horizontal, Self.portraitHorizontalPadding)
                 .clipped()
+                .padding(.horizontal, -Self.portraitHorizontalPadding)
 
             residentQueuePage(for: song)
 

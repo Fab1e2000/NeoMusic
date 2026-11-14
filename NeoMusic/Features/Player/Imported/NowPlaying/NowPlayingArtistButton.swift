@@ -50,6 +50,7 @@ struct NowPlayingVibrantLabel: View {
     var fontSizeIsScaled = false
     var opacity: Double = NowPlayingVisualHierarchy.subtitleOpacity
     @ScaledMetric private var scaledFontSize: CGFloat
+    @Environment(\.trackSwipeVibrantEdge) private var trackSwipeEdge
 
     init(
         text: String,
@@ -76,9 +77,35 @@ struct NowPlayingVibrantLabel: View {
             .font(.system(size: resolvedFontSize, weight: .regular))
             .lineLimit(1)
             .truncationMode(.tail)
+            .modifier(TrackSwipeVibrantEdgeModifier(edge: trackSwipeEdge))
             .nowPlayingPlusLighter(opacity)
             .accessibilityLabel(text)
             .allowsHitTesting(false)
+    }
+}
+
+private struct TrackSwipeVibrantEdgeModifier: ViewModifier {
+    let edge: TrackSwipeVibrantEdge?
+
+    func body(content: Content) -> some View {
+        let active = edge.map { $0.isActive && !$0.isPinned && $0.slotWidth > 1 } ?? false
+        let offsetX = active ? ((edge?.motion.value ?? 0) + (edge?.baseOffset ?? 0)) : 0
+        let leftStart = -(edge?.insets.leadingBleed ?? 0)
+        let fadeInEnd = leftStart + (edge?.insets.leadingFade ?? 0)
+        let rightEnd = (edge?.slotWidth ?? 0) + (edge?.insets.trailingBleed ?? 0)
+        let fadeOutStart = rightEnd - (edge?.insets.trailingFade ?? 0)
+        content.colorEffect(
+            ShaderLibrary.trackSwipeHorizontalFade(
+                .float4(
+                    Float(offsetX),
+                    Float(leftStart),
+                    Float(fadeInEnd),
+                    Float(fadeOutStart)
+                ),
+                .float(Float(rightEnd))
+            ),
+            isEnabled: active
+        )
     }
 }
 
@@ -109,10 +136,10 @@ private struct NowPlayingArtistMenuButton: UIViewRepresentable {
 
     private func configure(_ button: UIButton, coordinator: PlayerArtistMenuController) {
         let changed = coordinator.bind(track: track, actions: actions)
+        guard changed || !coordinator.hasConfiguredButton else { return }
         button.setTitle(track.artists, for: .normal)
         button.accessibilityLabel = track.artists
         button.isEnabled = !track.artists.isEmpty
-        guard changed || !coordinator.hasConfiguredButton else { return }
         coordinator.hasConfiguredButton = true
         button.menu = coordinator.menu()
         button.showsMenuAsPrimaryAction = true

@@ -1,102 +1,700 @@
 import SwiftUI
 import UIKit
 
-/// 全屏播放器里“歌名 + 作者”这一块：左右滑动切到上一首/下一首（和系统音乐一样，任何页面都可以）。
-///
-/// 拖动时当前歌名跟手，相邻一首的歌名从旁边淡入；松手过线或甩得够快就切歌并振动，否则弹回。
-/// 没有相邻曲目的方向会有阻尼。手势只认横向拖动，不影响下拉收起播放器和点作者名弹菜单。
-struct NowPlayingTrackSwipe<Content: View>: View {
+@Observable @MainActor
+final class TrackSwipeOffsetModel {
+    var value: CGFloat = 0
+    var edgeStrength: Double = 0
+}
+
+struct TrackSwipeVibrantEdge: Equatable {
+    let motion: TrackSwipeOffsetModel
+    let baseOffset: CGFloat
+    let isPinned: Bool
+    let isActive: Bool
+    let slotWidth: CGFloat
+    let insets: TrackSwipeViewportInsets
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.motion === rhs.motion &&
+        lhs.baseOffset == rhs.baseOffset &&
+        lhs.isPinned == rhs.isPinned &&
+        lhs.isActive == rhs.isActive &&
+        lhs.slotWidth == rhs.slotWidth &&
+        lhs.insets == rhs.insets
+    }
+}
+
+private struct TrackSwipeVibrantEdgeKey: EnvironmentKey {
+    static let defaultValue: TrackSwipeVibrantEdge? = nil
+}
+
+extension EnvironmentValues {
+    var trackSwipeVibrantEdge: TrackSwipeVibrantEdge? {
+        get { self[TrackSwipeVibrantEdgeKey.self] }
+        set { self[TrackSwipeVibrantEdgeKey.self] = newValue }
+    }
+}
+
+struct TrackSwipeViewportInsets: Equatable {
+    var leadingBleed: CGFloat = 0
+    var trailingBleed: CGFloat = 0
+    var leadingFade: CGFloat = 14
+    var trailingFade: CGFloat = 14
+    var fadesOnlyWhenSliding: Bool = false
+
+    static let header = TrackSwipeViewportInsets(
+        leadingBleed: 12,
+        trailingBleed: 12,
+        leadingFade: 12,
+        trailingFade: 12,
+        fadesOnlyWhenSliding: false
+    )
+
+    static let miniPlayer = TrackSwipeViewportInsets(
+        leadingBleed: 0,
+        trailingBleed: 0,
+        leadingFade: 14,
+        trailingFade: 14,
+        fadesOnlyWhenSliding: true
+    )
+}
+
+@Observable @MainActor
+final class TrackSwipeController {
+    static let spring = Spring(duration: 0.22, bounce: 0.26)
+    static let maxSpringVelocity: CGFloat = 700
+    static let thresholdFraction: CGFloat = 0.3
+    static let hapticRearmFraction: CGFloat = 0.22
+    static let thresholdVelocity: CGFloat = 600
+
+    var isDragging = false
+    var isSettling = false
+    var currentStep = 0
+
+    private(set) var exitingSlot: (step: Int, track: ReferenceTrack)?
+    private(set) var pinnedArtistDuringTransition: String?
+    private(set) var offsetSign = 0
+    private(set) var showsPreviousSlot = false
+    private(set) var showsNextSlot = false
+    private(set) var allowsOppositePreviousSlot = true
+    private(set) var allowsOppositeNextSlot = true
+
+    @ObservationIgnored let motion = TrackSwipeOffsetModel()
+    @ObservationIgnored private var rawDragOffset: CGFloat = 0
+    @ObservationIgnored private var dragBaseOffset: CGFloat = 0
+    @ObservationIgnored private var springStartOffset: CGFloat = 0
+    @ObservationIgnored private var springVelocity: CGFloat = 0
+    @ObservationIgnored private var springStartDate: Date = .now
+    @ObservationIgnored private var springSettlingDuration: TimeInterval = 0.05
+    @ObservationIgnored private var displayLink: CADisplayLink?
+    @ObservationIgnored private var settleTask: Task<Void, Never>?
+    @ObservationIgnored private var lastTrackKey: String?
+    @ObservationIgnored private var hapticArmedDirection = 0
+
+    @ObservationIgnored var feedbackHandler: () -> Void = { ReferenceTrackSwipeFeedback.selection() }
+    @ObservationIgnored var prepareFeedbackHandler: () -> Void = { ReferenceTrackSwipeFeedback.prepare() }
+    @ObservationIgnored var nowProvider: () -> Date = { .now }
+
+    var dragOffset: CGFloat {
+        get { rawDragOffset }
+        set {
+            rawDragOffset = newValue
+            updateMotionOutput(offset: newValue)
+        }
+    }
+
+    var isActive: Bool { isDragging || isSettling }
+
+    func syncTrack(song: ReferenceTrack, queueIndex: Int) {
+        let key = "\(queueIndex):\(song.id)"
+        guard let lastTrackKey else {
+            self.lastTrackKey = key
+            return
+        }
+        guard key != lastTrackKey else { return }
+        self.lastTrackKey = key
+        cancelMotion()
+    }
+
+    func currentOffset(at date: Date) -> CGFloat {
+        if isDragging { return rawDragOffset }
+        guard isSettling else { return 0 }
+        let dt = max(0, date.timeIntervalSince(springStartDate))
+        return springStartOffset + Self.spring.value(
+            target: -springStartOffset,
+            initialVelocity: springVelocity,
+            time: dt
+        )
+    }
+
+    func isArtistPinned(
+        at offset: CGFloat,
+        song: ReferenceTrack,
+        previous: ReferenceUpcomingTrack?,
+        next: ReferenceUpcomingTrack?
+    ) -> Bool {
+        if let pinnedArtistDuringTransition, !song.artists.isEmpty, pinnedArtistDuringTransition == song.artists {
+            return true
+        }
+        guard !song.artists.isEmpty else { return false }
+        if offset > 0, let previous {
+            return previous.track.artists == song.artists
+        }
+        if offset < 0, let next {
+            return next.track.artists == song.artists
+        }
+        return false
+    }
+
+    func panBegan(
+        translation: CGFloat,
+        distance: CGFloat,
+        previous: ReferenceUpcomingTrack?,
+        next: ReferenceUpcomingTrack?
+    ) {
+        let now = nowProvider()
+        let live = currentOffset(at: now)
+        stopSpringDrivers()
+        isSettling = false
+        isDragging = true
+        dragBaseOffset = live
+
+        let safeDistance = max(distance, 1)
+        let threshold = safeDistance * Self.thresholdFraction
+        if live >= threshold, previous != nil {
+            hapticArmedDirection = 1
+        } else if live <= -threshold, next != nil {
+            hapticArmedDirection = -1
+        } else {
+            hapticArmedDirection = 0
+        }
+
+        prepareFeedbackHandler()
+        applyDrag(translation: translation, distance: safeDistance, previous: previous, next: next)
+    }
+
+    func panChanged(
+        translation: CGFloat,
+        distance: CGFloat,
+        previous: ReferenceUpcomingTrack?,
+        next: ReferenceUpcomingTrack?
+    ) {
+        if !isDragging {
+            panBegan(translation: translation, distance: distance, previous: previous, next: next)
+            return
+        }
+        applyDrag(translation: translation, distance: max(distance, 1), previous: previous, next: next)
+    }
+
+    func panEnded(
+        translation: CGFloat,
+        velocity: CGFloat,
+        distance: CGFloat,
+        song: ReferenceTrack,
+        previous: ReferenceUpcomingTrack?,
+        next: ReferenceUpcomingTrack?,
+        reduceMotion: Bool,
+        select: (Int) -> Void
+    ) {
+        guard isDragging else { return }
+        let safeDistance = max(distance, 1)
+        let threshold = safeDistance * Self.thresholdFraction
+        let rearm = safeDistance * Self.hapticRearmFraction
+
+        let canCommitPrevious = previous != nil && (
+            dragBaseOffset < rearm ||
+            translation > 12 ||
+            velocity > Self.thresholdVelocity ||
+            rawDragOffset > safeDistance * 0.5
+        )
+        let canCommitNext = next != nil && (
+            dragBaseOffset > -rearm ||
+            translation < -12 ||
+            velocity < -Self.thresholdVelocity ||
+            rawDragOffset < -safeDistance * 0.5
+        )
+
+        var chosenEntry: ReferenceUpcomingTrack?
+        var direction: CGFloat = 0
+
+        if let next, canCommitNext,
+           rawDragOffset <= -threshold || (velocity < -Self.thresholdVelocity && (rawDragOffset <= 0 || translation < -12)) {
+            chosenEntry = next
+            direction = -1
+        } else if let previous, canCommitPrevious,
+                  rawDragOffset >= threshold || (velocity > Self.thresholdVelocity && (rawDragOffset >= 0 || translation > 12)) {
+            chosenEntry = previous
+            direction = 1
+        }
+
+        if let entry = chosenEntry {
+            let expectedArm = direction == 1 ? 1 : -1
+            if hapticArmedDirection != expectedArm {
+                feedbackHandler()
+            }
+            let sameArtists = !song.artists.isEmpty && song.artists == entry.track.artists
+            pinnedArtistDuringTransition = sameArtists ? song.artists : nil
+            exitingSlot = (step: currentStep, track: song)
+            currentStep += direction < 0 ? 1 : -1
+            lastTrackKey = "\(entry.index):\(entry.track.id)"
+
+            let rebased = rawDragOffset - direction * safeDistance
+            isDragging = false
+            rawDragOffset = 0
+            dragBaseOffset = 0
+            hapticArmedDirection = 0
+
+            startSpring(from: rebased, velocity: velocity, reduceMotion: reduceMotion)
+            select(entry.index)
+            return
+        }
+
+        if rawDragOffset > 0, let previous, !song.artists.isEmpty, song.artists == previous.track.artists {
+            pinnedArtistDuringTransition = song.artists
+        } else if rawDragOffset < 0, let next, !song.artists.isEmpty, song.artists == next.track.artists {
+            pinnedArtistDuringTransition = song.artists
+        } else {
+            pinnedArtistDuringTransition = nil
+        }
+
+        let releaseOffset = rawDragOffset
+        isDragging = false
+        rawDragOffset = 0
+        dragBaseOffset = 0
+        hapticArmedDirection = 0
+        startSpring(from: releaseOffset, velocity: velocity, reduceMotion: reduceMotion)
+    }
+
+    func panCancelled(reduceMotion: Bool) {
+        guard isDragging else { return }
+        let releaseOffset = rawDragOffset
+        isDragging = false
+        rawDragOffset = 0
+        dragBaseOffset = 0
+        hapticArmedDirection = 0
+        startSpring(from: releaseOffset, velocity: 0, reduceMotion: reduceMotion)
+    }
+
+    func finishSettling() {
+        stopSpringDrivers()
+        isSettling = false
+        exitingSlot = nil
+        pinnedArtistDuringTransition = nil
+        updateMotionOutput(offset: 0)
+    }
+
+    private func applyDrag(
+        translation: CGFloat,
+        distance: CGFloat,
+        previous: ReferenceUpcomingTrack?,
+        next: ReferenceUpcomingTrack?
+    ) {
+        let raw = dragBaseOffset + translation
+        let canPrevious = previous != nil
+        let canNext = next != nil
+
+        if (raw > 0 && !canPrevious) || (raw < 0 && !canNext) {
+            rawDragOffset = Self.rubberBand(raw, dimension: distance)
+        } else {
+            rawDragOffset = raw
+        }
+
+        if let exiting = exitingSlot {
+            if (exiting.step < currentStep && rawDragOffset < -2) || (exiting.step > currentStep && rawDragOffset > 2) {
+                exitingSlot = nil
+                pinnedArtistDuringTransition = nil
+            }
+        } else if pinnedArtistDuringTransition != nil, abs(translation) > 8 {
+            pinnedArtistDuringTransition = nil
+        }
+
+        let threshold = distance * Self.thresholdFraction
+        let rearm = distance * Self.hapticRearmFraction
+        if rawDragOffset >= threshold, canPrevious {
+            if hapticArmedDirection != 1 {
+                hapticArmedDirection = 1
+                feedbackHandler()
+            }
+        } else if rawDragOffset <= -threshold, canNext {
+            if hapticArmedDirection != -1 {
+                hapticArmedDirection = -1
+                feedbackHandler()
+            }
+        } else if abs(rawDragOffset) <= rearm {
+            hapticArmedDirection = 0
+        }
+
+        updateMotionOutput(offset: rawDragOffset)
+    }
+
+    private func startSpring(from offset: CGFloat, velocity: CGFloat, reduceMotion: Bool) {
+        stopSpringDrivers()
+        if reduceMotion || (abs(offset) < 0.1 && abs(velocity) < 1) {
+            isSettling = false
+            exitingSlot = nil
+            pinnedArtistDuringTransition = nil
+            updateMotionOutput(offset: 0)
+            return
+        }
+
+        let clampedVelocity = max(-Self.maxSpringVelocity, min(Self.maxSpringVelocity, velocity))
+        springStartOffset = offset
+        springVelocity = clampedVelocity
+        springStartDate = nowProvider()
+        springSettlingDuration = max(
+            Self.spring.settlingDuration(target: -offset, initialVelocity: clampedVelocity, epsilon: 0.1),
+            0.05
+        )
+        isSettling = true
+        updateMotionOutput(offset: offset)
+        startDisplayLink()
+
+        let duration = springSettlingDuration + 0.05
+        settleTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(duration))
+            guard !Task.isCancelled else { return }
+            self?.finishSettling()
+        }
+    }
+
+    func cancelMotion() {
+        stopSpringDrivers()
+        isSettling = false
+        isDragging = false
+        rawDragOffset = 0
+        dragBaseOffset = 0
+        exitingSlot = nil
+        pinnedArtistDuringTransition = nil
+        hapticArmedDirection = 0
+        updateMotionOutput(offset: 0)
+    }
+
+    private func startDisplayLink() {
+        let link = CADisplayLink(
+            target: TrackSwipeDisplayLinkTarget(owner: self),
+            selector: #selector(TrackSwipeDisplayLinkTarget.step(_:))
+        )
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
+        link.add(to: .main, forMode: .common)
+        displayLink = link
+    }
+
+    private func stopSpringDrivers() {
+        settleTask?.cancel()
+        settleTask = nil
+        displayLink?.invalidate()
+        displayLink = nil
+    }
+
+    fileprivate func stepDisplayLink(_ displayLink: CADisplayLink) {
+        guard isSettling else {
+            displayLink.invalidate()
+            if self.displayLink === displayLink { self.displayLink = nil }
+            return
+        }
+        let lookahead = min(max(displayLink.targetTimestamp - CACurrentMediaTime(), 0), 0.05)
+        let sampleDate = nowProvider().addingTimeInterval(lookahead)
+        let dt = max(0, sampleDate.timeIntervalSince(springStartDate))
+        if dt >= springSettlingDuration {
+            finishSettling()
+            return
+        }
+        updateMotionOutput(offset: currentOffset(at: sampleDate))
+    }
+
+    private func updateMotionOutput(offset: CGFloat) {
+        if motion.value != offset {
+            motion.value = offset
+        }
+        let nextStrength = min(Double(abs(offset)) / 6.0, 1.0)
+        if motion.edgeStrength != nextStrength {
+            motion.edgeStrength = nextStrength
+        }
+        syncDiscreteState(offset: offset)
+    }
+
+    private func syncDiscreteState(offset: CGFloat) {
+        let sign = offset > 0 ? 1 : (offset < 0 ? -1 : 0)
+        if offsetSign != sign { offsetSign = sign }
+
+        let showPrevious = offset > 0.25
+        if showsPreviousSlot != showPrevious { showsPreviousSlot = showPrevious }
+
+        let showNext = offset < -0.25
+        if showsNextSlot != showNext { showsNextSlot = showNext }
+
+        let allowOppositePrevious: Bool
+        let allowOppositeNext: Bool
+        if !isDragging, let exiting = exitingSlot {
+            let isExitingLeft = exiting.step < currentStep
+            allowOppositePrevious = isExitingLeft || abs(offset) > 12
+            allowOppositeNext = !isExitingLeft || abs(offset) > 12
+        } else {
+            allowOppositePrevious = true
+            allowOppositeNext = true
+        }
+        if allowsOppositePreviousSlot != allowOppositePrevious {
+            allowsOppositePreviousSlot = allowOppositePrevious
+        }
+        if allowsOppositeNextSlot != allowOppositeNext {
+            allowsOppositeNextSlot = allowOppositeNext
+        }
+    }
+
+    private static func rubberBand(_ offset: CGFloat, dimension: CGFloat) -> CGFloat {
+        let absOffset = abs(offset)
+        let damped = (1 - 1 / ((absOffset * 0.55 / dimension) + 1)) * dimension * 0.45
+        return offset >= 0 ? damped : -damped
+    }
+}
+
+struct NowPlayingTrackSwipe<Title: View, Artist: View>: View {
     let song: ReferenceTrack
     /// 相邻歌名离当前歌名的距离；不传时用这一块自己的宽度再留一点间隔。
     var pageDistance: CGFloat? = nil
+    /// 可选固定槽高度；用于在迷你条中将手势热区撑满完整行高。
+    var slotHeight: CGFloat? = nil
+    /// 行间距；为 nil 时标题和歌手叠放在同一槽内由调用方精确定位。
+    var rowSpacing: CGFloat? = 2
+    /// 视口边缘羽化与溢出距离。
+    var viewportInsets: TrackSwipeViewportInsets = .header
     /// LN hosts title content in a separate controller; give that slot an explicit touch surface.
     var usesUIKitTouchSurface = false
-    /// `interactive` 为 false 时是相邻曲目的预览，只显示文字，不响应点击。
-    @ViewBuilder let content: (_ track: ReferenceTrack, _ interactive: Bool) -> Content
+    /// `marqueeActive` controls scrolling title; `interactive` controls button clicks on current track.
+    @ViewBuilder let title: (_ track: ReferenceTrack, _ marqueeActive: Bool) -> Title
+    @ViewBuilder let artist: (_ track: ReferenceTrack, _ interactive: Bool) -> Artist
 
     @Environment(ReferencePlayerState.self) private var player
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
-    @State private var offset: CGFloat = 0
+    @State private var controller = TrackSwipeController()
     @State private var measuredWidth: CGFloat = 0
 
     private static var spacing: CGFloat { 24 }
+
+    private struct Slot: Identifiable {
+        let id: String
+        let step: Int
+        let track: ReferenceTrack
+        let baseOffset: CGFloat
+        let isCurrent: Bool
+        let keepMarqueeActive: Bool
+    }
+
+    private var verticalMaskOverflow: CGFloat {
+        rowSpacing == nil ? 0 : 8
+    }
 
     var body: some View {
         let previous = player.previousInOrder
         let next = player.nextInOrder
         let distance = max(pageDistance ?? (measuredWidth + Self.spacing), 1)
+        let pinnedArtist = controller.isArtistPinned(
+            at: CGFloat(controller.offsetSign),
+            song: song,
+            previous: previous,
+            next: next
+        )
+        let slots = visibleSlots(
+            distance: distance,
+            previous: previous,
+            next: next
+        )
 
-        ZStack(alignment: .topLeading) {
-            if offset > 0, let previous {
-                neighbor(previous.track, at: offset - distance, distance: distance)
+        trackLayers(slots: slots, pinnedArtist: pinnedArtist)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(height: slotHeight, alignment: rowSpacing == nil ? .topLeading : .leading)
+            .padding(.leading, viewportInsets.leadingBleed)
+            .padding(.trailing, viewportInsets.trailingBleed)
+            .clipped()
+            .padding(.leading, -viewportInsets.leadingBleed)
+            .padding(.trailing, -viewportInsets.trailingBleed)
+            .contentShape(.rect)
+            .modifier(TrackSwipeGestureModifier(
+                usesUIKitTouchSurface: usesUIKitTouchSurface,
+                pan: NowPlayingHorizontalPan(
+                    onStart: { translation in
+                        controller.panBegan(
+                            translation: translation,
+                            distance: distance,
+                            previous: previous,
+                            next: next
+                        )
+                    },
+                    onChange: { translation in
+                        controller.panChanged(
+                            translation: translation,
+                            distance: distance,
+                            previous: previous,
+                            next: next
+                        )
+                    },
+                    onEnd: { translation, velocity in
+                        controller.panEnded(
+                            translation: translation,
+                            velocity: velocity,
+                            distance: distance,
+                            song: song,
+                            previous: previous,
+                            next: next,
+                            reduceMotion: accessibilityReduceMotion,
+                            select: player.skip(toQueueIndex:)
+                        )
+                    },
+                    onCancel: {
+                        controller.panCancelled(reduceMotion: accessibilityReduceMotion)
+                    }
+                )
+            ))
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { measuredWidth = $0 }
+            .onChange(of: "\(player.currentQueueIndex):\(song.id)", initial: true) { _, _ in
+                controller.syncTrack(song: song, queueIndex: player.currentQueueIndex)
             }
-            content(song, true)
-                .offset(x: offset)
-                .opacity(Self.visibility(at: offset, distance: distance))
-            if offset < 0, let next {
-                neighbor(next.track, at: offset + distance, distance: distance)
+            .onDisappear {
+                controller.cancelMotion()
+            }
+    }
+
+    @ViewBuilder
+    private func trackLayers(slots: [Slot], pinnedArtist: Bool) -> some View {
+        let titleStack = applyEdgeFade(
+            ZStack(alignment: rowSpacing == nil ? .topLeading : .leading) {
+                ForEach(slots) { slot in
+                    title(slot.track, slot.keepMarqueeActive)
+                        .modifier(TrackSwipeSlotOffsetModifier(
+                            motion: controller.motion,
+                            baseOffset: slot.baseOffset,
+                            isPinned: false
+                        ))
+                        .allowsHitTesting(slot.isCurrent)
+                        .accessibilityHidden(!slot.isCurrent)
+                }
+            },
+            isStationary: false
+        )
+
+        let rawArtistStack = ZStack(alignment: rowSpacing == nil ? .topLeading : .leading) {
+            ForEach(slots) { slot in
+                let slotPinned = slot.isCurrent && pinnedArtist
+                let hidden = !slot.isCurrent && pinnedArtist
+                artist(slot.track, slot.isCurrent)
+                    .environment(
+                        \.trackSwipeVibrantEdge,
+                        viewportInsets.fadesOnlyWhenSliding
+                            ? nil
+                            : TrackSwipeVibrantEdge(
+                                motion: controller.motion,
+                                baseOffset: slot.baseOffset,
+                                isPinned: slotPinned || hidden,
+                                isActive: controller.isActive,
+                                slotWidth: measuredWidth,
+                                insets: viewportInsets
+                            )
+                    )
+                    .modifier(TrackSwipeSlotOffsetModifier(
+                        motion: controller.motion,
+                        baseOffset: slot.baseOffset,
+                        isPinned: slotPinned || hidden
+                    ))
+                    .opacity(hidden ? 0 : 1)
+                    .allowsHitTesting(slot.isCurrent)
+                    .accessibilityHidden(!slot.isCurrent)
             }
         }
-        .modifier(ReferenceTrackSwipeEdgeFade(displacement: offset, pageDistance: distance, width: measuredWidth))
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { measuredWidth = $0 }
-        .modifier(TrackSwipeGestureModifier(
-            usesUIKitTouchSurface: usesUIKitTouchSurface,
-            pan: NowPlayingHorizontalPan(
-                onChange: { translation in
-                    let hasNeighbor = translation < 0 ? next != nil : previous != nil
-                    // 没有相邻曲目的方向加阻尼。
-                    offset = hasNeighbor ? translation : translation * 0.25
-                },
-                onEnd: { translation, velocity in
-                    finish(translation: translation, velocity: velocity,
-                           previous: previous, next: next, distance: distance)
-                },
-                onCancel: {
-                    var transaction = Transaction(animation: nil)
-                    transaction.disablesAnimations = true
-                    withTransaction(transaction) { offset = 0 }
-                },
-                onStart: { ReferenceTrackSwipeFeedback.prepare() }
-            )
-        ))
+
+        // Only mask the mini bar artist layer (no `.plusLighter`); fullscreen/header artist fade runs inside the shader to preserve backdrop vibrancy.
+        let artistStack = applyArtistEdgeFade(rawArtistStack, isStationary: pinnedArtist)
+
+        if let rowSpacing {
+            VStack(alignment: .leading, spacing: rowSpacing) {
+                titleStack
+                artistStack
+            }
+        } else {
+            ZStack(alignment: .topLeading) {
+                titleStack
+                artistStack
+            }
+        }
     }
 
-    private func neighbor(_ track: ReferenceTrack, at x: CGFloat, distance: CGFloat) -> some View {
-        content(track, false)
-            .offset(x: x)
-            .opacity(Self.visibility(at: x, distance: distance))
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
+    @ViewBuilder
+    private func applyArtistEdgeFade<Layer: View>(_ layer: Layer, isStationary: Bool) -> some View {
+        if viewportInsets.fadesOnlyWhenSliding {
+            applyEdgeFade(layer, isStationary: isStationary)
+        } else {
+            layer
+        }
     }
 
-    /// 离原位越远越透明。静止时透明度正好是 1：作者名的叠加提亮只在透明度为 1 时生效。
-    private static func visibility(at x: CGFloat, distance: CGFloat) -> Double {
-        max(0, 1 - abs(x) / distance)
+    private func applyEdgeFade<Layer: View>(_ layer: Layer, isStationary: Bool) -> some View {
+        layer
+            .frame(maxWidth: .infinity, alignment: rowSpacing == nil ? .topLeading : .leading)
+            .padding(.leading, viewportInsets.leadingBleed)
+            .padding(.trailing, viewportInsets.trailingBleed)
+            .modifier(ReferenceTrackSwipeEdgeFade(
+                enabled: true,
+                slotWidth: measuredWidth,
+                insets: viewportInsets,
+                verticalOverflow: verticalMaskOverflow,
+                motion: viewportInsets.fadesOnlyWhenSliding ? controller.motion : nil,
+                isStationary: isStationary
+            ))
+            .padding(.leading, -viewportInsets.leadingBleed)
+            .padding(.trailing, -viewportInsets.trailingBleed)
     }
 
-    private func finish(
-        translation: CGFloat,
-        velocity: CGFloat,
+    private func visibleSlots(
+        distance: CGFloat,
         previous: ReferenceUpcomingTrack?,
-        next: ReferenceUpcomingTrack?,
-        distance: CGFloat
-    ) {
-        let rebasedOffset = Self.selectTarget(translation: translation, velocity: velocity,
-            previous: previous, next: next, distance: distance, select: player.skip(toQueueIndex:))
-        if let rebasedOffset {
-            ReferenceTrackSwipeFeedback.selection()
-            var transaction = Transaction(animation: nil)
-            transaction.disablesAnimations = true
-            // The selected title occupies the neighbor's current position.
-            withTransaction(transaction) { offset = rebasedOffset }
+        next: ReferenceUpcomingTrack?
+    ) -> [Slot] {
+        let currentStep = controller.currentStep
+        var result: [Slot] = []
+
+        if controller.showsPreviousSlot {
+            let exiting = controller.exitingSlot?.step == currentStep - 1 ? controller.exitingSlot : nil
+            let track = exiting?.track ?? (controller.allowsOppositePreviousSlot ? previous?.track : nil)
+            if let track {
+                result.append(Slot(
+                    id: "\(currentStep - 1):\(track.id)",
+                    step: currentStep - 1,
+                    track: track,
+                    baseOffset: -distance,
+                    isCurrent: false,
+                    keepMarqueeActive: exiting != nil
+                ))
+            }
         }
-        let animation: Animation = rebasedOffset == nil
-            ? .spring(duration: 0.35, bounce: 0.2)
-            : .spring(duration: 0.28, bounce: 0)
-        withAnimation(accessibilityReduceMotion ? nil : animation) { offset = 0 }
+
+        result.append(Slot(
+            id: "\(currentStep):\(song.id)",
+            step: currentStep,
+            track: song,
+            baseOffset: 0,
+            isCurrent: true,
+            keepMarqueeActive: true
+        ))
+
+        if controller.showsNextSlot {
+            let exiting = controller.exitingSlot?.step == currentStep + 1 ? controller.exitingSlot : nil
+            let track = exiting?.track ?? (controller.allowsOppositeNextSlot ? next?.track : nil)
+            if let track {
+                result.append(Slot(
+                    id: "\(currentStep + 1):\(track.id)",
+                    step: currentStep + 1,
+                    track: track,
+                    baseOffset: distance,
+                    isCurrent: false,
+                    keepMarqueeActive: exiting != nil
+                ))
+            }
+        }
+
+        return result
     }
 
-    /// Commits at release. SwiftUI owns the interruptible settling animation.
+    /// Commits at release for unit-level threshold/velocity verification.
     static func selectTarget(
         translation: CGFloat,
         velocity: CGFloat,
@@ -105,11 +703,13 @@ struct NowPlayingTrackSwipe<Content: View>: View {
         distance: CGFloat,
         select: (Int) -> Void
     ) -> CGFloat? {
-        let threshold = distance * 0.3
+        let threshold = distance * TrackSwipeController.thresholdFraction
         let target: (entry: ReferenceUpcomingTrack, direction: CGFloat)?
-        if (translation < -threshold || velocity < -600), translation <= 0, let next {
+        if (translation < -threshold || velocity < -TrackSwipeController.thresholdVelocity),
+           translation <= 0, let next {
             target = (next, -1)
-        } else if (translation > threshold || velocity > 600), translation >= 0, let previous {
+        } else if (translation > threshold || velocity > TrackSwipeController.thresholdVelocity),
+                  translation >= 0, let previous {
             target = (previous, 1)
         } else {
             target = nil
@@ -121,20 +721,21 @@ struct NowPlayingTrackSwipe<Content: View>: View {
     }
 }
 
-/// 只认横向拖动的平移手势。用 UIKit 手势是为了在作者名（原生按钮）上拖动也能识别。
+/// 只认横向拖动的平移手势。用 UIKit 手势是为了在作者名（原生按钮）和迷你条上拖动也能流畅仲裁并触发。
 private struct NowPlayingHorizontalPan: UIGestureRecognizerRepresentable {
+    let onStart: (CGFloat) -> Void
     let onChange: (CGFloat) -> Void
     let onEnd: (_ translation: CGFloat, _ velocity: CGFloat) -> Void
     let onCancel: () -> Void
-    /// 手势开始时预热切歌触感，触发那一刻延迟更低。
-    var onStart: (() -> Void)? = nil
 
     func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
 
     func makeUIGestureRecognizer(context: Context) -> UIPanGestureRecognizer {
         let pan = UIPanGestureRecognizer()
-        // Shared explicitly with LN's external-source dismissal recognizer.
         pan.name = "NeoDizzy.NowPlayingTrackSwipe"
+        pan.cancelsTouchesInView = true
+        pan.delaysTouchesBegan = false
+        pan.delaysTouchesEnded = false
         pan.delegate = context.coordinator
         return pan
     }
@@ -147,8 +748,8 @@ private struct NowPlayingHorizontalPan: UIGestureRecognizerRepresentable {
         let translation = recognizer.translation(in: recognizer.view).x
         switch recognizer.state {
         case .began:
-            onStart?()
-            onChange(translation)
+            Self.cancelPopupBarHighlight(from: recognizer.view)
+            onStart(translation)
         case .changed:
             onChange(translation)
         case .ended:
@@ -160,17 +761,48 @@ private struct NowPlayingHorizontalPan: UIGestureRecognizerRepresentable {
         }
     }
 
+    private static func cancelPopupBarHighlight(from view: UIView?) {
+        var cursor = view
+        while let current = cursor {
+            for recognizer in current.gestureRecognizers ?? []
+            where recognizer is UILongPressGestureRecognizer
+                && NSStringFromClass(type(of: recognizer)).contains("LNPopupLongPress")
+                && recognizer.isEnabled {
+                recognizer.isEnabled = false
+                recognizer.isEnabled = true
+            }
+            cursor = current.superview
+        }
+    }
+
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
-        /// Use accumulated travel, leaving diagonal intent to the player pan.
         func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
             guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return false }
-            let translation = pan.translation(in: pan.view?.window)
-            return abs(translation.x) > abs(translation.y) * 1.25
+            let host = pan.view?.window ?? pan.view
+            let translation = pan.translation(in: host)
+            let dx = abs(translation.x)
+            let dy = abs(translation.y)
+            if dx > 0 || dy > 0 {
+                return dx > dy * 1.15
+            }
+            let velocity = pan.velocity(in: host)
+            return abs(velocity.x) > abs(velocity.y) * 1.15
         }
 
-        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
-                               shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
-            other.name == "LNPopupExternalDismissPan"
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            guard otherGestureRecognizer !== gestureRecognizer else { return false }
+            let otherClass = NSStringFromClass(type(of: otherGestureRecognizer))
+            return otherClass.contains("LNPopupInteractionPan") || otherClass.contains("LNPopupOpenTap")
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            NSStringFromClass(type(of: otherGestureRecognizer)).contains("LNPopupLongPress")
         }
     }
 }
@@ -188,8 +820,7 @@ private struct TrackSwipeGestureModifier: ViewModifier {
     }
 }
 
-/// Only the miniature title slot gets this clear view. Its ancestor LN tap/pan
-/// recognizers still receive taps and vertical drags; artwork is a sibling.
+/// Gives mini-bar title slots a dedicated UIKit pan surface that cooperates with LNPopup gestures.
 private struct TrackSwipeTouchSurface: UIViewRepresentable {
     let pan: NowPlayingHorizontalPan
 
@@ -198,8 +829,12 @@ private struct TrackSwipeTouchSurface: UIViewRepresentable {
     func makeUIView(context: Context) -> UIView {
         let view = UIView()
         view.backgroundColor = .clear
+        view.isAccessibilityElement = false
         let gesture = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handle(_:)))
         gesture.name = "NeoDizzy.NowPlayingTrackSwipe"
+        gesture.cancelsTouchesInView = true
+        gesture.delaysTouchesBegan = false
+        gesture.delaysTouchesEnded = false
         gesture.delegate = context.coordinator.directionDelegate
         view.addGestureRecognizer(gesture)
         return view
@@ -216,8 +851,7 @@ private struct TrackSwipeTouchSurface: UIViewRepresentable {
 }
 
 /// Both player surfaces share one selection generator: swiping between tracks is a
-/// value change, matching the system selection pattern. The gesture prepares it on
-/// start for low-latency firing, and firing re-prepares for back-to-back swipes.
+/// value change, matching the system selection pattern.
 @MainActor enum ReferenceTrackSwipeFeedback {
     private static let generator = UISelectionFeedbackGenerator()
     static func prepare() { generator.prepare() }
@@ -227,30 +861,69 @@ private struct TrackSwipeTouchSurface: UIViewRepresentable {
     }
 }
 
-nonisolated private struct ReferenceTrackSwipeEdgeFade: ViewModifier, Animatable {
-    var displacement: CGFloat
-    let pageDistance: CGFloat
-    let width: CGFloat
-    var animatableData: CGFloat {
-        get { displacement }
-        set { displacement = newValue }
+@MainActor
+private final class TrackSwipeDisplayLinkTarget {
+    private weak var owner: TrackSwipeController?
+
+    init(owner: TrackSwipeController) {
+        self.owner = owner
     }
+
+    @objc func step(_ displayLink: CADisplayLink) {
+        guard let owner else {
+            displayLink.invalidate()
+            return
+        }
+        owner.stepDisplayLink(displayLink)
+    }
+}
+
+private struct TrackSwipeSlotOffsetModifier: ViewModifier {
+    let motion: TrackSwipeOffsetModel
+    let baseOffset: CGFloat
+    let isPinned: Bool
+
     func body(content: Content) -> some View {
-        let safeWidth = max(width, 1)
-        let fadeWidth = min(CGFloat(10), safeWidth / 4)
-        let travel = abs(displacement - (displacement / pageDistance).rounded() * pageDistance)
-        let edgeOpacity = 1 - min(travel / fadeWidth, 1)
-        if edgeOpacity < 0.999 {
-            content.mask {
-                LinearGradient(stops: [
-                    .init(color: .black.opacity(edgeOpacity), location: 0),
-                    .init(color: .black, location: fadeWidth / safeWidth),
-                    .init(color: .black, location: 1 - fadeWidth / safeWidth),
-                    .init(color: .black.opacity(edgeOpacity), location: 1)
-                ], startPoint: .leading, endPoint: .trailing)
-            }
-        } else {
+        content.offset(x: isPinned ? 0 : motion.value + baseOffset)
+    }
+}
+
+private struct ReferenceTrackSwipeEdgeFade: ViewModifier {
+    let enabled: Bool
+    let slotWidth: CGFloat
+    let insets: TrackSwipeViewportInsets
+    var verticalOverflow: CGFloat = 0
+    var motion: TrackSwipeOffsetModel? = nil
+    var isStationary = false
+
+    @ViewBuilder func body(content: Content) -> some View {
+        let totalWidth = insets.leadingBleed + slotWidth + insets.trailingBleed
+        if !enabled || slotWidth <= 1 || totalWidth <= 1 {
             content
+        } else {
+            let strength: Double = {
+                guard insets.fadesOnlyWhenSliding else { return 1.0 }
+                guard !isStationary, let motion else { return 0.0 }
+                return motion.edgeStrength
+            }()
+            let leadStop = min(Double(insets.leadingFade / totalWidth), 0.45)
+            let trailStop = max(1.0 - min(Double(insets.trailingFade / totalWidth), 0.45), leadStop)
+            let edgeAlpha = 1.0 - strength
+            content
+                .padding(.vertical, verticalOverflow)
+                .mask {
+                    LinearGradient(
+                        stops: [
+                            .init(color: .black.opacity(edgeAlpha), location: 0),
+                            .init(color: .black, location: leadStop),
+                            .init(color: .black, location: trailStop),
+                            .init(color: .black.opacity(edgeAlpha), location: 1)
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                }
+                .padding(.vertical, -verticalOverflow)
         }
     }
 }

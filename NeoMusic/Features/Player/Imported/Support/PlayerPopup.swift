@@ -185,25 +185,23 @@ private struct MiniPlayerTitle: View {
 
     var body: some View {
         let compact = placement == .inline
-        ReferenceMiniPlayerTitlePager(height: compact ? compactHeight : regularHeight, song: track,
-            currentIndex: player.currentQueueIndex, previous: player.previousInOrder,
-            next: player.nextInOrder, select: player.skip(toQueueIndex:)) { song, interactive in
-                VStack(alignment: .leading, spacing: 2) {
-                    NowPlayingMarqueeText(text: song.title, isActive: isActive && interactive && !compact)
-                        .font(.system(size: titleSize, weight: .medium))
-                        .foregroundStyle(.primary)
-                    Text(song.artists)
-                        .font(.system(size: artistSize))
-                        .foregroundStyle(.primary)
-                        .frame(height: compact ? 0 : nil)
-                        .opacity(compact ? 0 : 1)
-                        .accessibilityHidden(compact)
-                }
+        ReferenceMiniPlayerTitlePager(height: compact ? compactHeight : regularHeight, song: track) { song, marqueeActive in
+            NowPlayingMarqueeText(text: song.title, isActive: isActive && marqueeActive && !compact)
+                .font(.system(size: titleSize, weight: .medium))
+                .foregroundStyle(.primary)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(.rect)
-            }
-            .frame(height: compact ? compactHeight : regularHeight)
-            .clipped()
+        } artist: { song, _ in
+            Text(song.artists)
+                .font(.system(size: artistSize))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(height: compact ? 0 : nil)
+                .opacity(compact ? 0 : 1)
+                .accessibilityHidden(compact)
+        }
+        .frame(height: compact ? compactHeight : regularHeight)
+        .clipped()
     }
 }
 
@@ -281,5 +279,12 @@ struct MiniPlayerControls: View {
         guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return true }
         let travel = pan.translation(in: pan.view)
         return abs(travel.y) >= abs(travel.x)
+    }
+
+    func gestureRecognizer(
+        _ gestureRecognizer: UIGestureRecognizer,
+        shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+        otherGestureRecognizer.name != "NeoDizzy.NowPlayingTrackSwipe"
     }
 }

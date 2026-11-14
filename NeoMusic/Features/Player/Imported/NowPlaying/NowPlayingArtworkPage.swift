@@ -133,27 +133,49 @@ struct NowPlayingArtworkPage: View {
                 }
                 .position(x: proxy.size.width / 2, y: layout.pageY(95) + artworkSize / 2)
 
-                // 左右滑动歌名切到上一首/下一首；相邻歌名在歌名这一栏的宽度之外淡入。
-                NowPlayingTrackSwipe(song: song, pageDistance: layout.width(227) + 24) { track, interactive in
-                    ZStack {
-                        // 放不下时滚动显示（相邻曲目的预览不滚）。
-                        NowPlayingMarqueeText(text: track.title, isActive: interactive)
-                            .font(.system(size: informationFontSize, weight: .semibold))
-                            .nowPlayingPrimary()
-                            .lineLimit(1)
-                            .frame(width: layout.width(227), height: 27 * textScale, alignment: .leading)
-                            .contentShape(.rect)
-                            .position(x: layout.x(145.5), y: layout.pageY(488.833) - 39.5 * (textScale - 1) - controlsOverflow)
+                let actionsLeft = layout.x(329.875) - 46.125
+                let titleWidth = layout.width(227)
+                let artistWidth = layout.width(215)
+                let slotLeft = layout.x(145.5) - titleWidth / 2
+                let slotWidth = max(actionsLeft - slotLeft, titleWidth)
+                let titleCenterY = layout.pageY(488.833) - 39.5 * (textScale - 1) - controlsOverflow
+                let artistCenterY = layout.pageY(512.5) - 13 * (textScale - 1) - controlsOverflow
+                let slotTop = titleCenterY - (27 * textScale) / 2 - 6
+                let slotBottom = artistCenterY + (26 * textScale) / 2 + 6
+                let slotHeight = max(slotBottom - slotTop, 1)
+                let slotCenterY = (slotTop + slotBottom) / 2
+                let swipeInsets = TrackSwipeViewportInsets(
+                    leadingBleed: layout.width(24),
+                    trailingBleed: 0,
+                    leadingFade: layout.width(24),
+                    trailingFade: min(layout.width(21), max(slotWidth - titleWidth, 12)),
+                    fadesOnlyWhenSliding: false
+                )
 
-                        NowPlayingArtistButton(track: track, interactive: interactive, lineHeight: 26 * textScale,
-                                               fontSize: informationFontSize, fontSizeIsScaled: true)
-                            .font(.system(size: informationFontSize))
-                            .lineLimit(1)
-                            .frame(width: layout.width(215), height: 26 * textScale, alignment: .leading)
-                            .position(x: layout.x(139.5), y: layout.pageY(512.5) - 13 * (textScale - 1) - controlsOverflow)
-                    }
-                    .frame(width: proxy.size.width, height: proxy.size.height)
+                // 只限制在歌名与歌手区域内左右滑动；边缘仅做视口羽化，文本全程保持实体不透明。
+                NowPlayingTrackSwipe(
+                    song: song,
+                    pageDistance: max(layout.width(278), slotWidth + 24),
+                    rowSpacing: nil,
+                    viewportInsets: swipeInsets
+                ) { track, marqueeActive in
+                    // 放不下时滚动显示（相邻曲目的预览不滚）；滑动期间保持当前歌滚动。
+                    NowPlayingMarqueeText(text: track.title, isActive: marqueeActive)
+                        .font(.system(size: informationFontSize, weight: .semibold))
+                        .nowPlayingPrimary()
+                        .lineLimit(1)
+                        .frame(width: titleWidth, height: 27 * textScale, alignment: .leading)
+                        .position(x: titleWidth / 2, y: titleCenterY - slotTop)
+                } artist: { track, interactive in
+                    NowPlayingArtistButton(track: track, interactive: interactive, lineHeight: 26 * textScale,
+                                           fontSize: informationFontSize, fontSizeIsScaled: true)
+                        .font(.system(size: informationFontSize))
+                        .lineLimit(1)
+                        .frame(width: artistWidth, height: 26 * textScale, alignment: .leading)
+                        .position(x: artistWidth / 2, y: artistCenterY - slotTop)
                 }
+                .frame(width: slotWidth, height: slotHeight)
+                .position(x: slotLeft + slotWidth / 2, y: slotCenterY)
 
                 NowPlayingSongActions(track: song)
                     .fixedSize()
