@@ -67,6 +67,7 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
                     ContentUnavailableView("当前没有播放歌曲", systemImage: "music.note").foregroundStyle(.white)
                 }
             }
+            .compositingGroup()
             .environment(\.nowPlayingLayout, layout)
             .environment(\.nowPlayingControlsOverflow, textSize.isAccessibilitySize
                          ? max(0, controlsHeight - NowPlayingBottomControls.overlayHeight) : 0)
