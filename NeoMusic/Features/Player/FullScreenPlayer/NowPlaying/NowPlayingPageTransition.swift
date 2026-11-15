@@ -58,7 +58,8 @@ enum NowPlayingPageTransition {
         guard !reducesMotion else { return .opacity }
         return .asymmetric(
             insertion: offsetAndOpacity(y: motion.songHeaderTravel),
-            removal: offsetAndOpacity(y: -motion.artworkDetailsTravel)
+            removal: offsetAndOpacity(y: motion.songHeaderTravel)
+                .animation(.easeOut(duration: 0.14))
         )
     }
 
