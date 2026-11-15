@@ -109,6 +109,10 @@ xcodebuild -project NeoMusic.xcodeproj -scheme NeoMusic -configuration Release \
 
 导航 UI 测试需要既有的模拟器资料库。例如 `testNativeAlbumRowPlaybackMenusAndSwipes` 使用“塌陷于38°C的蓝”专辑及“湖畔、二人歌”；部分置顶测试需要 Sunrise 专辑。音乐文件不随仓库提供，全新模拟器不能直接视为具备这些测试条件。功能对照 scheme 还需要另外安装基线应用。测试时不要删除或替换用户的真机资料库。
 
+全屏播放器性能专项使用 `FullScreenPlayerPerformanceTests`，启动参数为 `-frontendReviewPreview player-performance`。该入口仅在 `DEBUG` 编译条件下存在，自动生成 30 首本地静音歌曲及每首 200 行歌词，复用正式播放引擎、弹出容器和全屏组件。使用 Release 优化并额外启用 `DEBUG` 条件，通过本机 xcconfig 为应用与测试 runner 指定独立 Bundle ID 和开发签名；账号、音乐与测试播放记录相互隔离。运行时设置 `TEST_RUNNER_NEOMUSIC_PLAYER_PERFORMANCE=1`，普通测试默认跳过此专项。
+
+`testAutomaticScenario` 自动执行三轮测量（另有 XCTest 预热轮），覆盖切页、队列与歌词滚动、歌词跳转、切歌、进度拖动和收起展开，记录 CPU、内存与卡顿指标；`testPageToggleMatchesNativeButton` 以同系统原生按钮的动作次数为参照，验证双击及再次点击的切页行为；`testSteadyStateResources` 分别停留在播放、暂停、收起和后台状态。需要 Instruments 时设置 `TEST_RUNNER_NEOMUSIC_TRACE_DELAY`，在日志出现 `PLAYER_PERFORMANCE_READY` 后附加当前测试 App 进程。对比使用相同设备、构建条件和操作脚本，记录工具类型及实际覆盖区间，原始结果保存在忽略的 `build/`。双击对照当前保留待修回归，状态见 [路线图](roadmap.md)。
+
 不运行测试、只需要模拟器构建时：
 
 ```sh

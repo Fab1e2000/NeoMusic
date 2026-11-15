@@ -6,6 +6,42 @@ import UIKit
 
 @MainActor
 final class LyricsFocusTests: XCTestCase {
+    func testOffscreenLyricsDiscardPositionsAndRecoverWhenBrowsed() async throws {
+        let state = LyricsFocusTestState()
+        let window = try await mount(state, size: .large)
+        defer { window.isHidden = true }
+        try await assertFocus(40, in: state)
+        let scroll = try XCTUnwrap(scrollViews(in: window).first)
+        XCTAssertNil(state.geometry.top(for: 0))
+        XCTAssertNil(state.geometry.top(for: 79))
+
+        scroll.delegate?.scrollViewWillBeginDragging?(scroll)
+        scroll.setContentOffset(CGPoint(x: 0, y: -scroll.contentInset.top), animated: false)
+        scroll.layoutIfNeeded()
+        let firstLineVisible = try await waitUntil { state.geometry.top(for: 0) != nil }
+        XCTAssertTrue(firstLineVisible)
+        XCTAssertNil(state.geometry.top(for: 40))
+        XCTAssertNotNil(state.geometry.height(for: 40), "Keep measured heights for later focus alignment")
+    }
+
+    func testInactiveLyricsIgnoreScrollLayoutCallbacks() async throws {
+        let state = LyricsFocusTestState()
+        let window = try await mount(state, size: .large)
+        defer { window.isHidden = true }
+        try await assertFocus(40, in: state)
+        let scroll = try XCTUnwrap(scrollViews(in: window).first)
+        state.isActive = false
+        let inactive = try await waitUntil { state.renderedIsActive == false }
+        XCTAssertTrue(inactive)
+        let previousTop = state.geometry.top(for: 40)
+        scroll.contentOffset.y += 100
+        scroll.setNeedsLayout()
+        scroll.layoutIfNeeded()
+        XCTAssertEqual(state.geometry.top(for: 40), previousTop)
+        state.isActive = true
+        try await assertFocus(40, in: state)
+    }
+
     func testWaveStartsAtTheOutgoingRowAndKeepsDistanceBlurReadable() {
         let motion = AppleMusicLyricsMotionProfile.iOS26_6
         XCTAssertTrue(motion.isForwardLineChange(from: 40, to: 41))

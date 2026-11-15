@@ -1,5 +1,164 @@
 import XCTest
 
+/// Release-optimized build with DEBUG previews enabled and its own app identifier.
+@MainActor
+final class FullScreenPlayerPerformanceTests: XCTestCase {
+    private var controls: [String: CGVector] = [:]
+    override func setUpWithError() throws {
+        continueAfterFailure = false
+        guard ProcessInfo.processInfo.environment["NEOMUSIC_PLAYER_PERFORMANCE"] == "1" else {
+            throw XCTSkip("Requires the isolated Release player performance build")
+        }
+    }
+
+    func testAutomaticScenario() throws {
+        let app = launchPlayer()
+        let options = XCTMeasureOptions()
+        options.iterationCount = 3
+        options.invocationOptions = [.manuallyStart, .manuallyStop]
+        measure(metrics: [XCTCPUMetric(application: app), XCTMemoryMetric(application: app),
+                          XCTHitchMetric(application: app)], options: options) {
+            runInteractionRound(app)
+        }
+        for (page, label) in [("artwork", "歌词"), ("lyrics", "继续播放"), ("queue", "继续播放")] {
+            let attachment = XCTAttachment(screenshot: app.screenshot())
+            attachment.name = "performance-\(page)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+            tapControl(label, in: app)
+        }
+        app.terminate()
+    }
+
+    func testPageToggleMatchesNativeButton() throws {
+        let app = launchPlayer()
+        defer { app.terminate() }
+        tapControl("player.dismiss", in: app)
+        let nativeButton = app.buttons["performance.nativeButton"]
+        XCTAssertTrue(nativeButton.waitForExistence(timeout: 5))
+        nativeButton.doubleTap()
+        let taps = try XCTUnwrap(Int(app.staticTexts["performance.nativeTapCount"].label))
+        XCTAssertTrue((1...2).contains(taps))
+        print("NATIVE_DOUBLE_TAP_ACTION_COUNT=\(taps)")
+        app.buttons["performance.open"].tap()
+        XCTAssertTrue(app.buttons["player.dismiss"].waitForExistence(timeout: 5))
+        for label in ["继续播放", "歌词"] {
+            tapControl(label, in: app, count: 2)
+            let selected = taps % 2 == 1
+            let matchesNative = XCTNSPredicateExpectation(predicate: NSPredicate(format: "selected == %@", NSNumber(value: selected)),
+                                                         object: app.buttons[label].firstMatch)
+            XCTAssertEqual(XCTWaiter.wait(for: [matchesNative], timeout: 3), .completed)
+            if selected {
+                tapControl(label, in: app)
+                XCTAssertFalse(app.buttons[label].firstMatch.isSelected)
+            }
+            XCTAssertTrue(app.buttons["player.dismiss"].exists)
+        }
+    }
+
+    func testSteadyStateResources() {
+        let app = launchPlayer()
+        defer { app.terminate() }
+        XCTContext.runActivity(named: "Steady artwork playback 20s") { _ in Thread.sleep(forTimeInterval: 20) }
+        tapControl("歌词", in: app)
+        XCTContext.runActivity(named: "Steady lyrics playback 20s") { _ in Thread.sleep(forTimeInterval: 20) }
+        tapControl("歌词", in: app)
+        visibleButton("暂停", in: app).tap()
+        XCTContext.runActivity(named: "Paused artwork 20s") { _ in Thread.sleep(forTimeInterval: 20) }
+        visibleButton("播放", in: app).tap()
+        tapControl("player.dismiss", in: app)
+        XCTAssertTrue(app.buttons["performance.open"].waitForExistence(timeout: 5))
+        XCTContext.runActivity(named: "Collapsed playback 20s") { _ in Thread.sleep(forTimeInterval: 20) }
+        XCUIDevice.shared.press(.home)
+        XCTContext.runActivity(named: "Background playback 20s") { _ in Thread.sleep(forTimeInterval: 20) }
+        app.activate()
+        app.buttons["performance.open"].tap()
+        XCTAssertTrue(app.buttons["player.dismiss"].waitForExistence(timeout: 5))
+    }
+
+    private func launchPlayer() -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments = ["-frontendReviewPreview", "player-performance"]
+        app.launch()
+        XCTAssertTrue(app.buttons["player.dismiss"].waitForExistence(timeout: 30))
+        for label in ["继续播放", "歌词", "下一首", "player.dismiss"] {
+            let frame = visibleButton(label, in: app).frame
+            controls[label] = CGVector(dx: frame.midX / app.frame.width, dy: frame.midY / app.frame.height)
+        }
+        // Allows an external Instruments recording to attach before measured interactions.
+        if let delay = ProcessInfo.processInfo.environment["NEOMUSIC_TRACE_DELAY"].flatMap(Double.init) {
+            print("PLAYER_PERFORMANCE_READY")
+            Thread.sleep(forTimeInterval: delay)
+        }
+        return app
+    }
+
+    private func runInteractionRound(_ app: XCUIApplication) {
+        startMeasuring()
+        XCTContext.runActivity(named: "Page transitions") { _ in
+            for _ in 0..<2 {
+                tapControl("继续播放", in: app)
+                tapControl("歌词", in: app)
+                tapControl("歌词", in: app)
+            }
+        }
+        XCTContext.runActivity(named: "Queue scrolling") { _ in
+            tapControl("继续播放", in: app)
+            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.52))
+            let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.38))
+            start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .fast, thenHoldForDuration: 0)
+            end.press(forDuration: 0.05, thenDragTo: start, withVelocity: .fast, thenHoldForDuration: 0)
+        }
+        XCTContext.runActivity(named: "Lyrics scrolling and distant seek") { _ in
+            tapControl("歌词", in: app)
+            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.48))
+            let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.38))
+            for _ in 0..<3 {
+                start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .fast, thenHoldForDuration: 0)
+            }
+            end.press(forDuration: 0.05, thenDragTo: start, withVelocity: .slow, thenHoldForDuration: 0)
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.4, dy: 0.38)).tap()
+            Thread.sleep(forTimeInterval: 0.6)
+            tapControl("歌词", in: app)
+        }
+        XCTContext.runActivity(named: "Track changes and transport") { _ in
+            for _ in 0..<3 { tapControl("下一首", in: app) }
+            let progress = app.sliders["播放进度"]
+            XCTAssertTrue(progress.exists)
+            progress.adjust(toNormalizedSliderPosition: 0.4)
+            progress.adjust(toNormalizedSliderPosition: 0.1)
+            let volume = app.sliders["系统音量"]
+            if volume.exists {
+                let original = (volume.value as? String).flatMap {
+                    Double($0.filter { $0.isNumber || $0 == "." })
+                }.map { CGFloat($0 / 100) }
+                volume.adjust(toNormalizedSliderPosition: 0.3)
+                if let original { volume.adjust(toNormalizedSliderPosition: original) }
+            }
+        }
+        XCTContext.runActivity(named: "Collapse and expand") { _ in
+            tapControl("player.dismiss", in: app)
+            let open = app.buttons["performance.open"]
+            XCTAssertTrue(open.waitForExistence(timeout: 5))
+            open.tap()
+            XCTAssertTrue(app.buttons["player.dismiss"].waitForExistence(timeout: 5))
+        }
+        stopMeasuring()
+    }
+
+    private func tapControl(_ label: String, in app: XCUIApplication, count: Int = 1) {
+        guard let point = controls[label] else { XCTFail("Missing control position: \(label)"); return }
+        let coordinate = app.coordinate(withNormalizedOffset: point)
+        if count == 2 { coordinate.doubleTap() } else { coordinate.tap() }
+    }
+
+    private func visibleButton(_ label: String, in app: XCUIApplication) -> XCUIElement {
+        let button = app.buttons.matching(identifier: label).allElementsBoundByIndex.first { $0.isHittable }
+        XCTAssertNotNil(button, "Expected visible control: \(label)")
+        return button ?? app.buttons[label].firstMatch
+    }
+}
+
 /// Run on the isolated simulator prepared by scripts/performance-benchmark.py.
 @MainActor
 final class PerformanceScenarioTests: XCTestCase {

@@ -253,11 +253,13 @@ private final class NativeLyricsScrollView: UIScrollView, UIScrollViewDelegate {
     private func updateAppearances(activeIndex: Int?, animated: Bool) {
         guard let input else { return }
         for (index, row) in rows.enumerated() {
-            row.appearance.animated = animated
-            row.appearance.focused = index == activeIndex
-            row.appearance.browsing = browsing
-            row.appearance.reducesMotion = input.reducesMotion
-            row.appearance.increasedContrast = input.increasedContrast
+            let appearance = row.appearance
+            if appearance.animated != animated { appearance.animated = animated }
+            let focused = index == activeIndex
+            if appearance.focused != focused { appearance.focused = focused }
+            if appearance.browsing != browsing { appearance.browsing = browsing }
+            if appearance.reducesMotion != input.reducesMotion { appearance.reducesMotion = input.reducesMotion }
+            if appearance.increasedContrast != input.increasedContrast { appearance.increasedContrast = input.increasedContrast }
         }
     }
 
@@ -300,8 +302,10 @@ private final class NativeLyricsScrollView: UIScrollView, UIScrollViewDelegate {
                                              damping: timingSpring.damping, initialVelocity: .zero))
                 let id = UUID()
                 animators[id] = animator
+                row.isMoving = true
                 animator.addAnimations { row.transform = .identity }
-                animator.addCompletion { [weak self] _ in
+                animator.addCompletion { [weak self, weak row] _ in
+                    row?.isMoving = false
                     self?.animators.removeValue(forKey: id)
                     self?.refreshVisualGeometry()
                     self?.stopDisplayLinkIfIdle()
@@ -327,7 +331,10 @@ private final class NativeLyricsScrollView: UIScrollView, UIScrollViewDelegate {
         for animator in animators.values { animator.stopAnimation(true) }
         animators.removeAll()
         UIView.performWithoutAnimation {
-            for (row, transform) in zip(rows, transforms) { row.transform = transform }
+            for (row, transform) in zip(rows, transforms) {
+                row.isMoving = false
+                row.transform = transform
+            }
         }
     }
 
@@ -433,7 +440,7 @@ private final class NativeLyricsScrollView: UIScrollView, UIScrollViewDelegate {
     }
 
     private func visualMinY(for row: NativeLyricRowView, presentation: Bool) -> CGFloat {
-        if presentation {
+        if presentation && row.isMoving {
             if let pending = pendingStartTransforms[ObjectIdentifier(row)] {
                 return row.center.y - row.bounds.height / 2 + pending.ty
             }
@@ -445,7 +452,7 @@ private final class NativeLyricsScrollView: UIScrollView, UIScrollViewDelegate {
     }
 
     private func updateVisualGeometry(presentation: Bool) {
-        guard let input, bounds.height > 0, !positioning, !refreshing else { return }
+        guard let input, input.isActive, bounds.height > 0, !positioning, !refreshing else { return }
         refreshing = true
         defer { refreshing = false }
         let bottom = fadeBottom
@@ -463,21 +470,24 @@ private final class NativeLyricsScrollView: UIScrollView, UIScrollViewDelegate {
         let lineHeight = LyricsFontMetrics.boldLineHeight(size: input.fontSize)
         for row in rows {
             let top = visualMinY(for: row, presentation: presentation)
-            // Retain the incoming row's last blur while its focus amount animates to zero.
+            // Preserve the next focused row's blur, including when it starts offscreen.
             if !row.appearance.focused {
-                row.appearance.distanceBlurRadius = motion.blurRadius(
+                let radius = motion.blurRadius(
                     verticalDistance: Double(top - focusedTop), lineHeight: Double(lineHeight)
                 )
+                if row.appearance.distanceBlurRadius != radius { row.appearance.distanceBlurRadius = radius }
             }
             let viewportTop = top - contentOffset.y
-            input.rowGeometry.record(.init(height: row.bounds.height, top: viewportTop), for: row.line.id)
             let bleed = NativeLyricRowView.horizontalBleed
             let intersectsFade = viewportTop + row.bounds.height >= fade.topStart - bleed
                 && viewportTop <= fade.bottomEnd + bleed
             // Horizontal overflow stays visible; offscreen rows remain hidden vertically.
-            row.content.isHidden = !intersectsFade
+            if row.content.isHidden == intersectsFade { row.content.isHidden = !intersectsFade }
             if intersectsFade {
+                input.rowGeometry.record(.init(height: row.bounds.height, top: viewportTop), for: row.line.id)
                 row.applyEdgeFade(fade, in: self, presentation: presentation)
+            } else {
+                input.rowGeometry.discardPosition(for: row.line.id)
             }
         }
     }
@@ -520,7 +530,7 @@ private final class NativeLyricsScrollView: UIScrollView, UIScrollViewDelegate {
             }
             previousOffset = contentOffset.y
         }
-        refreshVisualGeometry()
+        setNeedsLayout()
     }
     func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
         if !decelerate { resumeFollowing() }
@@ -564,7 +574,8 @@ private final class NativeLyricsScrollView: UIScrollView, UIScrollViewDelegate {
     var browsing = false
     var reducesMotion = false
     var increasedContrast = false
-    var animated = false
+    // Read alongside focus/opacity changes; changing timing alone must not redraw every row.
+    @ObservationIgnored var animated = false
     @ObservationIgnored var onTap: (() -> Void)?
 }
 
@@ -633,6 +644,7 @@ private final class NativeLyricRowView: UIView {
     let line: PlayerLyricLine
     let appearance: LyricsRowAppearance
     let content: UIView
+    var isMoving = false
     var onTap: (() -> Void)? {
         get { appearance.onTap }
         set { appearance.onTap = newValue }
@@ -667,7 +679,9 @@ private final class NativeLyricRowView: UIView {
     }
     override func layoutSublayers(of layer: CALayer) {
         super.layoutSublayers(of: layer)
-        if let scrollView = superview as? NativeLyricsScrollView { scrollView.refreshVisualGeometry() }
+        // UIKit coalesces row layout changes into the scroll view's next layout pass.
+        // A row must not synchronously refresh every other row's geometry.
+        if let scrollView = superview as? NativeLyricsScrollView { scrollView.setNeedsLayout() }
     }
 
     func applyEdgeFade(_ fade: LyricsViewportFade, in scroll: UIScrollView, presentation: Bool) {
@@ -688,7 +702,7 @@ private final class NativeLyricRowView: UIView {
             mask.startPoint = CGPoint(x: 0.5, y: flipped ? 1 : 0)
             mask.endPoint = CGPoint(x: 0.5, y: flipped ? 0 : 1)
             mask.setStops(fade)
-            target.mask = mask
+            if target.mask !== mask { target.mask = mask }
         }
     }
 

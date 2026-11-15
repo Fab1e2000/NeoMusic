@@ -109,6 +109,8 @@ struct FrontendReviewPreview: View {
             FrontendLibraryAuditPreview().environment(auditAccount)
         case "player-motion":
             NativePlayerPagePreview()
+        case "player-performance":
+            PlayerPerformancePreview()
         case "press-feedback":
             FrontendPressFeedbackPreview()
         case "artwork-color":
