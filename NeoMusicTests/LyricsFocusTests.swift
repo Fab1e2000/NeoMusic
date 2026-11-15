@@ -118,6 +118,22 @@ final class LyricsFocusTests: XCTestCase {
         }
     }
 
+    func testNonAdjacentJumpAnimatesBeforeSettling() async throws {
+        let state = LyricsFocusTestState()
+        let window = try await mount(state, size: .large)
+        defer { window.isHidden = true }
+        try await assertFocus(40, in: state)
+        let scrollView = try XCTUnwrap(scrollViews(in: window).first)
+        let rows = scrollView.subviews.filter { $0.subviews.first is any UIContentView }
+
+        state.activeID = 44
+        let animating = try await waitUntil {
+            state.renderedActiveID == 44 && rows.contains { !($0.layer.animationKeys() ?? []).isEmpty }
+        }
+        XCTAssertTrue(animating, "Non-adjacent line jump must drive UIKit row spring animations")
+        try await assertFocus(44, in: state)
+    }
+
     func testNativeFocusUsesLatestTargetAfterHiddenPageAndTrackReplacement() async throws {
         let state = LyricsFocusTestState()
         let window = try await mount(state, size: .large)

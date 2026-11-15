@@ -139,14 +139,16 @@ private final class NativeLyricsScrollView: UIScrollView, UIScrollViewDelegate {
             needsFocus = true
         }
         if value.reducesMotion && previous?.reducesMotion != true { needsFocus = true }
+        if !wasActive || replaced { suppressedPreSeekActiveID = nil }
         if !wasActive {
             browsing = false
             needsFocus = true
         }
-        let next = rows.firstIndex { $0.line.id == value.activeID }
+        let next = activeRowIndex(for: value.activeID, updatingSuppression: true)
         let changed = next != focusedIndex
-        let cascades = wasActive && !needsFocus && !browsing && !value.reducesMotion
-            && !interfaceChanged && !geometryChanged && lastSize == bounds.size
+        let canAnimate = wasActive && !replaced && !value.reducesMotion && lastSize == bounds.size
+        let cascades = canAnimate && !needsFocus && !browsing
+            && !interfaceChanged && !geometryChanged
             && motion.isForwardLineChange(from: focusedIndex, to: next)
         if bounds.width > 0, bounds.height > 0 {
             layoutRowsIfNeeded()
@@ -155,8 +157,17 @@ private final class NativeLyricsScrollView: UIScrollView, UIScrollViewDelegate {
                 updateFade(animated: interfaceChanged && wasActive && !value.reducesMotion)
             }
             if !browsing && (changed || needsFocus || interfaceChanged || geometryChanged) {
-                align(to: next, cascade: cascades,
-                      animated: wasActive && !value.reducesMotion && (interfaceChanged || geometryChanged))
+                let animates = canAnimate && (focusedIndex != nil || interfaceChanged || geometryChanged)
+                let spring = cascades || interfaceChanged || geometryChanged
+                    ? motion.lineChangeSpring
+                    : motion.forcedLineCatchUpSpring
+                // Avoid restarting an in-flight tap/seek catch-up animation when only the
+                // interface visibility changed and the target scroll offset stays the same.
+                let keepsRunningAnimation = !changed && !needsFocus && !animators.isEmpty
+                    && next.map { abs(targetOffset(for: $0, activeID: rows[$0].line.id) - contentOffset.y) < 0.5 } == true
+                if !keepsRunningAnimation {
+                    align(to: next, cascade: cascades, animated: animates, spring: spring)
+                }
             }
         }
         wasActive = true
@@ -169,21 +180,51 @@ private final class NativeLyricsScrollView: UIScrollView, UIScrollViewDelegate {
         if lastSize != bounds.size {
             freezeRows()
             layoutRowsIfNeeded()
-            updateAppearances(activeIndex: rows.firstIndex { $0.line.id == input.activeID }, animated: false)
+            let activeIndex = activeRowIndex(for: input.activeID, updatingSuppression: false)
+            updateAppearances(activeIndex: activeIndex, animated: false)
             updateFade(animated: false)
-            if !browsing { align(to: rows.firstIndex { $0.line.id == input.activeID }, cascade: false) }
+            if !browsing { align(to: activeIndex, cascade: false) }
         } else if needsFocus && !browsing {
-            align(to: rows.firstIndex { $0.line.id == input.activeID }, cascade: false)
+            align(to: activeRowIndex(for: input.activeID, updatingSuppression: false), cascade: false)
         }
         refreshVisualGeometry()
     }
 
+    private var suppressedPreSeekActiveID: Int?
+    private var pendingStartTransforms: [ObjectIdentifier: CGAffineTransform] = [:]
+    private var fadePendingStartHeight: CGFloat?
+    private var pendingTransformCommitObserver: CFRunLoopObserver?
+
+    /// Ignore stale pre-tap active line updates emitted while parent SwiftUI state catches up to a seek.
+    private func activeRowIndex(for activeID: Int?, updatingSuppression: Bool) -> Int? {
+        if let suppressed = suppressedPreSeekActiveID {
+            if activeID != suppressed {
+                if updatingSuppression { suppressedPreSeekActiveID = nil }
+                return rows.firstIndex { $0.line.id == activeID }
+            }
+            return focusedIndex ?? rows.firstIndex { $0.line.id == activeID }
+        }
+        return rows.firstIndex { $0.line.id == activeID }
+    }
+
+    private func targetOffset(for index: Int, activeID: Int? = nil, interfaceHidden: Bool? = nil) -> CGFloat {
+        let topInset = max(focusTop(forActiveID: activeID, interfaceHidden: interfaceHidden), motion.firstLineStartOffset)
+        return max(-topInset, min(rows[index].center.y - rows[index].bounds.height / 2
+                                  - focusTop(forActiveID: activeID, interfaceHidden: interfaceHidden),
+                                  max(contentSize.height - bounds.height, 0)))
+    }
+
     private var focusTop: CGFloat {
+        focusTop(forActiveID: input?.activeID)
+    }
+
+    private func focusTop(forActiveID activeID: Int?, interfaceHidden: Bool? = nil) -> CGFloat {
         guard let input else { return 0 }
-        let bottom = input.isInterfaceHidden ? bounds.height : max(bounds.height - input.bottomOverlayHeight, 1)
+        let hidden = interfaceHidden ?? input.isInterfaceHidden
+        let bottom = hidden ? bounds.height : max(bounds.height - input.bottomOverlayHeight, 1)
         let visible = max(bottom - input.topOverlayHeight, 1)
         let lineHeight = LyricsFontMetrics.boldLineHeight(size: input.fontSize)
-        let height = rows.first(where: { $0.line.id == input.activeID })?.bounds.height ?? lineHeight
+        let height = rows.first(where: { $0.line.id == activeID })?.bounds.height ?? lineHeight
         return input.topOverlayHeight + min(max(visible * 0.233 - lineHeight / 2, visible * 0.08),
                                             max(visible * 0.08, visible * 0.84 - height))
     }
@@ -216,39 +257,43 @@ private final class NativeLyricsScrollView: UIScrollView, UIScrollViewDelegate {
         }
     }
 
-    private func align(to index: Int?, cascade: Bool, animated: Bool = false) {
+    private func align(to index: Int?, cascade: Bool, animated: Bool = false,
+                       spring: LyricPhysicalSpringParameters? = nil, interfaceHidden: Bool? = nil) {
         guard let index, rows.indices.contains(index), let input else { return }
         freezeRows()
+        let activeID = rows[index].line.id
         let oldOffset = contentOffset.y
-        let topInset = max(focusTop, motion.firstLineStartOffset)
-        let target = max(-topInset, min(rows[index].center.y - rows[index].bounds.height / 2 - focusTop,
-                                       max(contentSize.height - bounds.height, 0)))
+        let topInset = max(focusTop(forActiveID: activeID, interfaceHidden: interfaceHidden), motion.firstLineStartOffset)
+        let target = targetOffset(for: index, activeID: activeID, interfaceHidden: interfaceHidden)
         let delta = target - oldOffset
+        let animates = (cascade || animated)
+            && (cascade || abs(delta) >= 0.5 || rows.contains { $0.transform != .identity })
         positioning = true
         UIView.performWithoutAnimation {
             contentInset.top = topInset
             setContentOffset(CGPoint(x: 0, y: target), animated: false)
             for row in rows {
-                row.transform = cascade || animated ? row.transform.translatedBy(x: 0, y: delta) : .identity
+                row.transform = animates ? row.transform.translatedBy(x: 0, y: delta) : .identity
             }
         }
         positioning = false
         focusedIndex = index
         needsFocus = false
-        input.rowGeometry.focus(on: input.activeID)
-        if cascade || animated {
+        input.rowGeometry.focus(on: activeID)
+        if animates {
+            let timingSpring = spring ?? motion.lineChangeSpring
             for (rowIndex, row) in rows.enumerated() {
                 let destination = row.center.y - row.bounds.height / 2 - target
                 let current = destination + row.transform.ty
-                guard max(current, destination) + row.bounds.height > input.topOverlayHeight,
+                guard max(current, destination) + row.bounds.height > 0,
                       min(current, destination) < bounds.height else {
                     row.transform = .identity
                     continue
                 }
-                let spring = motion.lineChangeSpring
+                pendingStartTransforms[ObjectIdentifier(row)] = row.transform
                 let animator = UIViewPropertyAnimator(duration: motion.lineChangeDuration, timingParameters:
-                    UISpringTimingParameters(mass: spring.mass, stiffness: spring.stiffness,
-                                             damping: spring.damping, initialVelocity: .zero))
+                    UISpringTimingParameters(mass: timingSpring.mass, stiffness: timingSpring.stiffness,
+                                             damping: timingSpring.damping, initialVelocity: .zero))
                 let id = UUID()
                 animators[id] = animator
                 animator.addAnimations { row.transform = .identity }
@@ -259,19 +304,56 @@ private final class NativeLyricsScrollView: UIScrollView, UIScrollViewDelegate {
                 }
                 animator.startAnimation(afterDelay: cascade ? motion.lineChangeDelay(rowIndex: rowIndex, activeIndex: index) : 0)
             }
+            schedulePendingTransformClear()
             startDisplayLink()
         }
-        updateVisualGeometry(presentation: cascade || animated)
+        updateVisualGeometry(presentation: animates)
     }
 
     private func freezeRows() {
+        let preCommit = pendingStartTransforms
+        pendingStartTransforms.removeAll()
+        schedulePendingTransformClear()
         guard !animators.isEmpty else { return }
-        let transforms = rows.map { $0.layer.presentation()?.affineTransform() ?? $0.transform }
+        let transforms = rows.map {
+            preCommit[ObjectIdentifier($0)]
+                ?? $0.layer.presentation()?.affineTransform()
+                ?? $0.transform
+        }
         for animator in animators.values { animator.stopAnimation(true) }
         animators.removeAll()
         UIView.performWithoutAnimation {
             for (row, transform) in zip(rows, transforms) { row.transform = transform }
         }
+    }
+
+    /// Keep pre-commit transforms and fade bounds until Core Animation flushes the current transaction.
+    private func schedulePendingTransformClear() {
+        guard !pendingStartTransforms.isEmpty || fadePendingStartHeight != nil else {
+            cancelPendingTransformCommitObserver()
+            return
+        }
+        guard pendingTransformCommitObserver == nil else { return }
+        let observer = CFRunLoopObserverCreateWithHandler(
+            kCFAllocatorDefault,
+            CFRunLoopActivity.beforeWaiting.rawValue,
+            false,
+            CFIndex.max
+        ) { [weak self] _, _ in
+            self?.pendingTransformCommitObserver = nil
+            self?.pendingStartTransforms.removeAll()
+            self?.fadePendingStartHeight = nil
+        }
+        pendingTransformCommitObserver = observer
+        if let observer {
+            CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
+        }
+    }
+
+    private func cancelPendingTransformCommitObserver() {
+        guard let observer = pendingTransformCommitObserver else { return }
+        CFRunLoopRemoveObserver(CFRunLoopGetMain(), observer, .commonModes)
+        pendingTransformCommitObserver = nil
     }
 
     private func updateFade(animated: Bool) {
@@ -281,19 +363,24 @@ private final class NativeLyricsScrollView: UIScrollView, UIScrollViewDelegate {
         fadeAnimator?.stopAnimation(true)
         fadeGuide.bounds.size.height = current
         if animated {
+            fadePendingStartHeight = current
             let animator = UIViewPropertyAnimator(duration: 0.35, curve: .easeInOut) {
                 self.fadeGuide.bounds.size.height = height
             }
             fadeAnimator = animator
             animator.addCompletion { [weak self] _ in
                 self?.fadeAnimator = nil
+                self?.fadePendingStartHeight = nil
                 self?.refreshVisualGeometry()
                 self?.stopDisplayLinkIfIdle()
             }
             animator.startAnimation()
+            schedulePendingTransformClear()
             startDisplayLink()
         } else {
             fadeAnimator = nil
+            fadePendingStartHeight = nil
+            schedulePendingTransformClear()
             fadeGuide.bounds.size.height = height
         }
     }
@@ -315,10 +402,25 @@ private final class NativeLyricsScrollView: UIScrollView, UIScrollViewDelegate {
     }
 
     private var fadeBottom: CGFloat {
+        if let pending = fadePendingStartHeight {
+            return pending
+        }
         if fadeAnimator != nil, let presentation = fadeGuide.layer.presentation() {
             return presentation.bounds.height
         }
         return fadeGuide.bounds.height
+    }
+
+    private func visualMinY(for row: NativeLyricRowView, presentation: Bool) -> CGFloat {
+        if presentation {
+            if let pending = pendingStartTransforms[ObjectIdentifier(row)] {
+                return row.center.y - row.bounds.height / 2 + pending.ty
+            }
+            if let layerMinY = row.layer.presentation()?.frame.minY {
+                return layerMinY
+            }
+        }
+        return row.frame.minY
     }
 
     private func updateVisualGeometry(presentation: Bool) {
@@ -329,12 +431,11 @@ private final class NativeLyricsScrollView: UIScrollView, UIScrollViewDelegate {
         let fade = LyricsViewportFade(height: bounds.height, referenceHeight: bottom,
                                       topOverlayHeight: input.topOverlayHeight, isInterfaceHidden: false)
         let focusedRow = focusedIndex.flatMap { rows.indices.contains($0) ? rows[$0] : nil }
-        let focusedTop = focusedRow.map {
-            (presentation ? $0.layer.presentation()?.frame.minY : nil) ?? $0.frame.minY
-        } ?? (contentOffset.y + focusTop)
+        let focusedTop = focusedRow.map { visualMinY(for: $0, presentation: presentation) }
+            ?? (contentOffset.y + focusTop)
         let lineHeight = LyricsFontMetrics.boldLineHeight(size: input.fontSize)
         for row in rows {
-            let top = (presentation ? row.layer.presentation()?.frame.minY : nil) ?? row.frame.minY
+            let top = visualMinY(for: row, presentation: presentation)
             // Retain the incoming row's last blur while its focus amount animates to zero.
             if !row.appearance.focused {
                 row.appearance.distanceBlurRadius = motion.blurRadius(
@@ -355,16 +456,29 @@ private final class NativeLyricsScrollView: UIScrollView, UIScrollViewDelegate {
     }
 
     private func seek(_ index: Int) {
-        guard let input, input.isActive else { return }
+        guard let input, input.isActive, rows.indices.contains(index) else { return }
         resumeTask?.cancel()
         browsing = false
-        needsFocus = true
-        input.onSeek(rows[index].line.time)
+        needsFocus = false
         input.isInterfaceHidden = false
-        setNeedsLayout()
+        input.onSeek(rows[index].line.time)
+        let animates = wasActive && !input.reducesMotion && lastSize == bounds.size
+        if bounds.width > 0, bounds.height > 0 {
+            let tappedID = rows[index].line.id
+            suppressedPreSeekActiveID = (input.activeID != nil && input.activeID != tappedID) ? input.activeID : nil
+            layoutRowsIfNeeded()
+            updateAppearances(activeIndex: index, animated: animates)
+            align(to: index, cascade: false, animated: animates, spring: motion.forcedLineCatchUpSpring,
+                  interfaceHidden: false)
+        } else {
+            suppressedPreSeekActiveID = nil
+            needsFocus = true
+            setNeedsLayout()
+        }
     }
 
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+        suppressedPreSeekActiveID = nil
         browsing = true
         resumeTask?.cancel()
         visibility.begin(isInterfaceVisible: !(input?.isInterfaceHidden ?? false))
@@ -387,10 +501,12 @@ private final class NativeLyricsScrollView: UIScrollView, UIScrollViewDelegate {
     func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { resumeFollowing() }
     private func resumeFollowing() {
         visibility.end()
+        guard browsing else { return }
         resumeTask?.cancel()
         resumeTask = Task { @MainActor [weak self] in
             do { try await Task.sleep(for: .seconds(3)) } catch { return }
-            guard let self, let input = self.input, input.isActive else { return }
+            guard let self, let input = self.input, input.isActive, self.browsing else { return }
+            self.suppressedPreSeekActiveID = nil
             self.browsing = false
             self.needsFocus = true
             self.update(input)
@@ -398,6 +514,7 @@ private final class NativeLyricsScrollView: UIScrollView, UIScrollViewDelegate {
     }
     func stop() {
         resumeTask?.cancel()
+        fadePendingStartHeight = nil
         freezeRows()
         fadeAnimator?.stopAnimation(true)
         fadeAnimator = nil
@@ -442,6 +559,9 @@ private struct LocalLyricsRow: View {
             motion.focusBlurTransitionControlPoint1X, motion.focusBlurTransitionControlPoint1Y,
             motion.focusBlurTransitionControlPoint2X, motion.focusBlurTransitionControlPoint2Y,
             duration: motion.focusBlurTransitionDuration) : nil
+        let backgroundHorizontalOutset = min(14, fontSize * 0.42)
+        let backgroundVerticalOutset = min(14, fontSize * 0.42)
+        let backgroundCornerRadius = min(16, fontSize * 0.47)
         LyricPressInteraction(isSelected: false, allowsLongPress: false, onTap: onTap, onLongPress: {}) { progress in
             Text(line.text.isEmpty ? "♪" : line.text)
                 .font(.system(size: fontSize, weight: .bold))
@@ -451,9 +571,11 @@ private struct LocalLyricsRow: View {
                 .modifier(LyricsFocusBlur(radius: radius, amount: appearance.focused ? 0 : 1))
                 .blendMode(foreground == .white && !appearance.focused ? .plusLighter : .normal)
                 .background {
-                    RoundedRectangle(cornerRadius: 12)
+                    RoundedRectangle(cornerRadius: backgroundCornerRadius, style: .continuous)
                         .fill(foreground.opacity(progress * 0.12))
                         .blendMode(foreground == .white ? .plusLighter : .normal)
+                        .padding(.horizontal, -backgroundHorizontalOutset)
+                        .padding(.vertical, -backgroundVerticalOutset)
                 }
         }
         .scaleEffect(appearance.focused ? 1 : motion.deselectedScale, anchor: .topLeading)
