@@ -16,6 +16,21 @@ class ModuleBoundaryTests(unittest.TestCase):
         self.assertEqual(boundaries.check_source(Path("NeoMusic/App/Composition.swift"),
                          "let account: NeteaseAccount"), [])
 
+    def test_full_screen_component_has_only_native_dependencies(self):
+        path = Path("NeoMusic/Features/Player/FullScreenPlayer/Surface.swift")
+        for module in ("SwiftUI", "UIKit", "Observation", "MetalKit", "AVFoundation"):
+            self.assertEqual(boundaries.check_source(path, "import " + module), [])
+        for module in ("NeoMusic", "Nuke", "NukeUI", "LNPopupUI", "FullScreenPlayer"):
+            self.assertTrue(boundaries.check_source(path, "import " + module))
+        for expression in ("NowPlayingModel()", "LibrarySongItem", "LyricsDocument", "LibraryToast", "PerformanceDiagnostics", "Bundle.main", 'UIImage(named: "Sample")', '"netease:123"'):
+            self.assertTrue(boundaries.check_source(path, expression))
+
+    def test_component_adapter_is_owned_by_app_or_player_integration(self):
+        for path in ("NeoMusic/App/Composition.swift", "NeoMusic/Features/Player/Integration/Adapter.swift"):
+            self.assertEqual(boundaries.check_source(Path(path), "import FullScreenPlayer"), [])
+        for path in ("NeoMusic/Core/Netease/Client.swift", "NeoMusic/Core/Playback/Engine.swift"):
+            self.assertTrue(boundaries.check_source(Path(path), "import FullScreenPlayer"))
+
     def test_local_and_player_sources_reject_online_business(self):
         for directory in ["Core/Library", "Core/Playback", "Features/Player", "Features/Library"]:
             with self.subTest(directory=directory):

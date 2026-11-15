@@ -62,6 +62,6 @@ xcodebuild -project NeoMusic.xcodeproj -scheme NeoMusic -configuration Release \
   -destination "platform=iOS Simulator,id=$simulator_id" \
   -derivedDataPath "${NEOMUSIC_DERIVED_DATA:-build/ci/DerivedData}" \
   -resultBundlePath build/ci/TestResults.xcresult \
-  -only-testing:NeoMusicTests -parallel-testing-enabled NO \
+  -only-testing:NeoMusicTests -only-testing:FullScreenPlayerTests -parallel-testing-enabled NO \
   CODE_SIGNING_ALLOWED=NO ENABLE_TESTABILITY=YES SWIFT_ACTIVE_COMPILATION_CONDITIONS= \
   test 2>&1 | tee build/ci/xcodebuild.log

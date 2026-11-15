@@ -1,3 +1,4 @@
+import FullScreenPlayer
 import SwiftUI
 
 /// 本地资料库与现有页面的装配入口。
@@ -150,7 +151,7 @@ enum LocalLibrary {
     }
     static let player = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false, elapsed: 0)
 
-    static let referencePlayer = ReferencePlayerState(model: player)
+    static let referencePlayer = PlayerState(model: player)
     static let referenceLibrary = ReferenceLibrary(reader: ReferenceLyricsReader(
         storageDirectory: URL.applicationSupportDirectory.appending(path: "Lyrics", directoryHint: .isDirectory),
         root: runtime.root,
@@ -160,8 +161,8 @@ enum LocalLibrary {
         }))
 
     private static func playerActions(openRoute: @escaping (LibraryRoute) -> Void,
-                                      openAudioQualitySettings: (() -> Void)?) -> ReferencePlayerActions {
-        ReferencePlayerActions(
+                                      openAudioQualitySettings: (() -> Void)?) -> PlayerActions {
+        PlayerActions(
             isFavorite: { id in song(id: id)?.isFavorite == true },
             toggleFavorite: { songLibrary.toggleFavorite($0) },
             addToPlaylist: { id in
@@ -187,7 +188,7 @@ enum LocalLibrary {
                 guard let song = song(id: id) else { return }
                 if song.isOnline { catalog.openSongArtist?(id, name, openRoute) }
                 else { openRoute(.artist(song.albumArtist)) }
-            }, notify: { toasts.show($0) }, audioQuality: { id in
+            }, feedback: { LibraryHaptics.impact() }, notify: { toasts.show(LibraryToast($0)) }, audioQuality: { id in
                 guard player.hasCurrent, player.current.id == id else { return nil }
                 if !player.current.isOnline {
                     return PlayerAudioQuality.localFile(runtime.root.appending(path: id))

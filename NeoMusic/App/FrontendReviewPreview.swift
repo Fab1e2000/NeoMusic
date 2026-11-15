@@ -1,3 +1,4 @@
+import FullScreenPlayer
 #if DEBUG
 import SwiftUI
 

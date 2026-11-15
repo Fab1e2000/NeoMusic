@@ -2,6 +2,7 @@ import AVFoundation
 import UIKit
 import XCTest
 @testable import NeoMusic
+@testable import FullScreenPlayer
 
 /// Test inputs use the same model and adapters as the app, with no demo runtime.
 @MainActor enum PlayerTestFixtures {
@@ -20,19 +21,19 @@ import XCTest
         return url
     }
 
-    static func owner(tracks: [ReferenceTrack]) -> NowPlayingModel {
+    static func owner(tracks: [PlayerTrack]) -> NowPlayingModel {
         NowPlayingModel(queue: tracks.map {
             LibrarySongItem(id: $0.id, title: $0.title, artist: $0.artists, album: $0.albumTitle,
                 albumArtist: $0.artists, trackNumber: 1, artwork: .missing, duration: Int($0.duration))
         }, currentIndex: 0, isPlaying: false, elapsed: 0)
     }
 
-    static func state(tracks: [ReferenceTrack]) -> ReferencePlayerState {
-        ReferencePlayerState(model: owner(tracks: tracks))
+    static func state(tracks: [PlayerTrack]) -> PlayerState {
+        PlayerState(model: owner(tracks: tracks))
     }
 
-    static func actions() -> ReferencePlayerActions {
-        ReferencePlayerActions(isFavorite: { _ in false }, toggleFavorite: { _ in },
+    static func actions() -> PlayerActions {
+        PlayerActions(isFavorite: { _ in false }, toggleFavorite: { _ in },
             addToPlaylist: { _ in }, openAlbum: { _ in }, openArtist: { _ in })
     }
 

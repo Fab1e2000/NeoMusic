@@ -1,6 +1,7 @@
 import XCTest
 import SwiftUI
 @testable import NeoMusic
+@testable import FullScreenPlayer
 
 final class PlaybackQueueV2Tests: XCTestCase {
     func testRepeatedFilesKeepIndependentEntryIdentity() {
@@ -151,8 +152,8 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
         let marked = try markConfigurations(in: host.view, source: source)
         let trackCell = try XCTUnwrap(marked[.track(a.id)])
         try assertReorderAccessory(in: trackCell)
-        inputs.entries[0] = UpcomingQueueEntry(id: a.id, queueIndex: 7,
-            song: ReferenceTrack(id: a.song.id, title: "Updated title", artists: a.song.artists,
+        inputs.entries[0] = PlayerQueueEntry(id: a.id, queueIndex: 7,
+            song: PlayerTrack(id: a.song.id, title: "Updated title", artists: a.song.artists,
                                  albumTitle: a.song.albumTitle, coverURL: nil, duration: a.song.duration))
         try await settle(host)
         XCTAssertEqual(reconfiguredCells(marked), [.track(a.id)])
@@ -195,11 +196,11 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
 
     func testNativeInteractiveMovementInLongQueueCommitsStableOccurrencesOnce() async throws {
         let tracks = (0..<2_000).map { index in
-            ReferenceTrack(id: "song-\(index % 50)", title: "Song \(index % 50)", artists: "Artist",
+            PlayerTrack(id: "song-\(index % 50)", title: "Song \(index % 50)", artists: "Artist",
                            albumTitle: "Album", coverURL: nil, duration: 60)
         }
         let owner = PlayerTestFixtures.owner(tracks: tracks)
-        let player = ReferencePlayerState(model: owner)
+        let player = PlayerState(model: owner)
         player.skip(toQueueIndex: 900)
         let hidden = Array(owner.entryIDs[921...]) + Array(owner.entryIDs[..<900])
         let inputs = QueueListTestInputs()
@@ -253,8 +254,8 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
         for count in [50, 500, 2_000] {
             let inputs = QueueListTestInputs()
             inputs.entries = (0..<count).map { index in
-                UpcomingQueueEntry(id: UUID(), queueIndex: index,
-                    song: ReferenceTrack(id: "song-\(index % 50)", title: "Song", artists: "Artist",
+                PlayerQueueEntry(id: UUID(), queueIndex: index,
+                    song: PlayerTrack(id: "song-\(index % 50)", title: "Song", artists: "Artist",
                                          albumTitle: "Album", coverURL: nil, duration: 60,
                                          artworkLoadID: "cover-\(index)"))
             }
@@ -292,7 +293,7 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
             let entry = inputs.entries[0]
             var updated = entry.song
             updated.artworkLoadID = "updated-cover"
-            inputs.entries[0] = UpcomingQueueEntry(id: entry.id, queueIndex: entry.queueIndex, song: updated)
+            inputs.entries[0] = PlayerQueueEntry(id: entry.id, queueIndex: entry.queueIndex, song: updated)
             try await settle(host)
             XCTAssertTrue(inputs.artworkRequests.contains("updated-cover"),
                           "A visible row must request its replacement artwork without another appearance")
@@ -318,8 +319,8 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
         for count in [0, 3, 50, 2_000] {
             let inputs = QueueListTestInputs()
             inputs.entries = (0..<count).map { index in
-                UpcomingQueueEntry(id: UUID(), queueIndex: index,
-                    song: ReferenceTrack(id: "song-\(index)", title: "Song", artists: "Artist",
+                PlayerQueueEntry(id: UUID(), queueIndex: index,
+                    song: PlayerTrack(id: "song-\(index)", title: "Song", artists: "Artist",
                                          albumTitle: "Album", coverURL: nil, duration: 60))
             }
             let (window, host) = try mount(inputs)
@@ -399,9 +400,9 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
 @MainActor @Observable
 private final class QueueListTestInputs {
     var revision: UInt64 = 0
-    var entries: [UpcomingQueueEntry] = ["a", "b"].enumerated().map { index, id in
-        UpcomingQueueEntry(id: UUID(), queueIndex: index + 1,
-                           song: ReferenceTrack(id: id, title: id, artists: "Artist", albumTitle: "Album", coverURL: nil, duration: 60))
+    var entries: [PlayerQueueEntry] = ["a", "b"].enumerated().map { index, id in
+        PlayerQueueEntry(id: UUID(), queueIndex: index + 1,
+                           song: PlayerTrack(id: id, title: id, artists: "Artist", albumTitle: "Album", coverURL: nil, duration: 60))
     } { didSet { revision &+= 1 } }
     var headerHeight: CGFloat = 40
     var subtitle = "Next songs"
@@ -417,13 +418,14 @@ private struct QueueListTestView: View {
     let inputs: QueueListTestInputs
     var body: some View {
         NowPlayingQueueList(entries: inputs.entries,
-                            version: UpcomingQueueVersion(revision: inputs.revision, index: 0, repeatMode: .all),
+                            version: PlayerQueueVersion(revision: inputs.revision, index: 0, repeatMode: .all),
                             subtitle: inputs.subtitle,
                             headerHeight: inputs.headerHeight, horizontalInset: 32,
                             onPlay: { _ in }, onMove: inputs.onMove, onScroll: { _ in })
             .environment(inputs.player)
             .environment(inputs.actions)
-            .environment(inputs.library)
+            .environment(NeoMusicPlayerServices.make(actions: inputs.actions, library: inputs.library,
+                prepareArtwork: { inputs.artworkRequests.append($0) }))
             .environment(\.playerVisualsActive, inputs.visualsActive)
             .environment(\.artworkLoadAction, ArtworkLoadAction(handler: { inputs.artworkRequests.append($0) }))
     }

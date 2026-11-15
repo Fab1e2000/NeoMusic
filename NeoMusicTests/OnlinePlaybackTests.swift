@@ -1,6 +1,7 @@
 import XCTest
 import AVFoundation
 @testable import NeoMusic
+@testable import FullScreenPlayer
 
 @MainActor
 final class OnlinePlaybackTests: XCTestCase {
@@ -324,7 +325,7 @@ final class OnlinePlaybackTests: XCTestCase {
             .init(id: 0, time: 0, text: "first"),
             .init(id: 1, time: initial + 0.3, text: "second")
         ])
-        let presentation = ReferencePlayerState(model: model)
+        let presentation = PlayerState(model: model)
         XCTAssertEqual(lyrics.activeLine(at: presentation.progress), 0)
         model.reloadCurrentResource()
         await fulfillment(of: [resolving], timeout: 2)

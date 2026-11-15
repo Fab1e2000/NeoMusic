@@ -8,6 +8,9 @@ ROOT = Path(__file__).resolve().parents[1]
 COMMON_IMPORTS = {"SwiftUI", "UIKit", "AVKit", "PhotosUI", "UniformTypeIdentifiers", "Foundation",
                   "AVFoundation", "MediaPlayer", "Observation", "ImageIO", "CryptoKit"}
 PLAYER_IMPORTS = {"LNPopupUI", "Nuke", "NukeUI", "CoreImage", "CoreGraphics", "MetalKit"}
+COMPONENT_ROOT = Path("NeoMusic/Features/Player/FullScreenPlayer")
+COMPONENT_IMPORTS = {"SwiftUI", "UIKit", "Foundation", "Observation", "AVKit", "AVFoundation",
+                     "MediaPlayer", "MetalKit", "CoreImage", "CoreGraphics", "UniformTypeIdentifiers"}
 NETEASE_IMPORTS = {"Foundation", "Observation", "CryptoKit", "CommonCrypto", "Security"}
 
 
@@ -17,6 +20,7 @@ def check_source(relative: Path, text: str) -> list[str]:
     account_ui = relative.is_relative_to("NeoMusic/Features/Account")
     app = relative.is_relative_to("NeoMusic/App")
     player = relative.is_relative_to("NeoMusic/Features/Player")
+    component = relative.is_relative_to(COMPONENT_ROOT)
     if relative.suffix == ".metal" and not player:
         errors.append("player shaders belong in Features/Player")
     if "Modules" in relative.parts:
@@ -41,8 +45,16 @@ def check_source(relative: Path, text: str) -> list[str]:
             } and module == "SQLite3"
             allowed |= relative == Path("NeoMusic/Core/PerformanceDiagnostics.swift") and module == "os"
             allowed |= relative == Path("NeoMusic/Core/LocalMusic/DownloadedAudioTags.swift") and module == "AudioTagBridge"
+            allowed |= (app or (player and not component)) and module == "FullScreenPlayer"
+            if component:
+                allowed = module in COMPONENT_IMPORTS
             if not allowed:
                 errors.append(f"import {module} is outside this source's dependency boundary")
+    if component:
+        if re.search(r"\b(?:NowPlayingModel|LibrarySongItem|ReferenceLibrary|ReferenceLyricsReader|LyricsReader|LyricsDocument|LocalLibrary\w*|LibraryToast|LibraryHaptics|PerformanceDiagnostics|ArtworkImagePipeline|ArtworkLoadAction)\b", text):
+            errors.append("full-screen presentation must consume host interfaces, not app implementations")
+        if re.search(r'Bundle\.main|UIImage\(named:|"netease:|"preview\.appearance', text):
+            errors.append("full-screen resources and identities must not depend on the app bundle or account format")
     # Scan Swift and Objective-C together; moving code does not exempt it.
     if not (netease or account_ui or app) and re.search(r"\bNetease\w*\b", text):
         errors.append("NetEase types belong in Core/Netease, Features/Account or App assembly")
@@ -52,7 +64,7 @@ def check_source(relative: Path, text: str) -> list[str]:
         errors.append("account requests and website authentication are outside the account boundary")
     if not (netease or account_ui) and re.search(r"(?:music\.163\.com|netease\.session)", text):
         errors.append("NetEase endpoints and credential keys belong in the account boundary")
-    if netease and re.search(r"\b(?:LocalLibrary\w*|LocalMusic\w*|PlaylistLibrary|NowPlayingModel|ReferencePlayer\w*)\b", text):
+    if netease and re.search(r"\b(?:LocalLibrary\w*|LocalMusic\w*|PlaylistLibrary|NowPlayingModel|ReferencePlayer\w*|PlayerState|PlayerPlaybackSource|PlayerServices)\b", text):
         errors.append("NetEase services must not own local library or player state")
     return [f"{relative}: {error}" for error in errors]
 

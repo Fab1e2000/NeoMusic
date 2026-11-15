@@ -1,6 +1,7 @@
 import XCTest
 import SwiftUI
 @testable import NeoMusic
+@testable import FullScreenPlayer
 
 @MainActor
 final class PlayerVisibilityTests: XCTestCase {
@@ -23,11 +24,11 @@ final class PlayerVisibilityTests: XCTestCase {
         let owner = NowPlayingModel(queue: songs, currentIndex: 0, isPlaying: false, elapsed: 39)
         owner.repeatMode = .off
         owner.sourceTitle = "喜爱歌曲"
-        let player = ReferencePlayerState(model: owner)
+        let player = PlayerState(model: owner)
         let library = PlayerTestFixtures.library()
         let lyrics = LyricsDocument.parse("[00:00.00]假装我们依然相爱\n[00:39.00]我真的演不出来\n[01:00.00]还是不习惯你不在\n[01:20.00]这身份转变太快\n[01:40.00]画面里不需要旁白")
         await library.reader.configureRemoteLyrics { _ in lyrics }
-        let actions = ReferencePlayerActions(isFavorite: { _ in true }, toggleFavorite: { _ in },
+        let actions = PlayerActions(isFavorite: { _ in true }, toggleFavorite: { _ in },
             addToPlaylist: { _ in }, openAlbum: { _ in }, openArtist: { _ in },
             audioQuality: { _ in PlayerAudioQuality(title: "无损", isLossless: true) })
         for (page, name) in [(NowPlayingPage.artwork, "artwork"), (.lyrics, "lyrics"), (.queue, "queue")] {

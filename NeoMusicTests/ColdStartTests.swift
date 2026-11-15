@@ -3,6 +3,7 @@ import MediaPlayer
 import UIKit
 import SwiftUI
 @testable import NeoMusic
+@testable import FullScreenPlayer
 
 @MainActor final class ColdStartTests: XCTestCase {
     func testRestoredPlayerStaysLightweightAndFirstPlaySeeksToSavedPosition() async throws {
@@ -20,7 +21,7 @@ import SwiftUI
         defer { model.shutdownPlayback() }
         model.configurePlayback(resolveURL: { _ in audioURL }, persistenceURL: stateURL)
         XCTAssertTrue(model.restoreQueue(songs: [song]))
-        let adapter = ReferencePlayerState(model: model)
+        let adapter = PlayerState(model: model)
         XCTAssertEqual(adapter.currentTrack?.title, "Tone")
         XCTAssertEqual(adapter.duration, 10)
         XCTAssertEqual(adapter.progress, 4)
@@ -57,7 +58,7 @@ import SwiftUI
         }, persistenceURL: directory.appendingPathComponent("queue.json"))
         XCTAssertTrue(model.restoreQueue(songs: [], restoredState: .success(saved)))
         model.restoreOnlineIdentity(ownerID: "12")
-        let presentation = ReferencePlayerState(model: model)
+        let presentation = PlayerState(model: model)
         XCTAssertEqual(presentation.currentTrack?.title, track.title)
         XCTAssertEqual(presentation.progress, 4)
         XCTAssertFalse(presentation.isPlaying)
@@ -136,7 +137,7 @@ import SwiftUI
         XCTAssertTrue(LocalArtworkImages.cached(url, pixels: 128) === thumbnail)
         let song = LibrarySongItem(id: "song", title: "Song", artist: "", album: "", albumArtist: "", trackNumber: 1, artwork: .file(url), artworkURL: url)
         let model = NowPlayingModel(queue: [song], currentIndex: 0, isPlaying: false)
-        let adapter = ReferencePlayerState(model: model)
+        let adapter = PlayerState(model: model)
         XCTAssertEqual(adapter.currentTrack?.coverURL, url)
         XCTAssertEqual(adapter.tracks.first?.coverURL, url)
         XCTAssertFalse(model.hasAudioEngine)

@@ -15,6 +15,12 @@
 | 前端 | Core Image 封面取色、歌词原生定位、辅助字号适配、原生菜单和页面导航；保留现有 LN 依赖 |
 | 验证 | 日常按影响验证；推送前本机 Release 全量；GitHub 仅保留 Release 工作流 |
 
+## 全屏播放器解耦（已本地提交，真机体验待验收）
+
+- 全屏界面已集中到 `Features/Player/FullScreenPlayer`，作为仅依赖 Apple 框架的独立 framework 编译；NeoMusic 通过 `Integration` 提供播放、队列、歌词、图片、业务动作及 LNPopup 转场。引擎、持久化和迷你播放器保持宿主归属，现有三页与交互继续复用同一份组件。
+- 组件公开数据／服务接口，Metal 与来源许可随模块打包。独立组件测试、应用定向回归及交互测试共 97 项通过，37 项脚本回归与 183 个源码文件边界检查通过；模拟器三页渲染已核对。验证记录在 `build/player-decoupling/`，接入与抽离方法见开发指南。
+- 本轮在现有工程内完成，未创建独立项目或 Swift Package。iPhone 模拟器可通过现有播放器预览体验；已按用户要求本地提交，真机体验待验收，未推送。
+
 ## 已确认的近期验收
 
 - 2026-11-15：从歌词页／继续播放页切回全屏封面页时标题与艺人动画步调同步通过手机体验验收（版本 73）。消除 `NowPlayingTrackSwipe` `ReferenceTrackSwipeEdgeFade` 在 `measuredWidth` 首帧从 `0` 更新为实测宽度时触发的 `@ViewBuilder` 条件遮罩结构分支切换（改为固定单层 `.mask` 结构并以 `disablesAnimations` 事务捕获首次度量），由 `NowPlayingArtworkPage` 直接传入 `viewportWidth: slotWidth` 使标题遮罩与艺人视图自首帧即处于同一布局结构；对 `NowPlayingMarqueeText` 的首次宽度测量（`containerWidth`／`textWidth`）禁用事务动画并对其滚动叠加层采用 `.transition(.identity)`，避免长标题在切页弹簧中触发额外淡入切换；调整 `NowPlayingArtistButton` 使 `NowPlayingVibrantLabel` 直接作为主 SwiftUI 文本视图参与转场，透明交互层 `NowPlayingArtistMenuButton` 改放 `.overlay` 保留菜单与点击区域。已完成 172 个源码文件模块边界检查、Release 真机构建、`codesign --verify --deep --strict` 验签（版本 73）及安装启动到用户 iPhone，按用户要求跳过本次单元与 UI 测试；用户确认体验并要求本地提交。

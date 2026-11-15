@@ -4,6 +4,7 @@ import UIKit.UIGestureRecognizerSubclass
 import LNPopupController
 import Synchronization
 @testable import NeoMusic
+@testable import FullScreenPlayer
 
 @MainActor @Observable
 private final class StartupLibraryProbe {
@@ -226,7 +227,7 @@ final class LibraryDetailNavigationTests: XCTestCase {
         let window = UIWindow(windowScene: scene)
         window.overrideUserInterfaceStyle = .light
         defer { window.isHidden = true }
-        let player = PlayerTestFixtures.state(tracks: [ReferenceTrack(id: "appearance", title: "Track",
+        let player = PlayerTestFixtures.state(tracks: [PlayerTrack(id: "appearance", title: "Track",
             artists: "Artist", albumTitle: "Album", coverURL: nil, duration: 60)])
         window.rootViewController = UIHostingController(rootView: AppShell(
             library: { TestRoot(showsArtwork: true) }, detailDestination: { AnyView(TestDetail(route: $0)) }, nowPlaying: nil,
@@ -365,7 +366,7 @@ final class LibraryDetailNavigationTests: XCTestCase {
         let scene = try await applicationWindowScene()
         let window = UIWindow(windowScene: scene)
         defer { window.isHidden = true }
-        let tracks = (0..<3).map { ReferenceTrack(id: "mini-\($0)", title: "Track \($0)",
+        let tracks = (0..<3).map { PlayerTrack(id: "mini-\($0)", title: "Track \($0)",
             artists: "Artist", albumTitle: "Album", coverURL: nil, duration: 60) }
         let player = PlayerTestFixtures.state(tracks: tracks)
         window.rootViewController = UIHostingController(rootView: AppShell(
@@ -388,7 +389,7 @@ final class LibraryDetailNavigationTests: XCTestCase {
         XCTAssertEqual(item.accessibilityLabel, "Track 0，Artist，迷你播放器")
         XCTAssertEqual(item.accessibilityHint, "打开正在播放")
         let pager = try XCTUnwrap(descendants(of: UIView.self, in: tabs.popupBar).first {
-            $0.gestureRecognizers?.contains(where: { $0.name == "NeoDizzy.NowPlayingTrackSwipe" }) == true
+            $0.gestureRecognizers?.contains(where: { $0.name == PlayerInteraction.trackSwipeGestureName }) == true
         })
         // Finish the initial native display before measuring placement-only updates.
         XCTAssertTrue(pager.window === window)
@@ -439,9 +440,9 @@ final class LibraryDetailNavigationTests: XCTestCase {
         let window = UIWindow(windowScene: scene)
         defer { window.isHidden = true }
         let tracks = [
-            ReferenceTrack(id: "mini-0", title: "Alpha Long Song Title For Marquee", artists: "Shared Artist", albumTitle: "Album", coverURL: nil, duration: 60),
-            ReferenceTrack(id: "mini-1", title: "Beta Track", artists: "Shared Artist", albumTitle: "Album", coverURL: nil, duration: 60),
-            ReferenceTrack(id: "mini-2", title: "Gamma Track", artists: "Different Artist", albumTitle: "Album", coverURL: nil, duration: 60)
+            PlayerTrack(id: "mini-0", title: "Alpha Long Song Title For Marquee", artists: "Shared Artist", albumTitle: "Album", coverURL: nil, duration: 60),
+            PlayerTrack(id: "mini-1", title: "Beta Track", artists: "Shared Artist", albumTitle: "Album", coverURL: nil, duration: 60),
+            PlayerTrack(id: "mini-2", title: "Gamma Track", artists: "Different Artist", albumTitle: "Album", coverURL: nil, duration: 60)
         ]
         let player = PlayerTestFixtures.state(tracks: tracks)
         window.rootViewController = UIHostingController(rootView: AppShell(
@@ -467,10 +468,10 @@ final class LibraryDetailNavigationTests: XCTestCase {
         let popupBar = tabs.popupBar
         let content = try XCTUnwrap(tabs.popupContent)
         let pager = try XCTUnwrap(descendants(of: UIView.self, in: popupBar).first {
-            $0.gestureRecognizers?.contains(where: { $0.name == "NeoDizzy.NowPlayingTrackSwipe" }) == true
+            $0.gestureRecognizers?.contains(where: { $0.name == PlayerInteraction.trackSwipeGestureName }) == true
         })
         let pan = try XCTUnwrap(pager.gestureRecognizers?.first {
-            $0.name == "NeoDizzy.NowPlayingTrackSwipe"
+            $0.name == PlayerInteraction.trackSwipeGestureName
         } as? UIPanGestureRecognizer)
         let panDelegate = try XCTUnwrap(pan.delegate)
         let openTap = try XCTUnwrap(popupBar.popupOpenGestureRecognizer)
@@ -533,7 +534,7 @@ final class LibraryDetailNavigationTests: XCTestCase {
         let window = UIWindow(windowScene: scene)
         window.overrideUserInterfaceStyle = .light
         defer { window.isHidden = true }
-        let player = PlayerTestFixtures.state(tracks: [ReferenceTrack(id: "appearance", title: "Track",
+        let player = PlayerTestFixtures.state(tracks: [PlayerTrack(id: "appearance", title: "Track",
             artists: "Artist", albumTitle: "Album", coverURL: nil, duration: 60)])
         window.rootViewController = UIHostingController(rootView: AppShell(
             library: { TestRoot(showsArtwork: true) }, detailDestination: { route in
@@ -1863,8 +1864,8 @@ final class LibraryDetailNavigationTests: XCTestCase {
         let window = UIWindow(windowScene: scene)
         defer { window.isHidden = true }
         let tracks = [
-            ReferenceTrack(id: "mini-0", title: "Track Alpha", artists: "Artist First", albumTitle: "Album", coverURL: nil, duration: 60),
-            ReferenceTrack(id: "mini-1", title: "Track Omega", artists: "Artist Second", albumTitle: "Album", coverURL: nil, duration: 60)
+            PlayerTrack(id: "mini-0", title: "Track Alpha", artists: "Artist First", albumTitle: "Album", coverURL: nil, duration: 60),
+            PlayerTrack(id: "mini-1", title: "Track Omega", artists: "Artist Second", albumTitle: "Album", coverURL: nil, duration: 60)
         ]
         let player = PlayerTestFixtures.state(tracks: tracks)
         window.rootViewController = UIHostingController(rootView: AppShell(
@@ -1917,9 +1918,9 @@ final class LibraryDetailNavigationTests: XCTestCase {
         let tabs = try XCTUnwrap(findTabs(in: window.rootViewController!))
         let popupBar = tabs.popupBar
         let pager = try XCTUnwrap(descendants(of: UIView.self, in: popupBar).first {
-            $0.gestureRecognizers?.contains(where: { $0.name == "NeoDizzy.NowPlayingTrackSwipe" }) == true
+            $0.gestureRecognizers?.contains(where: { $0.name == PlayerInteraction.trackSwipeGestureName }) == true
         })
-        let pan = try XCTUnwrap(pager.gestureRecognizers?.first { $0.name == "NeoDizzy.NowPlayingTrackSwipe" } as? UIPanGestureRecognizer)
+        let pan = try XCTUnwrap(pager.gestureRecognizers?.first { $0.name == PlayerInteraction.trackSwipeGestureName } as? UIPanGestureRecognizer)
         let coordinator = try XCTUnwrap(pan.delegate as? TrackSwipeTouchSurface.Coordinator)
 
         let settledInitial = renderView(popupBar)

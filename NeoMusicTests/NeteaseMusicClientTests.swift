@@ -3,6 +3,7 @@ import Foundation
 import Synchronization
 import XCTest
 @testable import NeoMusic
+@testable import FullScreenPlayer
 
 final class NeteaseMusicClientTests: XCTestCase, @unchecked Sendable {
     @MainActor func testPlaybackUsesMeloXIOSProfileAndKeepsCredentialsScoped() async throws {
@@ -132,8 +133,8 @@ final class NeteaseMusicClientTests: XCTestCase, @unchecked Sendable {
     }
     @MainActor func testPlayerForwardsSelectedArtist() {
         var selection: (String, String)?
-        let actions = ReferencePlayerActions(isFavorite: { _ in false }, toggleFavorite: { _ in }, addToPlaylist: { _ in }, openAlbum: { _ in }, openArtist: { _ in XCTFail("Wrong callback") }, artistNames: { _ in ["First", "Second"] }, openNamedArtist: { selection = ($0, $1) })
-        let track = ReferenceTrack(id: "netease:1:12", title: "Song", artists: "First / Second", albumTitle: "Album", coverURL: nil, duration: 90)
+        let actions = PlayerActions(isFavorite: { _ in false }, toggleFavorite: { _ in }, addToPlaylist: { _ in }, openAlbum: { _ in }, openArtist: { _ in XCTFail("Wrong callback") }, artistNames: { _ in ["First", "Second"] }, openNamedArtist: { selection = ($0, $1) })
+        let track = PlayerTrack(id: "netease:1:12", title: "Song", artists: "First / Second", albumTitle: "Album", coverURL: nil, duration: 90)
         XCTAssertEqual(actions.artistNames(for: track), ["First", "Second"])
         actions.openArtist("Second", track: track)
         XCTAssertEqual(selection?.0, track.id)

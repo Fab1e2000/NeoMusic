@@ -30,7 +30,10 @@ targets:
     platform: iOS
     sources:
       - path: NeoMusic
+        excludes:
+          - Features/Player/FullScreenPlayer
     dependencies:
+      - target: FullScreenPlayer
       - package: AudioTags
         product: AudioTagBridge
       - package: LNPopupUI
@@ -61,6 +64,28 @@ targets:
         CURRENT_PROJECT_VERSION: 3
         TARGETED_DEVICE_FAMILY: "1"
         SWIFT_OBJC_BRIDGING_HEADER: NeoMusic/NeoMusic-Bridging-Header.h
+  FullScreenPlayer:
+    type: framework
+    platform: iOS
+    sources:
+      - path: NeoMusic/Features/Player/FullScreenPlayer
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.elsterlee.FullScreenPlayer
+        GENERATE_INFOPLIST_FILE: YES
+        TARGETED_DEVICE_FAMILY: "1"
+        SKIP_INSTALL: YES
+  FullScreenPlayerTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: FullScreenPlayerTests
+    dependencies:
+      - target: FullScreenPlayer
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        TARGETED_DEVICE_FAMILY: "1"
   NeoMusicTests:
     type: bundle.unit-test
     platform: iOS
@@ -68,6 +93,7 @@ targets:
       - path: NeoMusicTests
     dependencies:
       - target: NeoMusic
+      - target: FullScreenPlayer
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
@@ -100,6 +126,13 @@ targets:
         TEST_TARGET_NAME: NeoMusic
 
 schemes:
+  FullScreenPlayer:
+    build:
+      targets:
+        FullScreenPlayer: all
+    test:
+      targets:
+        - FullScreenPlayerTests
   NeoMusicFunctionalParity:
     build:
       targets:
@@ -116,6 +149,7 @@ schemes:
     test:
       targets:
         - NeoMusicTests
+        - FullScreenPlayerTests
         - NeoMusicNavigationUITests
     run:
       config: Debug

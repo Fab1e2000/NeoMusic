@@ -6,7 +6,7 @@
 - Swift 6、iOS 27.0+，当前以 iPhone 为开发与验收目标。
 - XcodeGen：`brew install xcodegen`。
 
-唯一正式应用 target 与主 scheme 均为 `NeoMusic`，Bundle ID 为 `com.elsterlee.NeoMusic`。`NeoMusicTests` 是单元测试；`NeoMusicNavigationUITests` 是交互测试。`NeoMusicFunctionalParity` scheme 用于已有基线与当前正式应用的专项对照，不是另一份应用实现。
+唯一正式应用 target 与主 scheme 均为 `NeoMusic`，Bundle ID 为 `com.elsterlee.NeoMusic`。`FullScreenPlayer` 是仅依赖 Apple 框架的内部 framework，`FullScreenPlayerTests` 独立验证组件接口与资源。`NeoMusicTests` 是应用及接入测试；`NeoMusicNavigationUITests` 是交互测试。`NeoMusicFunctionalParity` scheme 用于已有基线与当前正式应用的专项对照，不是另一份应用实现。
 
 修改 `project.yml` 后运行 `xcodegen generate`，将生成的工程变更一起提交。不要手工修改生成的工程来替代源配置，也不要将本机签名信息写入共享配置。
 
@@ -32,12 +32,32 @@
 - **在线装配**通过 `OnlineMusicIntegration`、`HomeMusicIntegration`、`ArtistMusicIntegration`、`SearchMusicIntegration` 和 `DownloadMusicIntegration` 连接既有页面、资料库及播放器。网络、凭据、请求与账号状态归 `Core/Netease`。页面缓存按账号与资源键保存到 SQLite，封面管线合并请求并按账号隔离。本地持久化恢复后发布在线镜像，保留按账号保存的整理偏好。
 - **混合引用**将在线歌曲保存为 `netease:<账号 ID>:<歌曲 ID>`，临时音源 URL 在播放前解析。本地歌单可引用在线歌曲。在线歌单曲目保持只读，歌曲喜欢及歌单、艺人、专辑收藏通过业务入口同步网易云。本应用的置顶及文件夹归属另行保存，本地扫描只清理本地引用。
 - **下载与离线播放**由 `NeteaseDownloadStore` 管理原生后台传输和记录，`DownloadBackgroundDelegate` 接收系统后台会话事件。完成文件校验、NCM 解码及标签写入后保存到“音乐／网易云”，下载装配发布状态并连接通用离线资源解析。已下载文件在退出账号后继续可用，移除下载保留歌单和队列引用。
-- **播放**：`NowPlayingModel` 拥有队列与播放状态，恢复时仅还原队列、进度和暂停状态并注册系统媒体动作；首次播放才创建 `LocalPlaybackEngine` 和加载音频。系统媒体封面异步读取，取消旧请求后更新；相邻封面预取在播放或展开播放器时启动。`ReferencePlayerState` 只适配这个真实模型，不维护第二份演示队列或模拟时钟。
-- **界面**：`Features/Library` 管理资料库；`Features/Player/Imported` 保留已接入的播放器与歌词展示代码，`Features/Player/Support` 连接真实状态、动作及歌词存储。保留 `Reference` 类型名与来源标记不代表这些组件仍是预览功能。
+- **播放**：`NowPlayingModel` 拥有队列与播放状态，恢复时仅还原队列、进度和暂停状态并注册系统媒体动作；首次播放才创建 `LocalPlaybackEngine` 和加载音频。系统媒体封面异步读取，取消旧请求后更新；相邻封面预取在播放或展开播放器时启动。`NeoMusicPlaybackSource` 通过组件的 `PlayerState` 向界面提供这个真实模型，不维护第二份演示队列或模拟时钟。
+- **界面**：`Features/Library` 管理资料库；`Features/Player/FullScreenPlayer` 独立编译全屏播放器、歌词和共享控件，`Features/Player/Integration` 接入实际播放、歌词存储、封面服务和 LNPopup 容器。
 - **导航**：资料库继续使用现有 UIKit 导航与原生 zoom，顶部滚动边缘效果、栏位配色和播放器呈现沿用现有接线。
 - **歌词与动作**：歌词适配连接 `LyricsReader`；收藏、加入歌单与页面跳转由资料库注入。测试输入只存在于测试 target。
 
-独立播放器预览 target、zoom 实验入口及已无调用的旧播放器展示分支已移除。历史设计差分保留在 `design/`，不属于应用资源。
+独立播放器预览 App target、zoom 实验入口及已无调用的旧播放器展示分支已移除。历史设计差分保留在 `design/`，不属于应用资源。
+
+## 全屏播放器组件
+
+`FullScreenPlayer` 的源码、Metal 着色器与许可证集中在 [组件目录](../NeoMusic/Features/Player/FullScreenPlayer)。NeoMusic 将其作为 framework 链接和嵌入；组件 target 不链接 App、Nuke 或 LNPopup。未来可将该目录作为 framework target 加入其他 iOS 27+ 工程，资源随 framework 构建，无需带走 NeoMusic 业务代码。
+
+公开入口为 `FullScreenPlayerView(player:services:initialPage:isActive:onDismiss:)`。默认从封面页开始，使用 `EmptyModifier` 作为封面转场修饰器；宿主可通过另一个带 `artworkTransition:` 参数的初始化方法接入容器转场。播放器退出时调用宿主回调，未传回调时使用 SwiftUI 的 dismiss。可见性由宿主的 `isActive` 和系统 scene phase 共同决定。
+
+| 接口 | 宿主职责 |
+| --- | --- |
+| `PlayerPlaybackSource` → `PlayerState` | 使用 Observation 提供当前歌曲、进度、播放与队列状态；处理播放、切歌、重排及模式动作。读取直达宿主，组件不复制播放队列或创建计时器。歌曲 ID 为不透明字符串，队列 occurrence ID 为独立 UUID。 |
+| `PlayerActions` | 提供喜欢状态、收藏／歌单动作、专辑与艺人导航、音质和设置入口；把 `PlayerNotice` 转换为宿主提示并提供触感。 |
+| `PlayerLyricsSource` | 按歌曲 ID 返回已解析的 `PlayerLyrics`；可选提供文件导入。`contentRevision` 从宿主读取，导入和解析由宿主保存及处理。 |
+| `PlayerArtworkProvider` | 按请求中的 URL、像素尺寸及缩放模式读取缓存、异步加载和预取 `UIImage`；处理尚未就绪的封面标识。加载应响应任务取消。 |
+| `PlayerServices` | 组合动作、歌词、图片提供者和可选诊断回调。组件内的歌词请求、封面显示及背景渲染共用该上下文。 |
+
+NeoMusic 的 [接入层](../NeoMusic/Features/Player/Integration) 将 `NowPlayingModel`、`LyricsReader`、Nuke 与上述接口连接。`ReferenceNowPlayingView` 是宿主组装入口；`NeoMusicArtworkTransition` 在组件提供的封面位置应用 LNPopup 的转场标记。迷你播放器继续归宿主所有，并复用组件公开的按钮、标题滑动和图标。容器的手势协调使用 `PlayerInteraction.trackSwipeGestureName`；音量 HUD 更新使用 `playerVolumeHUDRefreshID` 环境值。
+
+组件内的布局和动画仍按现有参照渲染。Metal 与 SwiftUI shader 显式从 framework bundle 加载。来源清单保留上游基线，组件附带 GPL-3.0 许可与来源说明；Nuke、LNPopup 的说明保留在宿主。
+
+`FullScreenPlayer` scheme 可单独构建和运行 `FullScreenPlayerTests`，其测试 target 不依赖 NeoMusic。公开接口消费者示例见 [组件测试](../FullScreenPlayerTests/PlayerContractTests.swift)。应用内三页截图、队列与手势测试继续在 `NeoMusicTests`、`NeoMusicNavigationUITests` 验证同一份正式组件。`scripts/ci.sh` 包含组件与应用单元测试。
 
 ## 主页与搜索
 

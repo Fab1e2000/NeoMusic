@@ -1,3 +1,4 @@
+import FullScreenPlayer
 #if DEBUG
 import SwiftUI
 
@@ -23,7 +24,7 @@ struct SearchPreviewRoot: View {
     var body: some View {
         AppShell(library: { Text("搜索效果稿") }, detailDestination: { _ in AnyView(EmptyView()) },
             nowPlaying: player, playlistLibrary: library, toasts: toasts,
-            referencePlayer: ReferencePlayerState(model: player), referenceLibrary: lyrics,
+            referencePlayer: PlayerState(model: player), referenceLibrary: lyrics,
             makePlayerActions: { _, _ in .init(isFavorite: { _ in false }, toggleFavorite: { _ in }, addToPlaylist: { _ in }, openAlbum: { _ in }, openArtist: { _ in }) },
             searchContent: AnyView(previewContent.toolbar {
                 ToolbarItem(placement: .topBarTrailing) {

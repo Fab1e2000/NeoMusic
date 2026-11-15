@@ -55,6 +55,17 @@
             parallelizable = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
+               BlueprintIdentifier = "157932BED6AAB25EB5416C41"
+               BuildableName = "FullScreenPlayerTests.xctest"
+               BlueprintName = "FullScreenPlayerTests"
+               ReferencedContainer = "container:NeoMusic.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
                BlueprintIdentifier = "FFD0BAD0A00CB847E53925D8"
                BuildableName = "NeoMusicNavigationUITests.xctest"
                BlueprintName = "NeoMusicNavigationUITests"

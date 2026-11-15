@@ -2,6 +2,7 @@ import XCTest
 import SwiftUI
 import Nuke
 @testable import NeoMusic
+@testable import FullScreenPlayer
 
 @MainActor
 final class ArtworkRenderingTests: XCTestCase {
@@ -439,10 +440,12 @@ private struct ArtworkRenderingPage: View {
 }
 
 private struct PlayerArtworkRenderingPage: View {
+    private let services = NeoMusicPlayerServices.make(actions: PlayerTestFixtures.actions(), library: PlayerTestFixtures.library())
     let state: ArtworkRenderingState
     private var url: URL? { if case .file(let url) = state.artwork { url } else { nil } }
     var body: some View {
         ArtworkImage(url: url, contentID: state.contentID, artworkLoadID: state.artwork.loadID, cornerRadius: 0)
+            .environment(services)
             .frame(width: 96, height: 96)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(.white)

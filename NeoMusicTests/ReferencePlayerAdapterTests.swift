@@ -4,13 +4,14 @@ import SwiftUI
 import Nuke
 import AVFoundation
 @testable import NeoMusic
+@testable import FullScreenPlayer
 
 @MainActor final class NowPlayingProgressScrubTests: XCTestCase {
     func testNativeProgressUpdatesDoNotSeekAndControlEditsUseTheSamePlayer() async throws {
-        let song = ReferenceTrack(id: "native-progress", title: "Song", artists: "Artist", albumTitle: "Album", coverURL: nil, duration: 300)
+        let song = PlayerTrack(id: "native-progress", title: "Song", artists: "Artist", albumTitle: "Album", coverURL: nil, duration: 300)
         let owner = PlayerTestFixtures.owner(tracks: [song])
         owner.elapsed = 10
-        let player = ReferencePlayerState(model: owner)
+        let player = PlayerState(model: owner)
         let content = NowPlayingProgressControl(song: song)
             .frame(width: 338, height: 70)
             .environment(player).environment(PlayerTestFixtures.actions())
@@ -43,9 +44,9 @@ import AVFoundation
             LibrarySongItem(id: "song:\(id)", title: "Song", artist: "Artist", album: "Album", albumArtist: "Artist", trackNumber: 0, artwork: .missing, duration: 300)
         }
         let model = NowPlayingModel(queue: songs, currentIndex: 0, isPlaying: true)
-        let player = ReferencePlayerState(model: model)
+        let player = PlayerState(model: model)
         var qualityReads = 0
-        let actions = ReferencePlayerActions(isFavorite: { _ in false }, toggleFavorite: { _ in },
+        let actions = PlayerActions(isFavorite: { _ in false }, toggleFavorite: { _ in },
             addToPlaylist: { _ in }, openAlbum: { _ in }, openArtist: { _ in },
             audioQuality: { _ in qualityReads += 1; return PlayerAudioQuality(title: "Lossless") })
         let window = UIWindow(windowScene: try await applicationWindowScene())
@@ -108,12 +109,12 @@ import AVFoundation
     }
 
     func testPressVisualFeedbackSynchronizesTrackAndTimeLabelsWithoutRebuildingQualityControl() async throws {
-        let song = ReferenceTrack(id: "press-feedback", title: "Song", artists: "Artist", albumTitle: "Album", coverURL: nil, duration: 291)
+        let song = PlayerTrack(id: "press-feedback", title: "Song", artists: "Artist", albumTitle: "Album", coverURL: nil, duration: 291)
         let owner = PlayerTestFixtures.owner(tracks: [song])
         owner.elapsed = 13
-        let player = ReferencePlayerState(model: owner)
+        let player = PlayerState(model: owner)
         var qualityReads = 0
-        let actions = ReferencePlayerActions(
+        let actions = PlayerActions(
             isFavorite: { _ in false },
             toggleFavorite: { _ in },
             addToPlaylist: { _ in },
@@ -256,8 +257,8 @@ private struct HitTarget: UIViewRepresentable {
 }
 
 @MainActor final class ReferencePlayerAdapterTests: XCTestCase {
-    private func track(_ id: String) -> ReferenceTrack {
-        ReferenceTrack(id: id, title: id, artists: "Artist", albumTitle: "Album", coverURL: nil, duration: 210)
+    private func track(_ id: String) -> PlayerTrack {
+        PlayerTrack(id: id, title: id, artists: "Artist", albumTitle: "Album", coverURL: nil, duration: 210)
     }
     func testLocalFormatLabelsPreserveFormatWithoutInventingQuality() {
         for ext in ["mp3", "wav", "flac", "aac", "alac", "aiff", "m4a"] {
@@ -274,7 +275,7 @@ private struct HitTarget: UIViewRepresentable {
         var resourceTrackID = "a"
         var resolvedQuality = PlayerAudioQuality(title: "无损", detail: "24 位 / 48 kHz", isLossless: true)
         var settingsRequests = 0
-        let actions = ReferencePlayerActions(isFavorite: { _ in false }, toggleFavorite: { _ in },
+        let actions = PlayerActions(isFavorite: { _ in false }, toggleFavorite: { _ in },
             addToPlaylist: { _ in }, openAlbum: { _ in }, openArtist: { _ in },
             audioQuality: { $0 == resourceTrackID ? resolvedQuality : nil },
             openAudioQualitySettings: { settingsRequests += 1 })
@@ -297,7 +298,7 @@ private struct HitTarget: UIViewRepresentable {
 
     func testFiniteForwardAdapterUsesOwnerCapabilityAndAcceptsConsecutiveActions() {
         let owner = PlayerTestFixtures.owner(tracks: [track("a"), track("b"), track("a")])
-        let player = ReferencePlayerState(model: owner)
+        let player = PlayerState(model: owner)
         owner.repeatMode = .off
         player.next()
         XCTAssertEqual(owner.currentIndex, 1)
@@ -315,7 +316,7 @@ private struct HitTarget: UIViewRepresentable {
 
     func testContinuingForwardAdapterRequestsNextBatchAndDoesNotWrapProjection() {
         let owner = PlayerTestFixtures.owner(tracks: [track("a"), track("b")])
-        let player = ReferencePlayerState(model: owner)
+        let player = PlayerState(model: owner)
         owner.play(owner.queue, startingAt: 1, from: "Radio",
                    continuation: PlaybackQueueContinuation(ownerID: "42"))
         var advanceRequests = 0
@@ -342,7 +343,7 @@ private struct HitTarget: UIViewRepresentable {
 
     func testLyricsContentHidesPayloadDuringTrackMismatchAndLoading() async {
         let model = NowPlayingLyricsModel()
-        await model.load(trackID: "old") { ReferenceLyrics.parse("[00:01]old") }
+        await model.load(trackID: "old") { LyricsDocument.parse("[00:01]old").playerLyrics }
         let content = NowPlayingLyricsContent(availability: model.availability(for: "new"),
                                              lyrics: model.lyrics, error: "Old track error")
         XCTAssertNil(content.lyrics)
@@ -354,7 +355,7 @@ private struct HitTarget: UIViewRepresentable {
 
     func testLyricsContentPreservesEmptyAndFailedStates() async {
         let model = NowPlayingLyricsModel()
-        await model.load(trackID: "empty") { ReferenceLyrics.parse("") }
+        await model.load(trackID: "empty") { LyricsDocument.parse("").playerLyrics }
         let empty = NowPlayingLyricsContent(availability: model.availability(for: "empty"),
                                            lyrics: model.lyrics, error: model.error)
         XCTAssertTrue(empty.lyrics?.isEmpty == true)
@@ -368,7 +369,7 @@ private struct HitTarget: UIViewRepresentable {
 
     func testCancelledLyricsResultDoesNotPublishPayloadOrError() async {
         let model = NowPlayingLyricsModel()
-        var continuation: CheckedContinuation<ReferenceLyrics, Never>?
+        var continuation: CheckedContinuation<PlayerLyrics, Never>?
         let loading = Task {
             await model.load(trackID: "cancelled") {
                 await withCheckedContinuation { continuation = $0 }
@@ -376,7 +377,7 @@ private struct HitTarget: UIViewRepresentable {
         }
         while continuation == nil { await Task.yield() }
         loading.cancel()
-        continuation?.resume(returning: ReferenceLyrics.parse("[00:01]cancelled"))
+        continuation?.resume(returning: LyricsDocument.parse("[00:01]cancelled").playerLyrics)
         await loading.value
         XCTAssertNil(model.lyrics)
         XCTAssertNil(model.error)
@@ -397,7 +398,7 @@ private struct HitTarget: UIViewRepresentable {
     func testDuplicateQueueOccurrencesSelectAndEnqueueIndependently() {
         let a = track("a"), b = track("b")
         let owner = PlayerTestFixtures.owner(tracks: [a, b, a])
-        let player = ReferencePlayerState(model: owner)
+        let player = PlayerState(model: owner)
         player.skip(toQueueIndex: 2)
         XCTAssertEqual(player.currentQueueIndex, 2)
         XCTAssertEqual(player.upcoming.map(\.index), [0, 1])
@@ -425,7 +426,7 @@ private struct HitTarget: UIViewRepresentable {
     }
     func testLongQueueProjectionReusesStorageAcrossPlaybackProgress() {
         let owner = PlayerTestFixtures.owner(tracks: (0..<2_000).map { track("song-\($0)") })
-        let player = ReferencePlayerState(model: owner)
+        let player = PlayerState(model: owner)
         let initial = player.upcomingQueueEntries
         let version = player.upcomingQueueVersion
         XCTAssertEqual(initial.count, 20)
@@ -449,7 +450,7 @@ private struct HitTarget: UIViewRepresentable {
     func testQueueDisplayLimitAdvancesRefillsAndWrapsWithoutTruncatingPlayback() {
         for count in [0, 1, 20, 21, 22, 2_000] {
             let owner = PlayerTestFixtures.owner(tracks: (0..<count).map { track("song-\($0)") })
-            let player = ReferencePlayerState(model: owner)
+            let player = PlayerState(model: owner)
             let originalIDs = owner.entryIDs
             for mode in [NowPlayingModel.RepeatMode.off, .one, .all] {
                 owner.repeatMode = mode
@@ -467,7 +468,7 @@ private struct HitTarget: UIViewRepresentable {
         }
 
         let owner = PlayerTestFixtures.owner(tracks: (0..<30).map { track("song-\($0)") })
-        let player = ReferencePlayerState(model: owner)
+        let player = PlayerState(model: owner)
         owner.repeatMode = .off
         player.next()
         XCTAssertEqual(player.currentQueueIndex, 1)
@@ -481,7 +482,7 @@ private struct HitTarget: UIViewRepresentable {
     }
     func testLongQueueReorderPublishesOnceAndPreservesDuplicateOccurrences() {
         let owner = PlayerTestFixtures.owner(tracks: (0..<2_000).map { track("song-\($0 % 5)") })
-        let player = ReferencePlayerState(model: owner)
+        let player = PlayerState(model: owner)
         player.skip(toQueueIndex: 1_990)
         let current = owner.entryIDs[owner.currentIndex]
         let original = player.upcomingQueueEntries
@@ -507,7 +508,7 @@ private struct HitTarget: UIViewRepresentable {
     }
     func testQueueProjectionRefreshesForSelectionReorderAndArtwork() {
         let owner = PlayerTestFixtures.owner(tracks: [track("a"), track("b"), track("c"), track("d")])
-        let player = ReferencePlayerState(model: owner)
+        let player = PlayerState(model: owner)
         XCTAssertEqual(player.upcomingQueueEntries.map(\.song.id), ["b", "c", "d"])
         player.skip(toQueueIndex: 1)
         XCTAssertEqual(player.upcomingQueueEntries.map(\.song.id), ["c", "d", "a"])
@@ -534,10 +535,10 @@ private struct HitTarget: UIViewRepresentable {
         var favorites: Set<String> = []
         var openedArtistID: String?
         var notes: [String] = []
-        let actions = ReferencePlayerActions(isFavorite: { favorites.contains($0) },
+        let actions = PlayerActions(isFavorite: { favorites.contains($0) },
             toggleFavorite: { if favorites.contains($0) { favorites.remove($0) } else { favorites.insert($0) } },
             addToPlaylist: { _ in }, openAlbum: { _ in }, openArtist: { openedArtistID = $0 },
-            notify: { notes.append($0.title) })
+            notify: { notes.append(LibraryToast($0).title) })
         let song = track("a")
         actions.toggleFavorite(song)
         XCTAssertTrue(actions.isFavorite(song))
@@ -568,7 +569,7 @@ private struct HitTarget: UIViewRepresentable {
         XCTAssertEqual(items?.map(\.title), ["前往专辑", "前往艺人"])
         XCTAssertEqual(items?.compactMap(\.subtitle), ["Album", "Artist"])
 
-        let updated = ReferenceTrack(id: "a", title: "a", artists: "New Artist", albumTitle: "", coverURL: nil, duration: 210)
+        let updated = PlayerTrack(id: "a", title: "a", artists: "New Artist", albumTitle: "", coverURL: nil, duration: 210)
         XCTAssertTrue(controller.bind(track: updated, actions: actions))
         XCTAssertEqual(controller.menu()?.children.map(\.title), ["前往艺人"])
         XCTAssertEqual(controller.menu()?.children.first?.subtitle, "New Artist")
@@ -656,13 +657,13 @@ private struct HitTarget: UIViewRepresentable {
 
     func testImportedLyricsLateResponseDoesNotReplaceNewSong() async {
         let model = NowPlayingLyricsModel()
-        var continuation: CheckedContinuation<ReferenceLyrics, Never>?
+        var continuation: CheckedContinuation<PlayerLyrics, Never>?
         let old = Task {
             await model.load(trackID: "old") { await withCheckedContinuation { continuation = $0 } }
         }
         while continuation == nil { await Task.yield() }
-        await model.load(trackID: "new") { ReferenceLyrics.parse("[00:01]new") }
-        continuation?.resume(returning: ReferenceLyrics.parse("[00:01]old"))
+        await model.load(trackID: "new") { LyricsDocument.parse("[00:01]new").playerLyrics }
+        continuation?.resume(returning: LyricsDocument.parse("[00:01]old").playerLyrics)
         await old.value
         XCTAssertEqual(model.lyrics?.lines.first?.text, "new")
         XCTAssertEqual(model.availability(for: "new"), .available)
@@ -695,7 +696,7 @@ private enum ArtistHitRegionSurface: String, CaseIterable {
 }
 
 private struct ArtistHitRegionContent: View {
-    let song: ReferenceTrack
+    let song: PlayerTrack
     let surface: ArtistHitRegionSurface
     @Namespace private var artworkNamespace
 
@@ -749,7 +750,7 @@ extension ReferencePlayerAdapterTests {
                 artwork: .deferred(id: "cover-\(index)", placeholder: .missing), duration: 90)
         }
         let owner = NowPlayingModel(queue: songs, currentIndex: 1, isPlaying: false, elapsed: 12)
-        let player = ReferencePlayerState(model: owner)
+        let player = PlayerState(model: owner)
         XCTAssertEqual(player.currentTrack?.artworkLoadID, "cover-1")
         XCTAssertEqual(player.previousInOrder?.track.artworkLoadID, "cover-0")
         XCTAssertEqual(player.nextInOrder?.track.artworkLoadID, "cover-2")
@@ -771,7 +772,7 @@ extension ReferencePlayerAdapterTests {
         let a = LibrarySongItem(id: "local/a", title: "A", artist: "Artist", album: "Album", albumArtist: "Artist", trackNumber: 1, artwork: .missing, duration: 90)
         let b = LibrarySongItem(id: "local/b", title: "B", artist: "Artist", album: "Album", albumArtist: "Artist", trackNumber: 2, artwork: .missing, duration: 100)
         let owner = NowPlayingModel(queue: [a, b], currentIndex: 0, isPlaying: false, elapsed: 12)
-        let facade = ReferencePlayerState(model: owner)
+        let facade = PlayerState(model: owner)
         XCTAssertEqual(facade.currentTrack?.id, a.id)
         XCTAssertEqual(facade.progress, 12)
         facade.enqueue(facade.currentTrack!, next: false)

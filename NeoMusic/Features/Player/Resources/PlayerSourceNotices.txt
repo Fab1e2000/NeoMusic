@@ -28,5 +28,6 @@ MIT license texts for LNPopup and its utilities accompany this application in
 ThirdPartyLicenses.txt.
 
 Nuke: https://github.com/kean/Nuke, version 13.2.0, MIT.
-Used for the original player image loading, decode and caching behavior.
+Used by the host adapter for player image loading, decoding and caching.
+The FullScreenPlayer framework receives images through PlayerArtworkProvider.
 Full license text accompanies this file in Nuke-LICENSE.txt.

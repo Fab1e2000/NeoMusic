@@ -70,5 +70,5 @@ if [ -f build/ci/source-state.json ]; then
     mv -f build/ci/source-state.json build/ci/source-state.previous.json
 fi
 
-echo "推送前运行本机完整检查，包含脚本回归、边界检查、XcodeGen 和 NeoMusicTests Release。"
+echo "推送前运行本机完整检查，包含脚本回归、边界检查、XcodeGen 和 NeoMusicTests／FullScreenPlayerTests Release。"
 bash scripts/ci.sh

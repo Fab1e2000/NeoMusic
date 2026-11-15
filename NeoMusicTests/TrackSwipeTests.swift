@@ -3,12 +3,13 @@ import os
 import SwiftUI
 import XCTest
 @testable import NeoMusic
+@testable import FullScreenPlayer
 
 @MainActor final class TrackSwipeTests: XCTestCase {
     private typealias Swipe = NowPlayingTrackSwipe<Text, EmptyView>
 
-    private func entry(_ index: Int) -> ReferenceUpcomingTrack {
-        ReferenceUpcomingTrack(index: index, track: ReferenceTrack(id: "song-\(index)",
+    private func entry(_ index: Int) -> PlayerAdjacentTrack {
+        PlayerAdjacentTrack(index: index, track: PlayerTrack(id: "song-\(index)",
             title: "Song \(index)", artists: "Artist", albumTitle: "Album", coverURL: nil, duration: 60))
     }
 
@@ -74,10 +75,10 @@ import XCTest
         XCTAssertEqual(selections, [1, 2, 3])
     }
 
-    private func makeEntry(_ index: Int, artist: String = "Artist") -> ReferenceUpcomingTrack {
-        ReferenceUpcomingTrack(
+    private func makeEntry(_ index: Int, artist: String = "Artist") -> PlayerAdjacentTrack {
+        PlayerAdjacentTrack(
             index: index,
-            track: ReferenceTrack(
+            track: PlayerTrack(
                 id: "song-\(index)",
                 title: "Song \(index)",
                 artists: artist,

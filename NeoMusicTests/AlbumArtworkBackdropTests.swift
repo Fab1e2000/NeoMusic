@@ -3,6 +3,7 @@ import XCTest
 import MetalKit
 import Synchronization
 @testable import NeoMusic
+@testable import FullScreenPlayer
 
 private struct BackdropAlbumPage: Codable, Sendable {
     let detail: NeteaseArtistAlbumDetail

@@ -1,3 +1,4 @@
+import FullScreenPlayer
 import SwiftUI
 
 extension EnvironmentValues {
@@ -172,9 +173,9 @@ struct AppShell<Library: View>: View {
     let playlistLibrary: PlaylistLibrary
     let toasts: LibraryToastCenter
     /// 全屏播放页；迷你播放条与业务只通过 `isPlayerPresented` 打开或关闭它，转场实现可单独替换。
-    let referencePlayer: ReferencePlayerState
+    let referencePlayer: PlayerState
     let referenceLibrary: ReferenceLibrary
-    let makePlayerActions: (@escaping (LibraryRoute) -> Void, (() -> Void)?) -> ReferencePlayerActions
+    let makePlayerActions: (@escaping (LibraryRoute) -> Void, (() -> Void)?) -> PlayerActions
     var isInitialContentReady = true
     var searchContent: AnyView? = nil
     var searchDestination: ((LibraryRoute) -> AnyView)? = nil

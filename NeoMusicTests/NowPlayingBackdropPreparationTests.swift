@@ -2,6 +2,7 @@ import MetalKit
 import UIKit
 import XCTest
 @testable import NeoMusic
+@testable import FullScreenPlayer
 
 @MainActor
 final class NowPlayingBackdropPreparationTests: XCTestCase {

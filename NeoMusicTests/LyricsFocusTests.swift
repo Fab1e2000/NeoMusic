@@ -2,6 +2,7 @@ import XCTest
 import SwiftUI
 import UIKit
 @testable import NeoMusic
+@testable import FullScreenPlayer
 
 @MainActor
 final class LyricsFocusTests: XCTestCase {
@@ -361,7 +362,7 @@ private final class LyricsFocusTestState {
     var seekCount = 0
     var topOverlayHeight: CGFloat = 0
 
-    let lyrics: ReferenceLyrics = {
+    let lyrics: PlayerLyrics = {
         let lines = (0..<80).map { index in
             let text: String
             switch index % 4 {
@@ -370,9 +371,9 @@ private final class LyricsFocusTestState {
             case 2: text = "沿着熟悉的街道继续向前，看远处的光渐渐亮起"
             default: text = "尾声"
             }
-            return LyricsLine(id: index, time: Double(index * 4), text: text)
+            return PlayerLyricLine(id: index, time: Double(index * 4), text: text)
         }
-        return ReferenceLyrics(lines: lines, plainText: lines.map(\.text).joined(separator: "\n"), source: "test")
+        return PlayerLyrics(lines: lines, plainText: lines.map(\.text).joined(separator: "\n"), source: "test")
     }()
 
     func expectedTop(forRowHeight height: CGFloat) -> CGFloat {
