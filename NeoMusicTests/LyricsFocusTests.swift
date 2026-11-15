@@ -237,6 +237,73 @@ final class LyricsFocusTests: XCTestCase {
         XCTAssertEqual(hidden.bottomEnd - hidden.bottomStart, 56, accuracy: 0.5)
     }
 
+    func testPagePresentationMaskClipsImmediatelyDuringPageSwitches() async throws {
+        let state = PresentationMaskTestState()
+        let layout = ReferenceNowPlayingLayout()
+        let clipHeight = layout.pageY(557)
+        let host = UIHostingController(rootView: PresentationMaskTestContent(state: state, layout: layout))
+        let scene = try await applicationWindowScene()
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        window.rootViewController = host
+        window.isHidden = false
+        defer { window.isHidden = true }
+        host.view.layoutIfNeeded()
+
+        let settledUnclipped = try await waitUntil {
+            !self.clippedPresentationHeights(in: host.view.layer).contains { $0 <= clipHeight + 1 }
+        }
+        XCTAssertTrue(settledUnclipped, "Settled lyrics page must not stay hard-clipped above controls")
+
+        let spring = Animation.interpolatingSpring(mass: 1, stiffness: 475, damping: 45, initialVelocity: 0)
+        withAnimation(spring) {
+            state.isVisible = false
+            state.clipsAboveControls = true
+        }
+
+        for _ in 0..<8 {
+            try await Task.sleep(for: .milliseconds(25))
+            let heights = clippedPresentationHeights(in: host.view.layer)
+            XCTAssertFalse(heights.isEmpty, "Dismissing lyrics must keep the outer clip mask active")
+            for height in heights {
+                XCTAssertLessThanOrEqual(
+                    height,
+                    clipHeight + 1,
+                    "Dismissing lyrics must clip above controls immediately without animating the mask down"
+                )
+            }
+        }
+
+        withAnimation(spring) {
+            state.isVisible = true
+            state.clipsAboveControls = true
+        }
+
+        for _ in 0..<8 {
+            try await Task.sleep(for: .milliseconds(25))
+            let heights = clippedPresentationHeights(in: host.view.layer)
+            XCTAssertFalse(heights.isEmpty, "Entering lyrics must keep the outer clip mask active until settled")
+            for height in heights {
+                XCTAssertLessThanOrEqual(
+                    height,
+                    clipHeight + 1,
+                    "Entering lyrics must stay clipped above controls while translating from below"
+                )
+            }
+        }
+    }
+
+    private func clippedPresentationHeights(in layer: CALayer) -> [CGFloat] {
+        var heights: [CGFloat] = []
+        if layer.masksToBounds, layer.bounds.width >= 350 {
+            heights.append((layer.presentation() ?? layer).bounds.height)
+        }
+        for child in layer.sublayers ?? [] {
+            heights += clippedPresentationHeights(in: child)
+        }
+        return heights
+    }
+
     private func mount(_ state: LyricsFocusTestState, size: DynamicTypeSize) async throws -> UIWindow {
         let content = LyricsFocusTestContent(state: state)
             .dynamicTypeSize(size)
@@ -338,5 +405,41 @@ private struct LyricsFocusTestContent: View {
         .onChange(of: state.activeID, initial: true) { _, id in state.renderedActiveID = id }
         .onChange(of: state.isActive, initial: true) { _, active in state.renderedIsActive = active }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+@MainActor @Observable
+private final class PresentationMaskTestState {
+    var isVisible = true
+    var clipsAboveControls = false
+    let lyricsState = LyricsFocusTestState()
+}
+
+private struct PresentationMaskTestContent: View {
+    @Bindable var state: PresentationMaskTestState
+    let layout: ReferenceNowPlayingLayout
+
+    var body: some View {
+        AppleMusicLocalLyricsView(
+            lyrics: state.lyricsState.lyrics,
+            activeID: 40,
+            bottomOverlayHeight: 280,
+            isActive: state.isVisible,
+            isInterfaceHidden: .constant(false),
+            onSeek: { _ in },
+            topOverlayHeight: 102
+        )
+        .frame(width: 402, height: 753)
+        .modifier(
+            NowPlayingPagePresentation(
+                isVisible: state.isVisible,
+                presentationScale: 0.90,
+                hiddenOffset: 470,
+                spatialAnimation: .interpolatingSpring(mass: 1, stiffness: 475, damping: 45, initialVelocity: 0),
+                opacityAnimation: .easeInOut(duration: 0.30),
+                clipsAboveControls: state.clipsAboveControls
+            )
+        )
+        .environment(\.nowPlayingLayout, layout)
     }
 }

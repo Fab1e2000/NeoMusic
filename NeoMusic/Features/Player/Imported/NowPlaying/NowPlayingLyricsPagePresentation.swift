@@ -9,7 +9,7 @@ struct NowPlayingPagePresentation: ViewModifier {
     let hiddenOffset: CGFloat
     let spatialAnimation: Animation?
     let opacityAnimation: Animation?
-    // Lyrics keep their full viewport when the playback controls are hidden.
+    // Keep page transitions clipped above the bottom controls without cutting settled interface fades.
     var clipsAboveControls = true
 
     func body(content: Content) -> some View {
@@ -22,6 +22,10 @@ struct NowPlayingPagePresentation: ViewModifier {
             .mask(alignment: .top) {
                 Rectangle()
                     .frame(height: clipsAboveControls ? max(0, layout.pageY(557)) : nil)
+                    .transaction {
+                        $0.animation = nil
+                        $0.disablesAnimations = true
+                    }
             }
     }
 }

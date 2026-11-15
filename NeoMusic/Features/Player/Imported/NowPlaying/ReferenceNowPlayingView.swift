@@ -165,6 +165,7 @@ struct ReferenceNowPlayingView: View {
         withAnimation(animation, completionCriteria: .removed) {
             pageChange = request
             page = destination
+            showsLyricsControls = true
         } completion: {
             guard pageChange?.id == request.id else { return }
             finishPageChange()
@@ -375,7 +376,7 @@ struct ReferenceNowPlayingView: View {
                 opacityAnimation: pageAnimation(isVisible ? motion.lyricsOpacityPresentation : motion.lyricsOpacityDismissal,
                                                 includesDelay: pageChange?.startsFromRest == true,
                                                 extraDelay: entranceDelay),
-                clipsAboveControls: !isVisible
+                clipsAboveControls: !isVisible || (!hidesLyricsControls && pageChange != nil)
             ))
             .padding(.horizontal, -Self.portraitHorizontalPadding)
             .allowsHitTesting(isVisible)
