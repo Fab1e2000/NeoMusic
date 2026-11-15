@@ -136,7 +136,7 @@ struct NowPlayingProgressControl: View {
     }
 
     private var progressMaximum: TimeInterval {
-        max(player.duration, song.duration, 1)
+        player.duration > 0 ? player.duration : max(song.duration, 1)
     }
 
 }

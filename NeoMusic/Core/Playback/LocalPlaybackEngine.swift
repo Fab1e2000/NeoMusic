@@ -39,8 +39,13 @@ import Observation
         return (0..<5).map { analyzer.level(at: $0) }
     }
 
+    static func makePlayerItem(url: URL) -> AVPlayerItem {
+        let asset = AVURLAsset(url: url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
+        return AVPlayerItem(asset: asset)
+    }
+
     private func makeItem(url: URL) -> AVPlayerItem {
-        let item = AVPlayerItem(url: url)
+        let item = Self.makePlayerItem(url: url)
         let identity = ObjectIdentifier(item)
         spectrumTasks[identity] = Task { [weak self, weak item] in
             guard let item else { return }
@@ -175,7 +180,13 @@ import Observation
             Task { @MainActor in
                 guard let self, token == self.generation, self.player.currentItem === item else { return }
                 self.isLoading = item.status == .unknown || self.pendingSeek != nil
-                if item.status == .readyToPlay { self.submitPendingSeek() }
+                if item.status == .readyToPlay {
+                    // Attach the spectrum tap before initial seek/play so AVPlayer
+                    // does not rebuild its audio render graph after playback starts.
+                    await self.spectrumTasks[ObjectIdentifier(item)]?.value
+                    guard token == self.generation, self.player.currentItem === item else { return }
+                    self.submitPendingSeek()
+                }
                 if item.status == .failed {
                     self.error = item.error?.localizedDescription ?? "无法播放此音乐文件"
                     self.invalidateSeek()
@@ -490,7 +501,7 @@ private final class PlaybackCandidate {
     private var observation: NSKeyValueObservation?
     private var continuation: CheckedContinuation<Void, Error>?
 
-    init(url: URL) { item = AVPlayerItem(url: url) }
+    init(url: URL) { item = LocalPlaybackEngine.makePlayerItem(url: url) }
 
     func waitUntilReady() async throws {
         try await withTaskCancellationHandler {
