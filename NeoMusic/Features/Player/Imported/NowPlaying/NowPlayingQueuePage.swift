@@ -107,7 +107,7 @@ struct NowPlayingQueuePage: View {
     }
 }
 
-/// Scroll motion invalidates the header controls; edge fading runs inside the collection view.
+/// Header motion is observed separately from the list; edge fading runs inside the collection view.
 @MainActor @Observable
 private final class QueueHeaderScrollState {
     var offset: CGFloat = 0
@@ -121,7 +121,16 @@ private struct QueueHeaderControls: View {
         NowPlayingQueueModeControls()
             .padding(.vertical, 3)
             .frame(height: 44)
-            .offset(y: max(headerHeight - scroll.offset, 0))
+            .modifier(QueueControlsScrollPosition(scroll: scroll, headerHeight: headerHeight))
+    }
+}
+
+private struct QueueControlsScrollPosition: ViewModifier {
+    let scroll: QueueHeaderScrollState
+    let headerHeight: CGFloat
+
+    func body(content: Content) -> some View {
+        content.offset(y: max(headerHeight - scroll.offset, 0))
     }
 }
 
@@ -311,7 +320,8 @@ struct NowPlayingQueueRow: View {
 
             }
             .contextMenu { ReferenceSongMenuContents(configuration: configuration) }
-            .onChange(of: [entry.song.id] + configuration.trailingSongActions.map { "\($0.id)/\($0.title)" }, initial: true) {
+            .onAppear { onSwipeActions(configuration.trailingSongActions) }
+            .onChange(of: [entry.song.id] + configuration.trailingSongActions.map { "\($0.id)/\($0.title)" }) {
                 onSwipeActions(configuration.trailingSongActions)
             }
             .onDisappear { onSwipeActions([]) }

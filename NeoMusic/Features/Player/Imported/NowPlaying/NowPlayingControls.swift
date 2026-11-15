@@ -174,8 +174,9 @@ private struct NowPlayingCapsuleTrack: View {
 
             if clampedFraction > 0 {
                 Capsule(style: .circular)
-                    .fill(.white.opacity(deltaOpacity))
-                    .blendMode(.plusLighter)
+                    .fill(.white)
+                    .animation(spatialAnimation, value: isPressed)
+                    .opacity(deltaOpacity)
                     .animation(highlightAnimation, value: isPressed)
                     .mask {
                         HStack(spacing: 0) {
@@ -184,6 +185,7 @@ private struct NowPlayingCapsuleTrack: View {
                             Spacer(minLength: 0)
                         }
                     }
+                    .blendMode(.plusLighter)
             }
         }
         .frame(width: baseWidth, height: currentHeight)

@@ -185,15 +185,3 @@ final class AppStartupPerformanceTests: XCTestCase {
         XCTAssertEqual(playlistTabs.tabs.map(\.title), ["夜游", "主页", "搜索"])
     }
 }
-
-@MainActor extension XCTestCase {
-    /// Hosted tests can begin before UIKit connects the application's first scene.
-    func applicationWindowScene() async throws -> UIWindowScene {
-        if let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first {
-            return scene
-        }
-        let activation = expectation(forNotification: UIScene.didActivateNotification, object: nil)
-        await fulfillment(of: [activation], timeout: 10)
-        return try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
-    }
-}

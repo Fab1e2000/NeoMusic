@@ -313,7 +313,9 @@ private struct NativePlayerMotionContent: View {
             spatialAnimation: animation(isVisible ? motion.lyricsSpatialPresentation : motion.lyricsSpatialDismissal,
                                         extraDelay: entranceDelay),
             opacityAnimation: animation(isVisible ? motion.lyricsOpacityPresentation : motion.lyricsOpacityDismissal,
-                                        extraDelay: entranceDelay)
+                                        includesDelay: change?.startsFromRest == true,
+                                        extraDelay: entranceDelay),
+            clipsAboveControls: !hidesControls
         ))
         .allowsHitTesting(isVisible)
         .accessibilityHidden(!isVisible)

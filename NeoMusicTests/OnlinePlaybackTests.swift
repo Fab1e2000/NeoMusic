@@ -79,14 +79,7 @@ final class OnlinePlaybackTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let audioURL = directory.appendingPathComponent("local.wav")
-        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1))
-        do {
-            let file = try AVAudioFile(forWriting: audioURL, settings: format.settings)
-            let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 441000))
-            buffer.frameLength = buffer.frameCapacity
-            buffer.floatChannelData![0].initialize(repeating: 0, count: Int(buffer.frameLength))
-            try file.write(from: buffer)
-        }
+        try PlayerTestFixtures.silentAudio(at: audioURL, seconds: 10)
         let model = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false)
         defer { model.shutdownPlayback() }
         let requested = expectation(description: "Local resolution started")
@@ -183,10 +176,7 @@ final class OnlinePlaybackTests: XCTestCase {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let url = root.appendingPathComponent("quality.wav")
-        let format = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1)!
-        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 44100 * 12)!
-        buffer.frameLength = buffer.frameCapacity
-        do { let file = try AVAudioFile(forWriting: url, settings: format.settings); try file.write(from: buffer) }
+        try PlayerTestFixtures.silentAudio(at: url, seconds: 12)
         let model = NowPlayingModel(queue: [song("netease:12:34")], currentIndex: 0, isPlaying: false)
         defer { model.shutdownPlayback() }
         model.configurePlayback(resolveResource: { _ in PlaybackResource(url: url, quality: "lossless") },
@@ -269,10 +259,7 @@ final class OnlinePlaybackTests: XCTestCase {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let url = root.appendingPathComponent("audio.wav")
-        let format = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1)!
-        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 44100 * 4)!
-        buffer.frameLength = buffer.frameCapacity
-        do { let file = try AVAudioFile(forWriting: url, settings: format.settings); try file.write(from: buffer) }
+        try PlayerTestFixtures.silentAudio(at: url, seconds: 4)
         var fail = false
         let model = NowPlayingModel(queue: [song("netease:12:34")], currentIndex: 0, isPlaying: false)
         defer { model.shutdownPlayback() }
@@ -310,7 +297,7 @@ final class OnlinePlaybackTests: XCTestCase {
 
     func testSameTrackReloadKeepsClockAndLyricsMovingWhileResolverWaits() async throws {
         let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let url = try makeSeekAudio(in: root)
+        let url = try PlayerTestFixtures.silentAudio(at: root.appendingPathComponent("seek.wav"), seconds: 12)
         defer { try? FileManager.default.removeItem(at: root) }
         let resolving = expectation(description: "replacement resolver started")
         var reply: CheckedContinuation<PlaybackResource, Never>?
@@ -360,7 +347,7 @@ final class OnlinePlaybackTests: XCTestCase {
 
     func testSeekDuringInitialResolutionUsesLatestPositionAndPersistsIt() async throws {
         let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let url = try makeSeekAudio(in: root)
+        let url = try PlayerTestFixtures.silentAudio(at: root.appendingPathComponent("seek.wav"), seconds: 12)
         defer { try? FileManager.default.removeItem(at: root) }
         let resolving = expectation(description: "initial resolver started")
         var reply: CheckedContinuation<PlaybackResource, Never>?
@@ -394,18 +381,6 @@ final class OnlinePlaybackTests: XCTestCase {
         await model.flushQueuePersistence()
         let saved = try JSONDecoder().decode(NowPlayingModel.SavedQueue.self, from: Data(contentsOf: stateURL))
         XCTAssertEqual(saved.elapsed, 6.375, accuracy: 0.002)
-    }
-
-    private func makeSeekAudio(in root: URL) throws -> URL {
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let url = root.appendingPathComponent("seek.wav")
-        let format = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1)!
-        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 44100 * 12)!
-        buffer.frameLength = buffer.frameCapacity
-        memset(buffer.floatChannelData![0], 0, Int(buffer.frameLength) * MemoryLayout<Float>.size)
-        let file = try AVAudioFile(forWriting: url, settings: format.settings)
-        try file.write(from: buffer)
-        return url
     }
 
     private func waitForSeekState(_ condition: @MainActor () -> Bool) async throws {

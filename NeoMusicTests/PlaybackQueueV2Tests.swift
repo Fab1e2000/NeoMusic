@@ -75,8 +75,8 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
         }
         let collection = try XCTUnwrap(find(view))
         collection.layoutIfNeeded()
-        return try Dictionary(uniqueKeysWithValues: source.snapshot().itemIdentifiers.map { item in
-            let path = try XCTUnwrap(source.indexPath(for: item))
+        return try Dictionary(uniqueKeysWithValues: collection.indexPathsForVisibleItems.map { path in
+            let item = try XCTUnwrap(source.itemIdentifier(for: path))
             let cell = try XCTUnwrap(collection.cellForItem(at: path) as? UICollectionViewListCell)
             // The real cell provider clears this handler when it configures a cell.
             // UIKit's current snapshot does not retain already-applied reconfigure marks.
@@ -113,7 +113,13 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
 
         var marked = try markConfigurations(in: host.view, source: source)
         XCTAssertFalse(coordinator.update(with: try XCTUnwrap(coordinator.latest)))
-        XCTAssertTrue(reconfiguredCells(marked).isEmpty)
+        let list = try XCTUnwrap(collection(in: host.view))
+        for (item, cell) in marked {
+            let path = try XCTUnwrap(source.indexPath(for: item))
+            coordinator.collectionView(list, willDisplay: cell, forItemAt: path)
+        }
+        XCTAssertTrue(reconfiguredCells(marked).isEmpty,
+                      "Displaying an already prepared cell must preserve its hosting configuration")
         inputs.headerHeight += 20
         try await settle(host)
         XCTAssertEqual(reconfiguredCells(marked), [.spacer])
@@ -125,8 +131,7 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
         marked = try markConfigurations(in: host.view, source: source)
         inputs.visualsActive = false
         try await settle(host)
-        XCTAssertEqual(reconfiguredCells(marked),
-                       Set([.title] + inputs.entries.map { Coordinator.Item.track($0.id) }))
+        XCTAssertTrue(reconfiguredCells(marked).isEmpty)
         marked = try markConfigurations(in: host.view, source: source)
         inputs.actions = PlayerTestFixtures.actions()
         try await settle(host)
@@ -196,6 +201,7 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
         let owner = PlayerTestFixtures.owner(tracks: tracks)
         let player = ReferencePlayerState(model: owner)
         player.skip(toQueueIndex: 900)
+        let hidden = Array(owner.entryIDs[921...]) + Array(owner.entryIDs[..<900])
         let inputs = QueueListTestInputs()
         inputs.player = player
         inputs.entries = player.upcomingQueueEntries
@@ -215,6 +221,7 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
         let collectionView = try XCTUnwrap(collection(in: host.view))
         let coordinator = try coordinator(in: host.view)
         let source = try XCTUnwrap(coordinator.dataSource)
+        XCTAssertEqual(source.snapshot().numberOfItems(inSection: .queue), 20)
         let from = IndexPath(item: 0, section: 1)
         let to = IndexPath(item: 3, section: 1)
         let target = try XCTUnwrap(collectionView.layoutAttributesForItem(at: to)).center
@@ -229,8 +236,17 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
         XCTAssertEqual(player.upcomingQueueEntries.map(\.id), expected)
         XCTAssertEqual(source.snapshot().itemIdentifiers(inSection: .queue), expected.map(Coordinator.Item.track))
         XCTAssertEqual(owner.entryIDs[owner.currentIndex], current)
+        XCTAssertEqual(Array(owner.entryIDs[921...]) + Array(owner.entryIDs[..<900]), hidden)
         XCTAssertFalse(coordinator.update(with: try XCTUnwrap(coordinator.latest)),
                        "The accepted native order needs no second snapshot application")
+
+        XCTAssertNotNil(coordinator.trailingActions(at: from))
+        collectionView.contentOffset.y = 320
+        try await settle(host)
+        collectionView.contentOffset.y = 0
+        try await settle(host)
+        XCTAssertNotNil(coordinator.trailingActions(at: from),
+                        "A prepared row must restore swipe actions when it returns onscreen")
     }
 
     func testPageVisibilityChangesKeepListAndSnapshotForAllQueueLengths() async throws {
@@ -239,22 +255,62 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
             inputs.entries = (0..<count).map { index in
                 UpcomingQueueEntry(id: UUID(), queueIndex: index,
                     song: ReferenceTrack(id: "song-\(index % 50)", title: "Song", artists: "Artist",
-                                         albumTitle: "Album", coverURL: nil, duration: 60))
+                                         albumTitle: "Album", coverURL: nil, duration: 60,
+                                         artworkLoadID: "cover-\(index)"))
             }
             let (window, host) = try mount(inputs)
             defer { window.isHidden = true }
             try await settle(host)
             let list = try XCTUnwrap(collection(in: host.view))
             let coordinator = try coordinator(in: host.view)
+            let source = try XCTUnwrap(coordinator.dataSource)
             let applications = coordinator.snapshotApplicationCount
+            func visibleArtworkIDs() -> Set<String> {
+                let visible = Set(list.indexPathsForVisibleItems.compactMap { path -> UUID? in
+                    guard case .track(let id) = source.itemIdentifier(for: path) else { return nil }
+                    return id
+                })
+                return Set(inputs.entries.filter { visible.contains($0.id) }.compactMap { $0.song.artworkLoadID })
+            }
+            XCTAssertFalse(inputs.artworkRequests.isEmpty, "Initial visible rows request their deferred covers")
+            XCTAssertTrue(Set(inputs.artworkRequests).isSubset(of: visibleArtworkIDs()))
+            let marked = try markConfigurations(in: host.view, source: source)
             for _ in 0..<10 {
+                inputs.artworkRequests.removeAll()
                 inputs.visualsActive.toggle()
                 try await settle(host)
                 XCTAssertTrue(collection(in: host.view) === list)
                 XCTAssertEqual(coordinator.snapshotApplicationCount, applications,
                                "Visibility must not submit the \(count)-entry snapshot")
+                XCTAssertTrue(reconfiguredCells(marked).isEmpty,
+                              "Page visibility must preserve prepared hosting content")
+                XCTAssertEqual(Set(inputs.artworkRequests), inputs.visualsActive ? visibleArtworkIDs() : [])
             }
             XCTAssertEqual(coordinator.dataSource?.snapshot().numberOfItems(inSection: .queue), count)
+
+            inputs.artworkRequests.removeAll()
+            let entry = inputs.entries[0]
+            var updated = entry.song
+            updated.artworkLoadID = "updated-cover"
+            inputs.entries[0] = UpcomingQueueEntry(id: entry.id, queueIndex: entry.queueIndex, song: updated)
+            try await settle(host)
+            XCTAssertTrue(inputs.artworkRequests.contains("updated-cover"),
+                          "A visible row must request its replacement artwork without another appearance")
+
+            inputs.artworkRequests.removeAll()
+            inputs.visualsActive = false
+            try await settle(host)
+            list.contentOffset.y = 320
+            try await settle(host)
+            XCTAssertTrue(inputs.artworkRequests.isEmpty, "An inactive page must not request newly displayed rows")
+            inputs.visualsActive = true
+            try await settle(host)
+            XCTAssertEqual(Set(inputs.artworkRequests), visibleArtworkIDs())
+            inputs.artworkRequests.removeAll()
+            list.contentOffset.y = 0
+            try await settle(host)
+            XCTAssertTrue(inputs.artworkRequests.contains("updated-cover"),
+                          "Returning rows must request deferred artwork while active")
         }
     }
 
@@ -290,6 +346,54 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
             }
         }
     }
+
+    func testEdgeMasksFollowChangingCompositingLayersWithoutReplacingCustomMasks() throws {
+        let list = NowPlayingQueueList.EdgeFadedCollectionView(
+            frame: CGRect(x: 0, y: 0, width: 320, height: 400),
+            collectionViewLayout: UICollectionViewFlowLayout()
+        )
+        let cell = UICollectionViewCell(frame: CGRect(x: 0, y: 20, width: 320, height: 60))
+        list.addSubview(cell)
+        let group = CALayer(), vibrant = CALayer(), nested = CALayer(), plain = CALayer()
+        let custom = CALayer(), customChild = CALayer(), customMask = CAShapeLayer()
+        cell.contentView.layer.addSublayer(group)
+        group.addSublayer(vibrant)
+        group.addSublayer(plain)
+        group.addSublayer(custom)
+        vibrant.addSublayer(nested)
+        custom.addSublayer(customChild)
+        for layer in [group, vibrant, nested, plain, custom, customChild] { layer.frame = cell.bounds }
+        vibrant.compositingFilter = "plusL"
+        customChild.compositingFilter = "plusL"
+        custom.mask = customMask
+
+        list.updateEdgeMask(for: cell)
+        let vibrantMask = try XCTUnwrap(vibrant.mask as? CAGradientLayer)
+        XCTAssertNil(cell.layer.mask, "An ancestor mask would isolate the additive text layers")
+        XCTAssertNil(group.mask)
+        XCTAssertNil(nested.mask, "A compositing subtree must be faded only once")
+        XCTAssertTrue(plain.mask is CAGradientLayer)
+        XCTAssertTrue(custom.mask === customMask)
+        XCTAssertTrue(customChild.mask is CAGradientLayer)
+
+        list.updateEdgeMask(for: cell)
+        XCTAssertTrue(vibrant.mask === vibrantMask, "Unchanged layer targets reuse their gradient")
+
+        // Hosting content can rebuild its compositing hierarchy after a metadata or state update.
+        vibrant.compositingFilter = nil
+        customChild.compositingFilter = nil
+        list.updateEdgeMask(for: cell)
+        XCTAssertTrue(cell.layer.mask is CAGradientLayer)
+        XCTAssertNil(vibrant.mask)
+        XCTAssertNil(plain.mask)
+        XCTAssertNil(customChild.mask)
+        XCTAssertTrue(custom.mask === customMask)
+
+        cell.frame.origin.y = 100
+        list.updateEdgeMask(for: cell)
+        XCTAssertNil(cell.layer.mask, "A row inside the unfaded viewport releases its edge mask")
+        XCTAssertTrue(custom.mask === customMask)
+    }
 }
 
 @MainActor @Observable
@@ -305,6 +409,7 @@ private final class QueueListTestInputs {
     var actions = PlayerTestFixtures.actions()
     var player = PlayerTestFixtures.state(tracks: [])
     var onMove: (IndexSet, Int) -> Void = { _, _ in }
+    @ObservationIgnored var artworkRequests: [String] = []
     let library = PlayerTestFixtures.library()
 }
 
@@ -320,5 +425,6 @@ private struct QueueListTestView: View {
             .environment(inputs.actions)
             .environment(inputs.library)
             .environment(\.playerVisualsActive, inputs.visualsActive)
+            .environment(\.artworkLoadAction, ArtworkLoadAction(handler: { inputs.artworkRequests.append($0) }))
     }
 }

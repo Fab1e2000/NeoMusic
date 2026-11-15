@@ -4,7 +4,7 @@
 
 ## 当前阶段
 
-网易云与本地音乐能力已接入，当前进行前端、播放器和真实使用体验收尾。近期实现已本地提交，尚未推送；后续推送按项目规范执行本机门禁。
+网易云与本地音乐能力已接入，当前进行前端、播放器和真实使用体验收尾。此前已验收实现及本轮播放器性能、测试精简与歌词／列表转场统一已本地提交，尚未推送。后续推送按项目规范执行本机门禁。
 
 | 范围 | 当前能力 |
 | --- | --- |
@@ -48,6 +48,10 @@
 
 以下保留尚无明确完成记录的事项，后续按实际任务选择验证范围。
 
+- 2026-11-15：全屏播放器文字同步与歌词页转场统一已按用户指定的版本 80／82 行为真机验收通过并本地提交（未推送）。正式页与预览页已精确恢复至版本 80 快照并构建安装版本 82；常驻歌词／继续播放页统一使用 470pt 上推／下收、475／45 空间弹簧及 0.30 秒透明度曲线，静止入场延迟 0.10 秒，快速打断跳过延迟，歌词额外入场延迟为 0。控制栏显示时裁切至 `layout.pageY(557)`，仅歌词页控制栏隐藏时放开完整视口；布局、字体、颜色与控制栏保持原样。原有 `NowPlayingMotionSpec`／`NowPlayingPageTransition` 动画定义完整保留。172 文件边界检查及 5 项相关 Release 模拟器回归全部通过；版本 82 真机构建、验签与安装通过，用户验收确认后本地提交。证据见 `build/player-v80-restore-20261115/`。
+
+- 2026-11-15：全屏播放器性能优化与测试精简已由用户真机核验并本地提交（未推送）。按用户要求，“继续播放”最多显示接下来的 20 首；完整播放队列保留，切歌或移除后自动补入，拖动排序保留隐藏歌曲顺序。切页复用已准备的行，封面请求使用原生显示生命周期；移除重复配置与遮罩刷新，滚动位移限于叶子层，长标题使用原生关键帧动画。沿用背景可见性暂停、GPU 专用纹理与渲染对象复用，保持布局、模糊、渐隐和动画节奏。测试共用 `TestFixtures.swift`；本轮 6 项 Release 回归覆盖显示上限、循环、补入、重排和隐藏歌曲保留，全部通过，172 文件边界检查及手机验签通过。前轮 8 项列表／页面回归、模拟器采样与切页录屏证据保留于 `build/player-smoothness-20261115/`；本轮证据见 `build/queue-display-limit-20261115/`。
+
 - 2026-11-15：按用户补充说明与 Apple Music 录屏调整全屏播放器（封面页与队列／歌词头部）及迷你播放器的横向拖动切歌交互，修复全屏左边缘硬切、帧率、艺人名 `.plusLighter` 提亮与迷你播放器松手切换动画瞬间跳变（版本 72）。仅歌名／歌手文本区域响应左右拖动（封面与控制按钮保持不动），支持同歌手固定（相邻曲目歌手完全一致时仅歌名滑动，固定歌手留在原地并保持实色），松手即刻提交切歌（快速甩滑沿滑动方向触发）并支持手势打断延续实时位置（低阻尼弹簧 `duration: 0.22, bounce: 0.26`）；滑动期间文本不叠加全局透明度淡入淡出（仅视口边界做固定羽化），歌名跑马灯在拖动与退出阶段继续滚动；在拖动越过切歌阈值（`0.3 * distance`，回退至 `0.22 * distance` 重新上膛）时立即触发系统选择触感反馈（快速甩滑未越静态阈值则在提交时补发一次）；迷你条补充独立 UIKit 横向触摸层并在结构不变的遮罩下协调 `LNPopup` 长按取消与点按／上拉仲裁。针对全屏优化与提亮恢复：将位移观察收拢至叶子 `TrackSwipeSlotOffsetModifier` 与 `TrackSwipeOffsetModel` 使拖动与回弹逐帧不再重建槽位数组、标题／跑马灯或歌手菜单视图，移出 `NowPlayingArtistMenuButton` 每帧重复的 `button.setTitle` 布局刷新，以 ProMotion `120Hz` `CADisplayLink`（`preferredFrameRateRange` 80–120，`targetTimestamp` 前瞻采样）替代 `TimelineView(.animation)`；放开 `ReferenceNowPlayingView.pageContent` 对 `transientArtworkPageContent` 的左右 `32pt` 裁剪并将 `NowPlayingArtworkPage` `leadingFade` 扩至 `24pt` 使左滑文本在 `8pt..32pt` 内平滑淡出；移除全屏／头部艺人层外层会隔离 `.blendMode(.plusLighter)` 的 `.mask` 遮罩，改为仅对标题层保留静态 `.mask` 渐变、让全屏／头部艺人名通过 `@Environment(\.trackSwipeVibrantEdge)` 与 `.blendMode(.plusLighter)` 内层 Metal `trackSwipeHorizontalFade` `.colorEffect` 着色器在滑动（非固定）期间完成同款边缘羽化（迷你条艺人层维持 `.primary` 动态遮罩与实色 `I` 不变）。针对版本 72 迷你条松手瞬间跳变：修复 `MiniPlayerTitle` 仅接收 `.popupItem` 异步回传值快照 `track`、导致 `player.currentQueueIndex` 先于 `song.id` 更新并在首帧误触 `syncTrack` `cancelMotion()` 取消回弹的问题，改为读取实时 `player.currentTrack ?? fallbackTrack`；同时在 `TrackSwipeController.stepSpringFrame` 中对切歌瞬间主线程同步提交造成的首帧卡顿间隙（约 `22–350ms` 内超单帧阈值的耗时，累计上限 `0.5s`）做渲染对齐顺延并重设兜底完成任务，避免 `Spring(duration: 0.22, bounce: 0.26)` 在第一可见帧前已被提交耗时吞掉大部分行程（后台长停顿仍直接收尾；无卡顿滑回保持原实时时间线不变）。已完成 172 个源码文件边界检查、22 项 Release 定向回归（`TrackSwipeTests` 13 项含切歌后渲染阻塞顺延回归、`PlayerVisibilityTests` 3 项、`PopupItemAccessibilityTests` 2 项、`LibraryDetailNavigationTests` 4 项含迷你条 `.popupItem` 提交连续像素过渡回归）及 Release 真机构建、`codesign --verify --deep --strict` 验签（版本 72）并安装启动到用户 iPhone，按用户要求跳过本次真机推送前的新增 UI 录屏测试；待用户体验最终验收，用户要求先本地提交本次改动。
 
 - 2026-11-14：按用户提供的 Apple Music 录屏复刻全屏播放器进度条与音量条按下视觉反馈、松手惯性及系统音量 HUD 抑制（版本 57）。采用自定义 SwiftUI 胶囊轨道（`NowPlayingCapsuleTrack`）由同一份弹簧动画驱动纵向增高（7pt → 16.67pt）、横向 `scaleEffect` 外扩（`1064 / 1014`）、已填充条垂直内边、`Capsule(style: .circular)` 外端帽，以及同步的左右时间文字外扩／下移（`+3.14pt`）、音质卡片与扬声器图标外扩和高亮／变暗时序；进度条保留透明 `.thumbless` `NowPlayingScrubbingSlider`（`alpha = 0.02`，隐藏内部子视图以保持全条触控），拖动期间由 `interaction.scrubbingProgress` 独占条与时间显示并在松手后单次提交 `player.seek(to:)`（未发生拖动则不回退进度，旁白操作保持即时跳转），消除拖动／松手时与底层 0.2 秒播放时钟及解码跳转抢进度导致的抽搐；音量条保留 `MPVolumeView` 并以手势相对位移驱动系统音量，改用 `NowPlayingVolumeState` 减少拖动期间的视图重建，按用户补充的 Apple Music 音量甩滑 60fps 录屏实测复刻松手惯性滑行（`VolumeSliderTouchObserver` 采样末尾 ~30ms 释放速度、静停 ≥50ms 归零，由 `CADisplayLink` 以 `tau = 0.082s` 帧率无关指数减速同步推进界面与 `MPVolumeView`，松手即刻触发轨道回弹变暗而不等待滑行结束、再次触摸可随时打断续滑、触及 `0`/`1` 边界立即停止），并在拖动、惯性滑行期及结束后 350ms 冷却期内屏蔽 `AVAudioSession.outputVolume` KVO 回写覆盖（从 `lastReportedFraction` 起算相对位移），消除系统延迟回传与硬件分档导致的抽搐同时保留硬件音量键同步；系统音量 HUD 抑制改由 `AlignedSystemVolumeView` 保持 `MPVolumeSlider` 的 `alpha = 1` 与 `isUserInteractionEnabled = true`、仅将滑块子视图 `alpha` 设为 `0` 并通过 `hitTest` 透传触控，歌词控件自动隐藏时仅对可见胶囊与扬声器图标层应用 `.opacity(0)` 避免祖先视图透明度归零，同时在 `playerVisualsActive`、弹出动画完成 `onOpen`（`playerVolumeHUDRefreshID`）、`didMoveToWindow`、`beginDrag`、`didBecomeActive` 与音频路由变更时重设 `slider.alpha = 1` 触发 `MPVolumeHUDController` 刷新并在离开全屏播放器时置 `isHidden = true` 恢复系统音量提示；并补充 `#Preview("进度条与音量条")`。减少动态效果时关闭位移动画与缩放。174 个源码文件边界检查、35 项脚本单元测试、`NowPlayingProgressScrubTests` 5 项 Release 定向回归（含 `testPressVisualFeedbackSynchronizesTrackAndTimeLabelsWithoutRebuildingQualityControl`）及 Release 真机构建、安装与启动（版本 57）通过，待用户体验确认；用户要求先行本地提交。证据位于 `build/player-progress-feedback-20261114/`。
@@ -70,7 +74,7 @@
 | 播放与恢复 | 换源进度及实听、歌词同步、连续切歌与短拖／反向打断、队列展开与收起、断网启动及网络恢复 |
 | 下载 | 真机后台传输、断网播放、退出账号后已下载文件可用；已有真实无损下载及标签校验记录 |
 | 系统能力 | 后台／锁屏、控制中心、中断、蓝牙／AirPlay、音量、VoiceOver／Voice Control、触感、EDR 与横屏 |
-| 性能 | 启动、长列表与转场的实际流畅度；已有优化及局部采样，用户要求停止追加的性能采样保持停止 |
+| 性能 | 启动、长列表与转场的实际流畅度；本轮按用户要求继续全屏播放器代码优化与模拟器采样，真机仅用于安装体验 |
 | 已知缺口 | 自动续播推荐保持禁用；新发现、广播、共享与协作未接入；播放列表搜索筛选、部分菜单／侧滑视觉及下载按钮辅助状态仍有待处理项 |
 | 依赖与发布 | LN 内部未文档化接口、部分转场排队及减少动态效果路径继续专项评估；发布范围和完整系统能力验收待确定 |
 

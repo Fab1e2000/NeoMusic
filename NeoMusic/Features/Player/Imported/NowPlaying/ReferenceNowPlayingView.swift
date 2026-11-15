@@ -366,14 +366,18 @@ struct ReferenceNowPlayingView: View {
         let entranceDelay = isVisible && pageChange?.startsFromRest == true ? motion.lyricsPresentationDelay : 0
         return portraitLyricsPage(for: song)
             .id(song.id)
+            .padding(.horizontal, Self.portraitHorizontalPadding)
             .modifier(NowPlayingPagePresentation(
                 isVisible: isVisible, presentationScale: motion.lyricsPresentationScale,
                 hiddenOffset: motion.lyricsTravel,
                 spatialAnimation: pageAnimation(isVisible ? motion.lyricsSpatialPresentation : motion.lyricsSpatialDismissal,
                                                 extraDelay: entranceDelay),
                 opacityAnimation: pageAnimation(isVisible ? motion.lyricsOpacityPresentation : motion.lyricsOpacityDismissal,
-                                                extraDelay: entranceDelay)
+                                                includesDelay: pageChange?.startsFromRest == true,
+                                                extraDelay: entranceDelay),
+                clipsAboveControls: !hidesLyricsControls
             ))
+            .padding(.horizontal, -Self.portraitHorizontalPadding)
             .allowsHitTesting(isVisible)
             .accessibilityHidden(!isVisible)
             .environment(\.playerVisualsActive, visualsActive && (isVisible || pageChange?.source == .lyrics))
@@ -471,8 +475,6 @@ private struct QueueLinkedSongHeader: View {
     let artworkNamespace: Namespace.ID
     let onImportLyrics: () -> Void
 
-    private var translation: CGFloat { page == .queue ? offset.points : 0 }
-
     var body: some View {
         NowPlayingSongHeader(
             song: song,
@@ -482,8 +484,20 @@ private struct QueueLinkedSongHeader: View {
             showsArtwork: false,
             onImportLyrics: onImportLyrics
         )
-        .offset(y: translation)
-        .opacity(NowPlayingSongHeader.scrollFadeOpacity(scrolled: -translation))
+        .modifier(QueueSongHeaderScrollPresentation(page: page, offset: offset))
+    }
+}
+
+/// Keep scroll observation outside the title, artist menu and track-swipe content.
+private struct QueueSongHeaderScrollPresentation: ViewModifier {
+    let page: NowPlayingPage
+    let offset: QueueHeaderOffset
+
+    func body(content: Content) -> some View {
+        let translation = page == .queue ? offset.points : 0
+        content
+            .offset(y: translation)
+            .opacity(NowPlayingSongHeader.scrollFadeOpacity(scrolled: -translation))
     }
 }
 
@@ -495,14 +509,12 @@ private struct QueueLinkedArtwork: View {
     let artworkPageFrame: CGRect
     let reducesMotion: Bool
 
-    private var headerOffset: CGFloat { page == .queue ? offset.points : 0 }
-    private var fadeHeight: CGFloat { page == .queue ? min(24, max(0, -offset.points)) : 0 }
     private var expanded: Bool { player.isPlaying }
     private var frame: CGRect {
         if page == .artwork { return displayedFrame }
         return CGRect(
             x: 0,
-            y: NowPlayingSongHeader.topInset + headerOffset,
+            y: NowPlayingSongHeader.topInset,
             width: NowPlayingSongHeader.referenceHeight,
             height: NowPlayingSongHeader.referenceHeight
         )
@@ -520,10 +532,7 @@ private struct QueueLinkedArtwork: View {
                 NowPlayingPortraitArtwork(song: song, isArtworkPage: page == .artwork)
                     .frame(width: frame.width, height: frame.height)
                     .popupTransitionTarget()
-                    .position(
-                        x: frame.midX + ReferenceNowPlayingView.portraitHorizontalPadding,
-                        y: frame.midY
-                    )
+                    .modifier(QueueArtworkScrollPosition(page: page, offset: offset, frame: frame))
                     .animation(
                         reducesMotion ? nil : NowPlayingPageTransition.motion.artworkResize.animation,
                         value: expanded
@@ -531,18 +540,40 @@ private struct QueueLinkedArtwork: View {
                     .allowsHitTesting(false)
             }
         }
-        .mask {
+        .modifier(QueueArtworkScrollMask(page: page, offset: offset))
+        .padding(.horizontal, -ReferenceNowPlayingView.portraitHorizontalPadding)
+    }
+}
+
+private struct QueueArtworkScrollPosition: ViewModifier {
+    let page: NowPlayingPage
+    let offset: QueueHeaderOffset
+    let frame: CGRect
+
+    func body(content: Content) -> some View {
+        content.position(
+            x: frame.midX + ReferenceNowPlayingView.portraitHorizontalPadding,
+            y: frame.midY + (page == .queue ? offset.points : 0)
+        )
+    }
+}
+
+private struct QueueArtworkScrollMask: ViewModifier {
+    let page: NowPlayingPage
+    let offset: QueueHeaderOffset
+
+    func body(content: Content) -> some View {
+        content.mask {
             GeometryReader { geometry in
                 // The queue cover follows the list behind its top edge.
                 // Keep the artwork page's shadow uncut beneath the handle.
                 VStack(spacing: 0) {
-                    NowPlayingQueueTopFade(height: fadeHeight)
+                    NowPlayingQueueTopFade(height: page == .queue ? min(24, max(0, -offset.points)) : 0)
                     Rectangle()
                 }
                 .padding(.top, page == .queue ? NowPlayingSongHeader.topInset : 0)
                 .padding(page == .queue ? 0 : -max(geometry.size.width, geometry.size.height))
             }
         }
-        .padding(.horizontal, -ReferenceNowPlayingView.portraitHorizontalPadding)
     }
 }

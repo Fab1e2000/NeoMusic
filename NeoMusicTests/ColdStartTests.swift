@@ -1,5 +1,4 @@
 import XCTest
-import AVFoundation
 import MediaPlayer
 import UIKit
 import SwiftUI
@@ -11,14 +10,7 @@ import SwiftUI
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let audioURL = directory.appendingPathComponent("tone.wav")
-        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1))
-        do {
-            let file = try AVAudioFile(forWriting: audioURL, settings: format.settings)
-            let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 441000))
-            buffer.frameLength = buffer.frameCapacity
-            buffer.floatChannelData![0].initialize(repeating: 0, count: Int(buffer.frameLength))
-            try file.write(from: buffer)
-        }
+        try PlayerTestFixtures.silentAudio(at: audioURL, seconds: 10)
         let stateURL = directory.appendingPathComponent("queue.json")
         let saved = NowPlayingModel.SavedQueue(ids: ["tone.wav"], index: 0, elapsed: 4, repeatMode: .off, shuffled: false)
         let data = try JSONEncoder().encode(saved)
@@ -51,14 +43,7 @@ import SwiftUI
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let audioURL = directory.appendingPathComponent("tone.wav")
-        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1))
-        do {
-            let file = try AVAudioFile(forWriting: audioURL, settings: format.settings)
-            let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 441000))
-            buffer.frameLength = buffer.frameCapacity
-            buffer.floatChannelData![0].initialize(repeating: 0, count: Int(buffer.frameLength))
-            try file.write(from: buffer)
-        }
+        try PlayerTestFixtures.silentAudio(at: audioURL, seconds: 10)
         let track = LibrarySongItem(id: "netease:12:34", title: "Saved online song", artist: "Artist",
             album: "Album", albumArtist: "Artist", trackNumber: 1, artwork: .missing, duration: 10)
         let saved = NowPlayingModel.SavedQueue(ids: [track.id], index: 0, elapsed: 4,

@@ -1,4 +1,3 @@
-import AVFoundation
 import XCTest
 @testable import NeoMusic
 
@@ -53,7 +52,7 @@ final class DownloadedPlaybackTests: XCTestCase {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let file = directory.appendingPathComponent("download.wav")
-        try writeAudio(to: file)
+        try PlayerTestFixtures.silentAudio(at: file, seconds: 10)
         let local = song("网易云/Album/song.flac"), online = song("netease:12:34")
         let model = NowPlayingModel(queue: [local], currentIndex: 0, isPlaying: false, elapsed: 2)
         defer { model.shutdownPlayback() }
@@ -253,7 +252,7 @@ final class DownloadedPlaybackTests: XCTestCase {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let audioURL = directory.appendingPathComponent("download.wav")
-        try writeAudio(to: audioURL)
+        try PlayerTestFixtures.silentAudio(at: audioURL, seconds: 10)
         let track = song("netease:12:34")
         let store = directory.appendingPathComponent("state", isDirectory: true)
         try FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
@@ -318,14 +317,5 @@ final class DownloadedPlaybackTests: XCTestCase {
         let directory = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory
-    }
-
-    private func writeAudio(to url: URL) throws {
-        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1))
-        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 441000))
-        buffer.frameLength = buffer.frameCapacity
-        buffer.floatChannelData![0].initialize(repeating: 0, count: Int(buffer.frameLength))
-        let file = try AVAudioFile(forWriting: url, settings: format.settings)
-        try file.write(from: buffer)
     }
 }

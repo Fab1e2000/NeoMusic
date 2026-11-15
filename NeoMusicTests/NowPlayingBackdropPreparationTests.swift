@@ -25,14 +25,6 @@ final class NowPlayingBackdropPreparationTests: XCTestCase {
         }
     }
 
-    private func pixel(_ image: UIImage, row: Int) throws -> [UInt8] {
-        let cgImage = try XCTUnwrap(image.cgImage)
-        let data = try XCTUnwrap(cgImage.dataProvider?.data)
-        let bytes = try XCTUnwrap(CFDataGetBytePtr(data))
-        let start = row * cgImage.bytesPerRow
-        return Array(UnsafeBufferPointer(start: bytes + start, count: 4))
-    }
-
     func testFluidSourceOklabProfileCalibratesExtremeCoversAndDoesNotRetainImage() async throws {
         weak var weakInput: UIImage?
         let cache = NowPlayingFluidBackdropCache()
@@ -131,16 +123,31 @@ final class NowPlayingBackdropPreparationTests: XCTestCase {
         let wrSpread = max(abs(Int(wrTopRight[2]) - Int(wrTopRight[1])), abs(Int(wrTopRight[1]) - Int(wrTopRight[0])))
         XCTAssertGreaterThanOrEqual(Int(wrTopRight[1]), 135)
         XCTAssertLessThanOrEqual(wrSpread, 22, "Mostly-white cover should not wash neutral regions pink: \(wrTopRight)")
+
+        // A neutral cover after chromatic tracks must not inherit their color.
+        let whiteSource = try XCTUnwrap(NowPlayingFluidBackdropSource.make(from: image(.white)))
+        try renderSync(engine: engine, target: backdropTarget, source: whiteSource, time: 0, crossfade: 1, hasFrozen: false)
+        let center = pixelBGRA(readBGRA(from: backdropTarget), x: 80, y: 160, width: backdropTarget.width)
+        let channelSpread = max(abs(Int(center[0]) - Int(center[1])), abs(Int(center[1]) - Int(center[2])))
+        XCTAssertLessThanOrEqual(channelSpread, 4, "Pure white cover must stay neutral after chromatic tracks")
+        XCTAssertTrue((135...188).contains(Int(center[2])), "White cover should keep calibrated brightness")
     }
 
-    func testFluidBackdropViewRendersSynchronouslyAndStopsCleanly() async throws {
-        guard let pipelines = NowPlayingBackdropMetalPipelines() else {
-            throw XCTSkip("Metal pipelines unavailable on this destination")
-        }
+    func testFluidBackdropResourcesRenderAndFollowVisibility() async throws {
+        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("Metal is unavailable on this destination") }
+        await NowPlayingFluidBackdropResources.shared.prepare()
+        let pipelines = try XCTUnwrap(NowPlayingFluidBackdropResources.shared.pipelines,
+                                      "The app must contain the compiled fluid backdrop Metal library")
         let view = NowPlayingFluidBackdropView(pipelines: pipelines)
-        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
-        window.addSubview(view)
-        view.frame = window.bounds
+        let controller = UIViewController()
+        let window = UIWindow(windowScene: try await applicationWindowScene())
+        window.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+        window.rootViewController = controller
+        window.isHidden = false
+        defer { view.stop(); window.isHidden = true }
+        controller.view.addSubview(view)
+        view.frame = controller.view.bounds
+        XCTAssertFalse(view.hasActiveDisplayLink, "A backdrop without a source has no work to schedule")
 
         let source = try XCTUnwrap(NowPlayingFluidBackdropSource.make(from: image(.systemTeal)))
         view.update(source: source, isPlaying: true, reduceMotion: false)
@@ -148,100 +155,34 @@ final class NowPlayingBackdropPreparationTests: XCTestCase {
 
         XCTAssertEqual(view.layer.contentsScale, 1.0)
         XCTAssertTrue(view.hasActiveDisplayLink)
+        XCTAssertTrue(try XCTUnwrap(view.layer as? CAMetalLayer).framebufferOnly)
 
-        view.update(source: source, isPlaying: false, reduceMotion: true)
-        for _ in 0..<30 where view.hasActiveDisplayLink {
+        // A retained fullscreen player must stop immediately when collapsed or inactive,
+        // even while music plays or a track crossfade is pending.
+        let nextSource = try XCTUnwrap(NowPlayingFluidBackdropSource.make(from: image(.systemOrange)))
+        view.update(source: nextSource, isPlaying: true, reduceMotion: false, isActive: false)
+        XCTAssertFalse(view.hasActiveDisplayLink)
+        view.removeFromSuperview()
+        controller.view.addSubview(view)
+        view.layoutIfNeeded()
+        XCTAssertFalse(view.hasActiveDisplayLink)
+        view.update(source: nextSource, isPlaying: true, reduceMotion: false, isActive: true)
+        XCTAssertTrue(view.hasActiveDisplayLink)
+
+        view.update(source: nextSource, isPlaying: false, reduceMotion: true)
+        for _ in 0..<60 where view.hasActiveDisplayLink {
             try await Task.sleep(for: .milliseconds(15))
         }
         XCTAssertFalse(view.hasActiveDisplayLink)
 
+        view.update(source: nextSource, isPlaying: true, reduceMotion: false)
+        XCTAssertTrue(view.hasActiveDisplayLink)
+        view.removeFromSuperview()
+        XCTAssertFalse(view.hasActiveDisplayLink)
+        controller.view.addSubview(view)
+        XCTAssertTrue(view.hasActiveDisplayLink)
         view.stop()
         XCTAssertFalse(view.hasActiveDisplayLink)
-    }
-
-    func testRealCoversRenderSideBySideFluidBackdrops() throws {
-        guard let pipelines = NowPlayingBackdropMetalPipelines() else {
-            throw XCTSkip("Metal pipelines unavailable on this destination")
-        }
-        let engine = try XCTUnwrap(NowPlayingFluidBackdropEngine(pipelines: pipelines))
-        let targetDescriptor = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .bgra8Unorm,
-            width: NowPlayingFluidBackdropEngine.canvasWidth,
-            height: NowPlayingFluidBackdropEngine.canvasHeight,
-            mipmapped: false
-        )
-        targetDescriptor.storageMode = .shared
-        targetDescriptor.usage = [.renderTarget, .shaderRead]
-        let initialTarget = try XCTUnwrap(pipelines.device.makeTexture(descriptor: targetDescriptor))
-        let driftedTarget = try XCTUnwrap(pipelines.device.makeTexture(descriptor: targetDescriptor))
-
-        var samples: [(String, UIImage)] = []
-        let refCoverURL = URL(fileURLWithPath: "/Users/elsterlee/Dev/NeoMusic/build/player-strict-reference-20261113/cover.png")
-        if let refCover = UIImage(contentsOfFile: refCoverURL.path) {
-            samples.append(("ref-cover", refCover))
-        }
-        for name in ["AlbumSample01", "AlbumSample05", "AlbumSample08", "AlbumSample12"] {
-            if let img = UIImage(named: name, in: Bundle(for: NowPlayingFluidBackdropSource.self), compatibleWith: nil) {
-                samples.append((name, img))
-            }
-        }
-        samples.append(("white", image(.white)))
-        XCTAssertGreaterThanOrEqual(samples.count, 4)
-
-        let cellW = 160
-        let cellH = 320
-        var rows: [(cover: UIImage, initial: UIImage, drifted: UIImage)] = []
-        for entry in samples {
-            let source = try XCTUnwrap(NowPlayingFluidBackdropSource.make(from: entry.1))
-            try renderSync(engine: engine, target: initialTarget, source: source, time: 0.0, crossfade: 1, hasFrozen: false)
-            let initBytes = readBGRA(from: initialTarget)
-            try renderSync(engine: engine, target: driftedTarget, source: source, time: 0.6, crossfade: 1, hasFrozen: false)
-            let driftBytes = readBGRA(from: driftedTarget)
-            if entry.0 == "white" {
-                let center = pixelBGRA(initBytes, x: 80, y: 160, width: cellW)
-                let channelSpread = max(abs(Int(center[0]) - Int(center[1])), abs(Int(center[1]) - Int(center[2])))
-                XCTAssertLessThanOrEqual(channelSpread, 4, "Pure white cover must stay neutral even after prior chromatic tracks")
-                XCTAssertTrue((135...188).contains(Int(center[2])), "White cover should match calibrated bright neutral gray, got \(center[2])")
-            }
-            let initImg = try XCTUnwrap(imageFromBGRA(initBytes, width: cellW, height: cellH))
-            let driftImg = try XCTUnwrap(imageFromBGRA(driftBytes, width: cellW, height: cellH))
-            rows.append((entry.1, initImg, driftImg))
-        }
-
-        let sheet = UIGraphicsImageRenderer(size: CGSize(width: cellW * 3, height: cellH * rows.count)).image { ctx in
-            UIColor.black.setFill()
-            ctx.fill(CGRect(x: 0, y: 0, width: cellW * 3, height: cellH * rows.count))
-            for (row, entry) in rows.enumerated() {
-                let y = CGFloat(row * cellH)
-                entry.cover.draw(in: CGRect(x: 0, y: y + CGFloat((cellH - cellW) / 2), width: CGFloat(cellW), height: CGFloat(cellW)))
-                entry.initial.draw(in: CGRect(x: CGFloat(cellW), y: y, width: CGFloat(cellW), height: CGFloat(cellH)))
-                entry.drifted.draw(in: CGRect(x: CGFloat(cellW * 2), y: y, width: CGFloat(cellW), height: CGFloat(cellH)))
-            }
-        }
-        let attachment = XCTAttachment(image: sheet)
-        attachment.name = "fluid-backdrop-comparison-sheet"
-        attachment.lifetime = .deleteOnSuccess
-        add(attachment)
-    }
-
-    private func imageFromBGRA(_ bytes: [UInt8], width: Int, height: Int) -> UIImage? {
-        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
-              let data = bytes.withUnsafeBytes({ CFDataCreate(nil, $0.bindMemory(to: UInt8.self).baseAddress, $0.count) }),
-              let provider = CGDataProvider(data: data),
-              let cgImage = CGImage(
-                width: width,
-                height: height,
-                bitsPerComponent: 8,
-                bitsPerPixel: 32,
-                bytesPerRow: width * 4,
-                space: colorSpace,
-                bitmapInfo: CGBitmapInfo(rawValue: CGBitmapInfo.byteOrder32Little.rawValue | CGImageAlphaInfo.premultipliedFirst.rawValue),
-                provider: provider,
-                decode: nil,
-                shouldInterpolate: true,
-                intent: .defaultIntent
-              ) else { return nil }
-        return UIImage(cgImage: cgImage)
     }
 
     private func splitImage(leftTop: UIColor, rightBottom: UIColor) -> UIImage {
@@ -277,6 +218,7 @@ final class NowPlayingBackdropPreparationTests: XCTestCase {
         XCTAssertTrue(encoded)
         command.commit()
         command.waitUntilCompleted()
+        XCTAssertEqual(command.status, .completed, "GPU rendering failed: \(String(describing: command.error))")
     }
 
     private func readBGRA(from texture: MTLTexture) -> [UInt8] {

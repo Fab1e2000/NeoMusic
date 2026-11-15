@@ -16,6 +16,7 @@ struct NowPlayingArtworkBackdrop: View {
 
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.playerVisualsActive) private var visualsActive
     private var fluidResources = NowPlayingFluidBackdropResources.shared
     @State private var fluidSource: NowPlayingFluidBackdropSource?
     @State private var renderedTrackID: String?
@@ -67,8 +68,9 @@ struct NowPlayingArtworkBackdrop: View {
                 if let fluidSource, let pipelines = fluidResources.pipelines {
                     NowPlayingFluidBackdropRepresentable(
                         source: fluidSource,
-                        isPlaying: isPlaying && scenePhase != .background,
+                        isPlaying: isPlaying,
                         reduceMotion: accessibilityReduceMotion,
+                        isActive: visualsActive && scenePhase == .active,
                         pipelines: pipelines
                     )
                     .frame(width: proxy.size.width, height: proxy.size.height)
@@ -85,7 +87,9 @@ struct NowPlayingArtworkBackdrop: View {
         .ignoresSafeArea(edges: ignoresSafeArea ? .all : [])
         .accessibilityHidden(true)
         .onChange(of: fluidSource?.id, initial: true) { _, _ in onFluidSourceChange?(fluidSource) }
-        .task { await fluidResources.prepare() }
+        .task(id: visualsActive && scenePhase == .active) {
+            if visualsActive && scenePhase == .active { await fluidResources.prepare() }
+        }
         .task(id: BackdropRequestID(url: artworkURL, trackID: trackID)) {
             // Retain the backdrop while loading, but never attribute another song's cover to a missing image.
             guard let artworkURL, let request = Self.request(for: artworkURL) else {

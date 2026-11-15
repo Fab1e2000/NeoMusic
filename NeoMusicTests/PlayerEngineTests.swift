@@ -2,36 +2,7 @@ import AVFoundation
 import XCTest
 @testable import NeoMusic
 
-actor SessionActivation {
-    enum RequestError: Error { case missingRequest }
-    private var requests: [CheckedContinuation<Bool, Error>?] = []
-    var count: Int { requests.count }
-
-    func activate(started: @Sendable () -> Void = {}) async throws -> Bool {
-        try await withCheckedThrowingContinuation {
-            requests.append($0)
-            started()
-        }
-    }
-
-    func complete(_ index: Int = 0, with result: Result<Bool, Error> = .success(true)) throws {
-        guard requests.indices.contains(index), let request = requests[index] else { throw RequestError.missingRequest }
-        request.resume(with: result)
-        requests[index] = nil
-    }
-}
-
 @MainActor final class PlayerEngineTests: XCTestCase {
-    private func audioFile(seconds: Int = 1) throws -> URL {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".wav")
-        let format = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1)!
-        let file = try AVAudioFile(forWriting: url, settings: format.settings)
-        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(44100 * seconds))!
-        buffer.frameLength = AVAudioFrameCount(44100 * seconds)
-        memset(buffer.floatChannelData![0], 0, Int(buffer.frameLength) * MemoryLayout<Float>.size)
-        try file.write(from: buffer)
-        return url
-    }
     func testMissingFileDoesNotPretendToPlay() {
         let engine = LocalPlaybackEngine()
         defer { engine.shutdown() }
@@ -41,7 +12,7 @@ actor SessionActivation {
         XCTAssertFalse(engine.isLoading)
     }
     func testSuccessfulLoadSeekPauseAndCancellation() async throws {
-        let url = try audioFile()
+        let url = try PlayerTestFixtures.silentAudio()
         defer { try? FileManager.default.removeItem(at: url) }
         let engine = LocalPlaybackEngine()
         defer { engine.shutdown() }
@@ -81,7 +52,7 @@ actor SessionActivation {
     }
 
     func testCrossfadePromotesPlayingIncomingOnce() async throws {
-        let first = try audioFile(seconds: 4), second = try audioFile(seconds: 6)
+        let first = try PlayerTestFixtures.silentAudio(seconds: 4), second = try PlayerTestFixtures.silentAudio(seconds: 6)
         defer { try? FileManager.default.removeItem(at: first); try? FileManager.default.removeItem(at: second) }
         let engine = LocalPlaybackEngine()
         defer { engine.shutdown() }
@@ -100,7 +71,7 @@ actor SessionActivation {
     }
 
     func testFadePauseSeekDisableAndReplacement() async throws {
-        let first = try audioFile(seconds: 4), second = try audioFile(seconds: 6)
+        let first = try PlayerTestFixtures.silentAudio(seconds: 4), second = try PlayerTestFixtures.silentAudio(seconds: 6)
         defer { try? FileManager.default.removeItem(at: first); try? FileManager.default.removeItem(at: second) }
         let engine = LocalPlaybackEngine()
         defer { engine.shutdown() }
@@ -130,7 +101,7 @@ actor SessionActivation {
     }
 
     func testPreparedNextAdvancesWithoutCrossfade() async throws {
-        let first = try audioFile(), second = try audioFile(seconds: 4)
+        let first = try PlayerTestFixtures.silentAudio(), second = try PlayerTestFixtures.silentAudio(seconds: 4)
         defer { try? FileManager.default.removeItem(at: first); try? FileManager.default.removeItem(at: second) }
         let engine = LocalPlaybackEngine()
         defer { engine.shutdown() }
@@ -145,7 +116,7 @@ actor SessionActivation {
     }
 
     func testShortIncomingSurvivesFadePromotion() async throws {
-        let first = try audioFile(seconds: 4), second = try audioFile()
+        let first = try PlayerTestFixtures.silentAudio(seconds: 4), second = try PlayerTestFixtures.silentAudio()
         defer { try? FileManager.default.removeItem(at: first); try? FileManager.default.removeItem(at: second) }
         let engine = LocalPlaybackEngine()
         defer { engine.shutdown() }
@@ -163,7 +134,7 @@ actor SessionActivation {
     }
 
     func testInterruptionResumesOnlyPreservedIntent() async throws {
-        let url = try audioFile(seconds: 4)
+        let url = try PlayerTestFixtures.silentAudio(seconds: 4)
         defer { try? FileManager.default.removeItem(at: url) }
         let engine = LocalPlaybackEngine()
         defer { engine.shutdown() }
@@ -184,7 +155,7 @@ actor SessionActivation {
     }
 
     func testSessionActivationPublishesPlayingOnlyAfterSuccessAndSharesPendingRequest() async throws {
-        let url = try audioFile(seconds: 4)
+        let url = try PlayerTestFixtures.silentAudio(seconds: 4)
         defer { try? FileManager.default.removeItem(at: url) }
         let activation = SessionActivation()
         let engine = LocalPlaybackEngine(activateSession: { try await activation.activate() })
@@ -204,7 +175,7 @@ actor SessionActivation {
     }
 
     func testFailedAndDeclinedSessionActivationStayPaused() async throws {
-        let url = try audioFile(seconds: 4)
+        let url = try PlayerTestFixtures.silentAudio(seconds: 4)
         defer { try? FileManager.default.removeItem(at: url) }
         let results: [Result<Bool, Error>] = [
             .success(false),
@@ -225,7 +196,7 @@ actor SessionActivation {
     }
 
     func testAutomaticResumeFailureStaysPausedWithoutErrorAndAllowsManualRetry() async throws {
-        let url = try audioFile(seconds: 4)
+        let url = try PlayerTestFixtures.silentAudio(seconds: 4)
         defer { try? FileManager.default.removeItem(at: url) }
         let results: [Result<Bool, Error>] = [
             .success(false),
@@ -261,7 +232,7 @@ actor SessionActivation {
     }
 
     func testManualPlayDuringAutomaticResumeReportsActivationFailure() async throws {
-        let url = try audioFile(seconds: 4)
+        let url = try PlayerTestFixtures.silentAudio(seconds: 4)
         defer { try? FileManager.default.removeItem(at: url) }
         let activation = SessionActivation()
         let engine = LocalPlaybackEngine(activateSession: { try await activation.activate() })
@@ -285,7 +256,7 @@ actor SessionActivation {
     }
 
     func testUserPauseCancelsAutomaticResumeWithoutPublishingLateFailure() async throws {
-        let url = try audioFile(seconds: 4)
+        let url = try PlayerTestFixtures.silentAudio(seconds: 4)
         defer { try? FileManager.default.removeItem(at: url) }
         let activation = SessionActivation()
         let engine = LocalPlaybackEngine(activateSession: { try await activation.activate() })
@@ -310,7 +281,7 @@ actor SessionActivation {
     }
 
     func testCancelledSessionActivationCannotResumeAfterUserOrSystemStop() async throws {
-        let url = try audioFile(seconds: 4)
+        let url = try PlayerTestFixtures.silentAudio(seconds: 4)
         defer { try? FileManager.default.removeItem(at: url) }
         let stops: [(String, (LocalPlaybackEngine) -> Void)] = [
             ("pause", { $0.pause() }),
@@ -342,7 +313,7 @@ actor SessionActivation {
     }
 
     func testNewPlayRequestSurvivesLateFailureFromPreviousActivation() async throws {
-        let url = try audioFile(seconds: 4)
+        let url = try PlayerTestFixtures.silentAudio(seconds: 4)
         defer { try? FileManager.default.removeItem(at: url) }
         let activation = SessionActivation()
         let engine = LocalPlaybackEngine(activateSession: { try await activation.activate() })
@@ -363,7 +334,7 @@ actor SessionActivation {
     }
 
     func testSwitchingTracksDuringActivationUsesOnlyTheNewRequest() async throws {
-        let first = try audioFile(seconds: 4), second = try audioFile(seconds: 6)
+        let first = try PlayerTestFixtures.silentAudio(seconds: 4), second = try PlayerTestFixtures.silentAudio(seconds: 6)
         defer { try? FileManager.default.removeItem(at: first); try? FileManager.default.removeItem(at: second) }
         let activation = SessionActivation()
         let engine = LocalPlaybackEngine(activateSession: { try await activation.activate() })
@@ -383,7 +354,7 @@ actor SessionActivation {
     }
 
     func testPreparedAdvancePreservesPendingPlaybackIntent() async throws {
-        let first = try audioFile(seconds: 4), second = try audioFile(seconds: 6)
+        let first = try PlayerTestFixtures.silentAudio(seconds: 4), second = try PlayerTestFixtures.silentAudio(seconds: 6)
         defer { try? FileManager.default.removeItem(at: first); try? FileManager.default.removeItem(at: second) }
         let activation = SessionActivation()
         let engine = LocalPlaybackEngine(activateSession: { try await activation.activate() })
@@ -402,7 +373,7 @@ actor SessionActivation {
     }
 
     func testResourceReplacementPreservesPendingPlaybackIntent() async throws {
-        let first = try audioFile(seconds: 4), second = try audioFile(seconds: 6)
+        let first = try PlayerTestFixtures.silentAudio(seconds: 4), second = try PlayerTestFixtures.silentAudio(seconds: 6)
         defer { try? FileManager.default.removeItem(at: first); try? FileManager.default.removeItem(at: second) }
         let activation = SessionActivation()
         let engine = LocalPlaybackEngine(activateSession: { try await activation.activate() })
@@ -422,7 +393,7 @@ actor SessionActivation {
     }
 
     func testRestorationSeeksNativeItemBeforeStartingAndKeepsDisplayedPosition() async throws {
-        let url = try audioFile(seconds: 80)
+        let url = try PlayerTestFixtures.silentAudio(seconds: 80)
         defer { try? FileManager.default.removeItem(at: url) }
         let engine = LocalPlaybackEngine()
         defer { engine.shutdown() }
@@ -450,7 +421,7 @@ actor SessionActivation {
     }
 
     func testRapidSeeksAndItemReplacementKeepOnlyLatestNativePosition() async throws {
-        let first = try audioFile(seconds: 12), second = try audioFile(seconds: 16)
+        let first = try PlayerTestFixtures.silentAudio(seconds: 12), second = try PlayerTestFixtures.silentAudio(seconds: 16)
         defer { try? FileManager.default.removeItem(at: first); try? FileManager.default.removeItem(at: second) }
         let engine = LocalPlaybackEngine()
         defer { engine.shutdown() }
@@ -478,7 +449,7 @@ actor SessionActivation {
     }
 
     func testResourceReplacementCapturesNativePositionAndAcceptsLaterSeek() async throws {
-        let url = try audioFile(seconds: 12)
+        let url = try PlayerTestFixtures.silentAudio(seconds: 12)
         defer { try? FileManager.default.removeItem(at: url) }
         let engine = LocalPlaybackEngine()
         defer { engine.shutdown() }
@@ -510,7 +481,7 @@ actor SessionActivation {
     }
 
     func testCancelledResourcePreparationAndHandoverKeepCurrentAudioPlaying() async throws {
-        let url = try audioFile(seconds: 12)
+        let url = try PlayerTestFixtures.silentAudio(seconds: 12)
         defer { try? FileManager.default.removeItem(at: url) }
         let engine = LocalPlaybackEngine()
         defer { engine.onStateChange = nil; engine.shutdown() }

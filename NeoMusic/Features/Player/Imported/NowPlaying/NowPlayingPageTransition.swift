@@ -39,10 +39,9 @@ enum NowPlayingPageTransition {
 
         switch page {
         case .artwork:
-            return directionalOffsetAndOpacity(
-                insertionY: motion.artworkDetailsTravel,
-                removalY: motion.artworkDetailsTravel
-            )
+            // Text follows the page's spring, including interrupted returns.
+            // A separate delayed transition gives fresh insertions a different rhythm.
+            return offsetAndOpacity(y: motion.artworkDetailsTravel)
         case .lyrics:
             return .asymmetric(
                 insertion: .identity,
@@ -58,12 +57,8 @@ enum NowPlayingPageTransition {
     static func songHeader(reducesMotion: Bool) -> AnyTransition {
         guard !reducesMotion else { return .opacity }
         return .asymmetric(
-            insertion:
-                offsetAndOpacity(y: motion.songHeaderTravel)
-                .animation(motion.songHeaderIncoming.animation),
-            removal:
-                offsetAndOpacity(y: -motion.artworkDetailsTravel)
-                .animation(motion.outgoing.animation)
+            insertion: offsetAndOpacity(y: motion.songHeaderTravel),
+            removal: offsetAndOpacity(y: -motion.artworkDetailsTravel)
         )
     }
 

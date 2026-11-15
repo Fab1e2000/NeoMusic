@@ -1,6 +1,5 @@
 import XCTest
 import SwiftUI
-import Metal
 @testable import NeoMusic
 
 @MainActor
@@ -53,53 +52,6 @@ final class PlayerVisibilityTests: XCTestCase {
             add(attachment)
             window.isHidden = true
         }
-    }
-
-    func testCompiledFluidBackdropResourcesAndVisibilityPauseDisplayLink() async throws {
-        guard MTLCreateSystemDefaultDevice() != nil else { throw XCTSkip("Metal is unavailable on this destination") }
-        await NowPlayingFluidBackdropResources.shared.prepare()
-        let pipelines = try XCTUnwrap(NowPlayingFluidBackdropResources.shared.pipelines,
-                                      "The app must contain the compiled fluid backdrop Metal library")
-
-        let controller = UIViewController()
-        let scene = try await applicationWindowScene()
-        let window = UIWindow(windowScene: scene)
-        window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
-        window.rootViewController = controller
-        window.isHidden = false
-        defer { window.isHidden = true }
-
-        let image = UIGraphicsImageRenderer(size: CGSize(width: 32, height: 32)).image { ctx in
-            UIColor.systemTeal.setFill()
-            ctx.fill(CGRect(x: 0, y: 0, width: 32, height: 32))
-        }
-        let source = try XCTUnwrap(NowPlayingFluidBackdropSource.make(from: image))
-        let view = NowPlayingFluidBackdropView(pipelines: pipelines)
-        view.frame = controller.view.bounds
-        XCTAssertFalse(view.hasActiveDisplayLink)
-
-        controller.view.addSubview(view)
-        view.update(source: source, isPlaying: true, reduceMotion: false)
-        view.layoutIfNeeded()
-        XCTAssertTrue(view.hasActiveDisplayLink)
-
-        view.update(source: source, isPlaying: false, reduceMotion: true)
-        for _ in 0..<30 where view.hasActiveDisplayLink {
-            try await Task.sleep(for: .milliseconds(15))
-        }
-        XCTAssertFalse(view.hasActiveDisplayLink, "Static reduce-motion backdrop must stop displayLink once frame draws")
-
-        view.update(source: source, isPlaying: true, reduceMotion: false)
-        XCTAssertTrue(view.hasActiveDisplayLink)
-
-        view.removeFromSuperview()
-        XCTAssertFalse(view.hasActiveDisplayLink)
-
-        controller.view.addSubview(view)
-        XCTAssertTrue(view.hasActiveDisplayLink)
-
-        view.stop()
-        XCTAssertFalse(view.hasActiveDisplayLink)
     }
 
     func testArtworkMeasurementNeedsNoPlayerAndMatchesPresentedCoverFrame() async throws {

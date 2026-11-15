@@ -12,8 +12,6 @@ struct NowPlayingMarqueeText: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var textWidth: CGFloat = 0
     @State private var containerWidth: CGFloat = 0
-    /// 这一轮滚动的起点；换歌时重新计时，从头开始。
-    @State private var startDate = Date.now
 
     /// 首尾两份文字之间的空隙。
     private static let gap: CGFloat = 40
@@ -60,41 +58,41 @@ struct NowPlayingMarqueeText: View {
                         .transition(.identity)
                 }
             }
-            .onChange(of: text) { startDate = .now }
-            .onChange(of: scrolls) { _, active in if active { startDate = .now } }
             .accessibilityLabel(text)
     }
 
     private var scrollingText: some View {
         let distance = textWidth + Self.gap
         let scrollDuration = TimeInterval(distance / Self.speed)
-        let cycle = Self.pause + scrollDuration
-        return TimelineView(.animation) { context in
-            let elapsed = context.date.timeIntervalSince(startDate)
-            let phase = elapsed.truncatingRemainder(dividingBy: cycle)
-            let progress = max(0, phase - Self.pause) / scrollDuration
-            let offset = -CGFloat(progress) * distance
-            let isMoving = phase > Self.pause
-            HStack(spacing: Self.gap) {
-                Text(text).lineLimit(1).fixedSize()
-                Text(text).lineLimit(1).fixedSize()
-            }
-            .offset(x: offset)
-            .frame(width: containerWidth, alignment: .leading)
-            .clipped()
-            .mask {
-                // 停着时只有右侧渐隐（文字被截在右边）；滚动时左侧也渐隐。
-                HStack(spacing: 0) {
-                    LinearGradient(colors: [.clear, .black], startPoint: .leading, endPoint: .trailing)
-                        .frame(width: Self.fadeWidth)
-                        .opacity(isMoving ? 1 : 0)
-                        .overlay { Color.black.opacity(isMoving ? 0 : 1) }
-                    Rectangle()
-                    LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
-                        .frame(width: Self.fadeWidth)
-                }
-            }
+        let width = containerWidth
+        let fadeWidth = Self.fadeWidth
+        return HStack(spacing: Self.gap) {
+            Text(text).lineLimit(1).fixedSize()
+            Text(text).lineLimit(1).fixedSize()
         }
+        .keyframeAnimator(initialValue: CGFloat.zero) { content, progress in
+            content
+                .offset(x: -progress * distance)
+                .frame(width: width, alignment: .leading)
+                .clipped()
+                .mask {
+                    // 停着时只有右侧渐隐（文字被截在右边）；滚动时左侧也渐隐。
+                    HStack(spacing: 0) {
+                        LinearGradient(colors: [.clear, .black], startPoint: .leading, endPoint: .trailing)
+                            .frame(width: fadeWidth)
+                            .opacity(progress > 0 ? 1 : 0)
+                            .overlay { Color.black.opacity(progress > 0 ? 0 : 1) }
+                        Rectangle()
+                        LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
+                            .frame(width: fadeWidth)
+                    }
+                }
+        } keyframes: { _ in
+            MoveKeyframe(CGFloat.zero)
+            LinearKeyframe(CGFloat.zero, duration: Self.pause)
+            LinearKeyframe(CGFloat(1), duration: scrollDuration)
+        }
+        .id(text)
         .accessibilityHidden(true)
     }
 }

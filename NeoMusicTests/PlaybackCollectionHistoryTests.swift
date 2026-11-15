@@ -3,18 +3,6 @@ import AVFoundation
 @testable import NeoMusic
 
 @MainActor final class PlaybackCollectionHistoryTests: XCTestCase {
-    private func silentAudio(in directory: URL) throws -> URL {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let url = directory.appendingPathComponent("activation.wav")
-        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1))
-        let file = try AVAudioFile(forWriting: url, settings: format.settings)
-        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 44100 * 5))
-        buffer.frameLength = buffer.frameCapacity
-        memset(buffer.floatChannelData![0], 0, Int(buffer.frameLength) * MemoryLayout<Float>.size)
-        try file.write(from: buffer)
-        return url
-    }
-
     func testHistoryRestoresDeduplicatesAndIsolatesAccounts() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -157,7 +145,7 @@ import AVFoundation
     func testCollectionHistoryWaitsForSuccessfulSessionActivation() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let url = try silentAudio(in: directory)
+        let url = try PlayerTestFixtures.silentAudio(at: directory.appendingPathComponent("activation.wav"), seconds: 5)
         let activation = SessionActivation()
         let started = expectation(description: "Native session activation started")
         let engine = LocalPlaybackEngine(activateSession: { try await activation.activate { started.fulfill() } })
@@ -184,7 +172,7 @@ import AVFoundation
     func testDeclinedAndFailedSessionActivationLeaveCollectionHistoryEmpty() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let url = try silentAudio(in: directory)
+        let url = try PlayerTestFixtures.silentAudio(at: directory.appendingPathComponent("activation.wav"), seconds: 5)
         let results: [Result<Bool, Error>] = [.success(false), .failure(URLError(.cannotConnectToHost))]
         for result in results {
             let activation = SessionActivation()
@@ -214,7 +202,7 @@ import AVFoundation
     func testPausingPendingSessionActivationLeavesCollectionHistoryEmpty() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let url = try silentAudio(in: directory)
+        let url = try PlayerTestFixtures.silentAudio(at: directory.appendingPathComponent("activation.wav"), seconds: 5)
         let activation = SessionActivation()
         let started = expectation(description: "Native session activation started")
         let engine = LocalPlaybackEngine(activateSession: { try await activation.activate { started.fulfill() } })

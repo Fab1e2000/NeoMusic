@@ -428,9 +428,10 @@ private struct HitTarget: UIViewRepresentable {
         let player = ReferencePlayerState(model: owner)
         let initial = player.upcomingQueueEntries
         let version = player.upcomingQueueVersion
-        XCTAssertEqual(initial.count, 1_999)
+        XCTAssertEqual(initial.count, 20)
         XCTAssertEqual(initial.first?.queueIndex, 1)
-        XCTAssertEqual(initial.last?.queueIndex, 1_999)
+        XCTAssertEqual(initial.last?.queueIndex, 20)
+        XCTAssertEqual(owner.queue.count, 2_000)
 
         for second in 1...5 {
             player.seek(to: Double(second))
@@ -440,30 +441,69 @@ private struct HitTarget: UIViewRepresentable {
             initial.withUnsafeBufferPointer { originalBuffer in
                 current.withUnsafeBufferPointer { currentBuffer in
                     XCTAssertEqual(originalBuffer.baseAddress, currentBuffer.baseAddress,
-                                   "Playback progress must reuse the long queue's presentation storage")
+                                   "Playback progress must reuse the visible queue's presentation storage")
                 }
             }
         }
     }
-    func testLongQueueReorderPublishesOnceAndPreservesDuplicateOccurrences() {
-        let owner = PlayerTestFixtures.owner(tracks: (0..<2_000).map { track("song-\($0 % 50)") })
+    func testQueueDisplayLimitAdvancesRefillsAndWrapsWithoutTruncatingPlayback() {
+        for count in [0, 1, 20, 21, 22, 2_000] {
+            let owner = PlayerTestFixtures.owner(tracks: (0..<count).map { track("song-\($0)") })
+            let player = ReferencePlayerState(model: owner)
+            let originalIDs = owner.entryIDs
+            for mode in [NowPlayingModel.RepeatMode.off, .one, .all] {
+                owner.repeatMode = mode
+                for index in Set([0, max(0, count - 3), max(0, count - 1)]) {
+                    player.skip(toQueueIndex: index)
+                    let expectedOrder = (0..<count).filter { $0 > index }
+                        + (mode == .all ? Array(0..<index) : [])
+                    let expectedIndices = Array(expectedOrder.prefix(20))
+                    let entries = player.upcomingQueueEntries
+                    XCTAssertEqual(entries.map(\.queueIndex), expectedIndices)
+                    XCTAssertEqual(entries.map(\.id), expectedIndices.map { originalIDs[$0] })
+                    XCTAssertEqual(owner.entryIDs, originalIDs)
+                }
+            }
+        }
+
+        let owner = PlayerTestFixtures.owner(tracks: (0..<30).map { track("song-\($0)") })
         let player = ReferencePlayerState(model: owner)
-        player.skip(toQueueIndex: 900)
+        owner.repeatMode = .off
+        player.next()
+        XCTAssertEqual(player.currentQueueIndex, 1)
+        XCTAssertEqual(player.upcomingQueueEntries.map(\.song.id), (2...21).map { "song-\($0)" })
+        player.removeFromQueue(at: 2)
+        XCTAssertEqual(player.upcomingQueueEntries.map(\.song.id), (3...22).map { "song-\($0)" })
+        XCTAssertEqual(owner.queue.count, 29)
+        player.skip(toQueueIndex: 28)
+        XCTAssertEqual(player.currentTrack?.id, "song-29", "Hidden songs remain available for playback")
+        XCTAssertTrue(player.upcomingQueueEntries.isEmpty)
+    }
+    func testLongQueueReorderPublishesOnceAndPreservesDuplicateOccurrences() {
+        let owner = PlayerTestFixtures.owner(tracks: (0..<2_000).map { track("song-\($0 % 5)") })
+        let player = ReferencePlayerState(model: owner)
+        player.skip(toQueueIndex: 1_990)
         let current = owner.entryIDs[owner.currentIndex]
         let original = player.upcomingQueueEntries
         let songsByEntry = Dictionary(uniqueKeysWithValues: original.map { ($0.id, $0.song) })
         var expected = original.map(\.id)
-        expected.insert(expected.remove(at: 1_500), at: 0)
+        expected.insert(expected.remove(at: 19), at: 0)
+        var expectedQueue = owner.entryIDs
+        for (slot, entry) in zip(original.map(\.queueIndex), expected) { expectedQueue[slot] = entry }
         let revision = owner.queueRevision
 
-        player.moveUpcomingQueueItems(fromOffsets: IndexSet(integer: 1_500), toOffset: 0)
+        player.moveUpcomingQueueItems(fromOffsets: IndexSet(integer: 19), toOffset: 0)
 
         XCTAssertEqual(owner.queueRevision, revision + 1, "A native reorder publishes one completed queue")
         XCTAssertEqual(player.upcomingQueueEntries.map(\.id), expected)
         XCTAssertEqual(owner.entryIDs[owner.currentIndex], current)
-        XCTAssertEqual(owner.currentIndex, 900)
-        XCTAssertEqual(Set(player.upcomingQueueEntries.map(\.id)).count, 1_999)
+        XCTAssertEqual(owner.currentIndex, 1_990)
+        XCTAssertEqual(owner.entryIDs, expectedQueue, "Reordering visible songs preserves every hidden occurrence")
+        XCTAssertEqual(Set(player.upcomingQueueEntries.map(\.id)).count, 20)
         XCTAssertEqual(player.upcomingQueueEntries.map(\.song), expected.map { songsByEntry[$0]! })
+
+        player.moveUpcomingQueueItems(fromOffsets: IndexSet(integer: 0), toOffset: 20)
+        XCTAssertEqual(player.upcomingQueueEntries.map(\.id), original.map(\.id))
     }
     func testQueueProjectionRefreshesForSelectionReorderAndArtwork() {
         let owner = PlayerTestFixtures.owner(tracks: [track("a"), track("b"), track("c"), track("d")])

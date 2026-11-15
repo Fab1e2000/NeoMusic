@@ -75,6 +75,7 @@ struct UpcomingQueueVersion: Equatable, Sendable {
                              queueContinues: model.queueContinues)
     }
 
+    /// Display only the next 20 occurrences; the playback owner retains the full queue.
     var upcomingQueueEntries: [UpcomingQueueEntry] {
         let version = upcomingQueueVersion
         if let queuePresentation, queuePresentation.version == version {
@@ -82,9 +83,13 @@ struct UpcomingQueueVersion: Equatable, Sendable {
         }
         let interval = PerformanceDiagnostics.begin("QueueProjection")
         defer { PerformanceDiagnostics.end("QueueProjection", interval) }
-        let entries = upcoming.map { entry in
-            return UpcomingQueueEntry(id: model.entryIDs[entry.index],
-                                      queueIndex: entry.index, song: entry.track)
+        var indices = Array(model.queue.indices.dropFirst(currentQueueIndex + 1).prefix(20))
+        if repeatMode == .all && !model.queueContinues {
+            indices.append(contentsOf: model.queue.indices.prefix(currentQueueIndex).prefix(20 - indices.count))
+        }
+        let entries = indices.map { index in
+            UpcomingQueueEntry(id: model.entryIDs[index], queueIndex: index,
+                               song: Self.convert(model.queue[index]))
         }
         queuePresentation = (version, entries)
         return entries
@@ -110,7 +115,7 @@ struct UpcomingQueueVersion: Equatable, Sendable {
     func toggleCrossfade() { model.toggleCrossfade() }
     func toggleAutomaticContinuation() { }
     func moveUpcomingQueueItems(fromOffsets source: IndexSet, toOffset destination: Int) {
-        model.reorderUpcoming(indices: upcoming.map(\.index), fromOffsets: source, toOffset: destination)
+        model.reorderUpcoming(indices: upcomingQueueEntries.map(\.queueIndex), fromOffsets: source, toOffset: destination)
     }
     func removeFromQueue(at index: Int) {
         model.removeQueueEntry(at: index)

@@ -83,7 +83,7 @@ xcodebuild -project NeoMusic.xcodeproj -scheme NeoMusic -configuration Release \
   -only-testing:NeoMusicTests test
 ```
 
-按修改范围缩小到具体测试类即可。主要覆盖播放器适配、队列、歌词、资料库恢复、持久化及导航；原预览 target 的有效测试已迁入 `NeoMusicTests`，直接使用正式组件。单元测试的歌曲和图片在测试中生成，部分 Metal 与系统 zoom 用例有运行环境要求。
+按修改范围缩小到具体测试类即可。主要覆盖播放器适配、队列、歌词、资料库恢复、持久化及导航；原预览 target 的有效测试已迁入 `NeoMusicTests`，直接使用正式组件。单元测试的共享歌曲、图片、音频会话及窗口场景辅助集中在 `NeoMusicTests/TestFixtures.swift`；静音音频按每个用例所需时长独立生成并沿用用例内清理。部分 Metal 与系统 zoom 用例有运行环境要求。
 
 上述关闭签名的命令适用于注入凭据存储的账户单元测试。验证正式账户入口及真实 Keychain 读写时，模拟器构建须启用代码签名，移除 `CODE_SIGNING_ALLOWED=NO`；
 

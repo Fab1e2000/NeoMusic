@@ -320,18 +320,6 @@ final class PlaybackTests: XCTestCase {
         XCTAssertNil(model.pendingPlay)
     }
 
-    private func temporaryAudio(in root: URL) throws -> URL {
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        let url = root.appendingPathComponent("tone.wav")
-        let format = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1)!
-        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 44100 * 4)!
-        buffer.frameLength = buffer.frameCapacity
-        memset(buffer.floatChannelData![0], 0, Int(buffer.frameLength) * MemoryLayout<Float>.size)
-        let file = try AVAudioFile(forWriting: url, settings: format.settings)
-        try file.write(from: buffer)
-        return url
-    }
-
     private func queuePlayer(in model: NowPlayingModel) throws -> AVQueuePlayer {
         let engine = try XCTUnwrap(Mirror(reflecting: model).children.first { $0.label == "_audio" }?.value as? LocalPlaybackEngine)
         return try XCTUnwrap(Mirror(reflecting: engine).children.first { $0.label == "player" }?.value as? AVQueuePlayer)
@@ -339,7 +327,7 @@ final class PlaybackTests: XCTestCase {
 
     func testClockKeepsUIProgressWithoutRepublishingNowPlayingUntilPlaybackChanges() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let url = try temporaryAudio(in: root)
+        let url = try PlayerTestFixtures.silentAudio(at: root.appendingPathComponent("tone.wav"), seconds: 4)
         defer { try? FileManager.default.removeItem(at: root) }
         var first = song("first")
         first.duration = 99 // The resolved asset duration must still reach Now Playing.
@@ -385,7 +373,7 @@ final class PlaybackTests: XCTestCase {
 
     func testManualNextReusesPreparedOccurrencesAndPreservesPauseAndLoop() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let url = try temporaryAudio(in: root)
+        let url = try PlayerTestFixtures.silentAudio(at: root.appendingPathComponent("tone.wav"), seconds: 4)
         defer { try? FileManager.default.removeItem(at: root) }
         let model = NowPlayingModel(queue: [song("a"), song("b"), song("a")], currentIndex: 0, isPlaying: false)
         defer { model.shutdownPlayback() }
@@ -410,7 +398,7 @@ final class PlaybackTests: XCTestCase {
 
     func testManualNextReusesPreparedItemWhilePlaying() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let url = try temporaryAudio(in: root)
+        let url = try PlayerTestFixtures.silentAudio(at: root.appendingPathComponent("tone.wav"), seconds: 4)
         defer { try? FileManager.default.removeItem(at: root) }
         let model = NowPlayingModel(queue: [song("a"), song("b")], currentIndex: 0, isPlaying: true)
         defer { model.shutdownPlayback() }
@@ -427,7 +415,7 @@ final class PlaybackTests: XCTestCase {
 
     func testPreparedAdvanceCommitsItsOwnQualityAndClearsUnknownLocalQuality() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let url = try temporaryAudio(in: root)
+        let url = try PlayerTestFixtures.silentAudio(at: root.appendingPathComponent("tone.wav"), seconds: 4)
         defer { try? FileManager.default.removeItem(at: root) }
         let songs = [song("lossless-copy"), song("high-copy"), song("local-file")]
         let qualities: [String?] = ["lossless", "exhigh", nil]
@@ -457,7 +445,7 @@ final class PlaybackTests: XCTestCase {
 
     func testManualSelectionFallsBackForDifferentOrMissingPreparedItem() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let url = try temporaryAudio(in: root)
+        let url = try PlayerTestFixtures.silentAudio(at: root.appendingPathComponent("tone.wav"), seconds: 4)
         defer { try? FileManager.default.removeItem(at: root) }
         let model = NowPlayingModel(queue: [song("a"), song("b")], currentIndex: 0, isPlaying: false)
         defer { model.shutdownPlayback() }
@@ -478,7 +466,7 @@ final class PlaybackTests: XCTestCase {
 
     func testManualPreviousLoadsRequestedItemRatherThanPreparedNext() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let url = try temporaryAudio(in: root)
+        let url = try PlayerTestFixtures.silentAudio(at: root.appendingPathComponent("tone.wav"), seconds: 4)
         defer { try? FileManager.default.removeItem(at: root) }
         let model = NowPlayingModel(queue: [song("a"), song("b"), song("c")], currentIndex: 1, isPlaying: false)
         defer { model.shutdownPlayback() }
@@ -527,7 +515,6 @@ final class PlaybackTests: XCTestCase {
         XCTAssertNotNil(MPNowPlayingInfoCenter.default().nowPlayingInfo?[MPMediaItemPropertyArtwork])
         await model.flushQueuePersistence()
     }
-
 }
 
 // MediaPlayer invokes this immutable artwork provider from its background access queue.

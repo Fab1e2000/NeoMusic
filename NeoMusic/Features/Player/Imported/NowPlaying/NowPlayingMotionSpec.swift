@@ -101,7 +101,6 @@ struct NowPlayingMotionSpec: Equatable, Sendable {
         let directAlternate: NowPlayingAnimationSpec
         let outgoing: NowPlayingAnimationSpec
         let incoming: NowPlayingAnimationSpec
-        let songHeaderIncoming: NowPlayingAnimationSpec
         let delayedResidentEntrance: NowPlayingAnimationSpec
         let lyricsSpatialPresentation: NowPlayingAnimationSpec
         let lyricsOpacityPresentation: NowPlayingAnimationSpec
@@ -201,22 +200,17 @@ struct NowPlayingMotionSpec: Equatable, Sendable {
                 duration: 0.24,
                 delay: 0.15
             ),
-            songHeaderIncoming: NowPlayingAnimationSpec(
-                .easeInOut,
-                duration: 0.24,
-                delay: 0.20
-            ),
             delayedResidentEntrance: NowPlayingAnimationSpec(
                 .smooth,
                 duration: 0.34,
                 delay: 0.11
             ),
-            // Values recovered from the iOS 26 Music presentation animator.
+            // Lyrics and queue share the same resident-page motion.
             lyricsSpatialPresentation: NowPlayingAnimationSpec(
                 .interpolatingSpring(
                     mass: 1,
-                    stiffness: 350,
-                    damping: 40,
+                    stiffness: 475,
+                    damping: 45,
                     initialVelocity: 0
                 ),
                 duration: pageSpringSettlementDuration
@@ -228,13 +222,14 @@ struct NowPlayingMotionSpec: Equatable, Sendable {
                     x2: 0.58,
                     y2: 1
                 ),
-                duration: 0.18
+                duration: 0.30,
+                delay: 0.10
             ),
             lyricsSpatialDismissal: NowPlayingAnimationSpec(
                 .interpolatingSpring(
                     mass: 1,
-                    stiffness: 350,
-                    damping: 40,
+                    stiffness: 475,
+                    damping: 45,
                     initialVelocity: 0
                 ),
                 duration: pageSpringSettlementDuration
@@ -246,7 +241,7 @@ struct NowPlayingMotionSpec: Equatable, Sendable {
                     x2: 0.58,
                     y2: 1
                 ),
-                duration: 0.18
+                duration: 0.30
             ),
             // The recording's queue moves below the cover while fading, keeping
             // the playback controls fixed outside the animated content.
@@ -294,13 +289,11 @@ struct NowPlayingMotionSpec: Equatable, Sendable {
             directAlternateContentScale: 0.92,
             lyricsPresentationScale: 0.90,
             queuePresentationScale: 0.90,
-            // The recovered lyrics-mode transform contains scale only. It
-            // does not translate the presented lyrics view vertically.
-            lyricsTravel: 0,
+            lyricsTravel: 470,
             queueTravel: 470,
             artworkDetailsTravel: -300,
             songHeaderTravel: 40,
-            lyricsPresentationDelay: 0.07
+            lyricsPresentationDelay: 0
         ),
         interface: InterfaceMotion(
             coreShow: NowPlayingAnimationSpec(

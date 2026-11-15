@@ -345,13 +345,19 @@ final class NowPlayingFluidBackdropEngine {
     private let avgTexture: MTLTexture
     private let conditionedTexture: MTLTexture
     private let frozenTexture: MTLTexture
+    private let renderPass: MTLRenderPassDescriptor = {
+        let pass = MTLRenderPassDescriptor()
+        pass.colorAttachments[0].loadAction = .dontCare
+        pass.colorAttachments[0].storeAction = .store
+        return pass
+    }()
 
     init?(pipelines: NowPlayingBackdropMetalPipelines) {
         let device = pipelines.device
         let w = Self.canvasWidth
         let h = Self.canvasHeight
 
-        guard let artwork = Self.makeTexture(device: device, width: NowPlayingFluidBackdropSource.dimension, height: NowPlayingFluidBackdropSource.dimension, format: .rgba8Unorm_srgb, usage: [.shaderRead]),
+        guard let artwork = Self.makeTexture(device: device, width: NowPlayingFluidBackdropSource.dimension, height: NowPlayingFluidBackdropSource.dimension, format: .rgba8Unorm_srgb, usage: [.shaderRead], storageMode: .shared),
               let compose = Self.makeTexture(device: device, width: w, height: h, format: .rgba16Float, usage: [.renderTarget, .shaderRead]),
               let d1 = Self.makeTexture(device: device, width: 80, height: 160, format: .rgba16Float, usage: [.renderTarget, .shaderRead]),
               let d2 = Self.makeTexture(device: device, width: 40, height: 80, format: .rgba16Float, usage: [.renderTarget, .shaderRead]),
@@ -490,7 +496,7 @@ final class NowPlayingFluidBackdropEngine {
         let sourceID = source.id
         guard uploadedSourceID != sourceID else { return }
         if artworkTexture.width != source.width || artworkTexture.height != source.height,
-           let resized = Self.makeTexture(device: pipelines.device, width: source.width, height: source.height, format: .rgba8Unorm_srgb, usage: [.shaderRead]) {
+           let resized = Self.makeTexture(device: pipelines.device, width: source.width, height: source.height, format: .rgba8Unorm_srgb, usage: [.shaderRead], storageMode: .shared) {
             artworkTexture = resized
         }
         source.rgba8SRGBData.withUnsafeBytes { rawBuffer in
@@ -525,11 +531,10 @@ final class NowPlayingFluidBackdropEngine {
         textures: [MTLTexture],
         uniforms: inout U
     ) -> Bool {
-        let pass = MTLRenderPassDescriptor()
-        pass.colorAttachments[0].texture = target
-        pass.colorAttachments[0].loadAction = .dontCare
-        pass.colorAttachments[0].storeAction = .store
-        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return false }
+        renderPass.colorAttachments[0].texture = target
+        // Encoders capture the pass configuration; release the drawable from the reusable descriptor.
+        defer { renderPass.colorAttachments[0].texture = nil }
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPass) else { return false }
         encoder.setRenderPipelineState(pipeline)
         for (index, texture) in textures.enumerated() {
             encoder.setFragmentTexture(texture, index: index)
@@ -545,10 +550,11 @@ final class NowPlayingFluidBackdropEngine {
         width: Int,
         height: Int,
         format: MTLPixelFormat,
-        usage: MTLTextureUsage
+        usage: MTLTextureUsage,
+        storageMode: MTLStorageMode = .private
     ) -> MTLTexture? {
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: format, width: width, height: height, mipmapped: false)
-        descriptor.storageMode = .shared
+        descriptor.storageMode = storageMode
         descriptor.usage = usage
         return device.makeTexture(descriptor: descriptor)
     }
@@ -573,6 +579,7 @@ final class NowPlayingFluidBackdropView: UIView {
     private var targetMoving: Bool = true
     private var currentSpeed: Float = 1
     private var isReduceMotion = false
+    private var isActive = true
 
     private var hasRenderedFrame = false
     private var hasFrozenTrack = false
@@ -601,7 +608,7 @@ final class NowPlayingFluidBackdropView: UIView {
         metalLayer.pixelFormat = .bgra8Unorm
         // 着色器最终输出 linearToSRGB 编码像素，显式声明 sRGB 避免无标签图层与屏幕直出管线色彩失配。
         metalLayer.colorspace = CGColorSpace(name: CGColorSpace.sRGB)
-        metalLayer.framebufferOnly = false
+        metalLayer.framebufferOnly = true
         metalLayer.isOpaque = true
         metalLayer.contentsScale = 1.0
         metalLayer.magnificationFilter = .linear
@@ -612,8 +619,14 @@ final class NowPlayingFluidBackdropView: UIView {
     func update(
         source: NowPlayingFluidBackdropSource,
         isPlaying: Bool,
-        reduceMotion: Bool
+        reduceMotion: Bool,
+        isActive: Bool = true
     ) {
+        if self.isActive != isActive {
+            self.isActive = isActive
+            lastTickTimestamp = nil
+            needsRender = true
+        }
         let newSourceID = source.id
         if currentSourceID != newSourceID {
             let hadPrevious = currentSourceID != nil && hasRenderedFrame
@@ -641,7 +654,7 @@ final class NowPlayingFluidBackdropView: UIView {
         }
 
         updateDisplayLink()
-        if !hasRenderedFrame, bounds.width > 0, bounds.height > 0, window != nil {
+        if isActive, !hasRenderedFrame, bounds.width > 0, bounds.height > 0, window != nil {
             renderTick(timestamp: CACurrentMediaTime())
         }
     }
@@ -674,7 +687,7 @@ final class NowPlayingFluidBackdropView: UIView {
     }
 
     private func updateDisplayLink() {
-        guard window != nil else {
+        guard isActive, window != nil, engine != nil, source != nil else {
             stopDisplayLink()
             return
         }
@@ -709,7 +722,8 @@ final class NowPlayingFluidBackdropView: UIView {
     }
 
     private func renderTick(timestamp: CFTimeInterval) {
-        guard let engine, let source, bounds.width > 0, bounds.height > 0 else { return }
+        guard isActive, window != nil, let engine, let source,
+              bounds.width > 0, bounds.height > 0 else { return }
 
         let dt: Double
         if let lastTickTimestamp {
@@ -775,16 +789,17 @@ struct NowPlayingFluidBackdropRepresentable: UIViewRepresentable {
     let source: NowPlayingFluidBackdropSource
     let isPlaying: Bool
     let reduceMotion: Bool
+    let isActive: Bool
     let pipelines: NowPlayingBackdropMetalPipelines
 
     func makeUIView(context: Context) -> NowPlayingFluidBackdropView {
         let view = NowPlayingFluidBackdropView(pipelines: pipelines)
-        view.update(source: source, isPlaying: isPlaying, reduceMotion: reduceMotion)
+        view.update(source: source, isPlaying: isPlaying, reduceMotion: reduceMotion, isActive: isActive)
         return view
     }
 
     func updateUIView(_ view: NowPlayingFluidBackdropView, context: Context) {
-        view.update(source: source, isPlaying: isPlaying, reduceMotion: reduceMotion)
+        view.update(source: source, isPlaying: isPlaying, reduceMotion: reduceMotion, isActive: isActive)
     }
 
     static func dismantleUIView(_ view: NowPlayingFluidBackdropView, coordinator: ()) {
