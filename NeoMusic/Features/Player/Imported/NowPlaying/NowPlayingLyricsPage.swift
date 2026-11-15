@@ -20,6 +20,7 @@ struct NowPlayingLyricsContent {
 
 struct NowPlayingLyricsPage: View {
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+    @Environment(\.nowPlayingLayout) private var layout
     @Environment(\.nowPlayingControlsOverflow) private var controlsOverflow
     @ScaledMetric(relativeTo: .title) private var plainLyricsFontSize = 36
     @ScaledMetric(relativeTo: .title) private var plainLyricsLineSpacing = 14
@@ -66,16 +67,15 @@ struct NowPlayingLyricsPage: View {
     }
 
     var body: some View {
-        VStack(spacing: lyricsContentSpacing) {
-            if presentation == .portrait, showsSongHeader {
-                songHeader
+        lyricsStyleContent
+            .transition(.opacity)
+            .overlay(alignment: .top) {
+                if presentation == .portrait, showsSongHeader {
+                    songHeader
+                        .frame(height: NowPlayingSongHeader.referenceHeight)
+                        .padding(.top, NowPlayingSongHeader.topInset)
+                }
             }
-
-            lyricsStyleContent
-                .transition(.opacity)
-        }
-        .padding(.top, sharedSongHeaderInset)
-        .padding(.bottom, portraitContentBottomInset)
         .animation(
             accessibilityReduceMotion ? nil : .smooth(duration: 0.3),
             value: presentation
@@ -100,15 +100,18 @@ struct NowPlayingLyricsPage: View {
         Group {
             if let errorMessage {
                 ContentUnavailableView("歌词读取失败", systemImage: "exclamationmark.bubble", description: Text(errorMessage))
+                    .padding(.top, sharedSongHeaderInset)
             } else if let lyrics {
                 if lyrics.isEmpty {
                     ContentUnavailableView("暂无歌词", systemImage: "quote.bubble")
+                        .padding(.top, sharedSongHeaderInset)
                 } else if lyrics.isTimed {
                     AppleMusicLocalLyricsView(
                         lyrics: lyrics, activeID: lastActiveLineID,
                         bottomOverlayHeight: appleMusicBottomOverlayHeight, isActive: isActive,
                         isInterfaceHidden: Binding(get: { isInterfaceHidden }, set: { onInterfaceVisibilityChange?(!$0) }),
-                        onSeek: { player.seek(to: $0) }
+                        onSeek: { player.seek(to: $0) },
+                        topOverlayHeight: sharedSongHeaderInset - lyricsContentSpacing
                     )
                 } else {
                     ScrollView {
@@ -119,7 +122,8 @@ struct NowPlayingLyricsPage: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .textSelection(.enabled)
                     }
-                    .padding(.bottom, appleMusicBottomOverlayHeight)
+                    .padding(.top, sharedSongHeaderInset)
+                    .padding(.bottom, isInterfaceHidden ? 0 : appleMusicBottomOverlayHeight)
                 }
             } else {
                 Group {
@@ -135,6 +139,7 @@ struct NowPlayingLyricsPage: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .padding(.top, sharedSongHeaderInset)
             }
         }
         .pageContentReveal(isReady: lyrics != nil || errorMessage != nil || showsLoadingFeedback)
@@ -155,15 +160,10 @@ struct NowPlayingLyricsPage: View {
     private var appleMusicBottomOverlayHeight: CGFloat {
         switch presentation {
         case .portrait:
-            NowPlayingBottomControls.overlayHeight + controlsOverflow
+            max(0, layout.contentSize.height - 3 - layout.contentY(557)) + controlsOverflow
         case .landscape:
             50
         }
-    }
-
-    private var portraitContentBottomInset: CGFloat {
-        guard presentation == .portrait else { return 0 }
-        return 12
     }
 
     private var usesReferencePortraitLayout: Bool {
@@ -176,7 +176,7 @@ struct NowPlayingLyricsPage: View {
     }
 
     private var sharedSongHeaderInset: CGFloat {
-        guard presentation == .portrait, !showsSongHeader else {
+        guard presentation == .portrait else {
             return 0
         }
         return NowPlayingSongHeader.topInset

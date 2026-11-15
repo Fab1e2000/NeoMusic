@@ -9,6 +9,7 @@ struct AppleMusicLocalLyricsView: View {
     let lyrics: ReferenceLyrics
     let activeID: Int?
     let bottomOverlayHeight: CGFloat
+    let topOverlayHeight: CGFloat
     let isActive: Bool
     @Binding var isInterfaceHidden: Bool
     let onSeek: (Double) -> Void
@@ -34,11 +35,13 @@ struct AppleMusicLocalLyricsView: View {
 
     init(lyrics: ReferenceLyrics, activeID: Int?, bottomOverlayHeight: CGFloat,
          isActive: Bool, isInterfaceHidden: Binding<Bool>, onSeek: @escaping (Double) -> Void,
+         topOverlayHeight: CGFloat = 0,
          fixedFontSize: CGFloat? = nil,
          foreground: Color = .white, rowGeometry: LyricsRowGeometry = LyricsRowGeometry()) {
         self.lyrics = lyrics
         self.activeID = activeID
         self.bottomOverlayHeight = bottomOverlayHeight
+        self.topOverlayHeight = topOverlayHeight
         self.isActive = isActive
         _isInterfaceHidden = isInterfaceHidden
         self.onSeek = onSeek
@@ -53,12 +56,12 @@ struct AppleMusicLocalLyricsView: View {
             let referenceHeight = max(height - min(max(bottomOverlayHeight, 0), max(height - 1, 0)), 1)
             let lineHeight = LyricsFontMetrics.boldLineHeight(size: fontSize)
             let focusedHeight = rowGeometry.height(for: activeID) ?? lineHeight
-            let visibleHeight = isInterfaceHidden ? height : referenceHeight
+            let visibleHeight = max((isInterfaceHidden ? height : referenceHeight) - topOverlayHeight, 1)
             // The reference places the leading line near the upper quarter of the
             // visible lyrics, with wrapped lines continuing below that position.
             let preferredTop = visibleHeight * 0.233 - lineHeight / 2
-            let focusTop = min(max(preferredTop, visibleHeight * 0.08),
-                               max(visibleHeight * 0.08, visibleHeight * 0.84 - focusedHeight))
+            let focusTop = topOverlayHeight + min(max(preferredTop, visibleHeight * 0.08),
+                                                  max(visibleHeight * 0.08, visibleHeight * 0.84 - focusedHeight))
             let anchor = min(max(focusTop / max(height - focusedHeight, 1), 0), 1)
             // Keep the last active focus while the outgoing page shrinks.
             let appliedFocusTop = isActive ? focusTop : restingFocusTop
@@ -66,6 +69,7 @@ struct AppleMusicLocalLyricsView: View {
             let viewportFade = LyricsViewportFade(
                 height: height,
                 referenceHeight: referenceHeight,
+                topOverlayHeight: topOverlayHeight,
                 isInterfaceHidden: isInterfaceHidden
             )
             ScrollView {
@@ -203,29 +207,32 @@ private struct LyricsBrowseResumeRequest: Equatable {
 }
 
 nonisolated struct LyricsViewportFade: Equatable, Sendable {
+    var topStart: CGFloat = 0
     var topEnd: CGFloat = 0
     var bottomStart: CGFloat = .greatestFiniteMagnitude
     var bottomEnd: CGFloat = .greatestFiniteMagnitude
 
     init(
+        topStart: CGFloat = 0,
         topEnd: CGFloat = 0,
         bottomStart: CGFloat = .greatestFiniteMagnitude,
         bottomEnd: CGFloat = .greatestFiniteMagnitude
     ) {
+        self.topStart = topStart
         self.topEnd = topEnd
         self.bottomStart = bottomStart
         self.bottomEnd = bottomEnd
     }
 
-    init(height: CGFloat, referenceHeight: CGFloat, isInterfaceHidden: Bool) {
-        let ratio = referenceHeight / max(height, 1)
-        let bottomClear = isInterfaceHidden ? 1 : ratio
-        let bottomFade = isInterfaceHidden ? 0.08 : 0.16 * ratio
-        let topLocation = 0.08 * ratio
+    init(height: CGFloat, referenceHeight: CGFloat, topOverlayHeight: CGFloat, isInterfaceHidden: Bool) {
+        let bottomEnd = isInterfaceHidden ? height : referenceHeight
+        let topStart = min(topOverlayHeight, bottomEnd)
+        let topEnd = min(topStart + NowPlayingQueueList.topFadeHeight, bottomEnd)
         self.init(
-            topEnd: topLocation * height,
-            bottomStart: max(topLocation, bottomClear - bottomFade) * height,
-            bottomEnd: bottomClear * height
+            topStart: topStart,
+            topEnd: topEnd,
+            bottomStart: max(topEnd, bottomEnd - NowPlayingQueueList.bottomFadeHeight),
+            bottomEnd: bottomEnd
         )
     }
 }
@@ -241,10 +248,11 @@ nonisolated private struct LyricsEdgeVisualModifier: ViewModifier, Animatable {
     let motion: AppleMusicLyricsMotionProfile
     let blendPlusLighter: Bool
 
-    var animatableData: AnimatablePair<CGFloat, AnimatablePair<CGFloat, CGFloat>> {
-        get { .init(fade.topEnd, .init(fade.bottomStart, fade.bottomEnd)) }
+    var animatableData: AnimatablePair<AnimatablePair<CGFloat, CGFloat>, AnimatablePair<CGFloat, CGFloat>> {
+        get { .init(.init(fade.topStart, fade.topEnd), .init(fade.bottomStart, fade.bottomEnd)) }
         set {
-            fade.topEnd = newValue.first
+            fade.topStart = newValue.first.first
+            fade.topEnd = newValue.first.second
             fade.bottomStart = newValue.second.first
             fade.bottomEnd = newValue.second.second
         }
@@ -273,10 +281,10 @@ nonisolated private struct LyricsEdgeVisualModifier: ViewModifier, Animatable {
                             .float4(
                                 Float(frame.minY),
                                 Float(scaleY),
-                                Float(currentFade.topEnd),
-                                Float(currentFade.bottomStart)
+                                Float(currentFade.topStart),
+                                Float(currentFade.topEnd)
                             ),
-                            .float(Float(currentFade.bottomEnd))
+                            .float2(Float(currentFade.bottomStart), Float(currentFade.bottomEnd))
                         ),
                         isEnabled: needsFade
                     )

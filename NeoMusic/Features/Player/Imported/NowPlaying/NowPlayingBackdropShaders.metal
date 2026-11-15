@@ -298,17 +298,16 @@ fragment float4 fluidBackdropPresentFragment(
     float2 position,
     half4 color,
     float4 viewportMap,
-    float bottomEnd
+    float2 bottomEdge
 ) {
     float viewportY = viewportMap.x + position.y * viewportMap.y;
-    if (viewportY <= 0.0f || viewportY >= bottomEnd) {
+    float topStart = viewportMap.z;
+    float topEnd = viewportMap.w;
+    if (viewportY <= topStart || viewportY >= bottomEdge.y) {
         return half4(0.0h);
     }
-    float topEnd = viewportMap.z;
-    float bottomStart = viewportMap.w;
-    float topAlpha = topEnd > 0.0f ? clamp(viewportY / topEnd, 0.0f, 1.0f) : 1.0f;
-    float bottomSpan = bottomEnd - bottomStart;
-    float bottomAlpha = bottomSpan > 0.0f ? clamp((bottomEnd - viewportY) / bottomSpan, 0.0f, 1.0f) : 1.0f;
+    float topAlpha = topEnd > topStart ? smoothstep(topStart, topEnd, viewportY) : 1.0f;
+    float bottomAlpha = bottomEdge.y > bottomEdge.x ? 1.0f - smoothstep(bottomEdge.x, bottomEdge.y, viewportY) : 1.0f;
     return color * half(min(topAlpha, bottomAlpha));
 }
 
