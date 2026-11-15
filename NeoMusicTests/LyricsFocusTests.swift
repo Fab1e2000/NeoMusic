@@ -5,6 +5,102 @@ import UIKit
 
 @MainActor
 final class LyricsFocusTests: XCTestCase {
+    func testWaveStartsAtTheOutgoingRowAndKeepsDistanceBlurReadable() {
+        let motion = AppleMusicLyricsMotionProfile.iOS26_6
+        XCTAssertTrue(motion.isForwardLineChange(from: 40, to: 41))
+        for next in [nil, 40, 39, 62] as [Int?] {
+            XCTAssertFalse(motion.isForwardLineChange(from: 40, to: next))
+        }
+        XCTAssertFalse(motion.isForwardLineChange(from: nil, to: 0))
+        for (row, delay) in [(40, 0.0), (41, 0.05), (42, 0.10), (43, 0.15), (44, 0.20)] {
+            XCTAssertEqual(motion.lineChangeDelay(rowIndex: row, activeIndex: 41), delay, accuracy: 0.0001)
+        }
+        let lineHeight = 40.0
+        let stride = lineHeight + motion.lineSpacing
+        XCTAssertEqual(motion.blurRadius(verticalDistance: 0, lineHeight: lineHeight), 0)
+        XCTAssertEqual(motion.blurRadius(verticalDistance: stride, lineHeight: lineHeight), 2.5)
+        XCTAssertEqual(motion.blurRadius(verticalDistance: 2 * stride, lineHeight: lineHeight), 4)
+        XCTAssertEqual(motion.blurRadius(verticalDistance: 3 * stride, lineHeight: lineHeight), 5.5)
+        XCTAssertEqual(motion.blurRadius(verticalDistance: 20 * stride, lineHeight: lineHeight), 5.5)
+        for distance in [0.5 * stride, stride, 1.5 * stride, 2 * stride, 2.5 * stride] {
+            let radius = motion.blurRadius(verticalDistance: distance, lineHeight: lineHeight)
+            XCTAssertEqual(radius, motion.blurRadius(verticalDistance: -distance, lineHeight: lineHeight))
+            XCTAssertGreaterThan(motion.blurRadius(verticalDistance: distance + 0.5, lineHeight: lineHeight), radius)
+        }
+        XCTAssertLessThan(motion.focusBlurTransitionDuration, motion.lineChangeDuration)
+    }
+
+    func testLyricsHostingKeepsHorizontalBlurOverflowAndWrappedDistance() async throws {
+        let state = LyricsFocusTestState()
+        let window = try await mount(state, size: .large)
+        defer { window.isHidden = true }
+        try await assertFocus(40, in: state)
+        let scrollView = try XCTUnwrap(scrollViews(in: window).first)
+        XCTAssertFalse(scrollView.clipsToBounds)
+        let rows = scrollView.subviews.filter { $0.subviews.first is any UIContentView }
+        XCTAssertEqual(rows.count, state.lyrics.lines.count)
+        for row in rows {
+            let host = try XCTUnwrap(row.subviews.first)
+            XCTAssertFalse(row.clipsToBounds)
+            XCTAssertFalse(host.clipsToBounds)
+            XCTAssertLessThan(host.frame.minX, row.bounds.minX)
+            XCTAssertGreaterThan(host.frame.maxX, row.bounds.maxX)
+            if row.frame.maxY < scrollView.bounds.minY - 24 || row.frame.minY > scrollView.bounds.maxY + 24 {
+                XCTAssertTrue(host.isHidden, "Unclipped rows must not draw outside the vertical viewport")
+            }
+        }
+        let focus = try XCTUnwrap(state.geometry.top(for: 40))
+        let wrappedTop = try XCTUnwrap(state.geometry.top(for: 42))
+        let lineHeight = try XCTUnwrap(state.geometry.height(for: 40))
+        let motion = AppleMusicLyricsMotionProfile.iOS26_6
+        let wrappedBlur = motion.blurRadius(verticalDistance: Double(wrappedTop - focus), lineHeight: Double(lineHeight))
+        let twoSingleLines = motion.blurRadius(verticalDistance: 2 * (Double(lineHeight) + motion.lineSpacing),
+                                               lineHeight: Double(lineHeight))
+        XCTAssertGreaterThan(wrappedBlur, twoSingleLines, "Wrapped text must contribute its actual height to distance blur")
+    }
+
+    func testHeaderAndProgressBoundariesSurviveInterfaceVisibilityChanges() async throws {
+        let state = LyricsFocusTestState()
+        state.topOverlayHeight = 69.25
+        let window = try await mount(state, size: .large)
+        defer { window.isHidden = true }
+        let scrollView = try XCTUnwrap(scrollViews(in: window).first)
+        // Re-layout before another render commit must retain the current model position.
+        scrollView.setNeedsLayout()
+        scrollView.layoutIfNeeded()
+        let initialHeight = try XCTUnwrap(state.geometry.height(for: 40))
+        let initialTop = try XCTUnwrap(state.geometry.top(for: 40))
+        XCTAssertEqual(initialTop, state.expectedTop(forRowHeight: initialHeight), accuracy: 2)
+        for hidden in [false, true, false] {
+            state.isInterfaceHidden = hidden
+            try await assertFocus(40, in: state)
+            let top = try XCTUnwrap(state.geometry.top(for: 40))
+            let height = try XCTUnwrap(state.geometry.height(for: 40))
+            XCTAssertGreaterThan(top, state.topOverlayHeight)
+            XCTAssertLessThan(top + height, hidden ? 600 : 480)
+            let bottom: CGFloat = hidden ? 600 : 480
+            let edgeSettled = try await waitUntil {
+                self.edgeMasks(in: scrollView.layer).contains { owner, mask in
+                    let ownerFrame = scrollView.layer.convert(owner.bounds, from: owner)
+                    let frame = scrollView.layer.convert(mask.frame, from: owner)
+                    return ownerFrame.intersects(scrollView.bounds)
+                        && abs(frame.minY - scrollView.bounds.minY - state.topOverlayHeight) < 2
+                        && abs(frame.maxY - scrollView.bounds.minY - bottom) < 2
+                }
+            }
+            XCTAssertTrue(edgeSettled, "Leaf masks must follow the header and playback boundary")
+            XCTAssertFalse(scrollView.point(inside: CGPoint(x: 20, y: scrollView.bounds.minY + 60), with: nil))
+            XCTAssertEqual(scrollView.point(inside: CGPoint(x: 20, y: scrollView.bounds.minY + 490), with: nil), hidden)
+        }
+    }
+
+    private func edgeMasks(in layer: CALayer) -> [(CALayer, CAGradientLayer)] {
+        var masks: [(CALayer, CAGradientLayer)] = []
+        if let mask = layer.mask as? CAGradientLayer { masks.append((layer, mask)) }
+        for child in layer.sublayers ?? [] { masks += edgeMasks(in: child) }
+        return masks
+    }
+
     func testNativeFocusAlignsDistantAndMultilineTargetsAtDefaultAndAccessibilitySizes() async throws {
         for size in [DynamicTypeSize.large, .accessibility5] {
             let state = LyricsFocusTestState()
@@ -132,6 +228,7 @@ private final class LyricsFocusTestState {
     var renderedIsActive: Bool?
     var presentationScale: CGFloat = 1
     var seekCount = 0
+    var topOverlayHeight: CGFloat = 0
 
     let lyrics: ReferenceLyrics = {
         let lines = (0..<80).map { index in
@@ -148,9 +245,9 @@ private final class LyricsFocusTestState {
     }()
 
     func expectedTop(forRowHeight height: CGFloat) -> CGFloat {
-        let visibleHeight = isInterfaceHidden ? viewportHeight : viewportHeight - 120
+        let visibleHeight = (isInterfaceHidden ? viewportHeight : viewportHeight - 120) - topOverlayHeight
         let leadingLineHeight = geometry.height(for: 40) ?? height
-        return min(max(visibleHeight * 0.233 - leadingLineHeight / 2, visibleHeight * 0.08),
+        return topOverlayHeight + min(max(visibleHeight * 0.233 - leadingLineHeight / 2, visibleHeight * 0.08),
                    max(visibleHeight * 0.08, visibleHeight * 0.84 - height))
     }
 }
@@ -167,7 +264,7 @@ private struct LyricsFocusTestContent: View {
                 state.seekCount += 1
                 state.activeID = state.lyrics.activeLine(at: $0) ?? 0
             },
-            rowGeometry: state.geometry
+            topOverlayHeight: state.topOverlayHeight, rowGeometry: state.geometry
         )
         .id(state.trackIdentity)
         .scaleEffect(state.presentationScale, anchor: .center)

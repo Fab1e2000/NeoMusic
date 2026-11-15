@@ -64,8 +64,8 @@ nonisolated struct AppleMusicLyricsMotionProfile: Equatable, Sendable {
         transliterationBackgroundVocalsFontCoefficient: 0.27,
         cascadeDelay: 0.05,
         deselectedScale: 0.98,
-        nonFocusedBlurRadius: 3,
-        maximumNonFocusedBlurRadius: 4,
+        nonFocusedBlurRadius: 2.5,
+        maximumNonFocusedBlurRadius: 5.5,
         selectedTextOpacity: 1,
         selectedUpcomingTextOpacity: 0.35,
         deselectedTextOpacity: 0.175,
@@ -111,5 +111,28 @@ nonisolated struct AppleMusicLyricsMotionProfile: Equatable, Sendable {
         AppleMusicLyricsDynamicSpring.parameters(
             sourceDuration: sourceDuration
         )
+    }
+
+    var lineChangeDuration: TimeInterval { 0.30 }
+
+    func isForwardLineChange(from previous: Int?, to next: Int?) -> Bool {
+        guard let previous, let next else { return false }
+        return next == previous + 1
+    }
+
+    func lineChangeDelay(rowIndex: Int, activeIndex: Int) -> TimeInterval {
+        Double(max(rowIndex - activeIndex + 1, 0)) * cascadeDelay
+    }
+
+    /// Distance between the leading lines, normalized for the displayed font size.
+    /// Wrapped paragraphs therefore contribute their full height to the falloff.
+    func blurRadius(verticalDistance: Double, lineHeight: Double) -> Double {
+        let distance = abs(verticalDistance) / max(lineHeight + lineSpacing, 1)
+        let near = min(distance, 1)
+        let far = min(max((distance - 1) / 2, 0), 1)
+        let nearCurve = near * near * (3 - 2 * near)
+        let farCurve = far * far * (3 - 2 * far)
+        return nonFocusedBlurRadius * nearCurve
+            + (maximumNonFocusedBlurRadius - nonFocusedBlurRadius) * farCurve
     }
 }
