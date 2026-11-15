@@ -84,6 +84,7 @@ private final class NativeLyricsScrollView: UIScrollView, UIScrollViewDelegate {
     private var wasActive = false
     private var positioning = false
     private var refreshing = false
+    fileprivate var isRefreshing: Bool { refreshing }
     private var browsing = false
     private var resumeTask: Task<Void, Never>?
     private var visibility = LyricsScrollInterfaceVisibilityTracker()
@@ -416,11 +417,15 @@ private final class NativeLyricsScrollView: UIScrollView, UIScrollViewDelegate {
     private func startDisplayLink() {
         guard displayLink == nil else { return }
         let link = CADisplayLink(target: self, selector: #selector(refreshVisualGeometry))
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
         link.add(to: .main, forMode: .common)
         displayLink = link
     }
     private func stopDisplayLinkIfIdle() {
-        if animators.isEmpty && fadeAnimator == nil { displayLink?.invalidate(); displayLink = nil }
+        if animators.isEmpty && fadeAnimator == nil {
+            displayLink?.invalidate()
+            displayLink = nil
+        }
     }
 
     @objc fileprivate func refreshVisualGeometry() {
@@ -470,13 +475,6 @@ private final class NativeLyricsScrollView: UIScrollView, UIScrollViewDelegate {
         let lineHeight = LyricsFontMetrics.boldLineHeight(size: input.fontSize)
         for row in rows {
             let top = visualMinY(for: row, presentation: presentation)
-            // Preserve the next focused row's blur, including when it starts offscreen.
-            if !row.appearance.focused {
-                let radius = motion.blurRadius(
-                    verticalDistance: Double(top - focusedTop), lineHeight: Double(lineHeight)
-                )
-                if row.appearance.distanceBlurRadius != radius { row.appearance.distanceBlurRadius = radius }
-            }
             let viewportTop = top - contentOffset.y
             let bleed = NativeLyricRowView.horizontalBleed
             let intersectsFade = viewportTop + row.bounds.height >= fade.topStart - bleed
@@ -484,8 +482,14 @@ private final class NativeLyricsScrollView: UIScrollView, UIScrollViewDelegate {
             // Horizontal overflow stays visible; offscreen rows remain hidden vertically.
             if row.content.isHidden == intersectsFade { row.content.isHidden = !intersectsFade }
             if intersectsFade {
+                if !row.appearance.focused {
+                    let radius = motion.blurRadius(
+                        verticalDistance: Double(top - focusedTop), lineHeight: Double(lineHeight)
+                    )
+                    if row.appearance.distanceBlurRadius != radius { row.appearance.distanceBlurRadius = radius }
+                }
                 input.rowGeometry.record(.init(height: row.bounds.height, top: viewportTop), for: row.line.id)
-                row.applyEdgeFade(fade, in: self, presentation: presentation)
+                row.applyEdgeFade(fade, viewportTop: viewportTop, in: self, presentation: presentation)
             } else {
                 input.rowGeometry.discardPosition(for: row.line.id)
             }
@@ -681,13 +685,19 @@ private final class NativeLyricRowView: UIView {
         super.layoutSublayers(of: layer)
         // UIKit coalesces row layout changes into the scroll view's next layout pass.
         // A row must not synchronously refresh every other row's geometry.
-        if let scrollView = superview as? NativeLyricsScrollView { scrollView.setNeedsLayout() }
+        if let scrollView = superview as? NativeLyricsScrollView, !scrollView.isRefreshing {
+            scrollView.setNeedsLayout()
+        }
     }
 
-    func applyEdgeFade(_ fade: LyricsViewportFade, in scroll: UIScrollView, presentation: Bool) {
+    func applyEdgeFade(_ fade: LyricsViewportFade, viewportTop: CGFloat, in scroll: UIScrollView, presentation: Bool) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
+        if !presentation, viewportTop >= fade.topEnd, viewportTop + bounds.height <= fade.bottomStart {
+            removeEdgeMask(in: layer)
+            return
+        }
         var targets: [CALayer] = []
         collectTargets(in: layer, targets: &targets)
         for target in targets {
@@ -704,6 +714,11 @@ private final class NativeLyricRowView: UIView {
             mask.setStops(fade)
             if target.mask !== mask { target.mask = mask }
         }
+    }
+
+    private func removeEdgeMask(in layer: CALayer) {
+        if layer.mask is LyricsEdgeMaskLayer { layer.mask = nil }
+        for child in layer.sublayers ?? [] { removeEdgeMask(in: child) }
     }
 
     /// Match the queue: mask blend/compositing leaves, preserving existing custom masks.

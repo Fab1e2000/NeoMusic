@@ -57,6 +57,7 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
                     artworkURL: player.currentTrack?.coverURL,
                     trackID: player.currentTrack?.id,
                     isPlaying: player.isPlaying,
+                    isTransitioning: pageChange != nil,
                     onFrameChange: { geometryState.backdropFrame = $0 }
                 )
                 // iPhone 只支持竖屏（见 project.yml 的 UISupportedInterfaceOrientations），不保留横屏布局。
@@ -66,7 +67,6 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
                     ContentUnavailableView("当前没有播放歌曲", systemImage: "music.note").foregroundStyle(.white)
                 }
             }
-            .compositingGroup()
             .environment(\.nowPlayingLayout, layout)
             .environment(\.nowPlayingControlsOverflow, textSize.isAccessibilitySize
                          ? max(0, controlsHeight - NowPlayingBottomControls.overlayHeight) : 0)
@@ -294,17 +294,25 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
     private func transientArtworkPageContent(
         for song: PlayerTrack
     ) -> some View {
-        if page == .artwork {
-            NowPlayingArtworkPage(
-                song: song,
-                artworkNamespace: pageArtworkNamespace,
-                usesArtworkTransition: false,
-                showsArtwork: false
-            )
-            .transition(
-                pageContentTransition(for: .artwork)
-            )
+        let isVisible = page == .artwork
+        let yOffset: CGFloat = if isVisible || accessibilityReduceMotion {
+            0
+        } else if pageChange?.entersFromHiddenQueue == true {
+            -NowPlayingPageTransition.motion.artworkDetailsTravel
+        } else {
+            NowPlayingPageTransition.motion.artworkDetailsTravel
         }
+        NowPlayingArtworkPage(
+            song: song,
+            artworkNamespace: pageArtworkNamespace,
+            usesArtworkTransition: false,
+            showsArtwork: false
+        )
+        .offset(y: yOffset)
+        .opacity(isVisible ? 1 : 0)
+        .allowsHitTesting(isVisible)
+        .accessibilityHidden(!isVisible)
+        .environment(\.playerVisualsActive, visualsActive && isVisible)
     }
 
     private func recordArtworkPageFrame(_ frame: CGRect) {
@@ -393,13 +401,6 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
             .padding(.horizontal, -portraitHorizontalPadding)
             .allowsHitTesting(isVisible)
             .accessibilityHidden(!isVisible)
-            .environment(\.playerVisualsActive, visualsActive && (isVisible || pageChange?.source == .lyrics))
-    }
-
-    private func pageContentTransition(for destination: NowPlayingPage) -> AnyTransition {
-        NowPlayingPageTransition.content(for: destination,
-                                         entersFromHiddenQueue: pageChange?.entersFromHiddenQueue == true,
-                                         reducesMotion: accessibilityReduceMotion)
     }
 
     private func finishPageMeasurement() {

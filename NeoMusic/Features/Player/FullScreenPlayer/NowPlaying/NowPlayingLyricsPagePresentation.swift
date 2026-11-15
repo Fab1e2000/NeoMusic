@@ -13,20 +13,29 @@ struct NowPlayingPagePresentation: ViewModifier {
     var clipsAboveControls = true
 
     func body(content: Content) -> some View {
-        content
+        let presented = content
             .animation(spatialAnimation) {
                 $0.scaleEffect(isVisible ? 1 : presentationScale)
                     .offset(y: isVisible ? 0 : hiddenOffset * layout.verticalScale)
             }
             .animation(opacityAnimation) { $0.opacity(isVisible ? 1 : 0) }
-            .mask(alignment: .top) {
-                Rectangle()
-                    .frame(height: clipsAboveControls ? max(0, layout.pageY(557)) : nil)
-                    .transaction {
-                        $0.animation = nil
-                        $0.disablesAnimations = true
-                    }
-            }
+        // Rectangular scissor clip instead of .mask avoids a full-screen offscreen alpha pass every frame.
+        GeometryReader { proxy in
+            Color.clear
+                .frame(
+                    width: proxy.size.width,
+                    height: clipsAboveControls ? min(proxy.size.height, max(0, layout.pageY(557))) : proxy.size.height
+                )
+                .transaction {
+                    $0.animation = nil
+                    $0.disablesAnimations = true
+                }
+                .overlay(alignment: .top) {
+                    presented
+                        .frame(width: proxy.size.width, height: proxy.size.height)
+                }
+                .clipped()
+        }
     }
 }
 

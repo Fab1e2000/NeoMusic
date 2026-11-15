@@ -329,8 +329,7 @@ private struct BackdropPresentUniforms {
 
 /// Multi-pass GPU engine executing cover composition, Dual Kawase blur, Oklab conditioning,
 /// crossfade blending, EDR extraction, and dithered presentation.
-@MainActor
-final class NowPlayingFluidBackdropEngine {
+nonisolated final class NowPlayingFluidBackdropEngine: @unchecked Sendable {
     static let canvasWidth = 160
     static let canvasHeight = 320
 
@@ -572,7 +571,31 @@ final class NowPlayingFluidBackdropView: UIView {
         @objc func tick(_ link: CADisplayLink) { view?.renderTick(timestamp: link.timestamp) }
     }
 
+    private final class EncodingGate: @unchecked Sendable {
+        private let lock = NSLock()
+        private var inFlight = false
+
+        func tryAcquire() -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !inFlight else { return false }
+            inFlight = true
+            return true
+        }
+
+        func release() {
+            lock.lock()
+            inFlight = false
+            lock.unlock()
+        }
+    }
+
     private let engine: NowPlayingFluidBackdropEngine?
+    private let renderQueue = DispatchQueue(
+        label: "com.elsterlee.NeoMusic.FluidBackdropRender",
+        qos: .userInteractive
+    )
+    private let encodingGate = EncodingGate()
     private var source: NowPlayingFluidBackdropSource?
     private var currentSourceID: UUID?
 
@@ -580,6 +603,7 @@ final class NowPlayingFluidBackdropView: UIView {
     private var currentSpeed: Float = 1
     private var isReduceMotion = false
     private var isActive = true
+    private var isTransitioning = false
 
     private var hasRenderedFrame = false
     private var hasFrozenTrack = false
@@ -593,6 +617,7 @@ final class NowPlayingFluidBackdropView: UIView {
     private var lastDrawableSize: CGSize = .zero
 
     var hasActiveDisplayLink: Bool { displayLink != nil && displayLink?.isPaused == false }
+    var currentPreferredFrameRateRange: CAFrameRateRange? { displayLink?.preferredFrameRateRange }
 
     private static let crossfadeDuration: CFTimeInterval = 0.60
     private static let motionScale: Double = 0.45
@@ -620,8 +645,12 @@ final class NowPlayingFluidBackdropView: UIView {
         source: NowPlayingFluidBackdropSource,
         isPlaying: Bool,
         reduceMotion: Bool,
-        isActive: Bool = true
+        isActive: Bool = true,
+        isTransitioning: Bool = false
     ) {
+        if self.isTransitioning != isTransitioning {
+            self.isTransitioning = isTransitioning
+        }
         if self.isActive != isActive {
             self.isActive = isActive
             lastTickTimestamp = nil
@@ -706,9 +735,13 @@ final class NowPlayingFluidBackdropView: UIView {
             displayLink = link
         }
         let needsHighRate = crossfading || !hasRenderedFrame
-        displayLink?.preferredFrameRateRange = needsHighRate
-            ? CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
-            : CAFrameRateRange(minimum: 15, maximum: 24, preferred: 24)
+        displayLink?.preferredFrameRateRange = if isTransitioning {
+            CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
+        } else if needsHighRate {
+            CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
+        } else {
+            CAFrameRateRange(minimum: 15, maximum: 24, preferred: 24)
+        }
         displayLink?.isPaused = false
     }
 
@@ -750,29 +783,34 @@ final class NowPlayingFluidBackdropView: UIView {
             crossfade = Float(min(max(elapsed / Self.crossfadeDuration, 0), 1))
         }
 
-        guard let commandBuffer = engine.pipelines.queue.makeCommandBuffer(),
-              let drawable = metalLayer.nextDrawable() else { return }
-
+        let shouldCaptureFrozen = captureFrozenOnNextRender
+        let hadFrozen = hasFrozenTrack
         if captureFrozenOnNextRender {
-            engine.captureFrozenFrame(using: commandBuffer)
             captureFrozenOnNextRender = false
             hasFrozenTrack = true
         }
-
         let aspect = Float(bounds.width / max(bounds.height, 1))
-        let didEncode = engine.encodeFrame(
-            into: commandBuffer,
-            presentTarget: drawable.texture,
-            source: source,
-            aspect: aspect,
-            time: Float(phaseTime),
-            crossfade: crossfade,
-            hasFrozen: hasFrozenTrack
-        )
-        guard didEncode else { return }
+        let time = Float(phaseTime)
 
-        commandBuffer.present(drawable)
-        commandBuffer.commit()
+        if encodingGate.tryAcquire() {
+            nonisolated(unsafe) let layer = metalLayer
+            nonisolated(unsafe) let renderEngine = engine
+            nonisolated(unsafe) let renderSource = source
+            let gate = encodingGate
+            renderQueue.async {
+                Self.encodeAndPresent(
+                    layer: layer,
+                    engine: renderEngine,
+                    source: renderSource,
+                    aspect: aspect,
+                    time: time,
+                    crossfade: crossfade,
+                    shouldCaptureFrozen: shouldCaptureFrozen,
+                    hasFrozen: hadFrozen || shouldCaptureFrozen,
+                    gate: gate
+                )
+            }
+        }
 
         let finishedCrossfade = hasFrozenTrack && crossfade >= 0.999
         if finishedCrossfade {
@@ -783,6 +821,37 @@ final class NowPlayingFluidBackdropView: UIView {
         needsRender = false
         updateDisplayLink()
     }
+
+    nonisolated private static func encodeAndPresent(
+        layer: CAMetalLayer,
+        engine: NowPlayingFluidBackdropEngine,
+        source: NowPlayingFluidBackdropSource,
+        aspect: Float,
+        time: Float,
+        crossfade: Float,
+        shouldCaptureFrozen: Bool,
+        hasFrozen: Bool,
+        gate: EncodingGate
+    ) {
+        defer { gate.release() }
+        guard let commandBuffer = engine.pipelines.queue.makeCommandBuffer(),
+              let drawable = layer.nextDrawable() else { return }
+        if shouldCaptureFrozen {
+            engine.captureFrozenFrame(using: commandBuffer)
+        }
+        let didEncode = engine.encodeFrame(
+            into: commandBuffer,
+            presentTarget: drawable.texture,
+            source: source,
+            aspect: aspect,
+            time: time,
+            crossfade: crossfade,
+            hasFrozen: hasFrozen
+        )
+        guard didEncode else { return }
+        commandBuffer.present(drawable)
+        commandBuffer.commit()
+    }
 }
 
 struct NowPlayingFluidBackdropRepresentable: UIViewRepresentable {
@@ -790,16 +859,29 @@ struct NowPlayingFluidBackdropRepresentable: UIViewRepresentable {
     let isPlaying: Bool
     let reduceMotion: Bool
     let isActive: Bool
+    var isTransitioning: Bool = false
     let pipelines: NowPlayingBackdropMetalPipelines
 
     func makeUIView(context: Context) -> NowPlayingFluidBackdropView {
         let view = NowPlayingFluidBackdropView(pipelines: pipelines)
-        view.update(source: source, isPlaying: isPlaying, reduceMotion: reduceMotion, isActive: isActive)
+        view.update(
+            source: source,
+            isPlaying: isPlaying,
+            reduceMotion: reduceMotion,
+            isActive: isActive,
+            isTransitioning: isTransitioning
+        )
         return view
     }
 
     func updateUIView(_ view: NowPlayingFluidBackdropView, context: Context) {
-        view.update(source: source, isPlaying: isPlaying, reduceMotion: reduceMotion, isActive: isActive)
+        view.update(
+            source: source,
+            isPlaying: isPlaying,
+            reduceMotion: reduceMotion,
+            isActive: isActive,
+            isTransitioning: isTransitioning
+        )
     }
 
     static func dismantleUIView(_ view: NowPlayingFluidBackdropView, coordinator: ()) {

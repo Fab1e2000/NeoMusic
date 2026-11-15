@@ -6,6 +6,7 @@ struct NowPlayingArtworkBackdrop: View {
     let artworkURL: URL?
     var trackID: String? = nil
     var isPlaying: Bool = true
+    var isTransitioning: Bool = false
     var ignoresSafeArea = true
     /// 作为背景副本画在别的视图底下：没有封面时完全透明（露出真背景），不画黑色打底和压暗。
     var isUnderlay = false
@@ -25,6 +26,7 @@ struct NowPlayingArtworkBackdrop: View {
         artworkURL: URL?,
         trackID: String? = nil,
         isPlaying: Bool = true,
+        isTransitioning: Bool = false,
         ignoresSafeArea: Bool = true,
         isUnderlay: Bool = false,
         onFrameChange: ((CGRect) -> Void)? = nil,
@@ -33,6 +35,7 @@ struct NowPlayingArtworkBackdrop: View {
         self.artworkURL = artworkURL
         self.trackID = trackID
         self.isPlaying = isPlaying
+        self.isTransitioning = isTransitioning
         _renderedTrackID = State(initialValue: trackID)
         self.ignoresSafeArea = ignoresSafeArea
         self.isUnderlay = isUnderlay
@@ -68,6 +71,7 @@ struct NowPlayingArtworkBackdrop: View {
                         isPlaying: isPlaying,
                         reduceMotion: accessibilityReduceMotion,
                         isActive: visualsActive && scenePhase == .active,
+                        isTransitioning: isTransitioning,
                         pipelines: pipelines
                     )
                     .frame(width: proxy.size.width, height: proxy.size.height)
