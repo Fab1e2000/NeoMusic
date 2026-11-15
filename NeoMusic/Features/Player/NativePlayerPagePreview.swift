@@ -315,7 +315,7 @@ private struct NativePlayerMotionContent: View {
             opacityAnimation: animation(isVisible ? motion.lyricsOpacityPresentation : motion.lyricsOpacityDismissal,
                                         includesDelay: change?.startsFromRest == true,
                                         extraDelay: entranceDelay),
-            clipsAboveControls: !hidesControls
+            clipsAboveControls: !isVisible
         ))
         .allowsHitTesting(isVisible)
         .accessibilityHidden(!isVisible)

@@ -189,6 +189,54 @@ final class LyricsFocusTests: XCTestCase {
         XCTAssertEqual(state.activeID, 40)
     }
 
+    func testBottomFadeDepthAndInterfaceMotionMatchSynchronizedSpec() {
+        let motion = NowPlayingMotionSpec.appleMusic26.interface
+        XCTAssertEqual(motion.coreShow.duration, 0.36, accuracy: 0.001)
+        XCTAssertEqual(motion.coreHide.duration, 0.36, accuracy: 0.001)
+        XCTAssertEqual(motion.controlOpacityAnimation(isVisible: true).duration, 0.36, accuracy: 0.001)
+        XCTAssertEqual(motion.controlOpacityAnimation(isVisible: false).duration, 0.18, accuracy: 0.001)
+        for layer in [NowPlayingInterfaceLayer.progress, .transport, .volume, .pageSelector] {
+            for visible in [false, true] {
+                let spec = motion.controlAnimation(for: layer, isVisible: visible)
+                XCTAssertEqual(spec.duration, 0.36, accuracy: 0.001)
+                XCTAssertEqual(spec.delay, 0, accuracy: 0.001)
+            }
+        }
+        XCTAssertEqual(motion.progress.hiddenOffset, 245)
+        XCTAssertEqual(motion.transport.hiddenOffset, 220)
+        XCTAssertEqual(motion.volume.hiddenOffset, 198)
+        XCTAssertEqual(motion.pageSelector.hiddenOffset, 98)
+
+        let shown = LyricsViewportFade(
+            height: 753,
+            referenceHeight: 473,
+            shownReferenceHeight: 473,
+            topOverlayHeight: 102,
+            isInterfaceHidden: false
+        )
+        XCTAssertEqual(shown.bottomEnd, 473, accuracy: 0.5)
+        XCTAssertEqual(shown.bottomEnd - shown.bottomStart, 160, accuracy: 0.5)
+
+        let midpoint = LyricsViewportFade(
+            height: 753,
+            referenceHeight: 613,
+            shownReferenceHeight: 473,
+            topOverlayHeight: 102,
+            isInterfaceHidden: false
+        )
+        XCTAssertEqual(midpoint.bottomEnd - midpoint.bottomStart, 108, accuracy: 0.5)
+
+        let hidden = LyricsViewportFade(
+            height: 753,
+            referenceHeight: 753,
+            shownReferenceHeight: 473,
+            topOverlayHeight: 102,
+            isInterfaceHidden: true
+        )
+        XCTAssertEqual(hidden.bottomEnd, 753, accuracy: 0.5)
+        XCTAssertEqual(hidden.bottomEnd - hidden.bottomStart, 56, accuracy: 0.5)
+    }
+
     private func mount(_ state: LyricsFocusTestState, size: DynamicTypeSize) async throws -> UIWindow {
         let content = LyricsFocusTestContent(state: state)
             .dynamicTypeSize(size)

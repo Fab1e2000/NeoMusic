@@ -158,9 +158,13 @@ private final class NativeLyricsScrollView: UIScrollView, UIScrollViewDelegate {
             }
             if !browsing && (changed || needsFocus || interfaceChanged || geometryChanged) {
                 let animates = canAnimate && (focusedIndex != nil || interfaceChanged || geometryChanged)
-                let spring = cascades || interfaceChanged || geometryChanged
-                    ? motion.lineChangeSpring
-                    : motion.forcedLineCatchUpSpring
+                let spring: LyricPhysicalSpringParameters = if cascades || geometryChanged {
+                    motion.lineChangeSpring
+                } else if interfaceChanged && !changed {
+                    Self.interfaceSyncSpring
+                } else {
+                    motion.forcedLineCatchUpSpring
+                }
                 // Avoid restarting an in-flight tap/seek catch-up animation when only the
                 // interface visibility changed and the target scroll offset stays the same.
                 let keepsRunningAnimation = !changed && !needsFocus && !animators.isEmpty
@@ -356,15 +360,32 @@ private final class NativeLyricsScrollView: UIScrollView, UIScrollViewDelegate {
         pendingTransformCommitObserver = nil
     }
 
+    private static let interfaceSyncSpring: LyricPhysicalSpringParameters = {
+        let spring = Spring.smooth(duration: 0.36)
+        return LyricPhysicalSpringParameters(
+            mass: spring.mass,
+            stiffness: spring.stiffness,
+            damping: spring.damping
+        )
+    }()
+
     private func updateFade(animated: Bool) {
         guard let input else { return }
         let height = input.isInterfaceHidden ? bounds.height : max(bounds.height - input.bottomOverlayHeight, 1)
         let current = fadeBottom
         fadeAnimator?.stopAnimation(true)
         fadeGuide.bounds.size.height = current
-        if animated {
+        if animated, abs(current - height) >= 0.5 {
             fadePendingStartHeight = current
-            let animator = UIViewPropertyAnimator(duration: 0.35, curve: .easeInOut) {
+            let spring = Spring.smooth(duration: input.isInterfaceHidden ? 0.22 : 0.28)
+            let timing = UISpringTimingParameters(
+                mass: spring.mass,
+                stiffness: spring.stiffness,
+                damping: spring.damping,
+                initialVelocity: .zero
+            )
+            let animator = UIViewPropertyAnimator(duration: spring.settlingDuration, timingParameters: timing)
+            animator.addAnimations {
                 self.fadeGuide.bounds.size.height = height
             }
             fadeAnimator = animator
@@ -428,8 +449,14 @@ private final class NativeLyricsScrollView: UIScrollView, UIScrollViewDelegate {
         refreshing = true
         defer { refreshing = false }
         let bottom = fadeBottom
-        let fade = LyricsViewportFade(height: bounds.height, referenceHeight: bottom,
-                                      topOverlayHeight: input.topOverlayHeight, isInterfaceHidden: false)
+        let shownBottom = max(bounds.height - input.bottomOverlayHeight, 1)
+        let fade = LyricsViewportFade(
+            height: bounds.height,
+            referenceHeight: bottom,
+            shownReferenceHeight: shownBottom,
+            topOverlayHeight: input.topOverlayHeight,
+            isInterfaceHidden: false
+        )
         let focusedRow = focusedIndex.flatMap { rows.indices.contains($0) ? rows[$0] : nil }
         let focusedTop = focusedRow.map { visualMinY(for: $0, presentation: presentation) }
             ?? (contentOffset.y + focusTop)
@@ -706,15 +733,35 @@ private final class LyricsEdgeMaskLayer: CAGradientLayer {
 }
 
 nonisolated struct LyricsViewportFade: Equatable, Sendable {
+    static let shownBottomFadeHeight: CGFloat = 160
+    static let hiddenBottomFadeHeight: CGFloat = 56
+
     var topStart: CGFloat = 0
     var topEnd: CGFloat = 0
     var bottomStart: CGFloat = .greatestFiniteMagnitude
     var bottomEnd: CGFloat = .greatestFiniteMagnitude
 
-    init(height: CGFloat, referenceHeight: CGFloat, topOverlayHeight: CGFloat, isInterfaceHidden: Bool) {
+    init(
+        height: CGFloat,
+        referenceHeight: CGFloat,
+        shownReferenceHeight: CGFloat? = nil,
+        topOverlayHeight: CGFloat,
+        isInterfaceHidden: Bool
+    ) {
         bottomEnd = isInterfaceHidden ? height : referenceHeight
         topStart = min(topOverlayHeight, bottomEnd)
         topEnd = min(topStart + NowPlayingQueueList.topFadeHeight, bottomEnd)
-        bottomStart = max(topEnd, bottomEnd - NowPlayingQueueList.bottomFadeHeight)
+        let shownBottom = shownReferenceHeight ?? referenceHeight
+        let overlayShownFade = min(
+            Self.shownBottomFadeHeight,
+            max(Self.hiddenBottomFadeHeight, max(shownBottom - topEnd, 0) * 0.48)
+        )
+        let span = height - shownBottom
+        let hiddenFraction: CGFloat = span > 0.5
+            ? min(max((bottomEnd - shownBottom) / span, 0), 1)
+            : 1
+        let bottomFade = overlayShownFade
+            + (Self.hiddenBottomFadeHeight - overlayShownFade) * hiddenFraction
+        bottomStart = max(topEnd, bottomEnd - bottomFade)
     }
 }

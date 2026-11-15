@@ -615,8 +615,7 @@ struct NowPlayingVolumeControl: View {
                 }
                 .opacity(isInterfaceHidden ? 0 : 1)
                 .animation(
-                    NowPlayingInterfaceTransition.controlAnimation(
-                        for: .volume,
+                    NowPlayingInterfaceTransition.controlOpacityAnimation(
                         isVisible: !isInterfaceHidden,
                         reducesMotion: accessibilityReduceMotion
                     ),

@@ -53,4 +53,13 @@ enum NowPlayingInterfaceTransition {
             isVisible: isVisible
         ).animation
     }
+
+    static func controlOpacityAnimation(
+        isVisible: Bool,
+        reducesMotion: Bool
+    ) -> Animation? {
+        guard !reducesMotion else { return nil }
+
+        return motion.controlOpacityAnimation(isVisible: isVisible).animation
+    }
 }

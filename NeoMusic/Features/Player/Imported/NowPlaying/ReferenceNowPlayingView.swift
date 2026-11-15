@@ -375,7 +375,7 @@ struct ReferenceNowPlayingView: View {
                 opacityAnimation: pageAnimation(isVisible ? motion.lyricsOpacityPresentation : motion.lyricsOpacityDismissal,
                                                 includesDelay: pageChange?.startsFromRest == true,
                                                 extraDelay: entranceDelay),
-                clipsAboveControls: !hidesLyricsControls
+                clipsAboveControls: !isVisible
             ))
             .padding(.horizontal, -Self.portraitHorizontalPadding)
             .allowsHitTesting(isVisible)

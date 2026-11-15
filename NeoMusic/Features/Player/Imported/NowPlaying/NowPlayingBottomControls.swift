@@ -79,22 +79,28 @@ struct NowPlayingBottomControls: View {
         @ViewBuilder content: () -> Content
     ) -> some View {
         content()
-            .offset(
-                y: isInterfaceHidden
-                    ? NowPlayingInterfaceTransition.hiddenOffset(
-                        for: layer
-                    )
-                    : 0
-            )
-            .opacity(layer == .volume || !isInterfaceHidden ? 1 : 0)
             .animation(
                 NowPlayingInterfaceTransition.controlAnimation(
                     for: layer,
                     isVisible: !isInterfaceHidden,
                     reducesMotion: accessibilityReduceMotion
-                ),
-                value: isInterfaceHidden
-            )
+                )
+            ) {
+                $0.offset(
+                    y: isInterfaceHidden
+                        ? NowPlayingInterfaceTransition.hiddenOffset(for: layer)
+                            * layout.verticalScale
+                        : 0
+                )
+            }
+            .animation(
+                NowPlayingInterfaceTransition.controlOpacityAnimation(
+                    isVisible: !isInterfaceHidden,
+                    reducesMotion: accessibilityReduceMotion
+                )
+            ) {
+                $0.opacity(layer == .volume || !isInterfaceHidden ? 1 : 0)
+            }
     }
 }
 

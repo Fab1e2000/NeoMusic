@@ -132,6 +132,8 @@ struct NowPlayingMotionSpec: Equatable, Sendable {
 
         let coreShow: NowPlayingAnimationSpec
         let coreHide: NowPlayingAnimationSpec
+        let controlShowOpacity: NowPlayingAnimationSpec
+        let controlHideOpacity: NowPlayingAnimationSpec
         let utilityShow: NowPlayingAnimationSpec
         let utilityHide: NowPlayingAnimationSpec
         let controlDuration: TimeInterval
@@ -170,6 +172,12 @@ struct NowPlayingMotionSpec: Equatable, Sendable {
                         ? layerMotion.showDelay
                         : layerMotion.hideDelay
             )
+        }
+
+        func controlOpacityAnimation(
+            isVisible: Bool
+        ) -> NowPlayingAnimationSpec {
+            isVisible ? controlShowOpacity : controlHideOpacity
         }
     }
 
@@ -298,42 +306,50 @@ struct NowPlayingMotionSpec: Equatable, Sendable {
         interface: InterfaceMotion(
             coreShow: NowPlayingAnimationSpec(
                 .smooth,
-                duration: 0.34
+                duration: 0.36
             ),
             coreHide: NowPlayingAnimationSpec(
                 .smooth,
-                duration: 0.34
+                duration: 0.36
+            ),
+            controlShowOpacity: NowPlayingAnimationSpec(
+                .smooth,
+                duration: 0.36
+            ),
+            controlHideOpacity: NowPlayingAnimationSpec(
+                .smooth,
+                duration: 0.18
             ),
             utilityShow: NowPlayingAnimationSpec(
                 .smooth,
-                duration: 0.24
+                duration: 0.24,
+                delay: 0.12
             ),
             utilityHide: NowPlayingAnimationSpec(
                 .smooth,
-                duration: 0.24,
-                delay: 0.10
+                duration: 0.18
             ),
-            controlDuration: 0.24,
+            controlDuration: 0.36,
             utilityHiddenOffset: 64,
             utilityHiddenScale: 0.82,
             progress: InterfaceMotion.LayerMotion(
-                hiddenOffset: 180,
-                showDelay: 0.025,
-                hideDelay: 0.075
+                hiddenOffset: 245,
+                showDelay: 0,
+                hideDelay: 0
             ),
             transport: InterfaceMotion.LayerMotion(
-                hiddenOffset: 165,
-                showDelay: 0.05,
-                hideDelay: 0.05
+                hiddenOffset: 220,
+                showDelay: 0,
+                hideDelay: 0
             ),
             volume: InterfaceMotion.LayerMotion(
-                hiddenOffset: 148,
-                showDelay: 0.075,
-                hideDelay: 0.025
+                hiddenOffset: 198,
+                showDelay: 0,
+                hideDelay: 0
             ),
             pageSelector: InterfaceMotion.LayerMotion(
-                hiddenOffset: 128,
-                showDelay: 0.10,
+                hiddenOffset: 98,
+                showDelay: 0,
                 hideDelay: 0
             )
         )
