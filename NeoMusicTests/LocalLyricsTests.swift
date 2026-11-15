@@ -3,11 +3,25 @@ import XCTest
 
 final class LocalLyricsTests: XCTestCase, @unchecked Sendable {
     func testOffsetsMultipleTimestampsAndStableTies() {
-        let result = LyricsDocument.parse("[ti:Title]\n[00:02.50][00:01]hello\n[00:01]second\n[offset:-500]")
-        XCTAssertEqual(result.lines.map(\.time), [0.5, 0.5, 2])
-        XCTAssertEqual(result.lines.map(\.text), ["hello", "second", "hello"])
-        XCTAssertEqual(result.activeLine(at: 0.5), 1)
-        XCTAssertNil(result.activeLine(at: 0))
+        let cases: [(offset: String, times: [Double])] = [
+            ("+500", [0.5, 0.5, 2]),
+            ("-500", [1.5, 1.5, 3])
+        ]
+        for testCase in cases {
+            let result = LyricsDocument.parse("[ti:Title]\n[00:02.50][00:01]hello\n[00:01]second\n[offset:\(testCase.offset)]")
+            XCTAssertEqual(result.lines.map(\.time), testCase.times)
+            XCTAssertEqual(result.lines.map(\.text), ["hello", "second", "hello"])
+            XCTAssertNil(result.activeLine(at: testCase.times[0] - 0.001))
+            XCTAssertEqual(result.activeLine(at: testCase.times[0]), 1)
+        }
+    }
+
+    func testPositiveOffsetClampsAdvancedTimestampsAtZero() {
+        let result = LyricsDocument.parse("[offset:+500]\n[00:00.75]later\n[00:00.25]early\n[00:00.00]start\n[00:00.50]boundary")
+        XCTAssertEqual(result.lines.map(\.time), [0, 0, 0, 0.25])
+        XCTAssertEqual(result.lines.map(\.text), ["start", "early", "boundary", "later"])
+        XCTAssertEqual(result.activeLine(at: 0), 2)
+        XCTAssertEqual(result.activeLine(at: 0.25), 3)
     }
 
     func testPlainAndEmpty() {

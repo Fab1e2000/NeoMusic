@@ -48,7 +48,8 @@ struct LyricsDocument: Equatable, Sendable {
             return lhs.element.time < rhs.element.time
         }
         let lines = sortedLines.enumerated().map { index, entry in
-            LyricsLine(id: index, time: max(0, entry.element.time + offsetSeconds), text: entry.element.text)
+            // Positive LRC offsets advance lyrics; negative offsets delay them.
+            LyricsLine(id: index, time: max(0, entry.element.time - offsetSeconds), text: entry.element.text)
         }
         return Self(lines: lines, plainText: lines.isEmpty ? plain.joined(separator: "\n") : lines.map(\.text).joined(separator: "\n"))
     }

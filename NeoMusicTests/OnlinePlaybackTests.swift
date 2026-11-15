@@ -212,7 +212,8 @@ final class OnlinePlaybackTests: XCTestCase {
     }
 
     func testTranslationSharesOriginalLineAndRespectsIndependentOffsets() {
-        let value = LyricsDocument.onlineLyrics(original: "[offset:1000]\n[00:01.00]Original", translation: "[00:02.00]译文")
+        let value = LyricsDocument.onlineLyrics(original: "[offset:+1000]\n[00:03.00]Original",
+                                               translation: "[offset:-500]\n[00:01.50]译文")
         XCTAssertEqual(value.lines.count, 1)
         XCTAssertEqual(value.lines.first?.time, 2)
         XCTAssertEqual(value.lines.first?.text, "Original\n译文")
