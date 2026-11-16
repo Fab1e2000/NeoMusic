@@ -287,7 +287,7 @@ struct PlaylistDetailView: View {
                              ? "\(library.onlineTrackCounts[playlistID] ?? tracks.count)首歌"
                              : "\(tracks.count)首歌，\(displayed.totalDuration / 60)分钟")
                             .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                            .modifier(PlaylistSecondaryText())
                             .padding(.top, 14)
                             .padding(.bottom, 30)
                             .listRowSeparator(.hidden)
@@ -346,7 +346,7 @@ struct PlaylistDetailView: View {
             Text(playlist.subtitle ?? "我").font(.title3).padding(.top, 4)
             if externalActions == nil, let updatedAt = playlist.updatedAt {
                 Text("更新于 \(updatedAt, format: .relative(presentation: .named))")
-                    .font(.caption2.weight(.semibold)).foregroundStyle(.secondary).padding(.top, 4 + 1.0 / 3)
+                    .font(.caption2.weight(.semibold)).modifier(PlaylistSecondaryText()).padding(.top, 4 + 1.0 / 3)
             }
             if !tracks.isEmpty || playlist.offersCollection {
                 HStack(spacing: 14) {
@@ -436,10 +436,12 @@ struct PlaylistDetailView: View {
                 } else { playVisibleSong(song.id, title: title) }
             } label: { PlaylistDetailSongLabel(song: song) }
                 .buttonStyle(.automatic)
-            SongDownloadStatus(song: song, showsImported: false)
+            SongDownloadStatus(song: song, showsImported: false,
+                secondaryStyle: AnyShapeStyle(Color(white: 0.5).blendMode(
+                    (preparedBackdrop?.colorScheme ?? colorScheme) == .dark ? .plusLighter : .plusDarker)))
             Menu { SongMenuContents(song: song) } label: {
                 Image(systemName: "ellipsis").font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.secondary).frame(width: 30, height: 44).offset(x: 1)
+                    .modifier(PlaylistSecondaryText()).frame(width: 30, height: 44).offset(x: 1)
             }
             .accessibilityLabel("更多")
             .menuOrder(.fixed)
@@ -593,6 +595,18 @@ struct PlaylistDetailView: View {
     }
 }
 
+/// Matches the ±128 channel offset measured in Apple Music playlist subtitles.
+/// Apply at the text leaf so the blend uses the actual row background.
+private struct PlaylistSecondaryText: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+
+    func body(content: Content) -> some View {
+        content
+            .foregroundStyle(Color(white: 0.5))
+            .blendMode(colorScheme == .dark ? .plusLighter : .plusDarker)
+    }
+}
+
 private struct PlaylistDetailSongLabel: View {
     let song: LibrarySongItem
     var body: some View {
@@ -602,7 +616,7 @@ private struct PlaylistDetailSongLabel: View {
                 Text(song.title).font(.callout)
                     .foregroundStyle(song.unavailabilityReason == nil ? .primary : .secondary)
                 Text(song.unavailabilityReason ?? song.artist)
-                    .font(.footnote).foregroundStyle(.secondary)
+                    .font(.footnote).modifier(PlaylistSecondaryText())
             }
             .lineLimit(1)
             .frame(maxWidth: .infinity, alignment: .leading)

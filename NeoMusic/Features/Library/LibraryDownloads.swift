@@ -197,9 +197,10 @@ extension EnvironmentValues {
     @Entry var libraryDownloads: LibraryDownloads?
 }
 
-/// 曲目行右侧的下载状态：排队为灰圈，下载中为白色进度弧，完成后为灰色下载图标。
+/// 曲目行右侧的下载状态；完成图标可跟随所在页面的次级前景样式。
 struct SongDownloadIndicator: View {
     let state: LibraryDownloads.SongState?
+    var secondaryStyle = AnyShapeStyle(Color.primary.opacity(0.26))
 
     var body: some View {
         Group {
@@ -213,10 +214,10 @@ struct SongDownloadIndicator: View {
             case .finishing:
                 ProgressView().controlSize(.mini).accessibilityLabel("正在处理")
             case .downloaded:
-                // 实测 Apple Music：灰色实心圆约为 25% 白，箭头镂空露出底色。
+                // The arrow cutout preserves the row background.
                 Image(systemName: "arrow.down.circle.fill")
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color.primary.opacity(0.26))
+                    .foregroundStyle(secondaryStyle)
                     .accessibilityLabel("已下载")
             case .failed:
                 Image(systemName: "exclamationmark.circle")
@@ -246,6 +247,7 @@ struct SongDownloadIndicator: View {
 struct SongDownloadStatus: View {
     let song: LibrarySongItem
     var showsImported = true
+    var secondaryStyle = AnyShapeStyle(Color.primary.opacity(0.26))
     @Environment(\.libraryDownloads) private var downloads
     @State private var feedback = 0
     var body: some View {
@@ -257,19 +259,19 @@ struct SongDownloadStatus: View {
                     guard downloads?.isDownloadable(song) == true else { return }
                     feedback &+= 1; downloads?.download([song])
                 } label: {
-                    SongDownloadIndicator(state: state)
+                    SongDownloadIndicator(state: state, secondaryStyle: secondaryStyle)
                         .frame(width: 28, height: 44, alignment: .trailing)
                         .contentShape(.rect)
                 }
                 .accessibilityLabel("下载失败，轻点重试")
             } else if state?.isActive == true {
                 Button { feedback &+= 1; downloads?.stop([song]) } label: {
-                    SongDownloadIndicator(state: state)
+                    SongDownloadIndicator(state: state, secondaryStyle: secondaryStyle)
                         .frame(width: 28, height: 44, alignment: .trailing)
                         .contentShape(.rect)
                 }
                     .accessibilityLabel(state == .waiting ? "等待 Wi-Fi，轻点停止下载" : "停止下载")
-            } else { SongDownloadIndicator(state: state) }
+            } else { SongDownloadIndicator(state: state, secondaryStyle: secondaryStyle) }
             }
         }
         .buttonStyle(.plain)

@@ -713,6 +713,7 @@ private final class AlbumSongsController: UICollectionViewController {
         loadViewIfNeeded()
         let previous = songsByID
         let previousScheme = self.model?.scheme
+        let backgroundChanged = self.model?.pageColor != model.pageColor
         let environmentChanged = self.environment.scenePhase != environment.scenePhase || self.environment.dynamicTypeSize != environment.dynamicTypeSize
         self.model = model
         self.environment = environment
@@ -726,16 +727,29 @@ private final class AlbumSongsController: UICollectionViewController {
         snapshot.appendItems([.header] + model.songs.map { .song($0.id) } + [.footer])
         let changed = model.songs.filter { song in
             guard let old = previous[song.id] else { return false }
-            return old.title != song.title || old.trackNumber != song.trackNumber || old.isFavorite != song.isFavorite || previousScheme != model.scheme || environmentChanged
+            return old.title != song.title || old.trackNumber != song.trackNumber || old.isFavorite != song.isFavorite || previousScheme != model.scheme || backgroundChanged || environmentChanged
         }.map { Item.song($0.id) }
         snapshot.reconfigureItems(changed + (oldIDs.isEmpty ? [] : [.header, .footer]))
         source.apply(snapshot, animatingDifferences: !oldIDs.isEmpty)
     }
 
+    // The native accessory uses the same ±0.5 blend result against the opaque page.
+    private var albumSecondaryColor: UIColor {
+        let background = model?.pageColor ?? .systemBackground
+        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+        background.resolvedColor(with: traitCollection).getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+        let offset: CGFloat = model?.scheme == .dark ? 0.5 : -0.5
+        return UIColor(red: min(1, max(0, red + offset)),
+                       green: min(1, max(0, green + offset)),
+                       blue: min(1, max(0, blue + offset)), alpha: 1)
+    }
+
     private func configure(_ cell: AlbumSelectionCell, id: String) {
         guard let song = songsByID[id] else { return }
+        let secondary = albumSecondaryColor
+        cell.more.tintColor = secondary
         cell.contentConfiguration = UIHostingConfiguration {
-            hosted(NativeAlbumRowContent(song: song))
+            hosted(NativeAlbumRowContent(song: song, secondary: Color(secondary)))
         }.margins(.all, 0).margins(.leading, 20).margins(.trailing, 9)
         cell.more.menu = UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] completion in
             completion(self?.menu(for: id).children ?? [])
@@ -865,15 +879,16 @@ private final class AlbumSongsController: UICollectionViewController {
 
 private struct NativeAlbumRowContent: View {
     let song: LibrarySongItem
+    let secondary: Color
     @Environment(\.libraryDownloads) private var downloads
     @Environment(\.dynamicTypeSize) private var textSize
     var body: some View {
         HStack(spacing: 9) {
-            AlbumSongPosition(song: song, foreground: .primary)
+            AlbumSongPosition(song: song, foreground: secondary)
             Text(song.title).font(.callout).foregroundStyle(.primary)
                 .lineLimit(textSize.isAccessibilitySize ? nil : 1)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            SongDownloadStatus(song: song)
+            SongDownloadStatus(song: song, secondaryStyle: AnyShapeStyle(secondary))
         }
         .frame(minHeight: 52 + 1.0 / 3)
     }

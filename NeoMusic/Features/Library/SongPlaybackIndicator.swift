@@ -32,7 +32,7 @@ struct AlbumSongPosition: View {
             }
         }
         .frame(width: positionWidth)
-        .overlay(alignment: .leading) { FavoriteMark(isFavorite: song.isFavorite) }
+        .overlay(alignment: .leading) { FavoriteMark(isFavorite: song.isFavorite, color: foreground ?? .secondary) }
     }
 }
 
