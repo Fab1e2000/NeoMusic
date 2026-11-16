@@ -105,9 +105,7 @@ private actor LocalArtworkDecoder {
     func load(_ url: URL, pixels: Int) async -> Prepared? {
         guard !Task.isCancelled else { return nil }
         guard let data = try? Data(contentsOf: url) else { return nil }
-        // Row thumbnails only need pixels. Prepare navigation backdrop colors for
-        // large artwork; detail pages also resolve their own background on demand.
-        let colors = pixels >= 512 ? try? await backdrops.prepareAdditionalArtwork([url.absoluteString: data]) : nil
+        let colors = try? await backdrops.prepareAdditionalArtwork([url.absoluteString: data])
         guard !Task.isCancelled else { return nil }
         return autoreleasepool {
             guard let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),

@@ -1162,9 +1162,10 @@ final class LibraryDetailNavigationTests: XCTestCase {
         }
 
         cell.accessibilityTraits = .header
+        let unchangedTraits = cell.accessibilityTraits
         host.rootView = content(.dark, .accessibility5, Locale(identifier: "zh_CN"))
         try await settle()
-        XCTAssertEqual(cell.accessibilityTraits, .header, "Unchanged inputs leave the existing configuration in place")
+        XCTAssertEqual(cell.accessibilityTraits, unchangedTraits, "Unchanged inputs leave the existing configuration in place")
     }
 
     func testCategoryTitlesArePreparedBeforeDestinationContentLoads() {
