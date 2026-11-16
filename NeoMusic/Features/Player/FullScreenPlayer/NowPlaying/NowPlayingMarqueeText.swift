@@ -60,6 +60,8 @@ public struct NowPlayingMarqueeText: View {
                         .transition(.identity)
                 }
             }
+            // 宽度测量后插入的滚动文字与外层共用切页几何动画。
+            .geometryGroup()
             .accessibilityLabel(text)
     }
 
