@@ -861,9 +861,11 @@ import Observation
         collection.play = { [weak self] _, shuffled in self?.requestPlayback(id, songID: nil, shuffled: shuffled) }
         collection.playNext = { [weak self] _ in self?.withCompleteCollection(id) { [weak self] in self?.player.insertNext($0) } }
         collection.playLater = { [weak self] _ in self?.withCompleteCollection(id) { [weak self] in self?.player.appendLater($0) } }
-        var songs = SongMenuActions(downloads: LocalLibrary.downloads, notify: { LocalLibrary.toasts.show($0) })
+        var songs = LocalLibrary.songActions(for: route)
         songs.play = { [weak self] list, index, _ in
-            guard list.indices.contains(index), let songID = Int64(list[index].id.split(separator: ":").last ?? "") else { return }
+            guard list.indices.contains(index) else { return }
+            let target = list[index]
+            guard let songID = target.onlineSongID ?? LocalLibrary.catalog.downloadedOnlineSongID?(target.id) else { return }
             self?.requestPlayback(id, songID: songID, shuffled: false)
         }
         songs.playNext = { [weak self] song in guard self?.owner != nil else { self?.showsLogin = true; return }; self?.player.insertNext([song]) }
@@ -878,11 +880,14 @@ import Observation
     }
 
     private func setOnlineLiked(_ song: LibrarySongItem, liked: Bool) {
-        guard let owner, let number = Int64(song.id.split(separator: ":").last ?? "") else { showsLogin = true; return }
+        guard let owner,
+              let number = song.onlineSongID ?? LocalLibrary.catalog.downloadedOnlineSongID?(song.id) else {
+            showsLogin = true
+            return
+        }
         Task { [weak self] in
             guard let self, self.owner == owner, self.account.profile.map({ String($0.userID) }) == owner,
-                  let music = self.account.music, music.userID.map(String.init) == owner,
-                  song.id.hasPrefix("netease:\(owner):") else { return }
+                  let music = self.account.music, music.userID.map(String.init) == owner else { return }
             do { try await music.setLiked(songID: number, liked: liked) }
             catch is CancellationError {} catch {
                 guard self.owner == owner, self.account.profile.map({ String($0.userID) }) == owner else { return }

@@ -33,10 +33,10 @@ final class AppRuntime {
         }
         startupTask = Task {
             downloads.requestLogin = { [weak self] in self?.home.showsLogin = true }
-            integration.onPublication = { [weak self] in self?.downloads.publishMetadata() }
+            integration.onPublication = { [weak self] in self?.downloads.scheduleMetadataPublication() }
             await downloads.restore()
             search.prepareNavigation = { [weak self] in self?.home.prepareNavigation($0) }
-            search.onPublication = { [weak self] in self?.downloads.publishMetadata() }
+            search.onPublication = { [weak self] in self?.downloads.scheduleMetadataPublication() }
             search.connect()
             home.connect()
             artists.connect()

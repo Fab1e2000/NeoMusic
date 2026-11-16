@@ -196,10 +196,15 @@ private struct SearchResultList: View {
         .refreshable { if active { await model.onRefresh?() } }
     }
 
-    private func row(_ item: MusicSearchItem) -> some View {
-        SearchResultRow(item: item, model: model)
+    @ViewBuilder private func row(_ item: MusicSearchItem) -> some View {
+        let base = SearchResultRow(item: item, model: model)
             .listRowInsets(EdgeInsets(top: 6, leading: 20, bottom: 6, trailing: 20))
             .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] + 68 }
+        if let song = item.song {
+            base.songListRow(song, mode: .standard(), swipeBackground: Color(.systemBackground))
+        } else {
+            base
+        }
     }
 
     @ViewBuilder private var availability: some View {
@@ -240,34 +245,49 @@ struct SearchResultRow: View {
     @State private var sources = LibraryArtworkSources()
     @Environment(\.openLibraryRoute) private var openRoute
     var body: some View {
-        HStack(spacing: 12) {
-            Button { open() } label: {
-                HStack(spacing: 12) {
-                    LibraryCardArtwork(content: AnyView(ResourceArtworkView(resource: item.$artwork, contentID: item.id, cornerRadius: 0)),
-                        sources: sources, sourceID: item.id, cornerRadius: item.kind == .artist ? 28 : 5)
-                        .frame(width: 56, height: 56)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(item.title).font(.body).foregroundStyle(.primary).lineLimit(2)
-                        Text(item.subtitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
-                    }.frame(maxWidth: .infinity, alignment: .leading)
-                }.contentShape(.rect)
-            }.buttonStyle(.plain).accessibilityIdentifier("search.result.\(item.id)")
-            if let song = item.song {
-                Menu { SongMenuContents(song: song) } label: {
-                    Image(systemName: "ellipsis")
-                        .font(.body.weight(.semibold))
-                        .frame(width: 44, height: 44)
-                        .contentShape(.rect)
-                }
-                .accessibilityLabel("\(item.title)，更多")
-                .menuOrder(.fixed)
-                .padding(.trailing, -8)
-                .buttonStyle(.borderless)
-            } else {
+        if let song = item.song {
+            SharedSongRow(
+                song: song,
+                subtitle: item.subtitle,
+                appearance: SongRowAppearance(
+                    titleFont: .body,
+                    subtitleFont: .subheadline,
+                    titleLineLimit: 2,
+                    subtitleLineLimit: 1,
+                    moreColor: .secondary,
+                    moreTrailingPadding: -8,
+                    minHeight: 60,
+                    usesPlainButtonStyle: true
+                ),
+                moreAccessibilityLabel: "\(item.title)，更多",
+                playButtonAccessibilityIdentifier: "search.result.\(item.id)",
+                play: open
+            ) {
+                LibraryCardArtwork(
+                    content: AnyView(ResourceArtworkView(resource: item.$artwork, contentID: item.id, cornerRadius: 0)),
+                    sources: sources,
+                    sourceID: item.id,
+                    cornerRadius: 5
+                )
+                .frame(width: 56, height: 56)
+            }
+        } else {
+            HStack(spacing: 12) {
+                Button { open() } label: {
+                    HStack(spacing: 12) {
+                        LibraryCardArtwork(content: AnyView(ResourceArtworkView(resource: item.$artwork, contentID: item.id, cornerRadius: 0)),
+                            sources: sources, sourceID: item.id, cornerRadius: item.kind == .artist ? 28 : 5)
+                            .frame(width: 56, height: 56)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(item.title).font(.body).foregroundStyle(.primary).lineLimit(2)
+                            Text(item.subtitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                        }.frame(maxWidth: .infinity, alignment: .leading)
+                    }.contentShape(.rect)
+                }.buttonStyle(.plain).accessibilityIdentifier("search.result.\(item.id)")
                 Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
                     .accessibilityHidden(true)
-            }
-        }.frame(minHeight: 60)
+            }.frame(minHeight: 60)
+        }
     }
     private func open() {
         guard let route = item.route else { model.onOpen?(item); return }

@@ -8,6 +8,7 @@ final class DownloadMusicIntegration {
     private var byPath: [String: Int64] = [:]
     private var resolving: Set<LibraryRoute> = []
     private var publishing = false
+    private var metadataTask: Task<Void, Never>?
     private var stateAliases: [Int64: Set<String>] = [:]
     private var progressAliases: [Int64: Set<String>] = [:]
     private var progressCollections: [Int64: Set<String>] = [:]
@@ -24,7 +25,7 @@ final class DownloadMusicIntegration {
         store.onChange = { [weak self] in self?.publishStates() }
         store.onRecordsChanged = { [weak self, weak store] in
             guard let self, let store else { return }
-            self.publishMetadata()
+            self.scheduleMetadataPublication()
             let missing = store.records.values.filter { store.resource(songID: $0.songID) == nil }.map(\.relativePath)
             if !missing.isEmpty { Task { await LocalLibrary.runtime.removeMissingFiles(missing) } }
         }
@@ -35,12 +36,16 @@ final class DownloadMusicIntegration {
         LocalLibrary.player.configureOfflineSongs { [weak self] in self?.offlineSong($0) }
         LocalLibrary.playlistLibrary.configureOfflineSongs { [weak self] in self?.offlineSong($0) }
         LocalLibrary.runtime.onLibraryPublished = { [weak self] in
-            self?.publishMetadata()
+            self?.scheduleMetadataPublication()
             Task { await store.reconcileFiles() }
         }
         LocalLibrary.songLibrary.downloadedFileID = { [weak self] id in
             guard let self, let songID = self.songID(id), store.resource(songID: songID) != nil else { return nil }
             return store.records[songID]?.relativePath
+        }
+        LocalLibrary.catalog.downloadedOnlineSongID = { [weak self] id in
+            guard let self, let songID = self.songID(id), store.records[songID] != nil else { return nil }
+            return songID
         }
         LocalLibrary.songLibrary.downloadedFavoriteAction = { [weak self] song, liked in
             guard let self, let id = self.songID(song.id), store.records[id] != nil else { return false }
@@ -56,11 +61,6 @@ final class DownloadMusicIntegration {
             guard let self, let id = self.songID(song.id), store.records[id] != nil else { return song }
             guard let owner = self.account.music?.userID, let record = store.records[id] else { self.requestLogin?(); return nil }
             return self.song(record, id: "netease:\(owner):\(id)")
-        }
-        LocalLibrary.downloadedAlbumID = { id in
-            guard let album = Self.albumID(id),
-                  let record = store.records.values.first(where: { $0.song.albumID == album && store.resource(songID: $0.songID) != nil }) else { return nil }
-            return "folder:" + (record.relativePath as NSString).deletingLastPathComponent
         }
         LocalLibrary.collectionDownloadAction = { [weak self] route in self?.download(route) ?? false }
         LocalLibrary.collectionCanDownload = { [weak self] route in
@@ -118,7 +118,19 @@ final class DownloadMusicIntegration {
         publishMetadata()
     }
 
+    func scheduleMetadataPublication() {
+        guard metadataTask == nil else { return }
+        metadataTask = Task { @MainActor [weak self] in
+            await Task.yield()
+            guard let self, !Task.isCancelled else { return }
+            self.metadataTask = nil
+            self.publishMetadata()
+        }
+    }
+
     func publishMetadata() {
+        metadataTask?.cancel()
+        metadataTask = nil
         guard !publishing, let store = account.downloads else { return }
         publishing = true
         defer { publishing = false }
@@ -131,7 +143,10 @@ final class DownloadMusicIntegration {
         let local = Dictionary(store.records.values.filter { store.resource(songID: $0.songID) != nil }.map {
             ($0.relativePath, song($0, id: $0.relativePath))
         }, uniquingKeysWith: { first, _ in first })
-        LocalLibrary.songLibrary.updateLocalMetadata(local)
+        let updatedAlbums = makeDownloadedAlbums(store: store, localSongs: local)
+        if LocalLibrary.catalog.downloadedAlbums != updatedAlbums {
+            LocalLibrary.catalog.downloadedAlbums = updatedAlbums
+        }
         var referenced: [String: LibrarySongItem] = [:]
         if let owner = account.music?.userID {
             for record in store.records.values {
@@ -143,7 +158,14 @@ final class DownloadMusicIntegration {
             guard let id = songID(queued.id), let record = store.records[id], store.resource(songID: id) != nil else { continue }
             referenced[queued.id] = song(record, id: queued.id)
         }
-        LocalLibrary.songLibrary.replaceExternalSongs(referenced.values.sorted { $0.id < $1.id }, source: "downloads")
+        let sortedReferenced = referenced.values.sorted { $0.id < $1.id }
+        let previousAllSongs = LocalLibrary.songLibrary.allSongs
+        LocalLibrary.songLibrary.applyBatch(
+            localMetadata: local,
+            externalSongs: sortedReferenced,
+            externalSource: "downloads",
+            forceCatalogRefresh: true
+        )
         var items: [LibraryPlaylistItem] = []
         var contents: [String: [LibrarySongItem]] = [:]
         var aliases: [String: String] = [:]
@@ -163,10 +185,11 @@ final class DownloadMusicIntegration {
         }
         LocalLibrary.playlistLibrary.replaceDownloadedPlaylists(items: items, songs: contents, onlineAliases: aliases)
         publishStates()
-        LocalLibrary.refreshDownloadPresentation()
-        LocalLibrary.playlistLibrary.reconcileOfflineAvailability()
+        LocalLibrary.refreshDownloadedPlaylistsPresentation()
         LocalLibrary.player.reconcileOfflineAvailability()
-        LocalLibrary.player.reconcileAvailability(songs: LocalLibrary.allSongs)
+        if LocalLibrary.songLibrary.allSongs != previousAllSongs {
+            LocalLibrary.player.reconcileAvailability(songs: LocalLibrary.allSongs)
+        }
     }
 
     private func offlineSong(_ id: String) -> LibrarySongItem? {
@@ -185,8 +208,33 @@ final class DownloadMusicIntegration {
             isFavorite: account.music?.likedIDs.contains(value.id) == true,
             favoriteAddedAt: account.music?.likedAt[value.id],
             unavailabilityReason: account.downloads?.resource(songID: value.id) == nil && account.music?.userID == nil ? "请登录网易云账号后重试" : nil,
-            onlineAlbumID: id.hasPrefix("netease:") ? value.albumID : nil,
+            onlineAlbumID: value.albumID,
             artistReferences: (value.artists ?? []).map { .init(id: "catalog:artist:\($0.id)", name: $0.name) })
+    }
+
+    private func makeDownloadedAlbums(store: NeteaseDownloadStore, localSongs: [String: LibrarySongItem]) -> [LibraryShelfItem] {
+        var grouped: [Int64: [NeteaseDownloadRecord]] = [:]
+        for record in store.records.values where store.resource(songID: record.songID) != nil {
+            guard let albumID = record.song.albumID else { continue }
+            grouped[albumID, default: []].append(record)
+        }
+        let catalogByID = Dictionary(uniqueKeysWithValues: LocalLibrary.catalog.albums.map { ($0.id, $0) })
+        return grouped.keys.sorted().compactMap { albumID in
+            let routeID = "catalog:album:\(albumID)"
+            if let existing = catalogByID[routeID] { return existing }
+            guard let first = grouped[albumID]?.first else { return nil }
+            let local = localSongs[first.relativePath] ?? LocalLibrary.songLibrary.song(id: first.relativePath)
+            let subtitle = first.metadata.albumArtist.isEmpty ? first.song.artist : first.metadata.albumArtist
+            return LibraryShelfItem(
+                id: routeID,
+                title: first.song.album,
+                subtitle: subtitle,
+                artwork: local?.artwork ?? .missing,
+                route: .album(routeID),
+                addedOrder: local?.addedOrder ?? 0,
+                albumBackdrop: local?.artworkBackdrop
+            )
+        }
     }
 
     private func songID(_ id: String) -> Int64? {
@@ -205,7 +253,6 @@ final class DownloadMusicIntegration {
         switch route {
         case .album(let id):
             if let value = Self.albumID(id) { return "album:\(value)" }
-            if let store = account.downloads, let record = store.records.values.first(where: { "folder:" + ($0.relativePath as NSString).deletingLastPathComponent == id }), let value = record.song.albumID { return "album:\(value)" }
         case .playlist(let id):
             if id == "favorites", let value = account.music?.playlists.first(where: \.isFavorites)?.id { return "playlist:\(value)" }
             if id.hasPrefix("netease-playlist:") || id.hasPrefix("downloaded:playlist:") || id.hasPrefix("home:playlist:"), let value = id.split(separator: ":").last.flatMap({ Int64($0) }) { return "playlist:\(value)" }

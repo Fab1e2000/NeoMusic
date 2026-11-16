@@ -60,44 +60,23 @@ final class LocalLibraryAlbumProjectionTests: XCTestCase {
         XCTAssertEqual(LocalLibrary.albums.map(\.id), [first.albumID, hidden.albumID, last.albumID])
     }
 
-    func testArtistDetailKeepsWholeSharedAlbumsInShelfOrder() throws {
+    func testLocalArtistsAreNotSynthesizedAndOnlineSongsSkipFolderAlbumIndex() throws {
         let prefix = UUID().uuidString
         let artist = "\(prefix)-Artist"
-        let hiddenArtist = "\(prefix)-Hidden artist"
-        func song(_ name: String, folder: String, artist: String, track: Int,
-                  artwork: Artwork = .missing) -> LibrarySongItem {
-            LibrarySongItem(id: "\(prefix)/\(name)", title: name, artist: artist, album: name,
-                            albumArtist: artist, trackNumber: track, artwork: artwork,
-                            albumDirectory: "\(prefix)/\(folder)")
-        }
-        let first = song("Shared first", folder: "a", artist: "Other credit", track: 1, artwork: .favorites)
-        let matching = song("Shared second", folder: "a", artist: artist, track: 2)
-        let last = song("Solo", folder: "z", artist: artist, track: 1)
-        let unrelated = song("Unrelated", folder: "b", artist: "Unrelated credit", track: 1)
-        let hidden = song("Hidden", folder: "m", artist: hiddenArtist, track: 1)
+        let local = LibrarySongItem(id: "\(prefix)/local.wav", title: "Local", artist: artist, album: "Local Album",
+                                    albumArtist: artist, trackNumber: 1, artwork: .missing,
+                                    albumDirectory: "\(prefix)/local")
+        let downloadedNetease = LibrarySongItem(id: "\(prefix)/netease.flac", title: "Netease", artist: artist,
+                                                album: "Online Album", albumArtist: artist, trackNumber: 1,
+                                                artwork: .missing, albumDirectory: "\(prefix)/netease", onlineAlbumID: 999)
         let previous = LocalLibrary.songLibrary.songs
-        defer {
-            LocalLibrary.songLibrary.replace(previous)
-            LocalLibrary.favoriteArtists.remove(artist)
-            LocalLibrary.deletedAlbums.remove(hidden.albumID)
-        }
-        LocalLibrary.favoriteArtists.insert(artist)
-        LocalLibrary.deletedAlbums.insert(hidden.albumID)
-        LocalLibrary.songLibrary.replace([last, hidden, matching, unrelated, first])
+        defer { LocalLibrary.songLibrary.replace(previous) }
+        LocalLibrary.songLibrary.replace([local, downloadedNetease])
 
-        let detail = try XCTUnwrap(LocalLibrary.artistDetail(artist))
-        XCTAssertEqual(detail.name, artist)
-        XCTAssertTrue(detail.isFavorite)
-        XCTAssertEqual(detail.albums.map(\.id), [first.albumID, last.albumID])
-        let shared = try XCTUnwrap(detail.albums.first)
-        XCTAssertEqual(shared.title, first.album)
-        XCTAssertEqual(shared.subtitle, "Other credit / \(artist)")
-        if case .favorites = shared.artwork {} else { XCTFail("Keep the whole album's first cover, including other artists") }
-        XCTAssertNil(LocalLibrary.artistDetail(hiddenArtist))
-        XCTAssertNil(LocalLibrary.artistDetail("missing-\(prefix)"))
-
-        LocalLibrary.deletedAlbums.remove(hidden.albumID)
-        XCTAssertEqual(LocalLibrary.artistDetail(hiddenArtist)?.albums.map(\.id), [hidden.albumID])
+        XCTAssertFalse(LocalLibrary.artists.contains { $0.id == artist })
+        XCTAssertTrue(LocalLibrary.albums.contains { $0.id == local.albumID })
+        XCTAssertFalse(LocalLibrary.albums.contains { $0.id == "folder:\(prefix)/netease" })
+        XCTAssertEqual(downloadedNetease.albumID, "catalog:album:999")
     }
 }
 
@@ -786,7 +765,6 @@ final class LocalLibraryRuntimeTests: XCTestCase {
         LocalLibrary.songLibrary.replace([a, b, c])
         XCTAssertEqual(LocalLibrary.albums.count, 2)
         XCTAssertEqual(LocalLibrary.albumDetail(a.albumID)?.songs.count, 2)
-        XCTAssertEqual(LocalLibrary.artistDetail("B")?.albums.count, 1)
     }
 
     func testFolderMigrationPreservesFavoriteAndPinWithoutHidingOtherSongs() {

@@ -99,17 +99,34 @@ final class AlbumLibraryAdditionsTests: XCTestCase {
     func testLocalSongMenuMatchesTheRowEllipsis() {
         var song = LibrarySongItem(id: "local", title: "歌", artist: "艺人", album: "专辑", albumArtist: "艺人", trackNumber: 1, artwork: .missing)
         song.isFavorite = true
-        song.isPinned = true
         var actions = SongMenuActions()
         actions.playbackSource = { "喜爱歌曲" }
         var opened: [LibraryRoute] = []
         let items = actions.rowMenuSections(for: song) { opened.append($0) }.flatMap { $0 }
-        XCTAssertEqual(items.map(\.title), ["下载", "撤销", "取消置顶", "添加到播放列表", "插播", "随后播放", "前往专辑"])
+        XCTAssertEqual(items.map(\.title), ["撤销", "添加到播放列表", "插播", "随后播放", "前往专辑"])
         XCTAssertEqual(items.first { $0.title == "随后播放" }?.subtitle, "喜爱歌曲")
-        XCTAssertTrue(items.first { $0.title == "下载" }?.isDisabled == true)
-        XCTAssertFalse(items.contains { $0.title == "查看完整歌词" || $0.title == "从资料库删除" })
+        XCTAssertFalse(items.contains {
+            ["下载", "置顶歌曲", "取消置顶", "前往艺人", "查看完整歌词", "从资料库删除"].contains($0.title)
+        })
         items.first { $0.title == "前往专辑" }?.perform()
         XCTAssertEqual(opened, [.album(song.albumID)])
+    }
+
+    func testDownloadedNeteaseSongMenuOpensOnlineAlbumAndArtists() {
+        let downloads = LibraryDownloads()
+        downloads.isRemovable = { $0.id == "netease/song.flac" }
+        let song = LibrarySongItem(id: "netease/song.flac", title: "歌", artist: "甲", album: "辑", albumArtist: "甲",
+                                   trackNumber: 1, artwork: .missing, albumDirectory: "netease",
+                                   onlineAlbumID: 3, artistReferences: [.init(id: "catalog:artist:1", name: "甲")])
+        downloads.update(states: [song.id: .downloaded], collections: [:])
+        var actions = SongMenuActions(downloads: downloads)
+        var opened: [LibraryRoute] = []
+        actions.openAlbum = { item, open in open(.album(item.albumID)) }
+        let items = actions.rowMenuSections(for: song) { opened.append($0) }.flatMap { $0 }
+        XCTAssertEqual(items.map(\.title), ["喜爱", "添加到播放列表", "插播", "添加到队列", "移除下载", "前往专辑", "甲"])
+        items.first { $0.title == "前往专辑" }?.perform()
+        items.first { $0.title == "甲" }?.perform()
+        XCTAssertEqual(opened, [.album("catalog:album:3"), .artist("catalog:artist:1")])
     }
 
     func testOnlineSongMenuAddsAlbumAndArtists() {

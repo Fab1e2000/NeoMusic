@@ -92,7 +92,11 @@ struct ArtistDetailView: View {
                 if !detail.songs.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
                         heading(.songs)
-                        ForEach(detail.songs.prefix(5)) { song in ArtistSongRow(song: song, songs: detail.songs, source: detail.name, dark: true, playSong: playSong) }
+                        VStack(spacing: 0) {
+                            ForEach(detail.songs.prefix(5)) { song in
+                                ArtistSongRow(song: song, songs: detail.songs, source: detail.name, dark: true, playSong: playSong)
+                            }
+                        }
                     }.padding(.horizontal, 20).padding(.top, 24)
                 }
                 ForEach(detail.errors.keys.sorted(), id: \.self) { key in
@@ -199,7 +203,18 @@ struct ArtistSectionView: View {
     var body: some View {
         Group {
             switch section {
-            case .songs: List(detail.songs) { song in ArtistSongRow(song: song, songs: detail.songs, source: detail.name, dark: false, playSong: playSong).listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20)).listRowSeparator(.hidden) }.listStyle(.plain)
+            case .songs:
+                List {
+                    ForEach(detail.songs) { song in
+                        ArtistSongRow(song: song, songs: detail.songs, source: detail.name, dark: false, showsSeparator: false, playSong: playSong)
+                            .songListRow(song, mode: .standard(), swipeBackground: Color(.systemBackground))
+                            .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
+                            .listRowSeparator(.visible, edges: .bottom)
+                            .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] + 60 }
+                            .alignmentGuide(.listRowSeparatorTrailing) { $0.width }
+                    }
+                    .listSectionSeparator(.hidden, edges: .top)
+                }.listStyle(.plain)
             case .similar:
                 List(detail.similar) { artist in
                     LibraryRouteLink(value: .artist(artist.id), preview: artistPreview(artist)) {
@@ -222,31 +237,39 @@ private struct ArtistSongRow: View {
     let songs: [LibrarySongItem]
     let source: String
     let dark: Bool
+    var showsSeparator = true
     var playSong: ((LibrarySongItem) -> Void)?
     @Environment(\.songMenuActions) private var actions
-    @Environment(\.dynamicTypeSize) private var textSize
     @ScaledMetric(relativeTo: .body) private var titleSize = 17.0
     @ScaledMetric(relativeTo: .footnote) private var albumSize = 13.0
     var body: some View {
-        HStack(spacing: 12) {
-            Button {
-                if let playSong { playSong(song) }
-                else if let index = songs.firstIndex(where: { $0.id == song.id }) { actions.play(songs, index, source) }
-            } label: {
-                HStack(spacing: 12) {
-                    PlaylistSongArtwork(song: song).frame(width: 48, height: 48)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(song.title).font(.system(size: titleSize))
-                            .lineLimit(textSize.isAccessibilitySize ? nil : 1)
-                        Text(song.album).font(.system(size: albumSize))
-                            .foregroundStyle(dark ? Color.white.opacity(0.72) : Color.secondary)
-                            .lineLimit(textSize.isAccessibilitySize ? nil : 1)
-                    }.frame(maxWidth: .infinity, alignment: .leading)
-                }.contentShape(.rect)
-            }.buttonStyle(.automatic)
-            TrackMoreButton(song: song, color: dark ? Color.white.opacity(0.8) : Color.secondary).frame(width: 44, height: 44).padding(.trailing, 2)
-        }.padding(.vertical, 4)
-            .overlay(alignment: .bottom) { Rectangle().fill(dark ? Color.white.opacity(0.2) : Color.black.opacity(0.18)).frame(height: 0.33).padding(.leading, 60) }
-            .songContextMenu(song)
+        let secondaryColor = dark ? Color.white.opacity(0.72) : Color.secondary
+        SharedSongRow(
+            song: song,
+            subtitle: song.album,
+            appearance: SongRowAppearance(
+                titleFont: .system(size: titleSize),
+                subtitleFont: .system(size: albumSize),
+                subtitleColor: secondaryColor,
+                titleSubtitleSpacing: 1,
+                moreColor: dark ? Color.white.opacity(0.8) : Color.secondary,
+                favoriteMarkColor: secondaryColor,
+                downloadStatusStyle: AnyShapeStyle(secondaryColor),
+                minHeight: 0
+            )
+        ) {
+            if let playSong { playSong(song) }
+            else if let index = songs.firstIndex(where: { $0.id == song.id }) { actions.play(songs, index, source) }
+        } leading: {
+            PlaylistSongArtwork(song: song).frame(width: 48, height: 48)
+        }
+        .padding(.vertical, 4)
+        .overlay(alignment: .bottom) {
+            if showsSeparator {
+                Rectangle().fill(dark ? Color.white.opacity(0.2) : Color.black.opacity(0.18))
+                    .frame(height: 0.33).padding(.leading, 60)
+            }
+        }
+        .songContextMenu(song)
     }
 }

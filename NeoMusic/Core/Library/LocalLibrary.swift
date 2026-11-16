@@ -135,7 +135,9 @@ final class SongLibrary {
     private(set) var songs: [LibrarySongItem] {
         didSet {
             rebuildCatalog()
-            if !LocalAlbumIndex.hasSameMetadata(oldValue, songs) { albumIndex = LocalAlbumIndex(songs: songs) }
+            if !LocalAlbumIndex.hasSameMetadata(oldValue, songs) {
+                albumIndex = LocalAlbumIndex(songs: songs.filter { $0.onlineAlbumID == nil })
+            }
         }
     }
     private(set) var albumIndex = LocalAlbumIndex(songs: [])
@@ -143,7 +145,9 @@ final class SongLibrary {
     private(set) var externalSongs: [LibrarySongItem] = [] { didSet { rebuildCatalog() } }
     private var externalSources: [String: [LibrarySongItem]] = [:]
     private(set) var allSongs: [LibrarySongItem] = []
+    private(set) var favoriteSongs: [LibrarySongItem] = []
     private var songsByID: [String: LibrarySongItem] = [:]
+    private var isBatching = false
     @ObservationIgnored var downloadedFileID: (@MainActor (String) -> String?)?
     @ObservationIgnored var downloadedFavoriteAction: (@MainActor (LibrarySongItem, Bool) -> Bool)?
 
@@ -154,9 +158,42 @@ final class SongLibrary {
         if songs != updated { songs = updated }
     }
 
+    func applyBatch(localMetadata: [String: LibrarySongItem]? = nil,
+                    externalSongs externalValues: [LibrarySongItem]? = nil,
+                    externalSource: String = "home",
+                    forceCatalogRefresh: Bool = false) {
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            let wasBatching = isBatching
+            isBatching = true
+            var needsRebuild = forceCatalogRefresh
+            if let localMetadata {
+                let updated = songs.map { localMetadata[$0.id] ?? $0 }
+                if songs != updated {
+                    songs = updated
+                    needsRebuild = true
+                }
+            }
+            if let externalValues, externalSources[externalSource] != externalValues {
+                externalSources[externalSource] = externalValues
+                var seen = Set<String>()
+                let updated = externalSources.keys.sorted().flatMap { externalSources[$0] ?? [] }
+                    .filter { $0.isOnline && seen.insert($0.id).inserted }
+                if externalSongs != updated {
+                    externalSongs = updated
+                    needsRebuild = true
+                }
+            }
+            isBatching = wasBatching
+            if !isBatching && needsRebuild { rebuildCatalog() }
+        }
+    }
+
     func song(id: String) -> LibrarySongItem? { songsByID[id] }
 
     private func rebuildCatalog() {
+        guard !isBatching else { return }
         let existing = Set((songs + onlineSongs).map(\.id))
         let candidates = songs + onlineSongs + externalSongs.filter { !existing.contains($0.id) }
         var visibleFileIDs = Set(songs.map(\.id))
@@ -164,7 +201,11 @@ final class SongLibrary {
             guard song.isOnline, let localID = downloadedFileID?(song.id) else { return true }
             return visibleFileIDs.insert(localID).inserted
         }
-        if allSongs != updated { allSongs = updated }
+        if allSongs != updated {
+            allSongs = updated
+            let updatedFavorites = Self.orderedFavorites(updated)
+            if favoriteSongs != updatedFavorites { favoriteSongs = updatedFavorites }
+        }
         // Detail routes and old queue entries keep their original online identity.
         songsByID = Dictionary(candidates.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     }

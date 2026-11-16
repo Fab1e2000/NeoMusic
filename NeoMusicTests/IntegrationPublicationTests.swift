@@ -509,6 +509,66 @@ import XCTest
         XCTAssertEqual(library.onlineSongs, [third, first, second])
     }
 
+    func testBatchCatalogUpdateEmitsSingleRebuildAndIsolatesFavoritesObserver() {
+        let defaults = UserDefaults(suiteName: "FavoriteBatchTests.\(UUID().uuidString)")!
+        let library = SongLibrary(songs: [], defaults: defaults)
+        var liked = song(1)
+        liked.isFavorite = true
+        let local = LibrarySongItem(id: "local.flac", title: "Local", artist: "Artist", album: "Album",
+                                    albumArtist: "Artist", trackNumber: 1, artwork: .missing)
+        library.replace([local])
+        library.replaceOnline([liked])
+
+        let allChanges = Mutex(0)
+        let favoriteChanges = Mutex(0)
+        withObservationTracking { _ = library.allSongs } onChange: { allChanges.withLock { $0 += 1 } }
+        withObservationTracking { _ = library.favoriteSongs } onChange: { favoriteChanges.withLock { $0 += 1 } }
+
+        var updatedLocal = local
+        updatedLocal.duration = 240
+        let searchResult = song(2) // not favorite
+        library.applyBatch(localMetadata: [local.id: updatedLocal],
+                           externalSongs: [searchResult],
+                           externalSource: "search",
+                           forceCatalogRefresh: true)
+        XCTAssertEqual(allChanges.withLock { $0 }, 1)
+        XCTAssertEqual(favoriteChanges.withLock { $0 }, 0)
+        XCTAssertEqual(library.favoriteSongs.map(\.id), [liked.id])
+    }
+
+    func testAsyncListProjectionOffloadsBackgroundWorkAndHonorsCancellation() async {
+        let projection = AsyncListProjection<Int, Int>()
+        XCTAssertEqual(projection.currentValue(for: 1, fastPath: { _ in nil }, synchronousInitial: { $0 * 10 }), 10)
+        await projection.computeIfNeeded(for: 1, fastPath: { _ in nil }, background: { 10 }, finish: { $0 })
+        XCTAssertEqual(projection.committedOutput, 10)
+
+        let cancelled = Task {
+            await projection.computeIfNeeded(
+                for: 2,
+                fastPath: { _ in nil },
+                background: {
+                    Thread.sleep(forTimeInterval: 0.05)
+                    return 20
+                },
+                finish: { $0 }
+            )
+        }
+        cancelled.cancel()
+        await cancelled.value
+        XCTAssertEqual(projection.committedOutput, 10)
+
+        await projection.computeIfNeeded(
+            for: 3,
+            fastPath: { _ in nil },
+            background: {
+                XCTAssertFalse(Thread.isMainThread)
+                return 30
+            },
+            finish: { $0 }
+        )
+        XCTAssertEqual(projection.committedOutput, 30)
+    }
+
     private func song(_ id: Int) -> LibrarySongItem {
         .init(id: "netease:42:\(id)", title: "Song \(id)", artist: "Artist", album: "Album",
               albumArtist: "Artist", trackNumber: id, artwork: .missing)

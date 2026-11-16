@@ -508,10 +508,12 @@ import Observation
         }
     }
     private func openSong(_ songID: String, artist: String?, album: Bool, open: @escaping (LibraryRoute) -> Void) {
-        guard let song = LocalLibrary.songLibrary.song(id: songID), song.onlineOwnerID == owner.map(String.init) else { return }
+        guard let song = LocalLibrary.songLibrary.song(id: songID) else { return }
+        let downloadedID = LocalLibrary.catalog.downloadedOnlineSongID?(songID)
+        guard song.onlineOwnerID == owner.map(String.init) || downloadedID != nil else { return }
         if album, let id = song.onlineAlbumID { open(.album("catalog:album:\(id)")); return }
         if !album, let ref = song.artistReferences.first(where: { artist == nil || $0.name == artist }) { open(.artist(ref.id)); return }
-        guard let id = song.onlineSongID, let store else { return }
+        guard let id = song.onlineSongID ?? downloadedID, let store else { return }
         let captured = owner
         Task {
             do {
@@ -579,6 +581,7 @@ private struct ArtistCatalogDestination: View {
         if let detail {
             CollectionDetailView(detail: detail)
                 .environment(\.collectionMenuActions, integration.collectionActions)
+                .environment(\.songMenuActions, integration.songActions(route))
                 .safeAreaInset(edge: .bottom) {
                     if let error = integration.error(route) {
                         HStack {

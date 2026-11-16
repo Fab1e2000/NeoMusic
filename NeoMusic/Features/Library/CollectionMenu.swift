@@ -428,23 +428,21 @@ struct SongMenuActions {
     var delete: (LibrarySongItem) -> Void = { _ in }
     /// “随后播放”下方的当前播放来源；没有来源时菜单写“添加到队列”。
     var playbackSource: () -> String? = { nil }
+    var openAlbum: (LibrarySongItem, @escaping (LibraryRoute) -> Void) -> Void = { song, open in open(.album(song.albumID)) }
+    var openArtist: (LibrarySongItem, @escaping (LibraryRoute) -> Void) -> Void = { _, _ in }
     /// 菜单和侧滑共用的完成提示。调用方没另传时用这一份。
     var notify: (LibraryToast) -> Void = { _ in }
 
-    /// 专辑详情页曲目的菜单：未下载时首组为“下载 · 喜爱”横排，已下载时“喜爱”单独成行。
-    /// 已在专辑页，不再提供“前往专辑”。本地歌曲随文件夹保留，不从资料库删除。
+    /// 专辑详情页曲目的菜单：已隐藏「前往专辑」，保留网易云艺人入口。
     @MainActor func albumTrackSections(for song: LibrarySongItem, isDownloaded: Bool,
                                        download: @escaping () -> Void, removeDownload: @escaping () -> Void,
-                                       notify: @escaping (LibraryToast) -> Void) -> LibraryMenuSections {
-        var groups = sections(for: song, notify: notify, goToAlbum: {})
-        if !song.isOnline {
-            groups.removeAll { group in group.contains { $0.title == "前往专辑" } }
-        }
-        return groups
+                                       notify: @escaping (LibraryToast) -> Void,
+                                       open: @escaping (LibraryRoute) -> Void = { _ in }) -> LibraryMenuSections {
+        rowMenuSections(for: song, inAlbum: true, explicitNotify: notify, open: open)
     }
 
     @MainActor private func downloadItem(for song: LibrarySongItem) -> LibraryMenuItem? {
-        guard let downloads else { return unavailableDownload }
+        guard let downloads else { return song.isNeteaseCatalogSong ? unavailableDownload : nil }
         let state = downloads.state(of: song.id)
         if state == .downloaded { return nil }
         if state?.isActive == true {
@@ -454,18 +452,21 @@ struct SongMenuActions {
             }
         }
         if case .failed(let message) = state {
-            return LibraryMenuItem(title: "重试下载", subtitle: message, systemImage: "arrow.clockwise", isDisabled: !downloads.isDownloadable(song)) {
+            guard downloads.isDownloadable(song) else { return nil }
+            return LibraryMenuItem(title: "重试下载", subtitle: message, systemImage: "arrow.clockwise") {
                 LibraryHaptics.impact()
                 downloads.download([song])
             }
         }
-        return LibraryMenuItem(title: "下载", systemImage: "arrow.down.circle.fill", isDisabled: !downloads.isDownloadable(song)) {
+        guard downloads.isDownloadable(song) else { return nil }
+        return LibraryMenuItem(title: "下载", systemImage: "arrow.down.circle.fill") {
             LibraryHaptics.impact()
             downloads.download([song])
         }
     }
 
     @MainActor func sections(for song: LibrarySongItem, notify explicitNotify: ((LibraryToast) -> Void)? = nil,
+                            removeFromPlaylist: (() -> Void)? = nil,
                             goToAlbum: @escaping () -> Void) -> LibraryMenuSections {
         let notify = explicitNotify ?? self.notify
         var quick = [favoriteItem(isFavorite: song.isFavorite) {
@@ -482,33 +483,46 @@ struct SongMenuActions {
         }]
         if let item = downloadItem(for: song) { quick.insert(item, at: 0) }
         var additions = [LibraryMenuItem(title: "添加到播放列表", systemImage: "text.badge.plus") { addToPlaylist(song) }]
-        if !song.isOnline {
-            additions.insert(LibraryMenuItem(title: song.isPinned ? "取消置顶" : "置顶歌曲", systemImage: song.isPinned ? "pin.slash" : "pin") {
-                togglePin(song)
-                notify(song.isPinned ? .unpinned : .pinned)
-            }, at: 0)
+        if let removeFromPlaylist {
+            additions.append(LibraryMenuItem(title: "从歌单移除", systemImage: "minus.circle", isDestructive: true) {
+                CenteredActionSheet.confirmRemoveFromPlaylist(removeFromPlaylist)
+            })
         }
         var groups: LibraryMenuSections = [quick, additions,
             libraryQueueMenuItems(playbackSource: playbackSource(), playNext: { playNext(song) }, playLater: { playLater(song) }, notify: notify)]
-        if !song.isOnline {
-            groups.append([LibraryMenuItem(title: "前往专辑", subtitle: song.album, systemImage: "square", customImage: MenuIcons.album, perform: goToAlbum)])
-        }
         if let downloads, downloads.canRemove(song) {
             groups.append([LibraryMenuItem(title: "移除下载", systemImage: "xmark.circle") { downloads.requestRemoval([song]) }])
         }
         return groups
     }
 
-    /// 歌曲行省略号与长按共用的完整菜单，包含在线歌曲的专辑和艺人入口。
-    @MainActor func rowMenuSections(for song: LibrarySongItem, open: @escaping (LibraryRoute) -> Void) -> LibraryMenuSections {
-        var groups = sections(for: song) { open(.album(song.albumID)) }
-        guard song.isOnline else { return groups }
+    /// 歌曲行省略号与长按共用的完整菜单，包含在线歌曲及已下载网易云歌曲的专辑和艺人入口。
+    @MainActor func rowMenuSections(for song: LibrarySongItem, inAlbum: Bool = false,
+                                    removeFromPlaylist: (() -> Void)? = nil,
+                                    explicitNotify: ((LibraryToast) -> Void)? = nil,
+                                    open: @escaping (LibraryRoute) -> Void) -> LibraryMenuSections {
+        var groups = sections(for: song, notify: explicitNotify, removeFromPlaylist: removeFromPlaylist, goToAlbum: { openAlbum(song, open) })
         var links: [LibraryMenuItem] = []
-        if song.onlineAlbumID != nil {
-            links.append(LibraryMenuItem(title: "前往专辑", systemImage: "music.note.square.stack") { open(.album(song.albumID)) })
+        let isNetease = song.isNeteaseCatalogSong || downloads?.canRemove(song) == true
+        if !inAlbum {
+            if isNetease {
+                if song.onlineAlbumID != nil || downloads?.canRemove(song) == true {
+                    links.append(LibraryMenuItem(title: "前往专辑", subtitle: song.album.isEmpty ? nil : song.album,
+                                                 systemImage: "music.note.square.stack") { openAlbum(song, open) })
+                }
+            } else {
+                links.append(LibraryMenuItem(title: "前往专辑", subtitle: song.album.isEmpty ? nil : song.album,
+                                             systemImage: "square", customImage: MenuIcons.album) { open(.album(song.albumID)) })
+            }
         }
-        links += song.artistReferences.map { artist in
-            LibraryMenuItem(identity: "artist:" + artist.id, title: artist.name, systemImage: "music.microphone") { open(.artist(artist.id)) }
+        if !song.artistReferences.isEmpty {
+            links += song.artistReferences.map { artist in
+                LibraryMenuItem(identity: "artist:" + artist.id, title: artist.name, systemImage: "music.microphone") { open(.artist(artist.id)) }
+            }
+        } else if isNetease {
+            links.append(LibraryMenuItem(title: "前往艺人", subtitle: song.artist, systemImage: "music.microphone") {
+                openArtist(song, open)
+            })
         }
         if !links.isEmpty { groups.append(links) }
         return groups
@@ -538,13 +552,68 @@ extension EnvironmentValues {
 
 extension View {
     /// 给歌曲行加上长按菜单与预览卡片；行本身的点按与“…”按钮不受影响。
-    func songContextMenu(_ song: LibrarySongItem) -> some View {
-        modifier(SongContextMenu(song: song))
+    func songContextMenu(_ song: LibrarySongItem, onRemoveFromPlaylist: (() -> Void)? = nil) -> some View {
+        modifier(SongContextMenu(song: song, onRemoveFromPlaylist: onRemoveFromPlaylist))
+    }
+}
+
+struct OnlineSongTrailingSwipeButtons: View {
+    let song: LibrarySongItem
+    let items: [OnlineSongTrailingSwipe]
+    var animateRemoval = false
+    @Environment(\.songMenuActions) private var songActions
+    @Environment(\.libraryDownloads) private var downloads
+
+    var body: some View {
+        if let edge = items.first, edge != .removeFromLiked {
+            switch edge {
+            case .like:
+                Button("喜欢", systemImage: "heart.fill") {
+                    LibraryHaptics.impact()
+                    songActions.toggleFavorite(song)
+                    songActions.notify(.favorited)
+                }
+                .labelStyle(.iconOnly)
+                .tint(.pink)
+            case .download:
+                Button("下载", systemImage: "arrow.down") {
+                    LibraryHaptics.impact()
+                    downloads?.download([song])
+                }
+                .labelStyle(.iconOnly)
+                .tint(.blue)
+            case .stopDownload:
+                Button("停止下载", systemImage: "stop.fill") {
+                    LibraryHaptics.impact()
+                    downloads?.stop([song])
+                }
+                .labelStyle(.iconOnly)
+                .tint(.blue)
+            case .removeFromLiked:
+                EmptyView()
+            }
+        }
+        if items.contains(.removeFromLiked) {
+            // 不用 destructive。系统列表会把这个角色当成删掉当前行，歌还在歌单里也会从界面消失。
+            Button("从喜欢歌曲移除", systemImage: "trash") {
+                CenteredActionSheet.confirmRemoveFromLiked {
+                    if animateRemoval {
+                        withAnimation { songActions.removeFromFavorites(song) }
+                    } else {
+                        songActions.removeFromFavorites(song)
+                    }
+                    songActions.notify(.unfavorited)
+                }
+            }
+            .labelStyle(.iconOnly)
+            .tint(.red)
+        }
     }
 }
 
 private struct SongContextMenu: ViewModifier {
     let song: LibrarySongItem
+    var onRemoveFromPlaylist: (() -> Void)? = nil
     @Environment(\.songMenuActions) private var actions
     @Environment(\.openLibraryRoute) private var openLibraryRoute
     @Environment(\.dynamicTypeSize) private var textSize
@@ -552,7 +621,7 @@ private struct SongContextMenu: ViewModifier {
     func body(content: Content) -> some View {
         let lines = [song.title, song.artist, song.album]
         content.contextMenu {
-            SongNavigationMenu(song: song)
+            SongNavigationMenu(song: song, onRemoveFromPlaylist: onRemoveFromPlaylist)
         } preview: {
             let traits = UITraitCollection(preferredContentSizeCategory: UIContentSizeCategory(textSize))
             let size = MenuPreviewCard.size(for: lines, compatibleWith: traits)
@@ -566,11 +635,12 @@ private struct SongContextMenu: ViewModifier {
 /// 歌曲行与“…”按钮共用的菜单内容。
 struct SongMenuContents: View {
     let song: LibrarySongItem
+    var onRemoveFromPlaylist: (() -> Void)? = nil
     @Environment(\.songMenuActions) private var actions
     @Environment(\.openLibraryRoute) private var openLibraryRoute
 
     var body: some View {
-        SongNavigationMenu(song: song)
+        SongNavigationMenu(song: song, onRemoveFromPlaylist: onRemoveFromPlaylist)
     }
 }
 
@@ -658,9 +728,10 @@ struct MenuPreviewCard: View {
 
 private struct SongNavigationMenu: View {
     let song: LibrarySongItem
+    var onRemoveFromPlaylist: (() -> Void)? = nil
     @Environment(\.songMenuActions) private var actions
     @Environment(\.openLibraryRoute) private var open
     var body: some View {
-        LibraryMenuContents(sections: actions.rowMenuSections(for: song) { open($0) })
+        LibraryMenuContents(sections: actions.rowMenuSections(for: song, removeFromPlaylist: onRemoveFromPlaylist) { open($0) })
     }
 }

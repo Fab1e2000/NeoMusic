@@ -15,8 +15,62 @@ import SwiftUI
     }
 }
 
+/// Runs heavy list filtering and Pinyin sorting off the main thread while browsing,
+/// preserving the previous valid snapshot until background computation finishes.
+@MainActor @Observable
+final class AsyncListProjection<Input: Equatable, Output> {
+    private(set) var committedOutput: Output?
+    @ObservationIgnored private var committedInput: Input?
+    @ObservationIgnored private var fallbackInput: Input?
+    @ObservationIgnored private var fallbackOutput: Output?
+
+    func currentValue(for input: Input,
+                      fastPath: (Input) -> Output?,
+                      synchronousInitial: (Input) -> Output) -> Output {
+        if let fast = fastPath(input) { return fast }
+        if committedInput == input, let committedOutput { return committedOutput }
+        if let committedOutput { return committedOutput }
+        if fallbackInput == input, let fallbackOutput { return fallbackOutput }
+        let initial = synchronousInitial(input)
+        fallbackInput = input
+        fallbackOutput = initial
+        return initial
+    }
+
+    func computeIfNeeded<Intermediate: Sendable>(
+        for input: Input,
+        fastPath: (Input) -> Output?,
+        background: @escaping @Sendable () -> Intermediate,
+        finish: (Intermediate) -> Output
+    ) async {
+        if let fast = fastPath(input) {
+            committedInput = input
+            committedOutput = fast
+            fallbackInput = nil
+            fallbackOutput = nil
+            return
+        }
+        guard committedInput != input else { return }
+        if fallbackInput == input, let fallback = fallbackOutput {
+            committedInput = input
+            committedOutput = fallback
+            fallbackInput = nil
+            fallbackOutput = nil
+            return
+        }
+        let intermediate = await Task.detached(priority: .userInitiated) {
+            background()
+        }.value
+        guard !Task.isCancelled else { return }
+        committedInput = input
+        committedOutput = finish(intermediate)
+        fallbackInput = nil
+        fallbackOutput = nil
+    }
+}
+
 /// 列表页的筛选：全部、喜爱、已下载。本地音乐都在本机，“下载”保留位置但不可用。
-enum LibraryFilter: Hashable {
+enum LibraryFilter: Hashable, Sendable {
     case all, favorites, downloaded
 }
 

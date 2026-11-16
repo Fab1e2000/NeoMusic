@@ -2,74 +2,6 @@ import SwiftUI
 import PhotosUI
 import UniformTypeIdentifiers
 
-/// 网易云曲目按喜欢状态切换左滑；本地播放列表仍用移除。
-private struct PlaylistTrailingSwipe: ViewModifier {
-    let song: LibrarySongItem
-    let canRemove: Bool
-    let remove: () -> Void
-    @Environment(\.songMenuActions) private var songActions
-    @Environment(\.libraryDownloads) private var downloads
-
-    func body(content: Content) -> some View {
-        let usesOnlineActions = song.isOnline && !canRemove
-        let items = usesOnlineActions
-            ? OnlineSongTrailingSwipe.actions(isFavorite: song.isFavorite, downloadState: downloads?.state(of: song.id),
-                                              canDownload: downloads?.isDownloadable(song) == true)
-            : []
-        content.swipeActions(edge: .trailing, allowsFullSwipe: items.first != .removeFromLiked) {
-            if usesOnlineActions {
-                if let edge = items.first, edge != .removeFromLiked { edgeButton(edge) }
-                if items.contains(.removeFromLiked) {
-                    // 不用 destructive。系统列表会把这个角色当成删掉当前行，歌还在歌单里也会从界面消失。
-                    Button("从喜欢歌曲移除", systemImage: "trash") {
-                        CenteredActionSheet.confirmRemoveFromLiked {
-                            songActions.removeFromFavorites(song)
-                            songActions.notify(.unfavorited)
-                        }
-                    }
-                    .labelStyle(.iconOnly)
-                    .tint(.red)
-                }
-            } else if canRemove {
-                Button("移除", systemImage: "minus.circle.fill") {
-                    CenteredActionSheet.confirmRemoveFromPlaylist(remove)
-                }
-                .labelStyle(.iconOnly)
-                .tint(.red)
-            }
-        }
-    }
-
-    @ViewBuilder private func edgeButton(_ action: OnlineSongTrailingSwipe) -> some View {
-        switch action {
-        case .like:
-            Button("喜欢", systemImage: "heart.fill") {
-                LibraryHaptics.impact()
-                songActions.toggleFavorite(song)
-                songActions.notify(.favorited)
-            }
-                .labelStyle(.iconOnly)
-                .tint(.pink)
-        case .download:
-            Button("下载", systemImage: "arrow.down") {
-                LibraryHaptics.impact()
-                downloads?.download([song])
-            }
-                .labelStyle(.iconOnly)
-                .tint(.blue)
-        case .stopDownload:
-            Button("停止下载", systemImage: "stop.fill") {
-                LibraryHaptics.impact()
-                downloads?.stop([song])
-            }
-                .labelStyle(.iconOnly)
-                .tint(.blue)
-        case .removeFromLiked:
-            EmptyView()
-        }
-    }
-}
-
 /// 作为标签根页面时不显示导航标题，和喜爱歌曲一样。
 private struct PlaylistRootChrome: ViewModifier {
     let isRoot: Bool
@@ -109,7 +41,7 @@ struct PlaylistDetailView: View {
     @State private var backdrop: AlbumArtworkBackdrop?
     @State private var query = ""
     @State private var sort = DetailSort.order
-    @State private var projection = LibraryListProjection<ProjectionInput, Projection>()
+    @State private var projection = AsyncListProjection<ProjectionInput, Projection>()
     @State private var showsAddMusic = false
     @State private var showsEditor = false
     @State private var showsDestinations = false
@@ -132,25 +64,54 @@ struct PlaylistDetailView: View {
     private var pageBackground: Color { preparedBackdrop?.color ?? Color(.systemBackground) }
 
     private var resolvedSecondaryColor: Color {
-        let effectiveScheme = preparedBackdrop?.colorScheme ?? colorScheme
-        let traits = UITraitCollection(userInterfaceStyle: effectiveScheme == .dark ? .dark : .light)
-        let resolved = UIColor(pageBackground).resolvedColor(with: traits)
-        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
-        resolved.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
-        let offset: CGFloat = effectiveScheme == .dark ? 0.5 : -0.5
-        return Color(uiColor: UIColor(
-            red: min(1, max(0, red + offset)),
-            green: min(1, max(0, green + offset)),
-            blue: min(1, max(0, blue + offset)),
-            alpha: 1
-        ))
+        Color.secondaryContentColor(on: pageBackground, colorScheme: preparedBackdrop?.colorScheme ?? colorScheme)
     }
     private var tracks: [LibrarySongItem] { library.songs(in: playlistID) }
     private var displayed: Projection {
         let input = ProjectionInput(tracks: tracks, query: query, sort: sort)
-        return projection.value(for: input, calculate: input.calculate)
+        return projection.currentValue(for: input, fastPath: Self.fastPath, synchronousInitial: { $0.calculate() })
     }
     private var visibleTracks: [LibrarySongItem] { displayed.tracks }
+
+    private static func fastPath(_ input: ProjectionInput) -> Projection? {
+        if input.query.isEmpty && input.sort == .order {
+            return Projection(tracks: input.tracks, totalDuration: input.tracks.reduce(0) { $0 + $1.duration })
+        }
+        if input.tracks.count <= 120 { return input.calculate() }
+        return nil
+    }
+
+    private struct TrackSortEntry: Sendable {
+        let index: Int
+        let title: String
+        let artist: String
+        let album: String
+        let duration: Int
+    }
+
+    private struct TrackProjectionIndices: Sendable {
+        let indices: [Int]
+        let totalDuration: Int
+    }
+
+    private static func computeTrackIndices(entries: [TrackSortEntry], query: String,
+                                            sort: DetailSort) -> TrackProjectionIndices {
+        let filtered = query.isEmpty ? entries : entries.filter {
+            $0.title.localizedStandardContains(query)
+                || $0.artist.localizedStandardContains(query) || $0.album.localizedStandardContains(query)
+        }
+        let ordered: [TrackSortEntry]
+        switch sort {
+        case .order: ordered = filtered
+        case .title: ordered = filtered.sorted(byName: \.title)
+        case .artist: ordered = filtered.sorted(byName: \.artist)
+        case .album: ordered = filtered.sorted(byName: \.album)
+        }
+        return TrackProjectionIndices(
+            indices: ordered.map(\.index),
+            totalDuration: entries.reduce(0) { $0 + $1.duration }
+        )
+    }
 
     struct ProjectionInput: Equatable {
         let tracks: [LibrarySongItem]
@@ -211,6 +172,23 @@ struct PlaylistDetailView: View {
                                         hasMore: library.onlineHasMore.contains(playlistID))) {
             if !query.isEmpty || sort != .order { _ = await library.prepareCompleteCollection(playlistID) }
         }
+        .task(id: ProjectionInput(tracks: tracks, query: query, sort: sort)) {
+            let input = ProjectionInput(tracks: tracks, query: query, sort: sort)
+            let entries = input.tracks.enumerated().map { index, track in
+                TrackSortEntry(index: index, title: track.title, artist: track.artist,
+                               album: track.album, duration: track.duration)
+            }
+            let currentQuery = input.query
+            let currentSort = input.sort
+            await projection.computeIfNeeded(
+                for: input,
+                fastPath: Self.fastPath,
+                background: { Self.computeTrackIndices(entries: entries, query: currentQuery, sort: currentSort) },
+                finish: { result in
+                    Projection(tracks: result.indices.map { input.tracks[$0] }, totalDuration: result.totalDuration)
+                }
+            )
+        }
         .onDisappear { playbackTask?.cancel(); playbackTask = nil }
         .playlistDeletionConfirmation(library)
         .onChange(of: playlist == nil) { _, missing in
@@ -252,6 +230,7 @@ struct PlaylistDetailView: View {
             Group {
                 header(playlist)
                     .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: tracks.isEmpty ? 39 : 24, trailing: 20))
+                    .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden, edges: .top)
                     .listRowSeparator(query.isEmpty || !visibleTracks.isEmpty ? .visible : .hidden, edges: .bottom)
                     .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
@@ -261,35 +240,33 @@ struct PlaylistDetailView: View {
                         Text(error).font(.subheadline).foregroundStyle(.secondary)
                         Button("重试") { Task { await library.loadOnlinePlaylist?(playlistID) } }
                     }
+                    .listRowBackground(Color.clear)
                 }
                 Section {
                     ForEach(visibleTracks) { song in
-                        trackRow(song, title: playlist.title)
+                        let removeAction: () -> Void = { withAnimation { library.removeSong(song.id, from: playlistID) } }
+                        trackRow(song, title: playlist.title, remove: playlist.isReadOnly ? nil : removeAction)
                             .task(id: visibleTracks.count) {
                                 guard song.id == visibleTracks.last?.id, query.isEmpty, sort == .order,
                                       library.onlineHasMore.contains(playlistID), library.onlineErrors[playlistID] == nil else { return }
                                 await library.loadMoreOnlinePlaylist?(playlistID)
                             }
+                            .songListRow(
+                                song,
+                                mode: playlist.isReadOnly ? .standard() : .editablePlaylist(remove: removeAction),
+                                swipeBackground: pageBackground,
+                                colorScheme: preparedBackdrop?.colorScheme ?? colorScheme
+                            )
                             .listRowInsets(EdgeInsets(top: 4, leading: 20, bottom: 4, trailing: 20))
                             .alignmentGuide(.listRowSeparatorLeading) { _ in
                                 hasQuery && song.id == visibleTracks.last?.id ? 0 : 60
                             }
                             .alignmentGuide(.listRowSeparatorTrailing) { $0.width }
-                            .swipeActions(edge: .leading) {
-                                Button("插播", systemImage: "text.line.first.and.arrowtriangle.forward") {
-                                    songActions.playNext(song)
-                                    songActions.notify(.playingNext)
-                                }
-                                    .labelStyle(.iconOnly)
-                                    .tint(.indigo)
-                            }
-                            .modifier(PlaylistTrailingSwipe(song: song, canRemove: !playlist.isReadOnly) {
-                                withAnimation { library.removeSong(song.id, from: playlistID) }
-                            })
                     }
                     if query.isEmpty && !playlist.isReadOnly {
                         addMusicRow
                             .listRowInsets(EdgeInsets(top: 4, leading: 20, bottom: 4, trailing: 20))
+                            .listRowBackground(Color.clear)
                             .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
                             .alignmentGuide(.listRowSeparatorTrailing) { $0.width }
                     }
@@ -305,13 +282,13 @@ struct PlaylistDetailView: View {
                             .modifier(PlaylistSecondaryText())
                             .padding(.top, 14)
                             .padding(.bottom, 30)
+                            .listRowBackground(Color.clear)
                             .listRowSeparator(.hidden)
                             .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
                     }
 
                 }
             }
-            .listRowBackground(pageBackground)
         }
         .listStyle(.plain)
         .listSectionSpacing(0)
@@ -439,35 +416,29 @@ struct PlaylistDetailView: View {
             .background(Color(.tertiarySystemFill), in: .circle)
     }
 
-    private func trackRow(_ song: LibrarySongItem, title: String) -> some View {
-        HStack(spacing: 12) {
-            Button {
-                playbackTask?.cancel()
-                if library.onlineHasMore.contains(playlistID) {
-                    playbackTask = Task {
-                        guard await library.prepareCompleteCollection(playlistID), !Task.isCancelled else { return }
-                        playVisibleSong(song.id, title: title)
-                    }
-                } else { playVisibleSong(song.id, title: title) }
-            } label: { PlaylistDetailSongLabel(song: song) }
-                .buttonStyle(.automatic)
-            SongDownloadStatus(song: song, showsImported: false,
-                secondaryStyle: AnyShapeStyle(Color(white: 0.5).blendMode(
-                    (preparedBackdrop?.colorScheme ?? colorScheme) == .dark ? .plusLighter : .plusDarker)))
-            Menu { SongMenuContents(song: song) } label: {
-                Image(systemName: "ellipsis").font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(resolvedSecondaryColor)
-                    .frame(width: 44, height: 44)
-                    .contentShape(.rect)
-            }
-            .accessibilityLabel("更多")
-            .menuOrder(.fixed)
-            .padding(.leading, -12)
-            .padding(.trailing, -7)
-            .buttonStyle(.borderless)
-            .tint(resolvedSecondaryColor)
+    private func trackRow(_ song: LibrarySongItem, title: String, remove: (() -> Void)?) -> some View {
+        let secondaryStyle = AnyShapeStyle(Color(white: 0.5).blendMode(
+            (preparedBackdrop?.colorScheme ?? colorScheme) == .dark ? .plusLighter : .plusDarker))
+        let appearance = SongRowAppearance(
+            subtitleUsesPlaylistBlend: true,
+            moreColor: resolvedSecondaryColor,
+            moreFont: .system(size: 16, weight: .semibold),
+            favoriteMarkColor: Color(white: 0.5),
+            favoriteMarkUsesPlaylistBlend: true,
+            downloadStatusStyle: secondaryStyle,
+            minHeight: 0
+        )
+        return SharedSongRow(song: song, appearance: appearance, onRemoveFromPlaylist: remove) {
+            playbackTask?.cancel()
+            if library.onlineHasMore.contains(playlistID) {
+                playbackTask = Task {
+                    guard await library.prepareCompleteCollection(playlistID), !Task.isCancelled else { return }
+                    playVisibleSong(song.id, title: title)
+                }
+            } else { playVisibleSong(song.id, title: title) }
+        } leading: {
+            PlaylistSongArtwork(song: song, cornerRadius: 5).frame(width: 48, height: 48)
         }
-        .songContextMenu(song)
     }
 
     private func playVisibleSong(_ songID: String, title: String) {
@@ -608,43 +579,9 @@ struct PlaylistDetailView: View {
         } }
     }
 
-    enum DetailSort: String, CaseIterable, Identifiable {
+    enum DetailSort: String, CaseIterable, Identifiable, Sendable {
         case order = "播放列表顺序", title = "标题", artist = "艺人", album = "专辑"
         var id: Self { self }
-    }
-}
-
-/// Matches the ±128 channel offset measured in Apple Music playlist subtitles.
-/// Apply at the text leaf so the blend uses the actual row background.
-private struct PlaylistSecondaryText: ViewModifier {
-    @Environment(\.colorScheme) private var colorScheme
-
-    func body(content: Content) -> some View {
-        content
-            .foregroundStyle(Color(white: 0.5))
-            .blendMode(colorScheme == .dark ? .plusLighter : .plusDarker)
-    }
-}
-
-private struct PlaylistDetailSongLabel: View {
-    let song: LibrarySongItem
-    var body: some View {
-        HStack(spacing: 12) {
-            PlaylistSongArtwork(song: song, cornerRadius: 5).frame(width: 48, height: 48)
-                .overlay(alignment: .leading) {
-                    FavoriteMark(isFavorite: song.isFavorite, color: Color(white: 0.5), leadingOffset: -14.5)
-                        .modifier(PlaylistSecondaryText())
-                }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(song.title).font(.callout)
-                    .foregroundStyle(song.unavailabilityReason == nil ? .primary : .secondary)
-                Text(song.unavailabilityReason ?? song.artist)
-                    .font(.footnote).modifier(PlaylistSecondaryText())
-            }
-            .lineLimit(1)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .contentShape(.rect)
     }
 }
 

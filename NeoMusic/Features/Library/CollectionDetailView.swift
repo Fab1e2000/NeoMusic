@@ -62,18 +62,7 @@ struct CollectionDetailView: View {
     }
 
     private var resolvedSecondaryColor: Color {
-        let effectiveScheme = albumColorScheme ?? colorScheme
-        let traits = UITraitCollection(userInterfaceStyle: effectiveScheme == .dark ? .dark : .light)
-        let resolved = UIColor(pageBackground).resolvedColor(with: traits)
-        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
-        resolved.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
-        let offset: CGFloat = effectiveScheme == .dark ? 0.5 : -0.5
-        return Color(uiColor: UIColor(
-            red: min(1, max(0, red + offset)),
-            green: min(1, max(0, green + offset)),
-            blue: min(1, max(0, blue + offset)),
-            alpha: 1
-        ))
+        Color.secondaryContentColor(on: pageBackground, colorScheme: albumColorScheme ?? colorScheme)
     }
 
     /// Translucent system separators blend with the artwork-derived page color.
@@ -237,15 +226,21 @@ struct CollectionDetailView: View {
     }
 
     private var trackList: some View {
-        ForEach(Array(detail.songs.enumerated()), id: \.element.id) { index, song in
-            PlaylistTrackRow(song: song, secondaryColor: resolvedSecondaryColor) {
+        let isFavoritesRoute = detail.route == .playlist("favorites")
+        let appearance = SongRowAppearance(moreColor: resolvedSecondaryColor)
+        return ForEach(Array(detail.songs.enumerated()), id: \.element.id) { index, song in
+            SharedSongRow(song: song, appearance: appearance) {
                 songActions.play(detail.songs, index, detail.title)
+            } leading: {
+                PlaylistSongArtwork(song: song, cornerRadius: 6).frame(width: 48, height: 48)
             }
-                .songContextMenu(song)
-                .modifier(FavoritesSwipeActions(enabled: detail.route == .playlist("favorites"), song: song))
+            .songListRow(
+                song,
+                mode: .standard(animateFavoriteRemoval: isFavoritesRoute),
+                swipeBackground: pageBackground,
+                colorScheme: albumColorScheme ?? colorScheme
+            )
             .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
-            .background(SwipedSongBackground(color: UIColor(pageBackground),
-                                             colorScheme: albumColorScheme ?? colorScheme).allowsHitTesting(false))
             .listRowSeparator(.visible, edges: .bottom)
             .listRowSeparatorTint(pageSeparatorTint)
             .alignmentGuide(.listRowSeparatorLeading) { _ in
@@ -294,39 +289,6 @@ private struct FavoritesHeaderStar: View {
         .accessibilityLabel("喜爱歌曲")
         .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, distance in
             scrollDistance = distance
-        }
-    }
-}
-
-/// “喜爱歌曲”沿用系统侧滑样式；其他详情页不受影响。
-private struct FavoritesSwipeActions: ViewModifier {
-    let enabled: Bool
-    let song: LibrarySongItem
-    @Environment(\.songMenuActions) private var actions
-
-    @ViewBuilder func body(content: Content) -> some View {
-        if enabled {
-            content
-                .swipeActions(edge: .leading) {
-                    Button("插播", systemImage: "text.line.first.and.arrowtriangle.forward") {
-                        actions.playNext(song)
-                        actions.notify(.playingNext)
-                    }
-                        .labelStyle(.iconOnly)
-                        .tint(.indigo)
-                }
-                .swipeActions(edge: .trailing) {
-                    Button("从喜欢歌曲移除", systemImage: "trash") {
-                        CenteredActionSheet.confirmRemoveFromLiked {
-                            withAnimation { actions.removeFromFavorites(song) }
-                            actions.notify(.unfavorited)
-                        }
-                    }
-                    .labelStyle(.iconOnly)
-                    .tint(.red)
-                }
-        } else {
-            content
         }
     }
 }
@@ -466,59 +428,6 @@ struct DownloadProgressRing: View {
     }
 }
 
-/// 播放列表曲目行：播放与菜单平级，侧滑背景及形状由 List 管理。
-private struct PlaylistTrackRow: View {
-    let song: LibrarySongItem
-    var secondaryColor = Color.primary
-    let play: () -> Void
-    @Environment(\.dynamicTypeSize) private var textSize
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Button(action: play) {
-                HStack(spacing: 12) {
-                    PlaylistSongArtwork(song: song, cornerRadius: 6)
-                        .frame(width: 48, height: 48)
-                        .overlay(alignment: .leading) { FavoriteMark(isFavorite: song.isFavorite, leadingOffset: -14.5) }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(song.title).font(.callout).foregroundStyle(song.unavailabilityReason == nil ? .primary : .secondary)
-                        Text(song.unavailabilityReason ?? song.artist)
-                            .font(.footnote).foregroundStyle(.secondary)
-                    }
-                    .lineLimit(textSize.isAccessibilitySize ? nil : 1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .contentShape(.rect)
-            }
-            .buttonStyle(.automatic)
-            SongDownloadStatus(song: song, showsImported: false)
-            TrackMoreButton(song: song, color: secondaryColor)
-        }
-        .frame(minHeight: 56)
-    }
-}
-
-struct TrackMoreButton: View {
-    let song: LibrarySongItem
-    var color = Color.primary
-
-    var body: some View {
-        Menu { SongMenuContents(song: song) } label: {
-            Label("更多", systemImage: "ellipsis")
-                .labelStyle(.iconOnly)
-                .font(.body.weight(.semibold))
-                .foregroundStyle(color)
-                .frame(width: 44, height: 44)
-                .contentShape(.rect)
-        }
-        .menuOrder(.fixed)
-        .padding(.leading, -12)
-        .padding(.trailing, -7)
-        .buttonStyle(.borderless)
-        .tint(color)
-    }
-}
-
 extension Color {
     /// 底色较暗时，页面文字与控件改用浅色。
     var prefersLightContent: Bool {
@@ -531,7 +440,7 @@ extension Color {
 
 /// Configure the actual list cell so UIKit continues to own swipe state and geometry.
 /// A SwiftUI listRowBackground replaces that background, so it is deliberately absent.
-private struct SwipedSongBackground: UIViewRepresentable {
+struct SwipedSongBackground: UIViewRepresentable {
     let color: UIColor
     let colorScheme: ColorScheme
 
@@ -670,10 +579,10 @@ private final class AlbumSongsController: UICollectionViewController {
             switch item {
             case .header:
                 result.topSeparatorVisibility = .hidden
-                result.bottomSeparatorVisibility = model?.songs.isEmpty == false ? .visible : .hidden
+                result.bottomSeparatorVisibility = model?.songs.isEmpty == false ? .automatic : .hidden
                 result.bottomSeparatorInsets = .init(top: 0, leading: 20, bottom: 0, trailing: 20)
             case .song(let id):
-                result.bottomSeparatorVisibility = .visible
+                result.bottomSeparatorVisibility = .automatic
                 result.bottomSeparatorInsets = .init(top: 0, leading: model?.songs.last?.id == id ? 20 : 51,
                                                      bottom: 0, trailing: 20)
             case .footer:
@@ -800,17 +709,12 @@ private final class AlbumSongsController: UICollectionViewController {
     private func menu(for id: String) -> UIMenu {
         guard let song = songsByID[id] else { return UIMenu(children: []) }
         let downloads = environment.libraryDownloads
-        let downloaded = downloads?.state(of: id) == .downloaded
-        var sections = environment.songMenuActions.albumTrackSections(for: song, isDownloaded: downloaded,
+        let open = environment.openLibraryRoute
+        let sections = environment.songMenuActions.albumTrackSections(for: song,
+            isDownloaded: downloads?.state(of: id) == .downloaded,
             download: { downloads?.download([song]) }, removeDownload: { downloads?.requestRemoval([song]) },
-            notify: environment.collectionMenuActions.notify)
-        if !song.artistReferences.isEmpty {
-            let open = environment.openLibraryRoute
-            sections.append(song.artistReferences.map { artist in
-                LibraryMenuItem(identity: "artist:" + artist.id, title: artist.name, systemImage: "music.microphone") { open(.artist(artist.id)) }
-            })
-        }
-        return sections.nativeMenu(firstSectionIsRow: !downloaded)
+            notify: environment.collectionMenuActions.notify, open: { open($0) })
+        return sections.nativeMenu(firstSectionIsRow: (sections.first?.count ?? 0) > 1)
     }
 
     override func collectionView(_ collectionView: UICollectionView, contextMenuConfigurationForItemsAt indexPaths: [IndexPath], point: CGPoint) -> UIContextMenuConfiguration? {
@@ -830,20 +734,20 @@ private final class AlbumSongsController: UICollectionViewController {
         guard let song = song(at: indexPath) else { return nil }
         let actions = environment.songMenuActions
         let notify = environment.collectionMenuActions.notify
-        let later = UIContextualAction(style: .normal, title: nil) { _, _, done in
-            actions.playLater(song); notify(.addedToQueue); done(true)
-        }
-        later.image = UIImage(systemName: "text.line.last.and.arrowtriangle.forward"); later.backgroundColor = .systemOrange
-        later.image?.accessibilityLabel = "添加到队列"
         let next = UIContextualAction(style: .normal, title: nil) { _, _, done in
             actions.playNext(song); notify(.playingNext); done(true)
         }
         next.image = UIImage(systemName: "text.line.first.and.arrowtriangle.forward"); next.backgroundColor = .systemIndigo
         next.image?.accessibilityLabel = "插播"
-        return UISwipeActionsConfiguration(actions: [later, next])
+        let later = UIContextualAction(style: .normal, title: nil) { _, _, done in
+            actions.playLater(song); notify(.addedToQueue); done(true)
+        }
+        later.image = UIImage(systemName: "text.line.last.and.arrowtriangle.forward"); later.backgroundColor = .systemOrange
+        later.image?.accessibilityLabel = "添加到队列"
+        return UISwipeActionsConfiguration(actions: [next, later])
     }
     private func trailingActions(at indexPath: IndexPath) -> UISwipeActionsConfiguration? {
-        guard let song = song(at: indexPath), song.isOnline else { return nil }
+        guard let song = song(at: indexPath) else { return nil }
         let chosen = OnlineSongTrailingSwipe.actions(isFavorite: song.isFavorite,
                                                      downloadState: environment.libraryDownloads?.state(of: song.id),
                                                      canDownload: environment.libraryDownloads?.isDownloadable(song) == true)

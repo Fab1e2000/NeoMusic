@@ -72,6 +72,10 @@ struct LibrarySongItem: Identifiable, Equatable {
         return id.split(separator: ":").last.flatMap { Int64($0) }
     }
     var isOnline: Bool { onlineOwnerID != nil }
+    /// Whether this item represents a track from the NetEase catalog (online, guest catalog, or downloaded).
+    var isNeteaseCatalogSong: Bool {
+        isOnline || id.hasPrefix("catalog-guest:") || onlineAlbumID != nil || !artistReferences.isEmpty
+    }
 }
 
 /// Image resource state is observed separately from song metadata and list ordering.
@@ -166,7 +170,7 @@ struct LibraryArtistItem: Identifiable, Equatable {
 
 /// 歌曲列表的排序方式，对照 Apple Music：名称、添加日期、艺人（A-Z）。
 /// 按艺人时依次按专辑艺人、专辑、曲目号排列，并按专辑艺人首字母分组。
-enum SongSort: Hashable {
+enum SongSort: Hashable, Sendable {
     case name, addedDate, artist
 
     static let options = [
@@ -195,7 +199,7 @@ struct SongsListView: View {
     @State private var sort = SongSort.artist
     @State private var filter = LibraryFilter.all
     @State private var query = ""
-    @State private var projection = LibraryListProjection<ProjectionInput, Projection>()
+    @State private var projection = AsyncListProjection<ProjectionInput, Projection>()
     @Environment(\.songMenuActions) private var actions
 
     struct ProjectionInput: Equatable {
@@ -218,9 +222,47 @@ struct SongsListView: View {
         let ordered: [LibrarySongItem]
     }
 
+    private struct SongSortEntry: Sendable {
+        let index: Int
+        let title: String
+        let artist: String
+        let album: String
+        let albumArtist: String
+        let discNumber: Int
+        let trackNumber: Int
+        let addedOrder: Int
+        let isFavorite: Bool
+    }
+
+    private struct GroupedIndices: Sendable {
+        let letter: String
+        let indices: [Int]
+    }
+
+    private static func computeGroupedIndices(entries: [SongSortEntry], query: String,
+                                              filter: LibraryFilter, sort: SongSort) -> [GroupedIndices] {
+        let matching = query.isEmpty ? entries : entries.filter {
+            $0.title.localizedStandardContains(query)
+                || $0.artist.localizedStandardContains(query)
+                || $0.album.localizedStandardContains(query)
+        }
+        let shown = filter == .favorites ? matching.filter(\.isFavorite) : matching
+        switch sort {
+        case .name:
+            return TitleSection.group(shown, by: \.title).map { GroupedIndices(letter: $0.letter, indices: $0.items.map(\.index)) }
+        case .artist:
+            return TitleSection.group(shown) { entry in
+                [entry.albumArtist, entry.album, String(format: "%04d", entry.discNumber), String(format: "%04d", entry.trackNumber)].joined(separator: "\u{1}")
+            }.map { GroupedIndices(letter: $0.letter, indices: $0.items.map(\.index)) }
+        case .addedDate:
+            return [GroupedIndices(letter: "", indices: shown.sorted { $0.addedOrder > $1.addedOrder }.map(\.index))]
+        }
+    }
+
     var body: some View {
         let input = ProjectionInput(songs: songs, query: query, filter: filter, sort: sort)
-        let result = projection.value(for: input, calculate: input.calculate)
+        let fastPath: (ProjectionInput) -> Projection? = { $0.songs.count <= 120 ? $0.calculate() : nil }
+        let result = projection.currentValue(for: input, fastPath: fastPath, synchronousInitial: { $0.calculate() })
         let sections = result.sections
         let ordered = result.ordered
         List {
@@ -264,6 +306,27 @@ struct SongsListView: View {
         .libraryTitleDisplayMode(.large)
         .librarySearchable(text: $query, prompt: "搜索歌曲")
         .libraryRootAccountButton()
+        .task(id: input) {
+            let entries = input.songs.enumerated().map { index, song in
+                SongSortEntry(index: index, title: song.title, artist: song.artist, album: song.album,
+                              albumArtist: song.albumArtist, discNumber: song.discNumber,
+                              trackNumber: song.trackNumber, addedOrder: song.addedOrder, isFavorite: song.isFavorite)
+            }
+            let currentQuery = input.query
+            let currentFilter = input.filter
+            let currentSort = input.sort
+            await projection.computeIfNeeded(
+                for: input,
+                fastPath: { $0.songs.count <= 120 ? $0.calculate() : nil },
+                background: {
+                    Self.computeGroupedIndices(entries: entries, query: currentQuery, filter: currentFilter, sort: currentSort)
+                },
+                finish: { groups in
+                    let sections = groups.map { TitleSection(letter: $0.letter, items: $0.indices.map { input.songs[$0] }) }
+                    return Projection(sections: sections, ordered: sections.flatMap(\.items))
+                }
+            )
+        }
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 LibraryFilterMenu(filter: $filter, allTitle: "所有歌曲", allImage: "music.note")
@@ -277,61 +340,24 @@ struct SongsListView: View {
 struct SongRow: View {
     let song: LibrarySongItem
     var play: () -> Void = {}
-    @Environment(\.songMenuActions) private var actions
-    @Environment(\.libraryDownloads) private var downloads
-    @Environment(\.dynamicTypeSize) private var textSize
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        HStack(spacing: 12) {
-            Button(action: play) {
-                HStack(spacing: 12) {
-                    ArtworkView(artwork: song.artwork, cornerRadius: 6)
-                        .environment(\.nativeArtworkSurfaceEnabled, false)
-                        .frame(width: 48)
-                        .overlay(alignment: .leading) { FavoriteMark(isFavorite: song.isFavorite) }
-                    VStack(alignment: .leading, spacing: 0) {
-                        Text(song.title).font(.callout)
-                        Text(song.artist).font(.footnote).foregroundStyle(.secondary)
-                    }
-                    .lineLimit(textSize.isAccessibilitySize ? nil : 1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            SongDownloadStatus(song: song, showsImported: false)
-            TrackMoreButton(song: song)
+        SharedSongRow(
+            song: song,
+            appearance: SongRowAppearance(
+                titleSubtitleSpacing: 0,
+                moreColor: Color.secondaryContentColor(on: Color(.systemBackground), colorScheme: colorScheme),
+                favoriteMarkOffset: -15,
+                usesPlainButtonStyle: true
+            ),
+            play: play
+        ) {
+            ArtworkView(artwork: song.artwork, cornerRadius: 6)
+                .environment(\.nativeArtworkSurfaceEnabled, false)
+                .frame(width: 48)
         }
-        .frame(minHeight: 56)
-        .songContextMenu(song)
-        // 右滑插播，左滑下载；本地导入文件保留原有布局。
-        .swipeActions(edge: .leading) {
-            Button("插播", systemImage: "text.line.first.and.arrowtriangle.forward") {
-                actions.playNext(song)
-                actions.notify(.playingNext)
-            }
-                .labelStyle(.iconOnly)
-                .tint(.indigo)
-        }
-        .swipeActions(edge: .trailing) {
-            if downloads?.state(of: song.id)?.isActive == true {
-                Button("停止下载", systemImage: "stop.fill") {
-                    LibraryHaptics.impact()
-                    downloads?.stop([song])
-                }.tint(.blue)
-            } else if downloads?.canRemove(song) == true {
-                // 移除下载走确认框，确认时再震。
-                Button("移除下载", systemImage: "xmark.circle") { downloads?.requestRemoval([song]) }.tint(.red)
-            } else {
-                Button("下载", systemImage: "arrow.down") {
-                    LibraryHaptics.impact()
-                    downloads?.download([song])
-                }
-                    .labelStyle(.iconOnly)
-                    .tint(downloads?.isDownloadable(song) == true ? .blue : .gray)
-                    .disabled(downloads?.isDownloadable(song) != true)
-            }
-        }
+        .songListRow(song, mode: .libraryDownloads, swipeBackground: Color(.systemBackground))
         .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
         .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] + 60 }
         .alignmentGuide(.listRowSeparatorTrailing) { $0.width }

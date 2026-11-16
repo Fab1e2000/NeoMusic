@@ -80,7 +80,6 @@ final class LocalAlbumIndexTests: XCTestCase {
         LocalLibrary.deletedAlbums.insert(id)
         XCTAssertFalse(LocalLibrary.albums.contains { $0.id == id })
         XCTAssertNil(LocalLibrary.albumDetail(id))
-        XCTAssertNil(LocalLibrary.artistDetail(track.albumArtist))
         LocalLibrary.deletedAlbums.remove(id)
         XCTAssertEqual(LocalLibrary.albumDetail(id)?.songs.first?.id, track.id)
         XCTAssertTrue(LocalLibrary.songLibrary.albumIndex === index)
