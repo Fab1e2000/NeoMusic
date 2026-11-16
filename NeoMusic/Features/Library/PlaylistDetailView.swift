@@ -130,6 +130,21 @@ struct PlaylistDetailView: View {
             navigationPreview.flatMap { $0.route == .playlist(playlistID) && $0.ownerID == playlist?.sourceOwnerID ? $0.albumBackdrop : nil }
     }
     private var pageBackground: Color { preparedBackdrop?.color ?? Color(.systemBackground) }
+
+    private var resolvedSecondaryColor: Color {
+        let effectiveScheme = preparedBackdrop?.colorScheme ?? colorScheme
+        let traits = UITraitCollection(userInterfaceStyle: effectiveScheme == .dark ? .dark : .light)
+        let resolved = UIColor(pageBackground).resolvedColor(with: traits)
+        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+        resolved.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+        let offset: CGFloat = effectiveScheme == .dark ? 0.5 : -0.5
+        return Color(uiColor: UIColor(
+            red: min(1, max(0, red + offset)),
+            green: min(1, max(0, green + offset)),
+            blue: min(1, max(0, blue + offset)),
+            alpha: 1
+        ))
+    }
     private var tracks: [LibrarySongItem] { library.songs(in: playlistID) }
     private var displayed: Projection {
         let input = ProjectionInput(tracks: tracks, query: query, sort: sort)
@@ -441,12 +456,16 @@ struct PlaylistDetailView: View {
                     (preparedBackdrop?.colorScheme ?? colorScheme) == .dark ? .plusLighter : .plusDarker)))
             Menu { SongMenuContents(song: song) } label: {
                 Image(systemName: "ellipsis").font(.system(size: 16, weight: .semibold))
-                    .modifier(PlaylistSecondaryText()).frame(width: 30, height: 44).offset(x: 1)
+                    .foregroundStyle(resolvedSecondaryColor)
+                    .frame(width: 44, height: 44)
+                    .contentShape(.rect)
             }
             .accessibilityLabel("更多")
             .menuOrder(.fixed)
+            .padding(.leading, -12)
+            .padding(.trailing, -7)
             .buttonStyle(.borderless)
-            .tint(.secondary)
+            .tint(resolvedSecondaryColor)
         }
         .songContextMenu(song)
     }

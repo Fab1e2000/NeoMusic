@@ -61,6 +61,21 @@ struct CollectionDetailView: View {
         return usesFavoritesBackground ? Artwork.favoritesBackground : Color(.systemBackground)
     }
 
+    private var resolvedSecondaryColor: Color {
+        let effectiveScheme = albumColorScheme ?? colorScheme
+        let traits = UITraitCollection(userInterfaceStyle: effectiveScheme == .dark ? .dark : .light)
+        let resolved = UIColor(pageBackground).resolvedColor(with: traits)
+        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+        resolved.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+        let offset: CGFloat = effectiveScheme == .dark ? 0.5 : -0.5
+        return Color(uiColor: UIColor(
+            red: min(1, max(0, red + offset)),
+            green: min(1, max(0, green + offset)),
+            blue: min(1, max(0, blue + offset)),
+            alpha: 1
+        ))
+    }
+
     /// Translucent system separators blend with the artwork-derived page color.
     /// Use the same appearance as text and controls, rather than the device setting alone.
     private var pageSeparatorTint: Color {
@@ -223,7 +238,9 @@ struct CollectionDetailView: View {
 
     private var trackList: some View {
         ForEach(Array(detail.songs.enumerated()), id: \.element.id) { index, song in
-            PlaylistTrackRow(song: song) { songActions.play(detail.songs, index, detail.title) }
+            PlaylistTrackRow(song: song, secondaryColor: resolvedSecondaryColor) {
+                songActions.play(detail.songs, index, detail.title)
+            }
                 .songContextMenu(song)
                 .modifier(FavoritesSwipeActions(enabled: detail.route == .playlist("favorites"), song: song))
             .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
@@ -452,6 +469,7 @@ struct DownloadProgressRing: View {
 /// 播放列表曲目行：播放与菜单平级，侧滑背景及形状由 List 管理。
 private struct PlaylistTrackRow: View {
     let song: LibrarySongItem
+    var secondaryColor = Color.primary
     let play: () -> Void
     @Environment(\.dynamicTypeSize) private var textSize
 
@@ -474,7 +492,7 @@ private struct PlaylistTrackRow: View {
             }
             .buttonStyle(.automatic)
             SongDownloadStatus(song: song, showsImported: false)
-            TrackMoreButton(song: song)
+            TrackMoreButton(song: song, color: secondaryColor)
         }
         .frame(minHeight: 56)
     }
@@ -487,15 +505,17 @@ struct TrackMoreButton: View {
     var body: some View {
         Menu { SongMenuContents(song: song) } label: {
             Label("更多", systemImage: "ellipsis")
+                .labelStyle(.iconOnly)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(color)
+                .frame(width: 44, height: 44)
+                .contentShape(.rect)
         }
         .menuOrder(.fixed)
-        .labelStyle(.iconOnly)
-        .font(.body.weight(.semibold))
-        .foregroundStyle(color)
-        .frame(width: 42, height: 44)
+        .padding(.leading, -12)
         .padding(.trailing, -7)
         .buttonStyle(.borderless)
-        .tint(.secondary)
+        .tint(color)
     }
 }
 
@@ -750,7 +770,7 @@ private final class AlbumSongsController: UICollectionViewController {
         cell.more.tintColor = secondary
         cell.contentConfiguration = UIHostingConfiguration {
             hosted(NativeAlbumRowContent(song: song, secondary: Color(secondary)))
-        }.margins(.all, 0).margins(.leading, 20).margins(.trailing, 9)
+        }.margins(.all, 0).margins(.leading, 20).margins(.trailing, 2)
         cell.more.menu = UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] completion in
             completion(self?.menu(for: id).children ?? [])
         }])
@@ -900,13 +920,13 @@ final class AlbumSelectionCell: UICollectionViewListCell {
         super.init(frame: frame)
         backgroundColor = .clear
         automaticallyUpdatesBackgroundConfiguration = false
-        more.frame = CGRect(x: 0, y: 0, width: 30, height: 44)
+        more.frame = CGRect(x: 0, y: 0, width: 44, height: 44)
         more.setImage(UIImage(systemName: "ellipsis", withConfiguration: UIImage.SymbolConfiguration(pointSize: 16, weight: .semibold)), for: .normal)
         more.tintColor = .label
         more.showsMenuAsPrimaryAction = true
         more.accessibilityLabel = "更多"
         accessories = [.customView(configuration: .init(customView: more, placement: .trailing(),
-            reservedLayoutWidth: .custom(30), maintainsFixedSize: true))]
+            reservedLayoutWidth: .custom(44), maintainsFixedSize: true))]
     }
     required init?(coder: NSCoder) { fatalError() }
 

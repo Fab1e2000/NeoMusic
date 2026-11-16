@@ -254,8 +254,15 @@ struct SearchResultRow: View {
             }.buttonStyle(.plain).accessibilityIdentifier("search.result.\(item.id)")
             if let song = item.song {
                 Menu { SongMenuContents(song: song) } label: {
-                    Image(systemName: "ellipsis").font(.body.weight(.semibold)).frame(width: 28, height: 44)
-                }.accessibilityLabel("\(item.title)，更多")
+                    Image(systemName: "ellipsis")
+                        .font(.body.weight(.semibold))
+                        .frame(width: 44, height: 44)
+                        .contentShape(.rect)
+                }
+                .accessibilityLabel("\(item.title)，更多")
+                .menuOrder(.fixed)
+                .padding(.trailing, -8)
+                .buttonStyle(.borderless)
             } else {
                 Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
                     .accessibilityHidden(true)
