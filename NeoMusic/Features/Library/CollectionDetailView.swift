@@ -461,7 +461,7 @@ private struct PlaylistTrackRow: View {
                 HStack(spacing: 12) {
                     PlaylistSongArtwork(song: song, cornerRadius: 6)
                         .frame(width: 48, height: 48)
-                        .overlay(alignment: .leading) { FavoriteMark(isFavorite: song.isFavorite) }
+                        .overlay(alignment: .leading) { FavoriteMark(isFavorite: song.isFavorite, leadingOffset: -14.5) }
                     VStack(alignment: .leading, spacing: 2) {
                         Text(song.title).font(.callout).foregroundStyle(song.unavailabilityReason == nil ? .primary : .secondary)
                         Text(song.unavailabilityReason ?? song.artist)

@@ -143,14 +143,7 @@ struct CollectionDownloadButton: View {
         let completed = summary?.isComplete ?? actions.isDownloaded(route)
         let active = summary?.isActive ?? downloads?.isDownloading(songs) ?? false
         let failed = (summary?.failedCount ?? 0) > 0
-        Button {
-            guard active || actions.canDownload(route) || (completed && actions.canRemoveDownload(route)) else { return }
-            feedback &+= 1
-            if active { actions.stopDownload(route) }
-            else if completed { actions.removeDownload(route) }
-            else { downloadedHere = true; actions.download(route) }
-        } label: {
-            Group {
+        let label = Group {
                 if active {
                     if summary?.isResolving == true { ProgressView().tint(.primary) }
                     else { DownloadProgressRing(progress: summary?.progress ?? downloads?.progress(of: songs) ?? 0) }
@@ -161,10 +154,23 @@ struct CollectionDownloadButton: View {
             .background(Color.primary.opacity(compact ? 0.2 : 0.08), in: .circle)
             .frame(width: compact ? 44 : 48, height: compact ? 44 : 48)
             .contentShape(.rect)
+        Group {
+            if completed && !active && !actions.canRemoveDownload(route) {
+                label.accessibilityElement(children: .ignore)
+                    .accessibilityLabel("已下载")
+            } else {
+                Button {
+                    guard active || actions.canDownload(route) || (completed && actions.canRemoveDownload(route)) else { return }
+                    feedback &+= 1
+                    if active { actions.stopDownload(route) }
+                    else if completed { actions.removeDownload(route) }
+                    else { downloadedHere = true; actions.download(route) }
+                } label: { label }
+                .buttonStyle(.plain)
+                .disabled(!active && !(completed ? actions.canRemoveDownload(route) : actions.canDownload(route)))
+                .accessibilityLabel(completed ? "已下载，移除下载" : active ? "停止下载" : failed ? "重试未完成的下载" : "下载")
+            }
         }
-        .buttonStyle(.plain)
-        .disabled(!active && !(completed ? actions.canRemoveDownload(route) : actions.canDownload(route)))
-        .accessibilityLabel(completed ? "已下载，移除下载" : active ? "停止下载" : failed ? "重试未完成的下载" : "下载")
         .accessibilityValue(summary?.accessibilityValue ?? "")
         .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.6), trigger: feedback)
     }

@@ -127,6 +127,7 @@ extension EnvironmentValues {
 struct FavoriteMark: View {
     let isFavorite: Bool
     var color: Color = .secondary
+    var leadingOffset: CGFloat = -15
 
     var body: some View {
         if isFavorite {
@@ -134,7 +135,7 @@ struct FavoriteMark: View {
                 .font(.system(size: 9))
                 .foregroundStyle(color)
                 .frame(width: 10, height: 12)
-                .offset(x: -15)
+                .offset(x: leadingOffset)
                 .accessibilityHidden(true)
         }
     }

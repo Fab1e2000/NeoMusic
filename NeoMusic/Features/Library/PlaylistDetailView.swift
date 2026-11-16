@@ -612,6 +612,10 @@ private struct PlaylistDetailSongLabel: View {
     var body: some View {
         HStack(spacing: 12) {
             PlaylistSongArtwork(song: song, cornerRadius: 5).frame(width: 48, height: 48)
+                .overlay(alignment: .leading) {
+                    FavoriteMark(isFavorite: song.isFavorite, color: Color(white: 0.5), leadingOffset: -14.5)
+                        .modifier(PlaylistSecondaryText())
+                }
             VStack(alignment: .leading, spacing: 2) {
                 Text(song.title).font(.callout)
                     .foregroundStyle(song.unavailabilityReason == nil ? .primary : .secondary)
