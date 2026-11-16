@@ -540,7 +540,6 @@ private struct QueueLinkedArtwork<ArtworkTransition: ViewModifier>: View {
                     isArtworkPage: page == .artwork,
                     decodeSize: artworkPageFrame.width > 0 ? artworkPageFrame.size : nil
                 )
-                    .geometryGroup()
                     .frame(width: frame.width, height: frame.height)
                     .modifier(artworkTransition)
                     .modifier(QueueArtworkScrollPosition(page: page, offset: offset, frame: frame))

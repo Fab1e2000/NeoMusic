@@ -22,6 +22,8 @@ struct NowPlayingPortraitArtwork: View {
             cornerRadius: 12,
             decodeSize: decodeSize
         )
+        // 保持阴影位于几何分组外层，供弹出转场读取并连续插值。
+        .geometryGroup()
         .shadow(
             color: .black.opacity(shadowOpacity),
             radius: shadowRadius,
