@@ -139,7 +139,8 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
     private func portraitPlayerControls(for song: PlayerTrack) -> some View {
         NowPlayingBottomControls(
             song: song,
-            page: pageSelection,
+            page: page,
+            onPageTap: { selectPage(page == $0 ? .artwork : $0) },
             hasLyrics: lyricsAvailability == .available,
             showsLyricsUtilities:
                 usesExpandedAppleMusicLyricsLayout,
@@ -156,10 +157,6 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
     private var lyricsContent: NowPlayingLyricsContent {
         NowPlayingLyricsContent(availability: lyricsAvailability,
                                 lyrics: lyricsModel.lyrics, error: lyricsModel.error)
-    }
-
-    private var pageSelection: Binding<NowPlayingPage> {
-        Binding(get: { page }, set: selectPage)
     }
 
     private func selectPage(_ destination: NowPlayingPage) {
@@ -193,11 +190,11 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
         finishPageMeasurement()
     }
 
-    private func pageAnimation(_ spec: NowPlayingAnimationSpec, includesDelay: Bool = true,
-                               extraDelay: TimeInterval = 0) -> Animation? {
+    private var titleSpatialAnimation: Animation? {
         guard animatesPageChanges else { return nil }
-        return NowPlayingAnimationSpec(spec.curve, duration: spec.duration,
-                                       delay: (includesDelay ? spec.delay : 0) + extraDelay).animation
+        return pageChange?.source == .artwork
+            ? NowPlayingPageTransition.motion.titleCollapse.animation
+            : NowPlayingPageTransition.animation
     }
 
     private var hidesLyricsControls: Bool {
@@ -253,24 +250,26 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
 
             residentAppleMusicLyricsPage(for: song)
 
-            if page != .artwork {
-                QueueLinkedSongHeader(
-                    song: song,
-                    page: page,
-                    offset: queueHeaderOffset,
-                    artworkNamespace: pageArtworkNamespace,
-                    onImportLyrics: library.canImport ? {
-                        importTrackID = song.id
-                        importingLyrics = true
-                    } : nil
-                )
-                .padding(.top, NowPlayingSongHeader.topInset)
-                .transition(
-                    NowPlayingPageTransition.songHeader(
-                        reducesMotion: accessibilityReduceMotion
-                    )
-                )
-            }
+            QueueLinkedSongHeader(
+                song: song,
+                page: page,
+                offset: queueHeaderOffset,
+                artworkNamespace: pageArtworkNamespace,
+                onImportLyrics: library.canImport ? {
+                    importTrackID = song.id
+                    importingLyrics = true
+                } : nil
+            )
+            .padding(.top, NowPlayingSongHeader.topInset)
+            .offset(y: page == .artwork && !accessibilityReduceMotion ? NowPlayingPageTransition.motion.songHeaderTravel : 0)
+            .animation(titleSpatialAnimation, value: page == .artwork)
+            .opacity(page == .artwork ? 0 : 1)
+            .animation(animatesPageChanges
+                       ? (page == .artwork ? .easeInOut(duration: 0.12)
+                                          : .easeInOut(duration: 0.125).delay(0.234)) : nil,
+                       value: page == .artwork)
+            .allowsHitTesting(page != .artwork)
+            .accessibilityHidden(page == .artwork)
 
         }
         .background {
@@ -310,7 +309,12 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
             showsArtwork: false
         )
         .offset(y: yOffset)
+        .animation(titleSpatialAnimation, value: isVisible)
         .opacity(isVisible ? 1 : 0)
+        .animation(animatesPageChanges
+                   ? (isVisible ? .easeInOut(duration: 0.125).delay(0.15)
+                                : .easeInOut(duration: 0.12).delay(0.04)) : nil,
+                   value: isVisible)
         .allowsHitTesting(isVisible)
         .accessibilityHidden(!isVisible)
         .environment(\.playerVisualsActive, visualsActive && isVisible)
@@ -339,7 +343,6 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
         for song: PlayerTrack
     ) -> some View {
         let isVisible = page == .queue
-        let motion = NowPlayingPageTransition.motion
 
         return NowPlayingQueuePage(
             song: song,
@@ -358,11 +361,8 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
         .padding(.horizontal, portraitHorizontalPadding)
         .clipped()
         .modifier(NowPlayingPagePresentation(
-            isVisible: isVisible, presentationScale: motion.queuePresentationScale,
-            hiddenOffset: motion.queueTravel,
-            spatialAnimation: pageAnimation(isVisible ? motion.queueSpatialPresentation : motion.queueSpatialDismissal),
-            opacityAnimation: pageAnimation(isVisible ? motion.queueOpacityPresentation : motion.queueOpacityDismissal,
-                                            includesDelay: pageChange?.startsFromRest == true)
+            isVisible: isVisible, page: .queue, selectedPage: page, change: pageChange,
+            animates: animatesPageChanges
         ))
         .padding(.horizontal, -portraitHorizontalPadding)
         .allowsHitTesting(isVisible)
@@ -384,19 +384,12 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
 
     private func residentAppleMusicLyricsPage(for song: PlayerTrack) -> some View {
         let isVisible = page == .lyrics
-        let motion = NowPlayingPageTransition.motion
-        let entranceDelay = isVisible && pageChange?.startsFromRest == true ? motion.lyricsPresentationDelay : 0
         return portraitLyricsPage(for: song)
             .id(song.id)
             .padding(.horizontal, portraitHorizontalPadding)
             .modifier(NowPlayingPagePresentation(
-                isVisible: isVisible, presentationScale: motion.lyricsPresentationScale,
-                hiddenOffset: motion.lyricsTravel,
-                spatialAnimation: pageAnimation(isVisible ? motion.lyricsSpatialPresentation : motion.lyricsSpatialDismissal,
-                                                extraDelay: entranceDelay),
-                opacityAnimation: pageAnimation(isVisible ? motion.lyricsOpacityPresentation : motion.lyricsOpacityDismissal,
-                                                includesDelay: pageChange?.startsFromRest == true,
-                                                extraDelay: entranceDelay),
+                isVisible: isVisible, page: .lyrics, selectedPage: page, change: pageChange,
+                animates: animatesPageChanges,
                 clipsAboveControls: !isVisible || (!hidesLyricsControls && pageChange != nil)
             ))
             .padding(.horizontal, -portraitHorizontalPadding)
@@ -527,7 +520,10 @@ private struct QueueLinkedArtwork<ArtworkTransition: ViewModifier>: View {
     let artworkTransition: ArtworkTransition
     private var expanded: Bool { player.isPlaying }
     private var frame: CGRect {
-        if page == .artwork { return displayedFrame }
+        if page == .artwork {
+            let inset = expanded ? 0 : artworkPageFrame.width * (1 - NowPlayingArtworkPage.pausedArtworkScale) / 2
+            return artworkPageFrame.insetBy(dx: inset, dy: inset)
+        }
         return CGRect(
             x: 0,
             y: NowPlayingSongHeader.topInset,
@@ -535,24 +531,22 @@ private struct QueueLinkedArtwork<ArtworkTransition: ViewModifier>: View {
             height: NowPlayingSongHeader.referenceHeight
         )
     }
-    private var displayedFrame: CGRect {
-        guard !expanded else { return artworkPageFrame }
-        let horizontalInset = artworkPageFrame.width * (1 - NowPlayingArtworkPage.pausedArtworkScale) / 2
-        let verticalInset = artworkPageFrame.height * (1 - NowPlayingArtworkPage.pausedArtworkScale) / 2
-        return artworkPageFrame.insetBy(dx: horizontalInset, dy: verticalInset)
-    }
 
     var body: some View {
         GeometryReader { _ in
             if frame.width > 0 {
-                NowPlayingPortraitArtwork(song: song, isArtworkPage: page == .artwork)
+                NowPlayingPortraitArtwork(
+                    song: song,
+                    isArtworkPage: page == .artwork,
+                    decodeSize: artworkPageFrame.width > 0 ? artworkPageFrame.size : nil
+                )
+                    .geometryGroup()
                     .frame(width: frame.width, height: frame.height)
                     .modifier(artworkTransition)
                     .modifier(QueueArtworkScrollPosition(page: page, offset: offset, frame: frame))
-                    .animation(
-                        reducesMotion ? nil : NowPlayingPageTransition.motion.artworkResize.animation,
-                        value: expanded
-                    )
+                    .animation(reducesMotion ? nil : .interpolatingSpring(
+                        mass: 1, stiffness: expanded ? 180 : 153, damping: expanded ? 16.4 : 22.8
+                    ), value: expanded)
                     .allowsHitTesting(false)
             }
         }

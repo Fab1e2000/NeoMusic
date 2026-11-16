@@ -5,143 +5,16 @@ import SwiftUI
 enum NowPlayingPageTransition {
     static let motion = NowPlayingMotionSpec.appleMusic26.page
 
-    static var animation: Animation {
-        motion.selection.animation
-    }
+    static var animation: Animation { motion.selection.animation }
 
-    static var directLyricsQueueContentScale: CGFloat {
-        motion.directAlternateContentScale
-    }
-
-    static var lyricsEntranceOffset: CGFloat {
-        motion.lyricsTravel
-    }
-
-    static var queueOffset: CGFloat {
-        motion.queueTravel
-    }
-
-    static func content(
-        for page: NowPlayingPage,
-        entersFromHiddenQueue: Bool,
-        reducesMotion: Bool
-    ) -> AnyTransition {
-        if reducesMotion {
-            return .opacity
-        }
-
-        if entersFromHiddenQueue {
-            return .asymmetric(
-                insertion: .move(edge: .top).combined(with: .opacity),
-                removal: .opacity
-            )
-        }
-
-        switch page {
-        case .artwork:
-            // Text follows the page's spring, including interrupted returns.
-            // A separate delayed transition gives fresh insertions a different rhythm.
-            return offsetAndOpacity(y: motion.artworkDetailsTravel)
-        case .lyrics:
-            return .asymmetric(
-                insertion: .identity,
-                removal:
-                    offsetAndOpacity(y: lyricsEntranceOffset)
-                    .animation(motion.outgoing.animation)
-            )
-        case .queue:
-            return stagedOffsetAndOpacity(y: queueOffset)
-        }
-    }
-
-    static func songHeader(reducesMotion: Bool) -> AnyTransition {
-        guard !reducesMotion else { return .opacity }
-        return .asymmetric(
-            insertion: offsetAndOpacity(y: motion.songHeaderTravel),
-            removal: offsetAndOpacity(y: motion.songHeaderTravel)
-                .animation(.easeOut(duration: 0.14))
-        )
-    }
-
-    static func selectionAnimation(
-        from source: NowPlayingPage,
-        to destination: NowPlayingPage
-    ) -> Animation {
-        if isDirectLyricsQueueTransition(
-            from: source,
-            to: destination
-        ) {
+    static func selectionAnimation(from source: NowPlayingPage, to destination: NowPlayingPage) -> Animation {
+        if isDirectLyricsQueueTransition(from: source, to: destination) {
             return motion.directAlternate.animation
         }
         return source == .artwork ? motion.artworkCollapse.animation : animation
     }
 
-    static func residentQueueAnimation(
-        from source: NowPlayingPage,
-        to destination: NowPlayingPage,
-        reducesMotion: Bool
-    ) -> Animation? {
-        guard !reducesMotion else { return nil }
-        if isDirectLyricsQueueTransition(
-            from: source,
-            to: destination
-        ) {
-            return motion.directAlternate.animation
-        }
-        if destination == .queue {
-            return motion.delayedResidentEntrance.animation
-        }
-        if source == .queue {
-            return motion.outgoing.animation
-        }
-        return nil
-    }
-
-    static func isDirectLyricsQueueTransition(
-        from source: NowPlayingPage,
-        to destination: NowPlayingPage
-    ) -> Bool {
-        source == .lyrics && destination == .queue
-            || source == .queue && destination == .lyrics
-    }
-
-    static func directAlternateContent(
-        reducesMotion: Bool
-    ) -> AnyTransition {
-        guard !reducesMotion else { return .opacity }
-        return .scale(
-            scale: directLyricsQueueContentScale,
-            anchor: .center
-        )
-        .combined(with: .opacity)
-    }
-
-    private static func stagedOffsetAndOpacity(
-        y: CGFloat
-    ) -> AnyTransition {
-        directionalOffsetAndOpacity(
-            insertionY: y,
-            removalY: y
-        )
-    }
-
-    private static func directionalOffsetAndOpacity(
-        insertionY: CGFloat,
-        removalY: CGFloat
-    ) -> AnyTransition {
-        .asymmetric(
-            insertion:
-                offsetAndOpacity(y: insertionY)
-                .animation(motion.incoming.animation),
-            removal:
-                offsetAndOpacity(y: removalY)
-                .animation(motion.outgoing.animation)
-        )
-    }
-
-    private static func offsetAndOpacity(
-        y: CGFloat
-    ) -> AnyTransition {
-        .offset(y: y).combined(with: .opacity)
+    static func isDirectLyricsQueueTransition(from source: NowPlayingPage, to destination: NowPlayingPage) -> Bool {
+        source == .lyrics && destination == .queue || source == .queue && destination == .lyrics
     }
 }

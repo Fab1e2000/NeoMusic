@@ -84,43 +84,13 @@ enum NowPlayingInterfaceLayer: Hashable, Sendable {
 }
 
 struct NowPlayingMotionSpec: Equatable, Sendable {
-    private static let pageSpringSettlementDuration = Spring(
-        mass: 1,
-        stiffness: 350,
-        damping: 40,
-        allowOverDamping: true
-    ).settlingDuration(
-        target: 1,
-        initialVelocity: 0,
-        epsilon: 0.001
-    )
-
     struct PageMotion: Equatable, Sendable {
         let selection: NowPlayingAnimationSpec
         let artworkCollapse: NowPlayingAnimationSpec
+        let titleCollapse: NowPlayingAnimationSpec
         let directAlternate: NowPlayingAnimationSpec
-        let outgoing: NowPlayingAnimationSpec
-        let incoming: NowPlayingAnimationSpec
-        let delayedResidentEntrance: NowPlayingAnimationSpec
-        let lyricsSpatialPresentation: NowPlayingAnimationSpec
-        let lyricsOpacityPresentation: NowPlayingAnimationSpec
-        let lyricsSpatialDismissal: NowPlayingAnimationSpec
-        let lyricsOpacityDismissal: NowPlayingAnimationSpec
-        let queueSpatialPresentation: NowPlayingAnimationSpec
-        let queueOpacityPresentation: NowPlayingAnimationSpec
-        let queueSpatialDismissal: NowPlayingAnimationSpec
-        let queueOpacityDismissal: NowPlayingAnimationSpec
-        let artworkResize: NowPlayingAnimationSpec
-
-        let directAlternateContentScale: CGFloat
-        let lyricsPresentationScale: CGFloat
-        let queuePresentationScale: CGFloat
-        let lyricsTravel: CGFloat
-        let queueTravel: CGFloat
         let artworkDetailsTravel: CGFloat
         let songHeaderTravel: CGFloat
-        let lyricsPresentationDelay: TimeInterval
-
     }
 
     struct InterfaceMotion: Equatable, Sendable {
@@ -187,121 +157,20 @@ struct NowPlayingMotionSpec: Equatable, Sendable {
     static let appleMusic26 = NowPlayingMotionSpec(
         page: PageMotion(
             selection: NowPlayingAnimationSpec(
-                .interpolatingSpring(mass: 1, stiffness: 475, damping: 45, initialVelocity: 0),
+                .interpolatingSpring(mass: 1, stiffness: 441, damping: 42, initialVelocity: 0),
                 duration: 0.60
             ),
-            // Fit to the supplied recording's cover bounds; SwiftUI owns retargeting.
             artworkCollapse: NowPlayingAnimationSpec(
-                .interpolatingSpring(mass: 1, stiffness: 800, damping: 72, initialVelocity: 0),
+                .interpolatingSpring(mass: 1, stiffness: 426, damping: 40.6, initialVelocity: 0),
                 duration: 0.60
             ),
-            directAlternate: NowPlayingAnimationSpec(
-                .smooth,
-                duration: 0.44
+            titleCollapse: NowPlayingAnimationSpec(
+                .interpolatingSpring(mass: 1, stiffness: 337, damping: 36.5, initialVelocity: 0),
+                duration: 0.60
             ),
-            outgoing: NowPlayingAnimationSpec(
-                .smooth,
-                duration: 0.24
-            ),
-            incoming: NowPlayingAnimationSpec(
-                .easeInOut,
-                duration: 0.24,
-                delay: 0.15
-            ),
-            delayedResidentEntrance: NowPlayingAnimationSpec(
-                .smooth,
-                duration: 0.34,
-                delay: 0.11
-            ),
-            // Lyrics and queue share the same resident-page motion.
-            lyricsSpatialPresentation: NowPlayingAnimationSpec(
-                .interpolatingSpring(
-                    mass: 1,
-                    stiffness: 475,
-                    damping: 45,
-                    initialVelocity: 0
-                ),
-                duration: pageSpringSettlementDuration
-            ),
-            lyricsOpacityPresentation: NowPlayingAnimationSpec(
-                .cubicBezier(
-                    x1: 0.42,
-                    y1: 0,
-                    x2: 0.58,
-                    y2: 1
-                ),
-                duration: 0.30,
-                delay: 0.10
-            ),
-            lyricsSpatialDismissal: NowPlayingAnimationSpec(
-                .interpolatingSpring(
-                    mass: 1,
-                    stiffness: 475,
-                    damping: 45,
-                    initialVelocity: 0
-                ),
-                duration: pageSpringSettlementDuration
-            ),
-            lyricsOpacityDismissal: NowPlayingAnimationSpec(
-                .cubicBezier(
-                    x1: 0.42,
-                    y1: 0,
-                    x2: 0.58,
-                    y2: 1
-                ),
-                duration: 0.30
-            ),
-            // The recording's queue moves below the cover while fading, keeping
-            // the playback controls fixed outside the animated content.
-            queueSpatialPresentation: NowPlayingAnimationSpec(
-                .interpolatingSpring(
-                    mass: 1,
-                    stiffness: 475,
-                    damping: 45,
-                    initialVelocity: 0
-                ),
-                duration: pageSpringSettlementDuration
-            ),
-            queueOpacityPresentation: NowPlayingAnimationSpec(
-                .cubicBezier(
-                    x1: 0.42,
-                    y1: 0,
-                    x2: 0.58,
-                    y2: 1
-                ),
-                duration: 0.30,
-                delay: 0.10
-            ),
-            queueSpatialDismissal: NowPlayingAnimationSpec(
-                .interpolatingSpring(
-                    mass: 1,
-                    stiffness: 475,
-                    damping: 45,
-                    initialVelocity: 0
-                ),
-                duration: pageSpringSettlementDuration
-            ),
-            queueOpacityDismissal: NowPlayingAnimationSpec(
-                .cubicBezier(
-                    x1: 0.42,
-                    y1: 0,
-                    x2: 0.58,
-                    y2: 1
-                ),
-                duration: 0.30
-            ),
-            artworkResize: NowPlayingAnimationSpec(
-                .smooth,
-                duration: 0.48
-            ),
-            directAlternateContentScale: 0.92,
-            lyricsPresentationScale: 0.90,
-            queuePresentationScale: 0.90,
-            lyricsTravel: 470,
-            queueTravel: 470,
-            artworkDetailsTravel: -300,
-            songHeaderTravel: 40,
-            lyricsPresentationDelay: 0
+            directAlternate: NowPlayingAnimationSpec(.easeInOut, duration: 0.31),
+            artworkDetailsTravel: -384,
+            songHeaderTravel: 384
         ),
         interface: InterfaceMotion(
             coreShow: NowPlayingAnimationSpec(

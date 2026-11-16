@@ -14,7 +14,8 @@ struct NowPlayingBottomControls: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     let song: PlayerTrack
-    @Binding var page: NowPlayingPage
+    let page: NowPlayingPage
+    let onPageTap: (NowPlayingPage) -> Void
     let hasLyrics: Bool
     let showsLyricsUtilities: Bool
     let hasLyricsTranslations: Bool
@@ -36,7 +37,7 @@ struct NowPlayingBottomControls: View {
                 }
                 .frame(height: 52)
                 interfaceLayer(.pageSelector) {
-                    NowPlayingPageSelector(page: $page, hasLyrics: hasLyrics)
+                    NowPlayingPageSelector(page: page, onPageTap: onPageTap, hasLyrics: hasLyrics)
                 }
                 .frame(height: 62)
             }
@@ -66,7 +67,7 @@ struct NowPlayingBottomControls: View {
                 .position(x: proxy.size.width / 2, y: layout.controlsY(744.5))
 
                 interfaceLayer(.pageSelector) {
-                    NowPlayingPageSelector(page: $page, hasLyrics: hasLyrics)
+                    NowPlayingPageSelector(page: page, onPageTap: onPageTap, hasLyrics: hasLyrics)
                 }
                 .position(x: proxy.size.width / 2, y: layout.controlsY(796))
             }

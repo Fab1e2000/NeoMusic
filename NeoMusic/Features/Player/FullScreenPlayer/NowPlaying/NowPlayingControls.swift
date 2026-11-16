@@ -1096,7 +1096,8 @@ struct NowPlayingPageSelector: View {
 
     @Environment(\.nowPlayingLayout) private var layout
 
-    @Binding var page: NowPlayingPage
+    let page: NowPlayingPage
+    let onPageTap: (NowPlayingPage) -> Void
     let hasLyrics: Bool
 
     var body: some View {
@@ -1128,9 +1129,7 @@ struct NowPlayingPageSelector: View {
         let isSelected = page == destination
 
         return Button {
-            let targetPage: NowPlayingPage =
-                isSelected ? .artwork : destination
-            page = targetPage
+            onPageTap(destination)
         } label: {
             ZStack(alignment: .topTrailing) {
                 Group {

@@ -7,51 +7,28 @@ enum NowPlayingPortraitCoordinateSpace {
 }
 
 struct NowPlayingPortraitArtwork: View {
-    @Environment(\.accessibilityReduceMotion)
-    private var accessibilityReduceMotion
     @Environment(PlayerState.self) private var player
-    @Environment(\.playerVisualsActive) private var visualsActive
 
     let song: PlayerTrack
     let isArtworkPage: Bool
+    var decodeSize: CGSize? = nil
 
-    @State private var bounceScale: CGFloat = 1
-    @State private var bounceGeneration = 0
-    @State private var handledBounceGeneration = 0
 
     var body: some View {
         ArtworkImage(
             url: song.coverURL,
             contentID: song.id,
             artworkLoadID: song.artworkLoadID,
-            cornerRadius: 12
+            cornerRadius: 12,
+            decodeSize: decodeSize
         )
-        .scaleEffect(bounceScale)
         .shadow(
             color: .black.opacity(shadowOpacity),
             radius: shadowRadius,
             y: shadowOffset
         )
-        .animation(
-            accessibilityReduceMotion
-                ? nil
-                : .easeInOut(duration: 0.3),
-            value: player.isPlaying
-        )
         .accessibilityElement()
         .accessibilityLabel("\(song.title)的封面")
-        .onChange(of: player.isPlaying) { _, playing in
-            if playing && isArtworkPage && visualsActive { bounceGeneration += 1 }
-        }
-        .task(id: ArtworkBounceRequest(generation: bounceGeneration, isActive: shouldBounce)) {
-            guard bounceGeneration > handledBounceGeneration else { bounceScale = 1; return }
-            handledBounceGeneration = bounceGeneration
-            await animateBounce()
-        }
-    }
-
-    private var shouldBounce: Bool {
-        isArtworkPage && visualsActive && player.isPlaying && !accessibilityReduceMotion
     }
 
     private var shadowOpacity: Double {
@@ -69,25 +46,4 @@ struct NowPlayingPortraitArtwork: View {
         return player.isPlaying ? 15 : 8
     }
 
-    private func animateBounce() async {
-        bounceScale = 1
-        guard shouldBounce else {
-            return
-        }
-
-        await Task.yield()
-        guard !Task.isCancelled else { return }
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            withAnimation(.easeOut(duration: 0.17), completionCriteria: .removed) {
-                bounceScale = 1.055
-            } completion: {
-                continuation.resume()
-            }
-        }
-        guard !Task.isCancelled else { return }
-
-        withAnimation(.spring(duration: 0.42, bounce: 0.24)) {
-            bounceScale = 1
-        }
-    }
 }

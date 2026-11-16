@@ -470,10 +470,7 @@ private struct PresentationMaskTestContent: View {
         .modifier(
             NowPlayingPagePresentation(
                 isVisible: state.isVisible,
-                presentationScale: 0.90,
-                hiddenOffset: 470,
-                spatialAnimation: .interpolatingSpring(mass: 1, stiffness: 475, damping: 45, initialVelocity: 0),
-                opacityAnimation: .easeInOut(duration: 0.30),
+                page: .lyrics,
                 clipsAboveControls: state.clipsAboveControls
             )
         )

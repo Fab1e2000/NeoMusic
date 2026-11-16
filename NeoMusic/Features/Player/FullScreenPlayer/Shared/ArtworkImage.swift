@@ -22,31 +22,49 @@ struct ArtworkImage: View {
     }
 
     var body: some View {
-        GeometryReader { proxy in
-            let request = imageRequest(for: proxy.size)
-            let cached = request.flatMap { services?.artwork.cached($0) }
-            content(image: cached ?? retainedImage)
-                .frame(width: proxy.size.width, height: proxy.size.height)
-                .task(id: LoadID(content: contentID, artwork: artworkLoadID, request: request)) {
-                    failed = false
-                    guard let request, let provider = services?.artwork else {
-                        if url == nil && artworkLoadID == nil { displayedImage = nil; displayedContentID = nil }
-                        return
+        Group {
+            if let fixedSize = decodeSize {
+                let request = imageRequest(for: fixedSize)
+                let cached = request.flatMap { services?.artwork.cached($0) }
+                Color.clear
+                    .overlay {
+                        content(image: cached ?? retainedImage)
                     }
-                    do {
-                        let image: UIImage
-                        if let cached = provider.cached(request) { image = cached }
-                        else { image = try await provider.load(request) }
-                        try Task.checkCancellation()
-                        displayedImage = image
-                        displayedContentID = contentID
-                    } catch is CancellationError { }
-                    catch { if !Task.isCancelled { failed = true } }
+                    .task(id: LoadID(content: contentID, artwork: artworkLoadID, request: request)) {
+                        await loadArtwork(request: request)
+                    }
+            } else {
+                GeometryReader { proxy in
+                    let request = imageRequest(for: proxy.size)
+                    let cached = request.flatMap { services?.artwork.cached($0) }
+                    content(image: cached ?? retainedImage)
+                        .frame(width: proxy.size.width, height: proxy.size.height)
+                        .task(id: LoadID(content: contentID, artwork: artworkLoadID, request: request)) {
+                            await loadArtwork(request: request)
+                        }
                 }
+            }
         }
         .aspectRatio(aspectRatio, contentMode: .fit)
         .clipShape(.rect(cornerRadius: cornerRadius))
         .accessibilityHidden(true)
+    }
+
+    private func loadArtwork(request: PlayerArtworkRequest?) async {
+        failed = false
+        guard let request, let provider = services?.artwork else {
+            if url == nil && artworkLoadID == nil { displayedImage = nil; displayedContentID = nil }
+            return
+        }
+        do {
+            let image: UIImage
+            if let cached = provider.cached(request) { image = cached }
+            else { image = try await provider.load(request) }
+            try Task.checkCancellation()
+            displayedImage = image
+            displayedContentID = contentID
+        } catch is CancellationError { }
+        catch { if !Task.isCancelled { failed = true } }
     }
 
     private var retainedImage: UIImage? {
