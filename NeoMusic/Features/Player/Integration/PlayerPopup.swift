@@ -161,7 +161,7 @@ private struct PlayerPopupContent: View {
                                 .accessibilityIdentifier("mini.trackTitle")
                         }, buttons: {
                             ToolbarItem(placement: .popupBar) {
-                                MiniPlayerControls(isPlaying: player.isPlaying, isLoading: player.isLoading,
+                                MiniPlayerControls(isPlaying: player.isPlaying,
                                                    canPlayNext: player.canPlayNext,
                                                    togglePlayback: player.togglePlayback, next: player.next)
                                     .environment(\.colorScheme, barColorScheme)
@@ -202,15 +202,14 @@ private struct MiniPlayerTitle: View {
                 .opacity(compact ? 0 : 1)
                 .accessibilityHidden(compact)
         }
+        .padding(.leading, 8)
         .frame(height: compact ? compactHeight : regularHeight)
-        .clipped()
     }
 }
 
 /// One fixed-size toolbar item gives LN a single, stable title exclusion rect.
 struct MiniPlayerControls: View {
     let isPlaying: Bool
-    let isLoading: Bool
     let canPlayNext: Bool
     let togglePlayback: () -> Void
     let next: () -> Void
@@ -218,33 +217,16 @@ struct MiniPlayerControls: View {
     @Environment(\.accessibilityReduceMotion) private var reducesMotion
     @Environment(\.popupBarPlacement) private var placement
     @State private var nextTrigger = 0
-    @State private var showsLoadingIndicator = false
 
     var body: some View {
         let compact = placement == .inline
         HStack(spacing: 0) {
             Button(action: togglePlayback) {
-                ZStack {
-                    NowPlayingPlayPauseIcon(isPlaying: isPlaying, reducesMotion: reducesMotion,
-                                            playOffsetX: 0.8)
-                        .frame(width: 14, height: 17)
-                        .opacity(showsLoadingIndicator ? 0 : 1)
-                        .scaleEffect(showsLoadingIndicator ? 0.6 : 1)
-                    if showsLoadingIndicator {
-                        ProgressView().allowsHitTesting(false).transition(.opacity)
-                    }
-                }
-                .offset(x: compact ? 0 : 8)
-                .frame(width: 44, height: 44)
-                .task(id: isLoading) {
-                    if isLoading {
-                        try? await Task.sleep(for: .milliseconds(300))
-                        guard !Task.isCancelled else { return }
-                    }
-                    withAnimation(reducesMotion ? nil : .smooth(duration: 0.2)) {
-                        showsLoadingIndicator = isLoading
-                    }
-                }
+                NowPlayingPlayPauseIcon(isPlaying: isPlaying, reducesMotion: reducesMotion,
+                                        playOffsetX: 0.8)
+                    .frame(width: 14, height: 17)
+                    .offset(x: 8)
+                    .frame(width: 44, height: 44)
             }
             .buttonStyle(NowPlayingTransportButtonStyle(reducesMotion: reducesMotion,
                                                         springsBack: true, diameter: 44, showsHighlight: false))

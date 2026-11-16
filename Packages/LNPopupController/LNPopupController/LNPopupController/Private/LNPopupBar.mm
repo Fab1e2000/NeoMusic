@@ -2215,6 +2215,14 @@ BOOL _LNRectEqualToRectWithinTolerance(CGRect rect1, CGRect rect2, CGFloat toler
 - (void)_layoutTitles
 {
 	UIEdgeInsets titleInsets = [self contentInsetsIncludingImage:YES];
+	// Custom compact titles keep their resting inset inside the swipe viewport.
+	if(_titlesController.hasSwiftUITitles && _resolvedIsFloating && _resolvedIsCompact && !self.imageView.isHidden)
+	{
+		if([UIView userInterfaceLayoutDirectionForSemanticContentAttribute:self.semanticContentAttribute] == UIUserInterfaceLayoutDirectionLeftToRight)
+			titleInsets.left -= 8;
+		else
+			titleInsets.right -= 8;
+	}
 	
 #if DEBUG
 	if(_LNEnableBarTitleLayoutDebug())

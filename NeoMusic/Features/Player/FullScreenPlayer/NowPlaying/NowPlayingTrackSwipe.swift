@@ -52,9 +52,9 @@ struct TrackSwipeViewportInsets: Equatable {
     )
 
     static let miniPlayer = TrackSwipeViewportInsets(
-        leadingBleed: 0,
+        leadingBleed: 8,
         trailingBleed: 0,
-        leadingFade: 14,
+        leadingFade: 8,
         trailingFade: 14,
         fadesOnlyWhenSliding: true
     )

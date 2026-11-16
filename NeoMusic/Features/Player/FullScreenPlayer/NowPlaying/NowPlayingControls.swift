@@ -447,7 +447,6 @@ struct NowPlayingTransportControls: View {
 
     @Environment(\.nowPlayingLayout) private var layout
 
-    @State private var showsLoadingIndicator = false
     /// 每点一次上一首/下一首加一，触发图标的推进动画。
     @State private var previousTrigger = 0
     @State private var nextTrigger = 0
@@ -482,34 +481,13 @@ struct NowPlayingTransportControls: View {
             Button {
                 player.togglePlayback()
             } label: {
-                ZStack {
-                    NowPlayingPlayPauseIcon(
-                        isPlaying: player.isPlaying,
-                        reducesMotion: accessibilityReduceMotion
-                    )
-                    .nowPlayingPrimary()
-                    .frame(width: 32, height: 40)
-                    .opacity(showsLoadingIndicator ? 0 : 1)
-                    .scaleEffect(showsLoadingIndicator ? 0.6 : 1)
-
-                    if showsLoadingIndicator {
-                        ProgressView()
-                            .controlSize(.large)
-                            .tint(NowPlayingVisualHierarchy.primaryColor)
-                            .transition(.opacity)
-                    }
-                }
+                NowPlayingPlayPauseIcon(
+                    isPlaying: player.isPlaying,
+                    reducesMotion: accessibilityReduceMotion
+                )
+                .nowPlayingPrimary()
+                .frame(width: 32, height: 40)
                 .frame(width: 64, height: 64)
-                // 加载很快结束时不闪转圈：持续 0.3 秒以上才换成转圈。
-                .task(id: player.isLoading) {
-                    if player.isLoading {
-                        try? await Task.sleep(for: .milliseconds(300))
-                        guard !Task.isCancelled else { return }
-                    }
-                    withAnimation(accessibilityReduceMotion ? nil : .smooth(duration: 0.2)) {
-                        showsLoadingIndicator = player.isLoading
-                    }
-                }
                 .contentShape(.circle)
             }
             .buttonStyle(

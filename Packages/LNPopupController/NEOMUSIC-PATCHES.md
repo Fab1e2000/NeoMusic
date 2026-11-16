@@ -18,7 +18,7 @@ Local presentation correction:
 - `_LNPopupTransitionAnimator.mm`: carry the mini-player's resolved interface style
   into the sibling glass transition wrapper, so opening and closing retain the
   endpoint appearance even when the page overrides the system style.
-- `LNPopupBar.mm`: forward the bar placement trait to the detached SwiftUI toolbar
+- `LNPopupBar.mm`: extend the compact custom-title viewport to the artwork edge; the SwiftUI title preserves its resting inset and owns swipe fading. Forward the bar placement trait to the detached SwiftUI toolbar
   hosts at attachment and on trait changes. Buttons can adapt locally without
   resubmitting the popup item or rebuilding the full-screen content.
 - `UIViewController+LNPopupSupport.mm`: the transition lock no longer drops hits
