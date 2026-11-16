@@ -21,6 +21,7 @@ import ImageIO
     private struct Request: Hashable {
         let url: URL
         let pixels: Int
+        let prepareBackdrop: Bool
     }
     private static var loading: [Request: Task<UIImage?, Never>] = [:]
     private static let decoder = LocalArtworkDecoder()
@@ -34,6 +35,13 @@ import ImageIO
     private static var resolvedArtwork: [String: URL] = [:]
 
     static func registerResolvedArtwork(_ id: String, url: URL) { resolvedArtwork[id] = url }
+
+    static func cachedResolved(_ id: String, pixels: Int) -> UIImage? {
+        guard let url = resolvedArtwork[id] else { return nil }
+        return cached(url, pixels: pixels)
+    }
+
+    static func resolvedURL(for id: String) -> URL? { resolvedArtwork[id] }
 
     static func cachedBackdrop(for artwork: Artwork) -> AlbumArtworkBackdrop? {
         let url: URL
@@ -69,9 +77,22 @@ import ImageIO
     }
 
     static func load(_ url: URL, pixels: Int) async -> UIImage? {
+        await load(url, pixels: pixels, prepareBackdrop: true)
+    }
+
+    /// Row thumbnails only need pixels and skip backdrop color extraction and disk writes.
+    static func loadThumbnail(_ url: URL, pixels: Int) async -> UIImage? {
+        await load(url, pixels: pixels, prepareBackdrop: false)
+    }
+
+    private static func load(_ url: URL, pixels: Int, prepareBackdrop: Bool) async -> UIImage? {
         guard !Task.isCancelled else { return nil }
-        if let image = images.object(forKey: url as NSURL)?.image(for: pixels, allowingSmaller: false) { return image }
-        let request = Request(url: url, pixels: pixels)
+        if let variants = images.object(forKey: url as NSURL),
+           let image = variants.image(for: pixels, allowingSmaller: false),
+           (!prepareBackdrop || variants.backdrop != nil) {
+            return image
+        }
+        let request = Request(url: url, pixels: pixels, prepareBackdrop: prepareBackdrop)
         let task: Task<UIImage?, Never>
         if let pending = loading[request] {
             task = pending
@@ -80,7 +101,7 @@ import ImageIO
             // alive for those consumers even when an individual row scrolls away.
             task = Task {
                 defer { loading[request] = nil }
-                guard let prepared = await decoder.load(url, pixels: pixels) else { return nil }
+                guard let prepared = await decoder.load(url, pixels: pixels, prepareBackdrop: prepareBackdrop) else { return nil }
                 let variants = images.object(forKey: url as NSURL) ?? Variants()
                 variants.images[pixels] = prepared.image
                 if let backdrop = prepared.backdrop { variants.backdrop = backdrop }
@@ -102,10 +123,10 @@ private actor LocalArtworkDecoder {
     private let backdrops = AlbumArtworkBackdropPreparer(
         cacheURL: URL.cachesDirectory.appending(path: "ArtworkBackdrops.json"))
 
-    func load(_ url: URL, pixels: Int) async -> Prepared? {
+    func load(_ url: URL, pixels: Int, prepareBackdrop: Bool) async -> Prepared? {
         guard !Task.isCancelled else { return nil }
         guard let data = try? Data(contentsOf: url) else { return nil }
-        let colors = try? await backdrops.prepareAdditionalArtwork([url.absoluteString: data])
+        let colors = prepareBackdrop ? (try? await backdrops.prepareAdditionalArtwork([url.absoluteString: data])) : nil
         guard !Task.isCancelled else { return nil }
         return autoreleasepool {
             guard let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),

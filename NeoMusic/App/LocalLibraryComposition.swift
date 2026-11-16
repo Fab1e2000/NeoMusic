@@ -457,7 +457,7 @@ enum LocalLibrary {
         case .category(.artists): ArtistsListView(artists: artists)
         case .category(.playlists): PlaylistsListView(library: playlistLibrary)
         case .playlistFolder(let id): PlaylistsListView(library: playlistLibrary, folderID: id)
-        case .album(let id): albumDetail(id).map(CollectionDetailView.init)
+        case .album(let id): albumDetail(id).map { CollectionDetailView(detail: $0) }
         case .playlist(let id):
             if id == "favorites" { LocalFavoritesDetail() }
             else { PlaylistDetailView(playlistID: id, library: playlistLibrary, songs: [], availableSongs: { allSongs }, recentlyPlayedSongs: recentPlaybackFixture) }
@@ -549,7 +549,21 @@ struct LocalFavoritesDetail: View {
 
     var body: some View {
         if let detail = LocalLibrary.playlistDetail("favorites") {
-            CollectionDetailView(detail: detail)
+            let hasMore = LocalLibrary.playlistLibrary.onlineHasMore.contains("favorites")
+            let totalCount = LocalLibrary.playlistLibrary.onlineTrackCounts["favorites"]
+            CollectionDetailView(
+                detail: detail,
+                hasMoreSongs: hasMore,
+                totalSongCount: totalCount,
+                onReachedEnd: {
+                    guard LocalLibrary.playlistLibrary.onlineHasMore.contains("favorites"),
+                          LocalLibrary.playlistLibrary.onlineErrors["favorites"] == nil else { return }
+                    Task { await LocalLibrary.playlistLibrary.loadMoreOnlinePlaylist?("favorites") }
+                },
+                onPrepareCompleteCollection: {
+                    _ = await LocalLibrary.playlistLibrary.prepareCompleteCollection("favorites")
+                }
+            )
                 .task(id: loadRequest) {
                     guard loadRequest != nil else { return }
                     await loadFavorites()
@@ -561,7 +575,7 @@ struct LocalFavoritesDetail: View {
     private func loadFavorites(force: Bool = false) async {
         guard let music = account.music else { return }
         let revision = music.sessionRevision
-        await music.loadFavorites(force: force)
+        await music.loadFavoritesPreview(force: force)
         guard revision == music.sessionRevision, !Task.isCancelled else { return }
         let playlistError = music.playlists.first(where: \.isFavorites).flatMap { music.playlistErrors[$0.id] }
         if let message = playlistError ?? music.error { LocalLibrary.toasts.show(.error(message)) }

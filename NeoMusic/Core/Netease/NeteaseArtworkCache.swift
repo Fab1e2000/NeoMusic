@@ -44,8 +44,10 @@ enum NeteaseArtworkPrefetch {
 /// Shared original artwork files; Nuke owns network coalescing and subscriber cancellation.
 @MainActor
 final class NeteaseArtworkCache {
-    static let shared = NeteaseArtworkCache(directory: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("NeteaseArtwork", isDirectory: true))
+    static let shared = NeteaseArtworkCache(
+        directory: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("NeteaseArtwork", isDirectory: true),
+        countLimit: 4_096)
     /// Posted synchronously on MainActor, after cachedURL has stopped returning evicted files.
     /// Observe this cache as the object; use evictedURLs(in:scope:) for the account-owned resources.
     static let didEvictArtwork = Notification.Name("NeoMusic.NeteaseArtworkCache.didEvictArtwork")
@@ -73,10 +75,11 @@ final class NeteaseArtworkCache {
     private let storage: NeteaseArtworkFiles
     private let keys: NSCache<NSString, NSString> = {
         let cache = NSCache<NSString, NSString>()
-        cache.countLimit = 1_024
+        cache.countLimit = 4_096
         return cache
     }()
     private var files: [String: URL] = [:]
+    private var keyRevisions: [String: Int] = [:]
     private var resources: [String: Resource] = [:]
     private var revision = -1
     private var restored = false
@@ -115,6 +118,7 @@ final class NeteaseArtworkCache {
     func cachedFileURL(for remote: URL, scope: String) async -> URL? {
         guard !Task.isCancelled, remote.scheme == "https" else { return nil }
         if let file = cachedURL(for: remote, scope: scope) { return file }
+        guard !restored else { return nil }
         let key = key(remote, scope: scope)
         guard let snapshot = try? await storage.cachedFile(key: key), !Task.isCancelled else { return nil }
         apply(snapshot)
@@ -160,22 +164,43 @@ final class NeteaseArtworkCache {
         }
         let key = key(remote, scope: scope)
         let snapshot = try await storage.store(data, key: key)
-        try Task.checkCancellation()
         apply(snapshot)
+        try Task.checkCancellation()
         guard let url = files[key] else { throw URLError(.cannotWriteToFile) }
         resources[key] = Resource(scope: scope, remote: remote)
         return url
     }
 
     private func apply(_ snapshot: NeteaseArtworkFiles.Snapshot) {
-        guard snapshot.revision >= revision else { return }
-        let removed = files.keys.filter { snapshot.files[$0] == nil }
-        revision = snapshot.revision
-        files = snapshot.files
         var evicted: [String: Set<URL>] = [:]
-        for key in removed {
-            if let resource = resources.removeValue(forKey: key) {
-                evicted[resource.scope, default: []].insert(resource.remote)
+        switch snapshot {
+        case .full(let nextRevision, let nextFiles):
+            guard nextRevision >= revision else { return }
+            let removed = files.keys.filter { nextFiles[$0] == nil && nextRevision >= (keyRevisions[$0] ?? -1) }
+            revision = nextRevision
+            for key in removed {
+                files.removeValue(forKey: key)
+                keyRevisions[key] = nextRevision
+                if let resource = resources.removeValue(forKey: key) {
+                    evicted[resource.scope, default: []].insert(resource.remote)
+                }
+            }
+            for (key, url) in nextFiles where nextRevision >= (keyRevisions[key] ?? -1) {
+                files[key] = url
+                keyRevisions[key] = nextRevision
+            }
+        case .delta(let nextRevision, let added, let removed):
+            if nextRevision > revision { revision = nextRevision }
+            if let (key, url) = added, nextRevision >= (keyRevisions[key] ?? -1) {
+                files[key] = url
+                keyRevisions[key] = nextRevision
+            }
+            for key in removed where nextRevision >= (keyRevisions[key] ?? -1) {
+                keyRevisions[key] = nextRevision
+                files.removeValue(forKey: key)
+                if let resource = resources.removeValue(forKey: key) {
+                    evicted[resource.scope, default: []].insert(resource.remote)
+                }
             }
         }
         for (scope, urls) in evicted {
@@ -224,9 +249,9 @@ final class NeteaseArtworkCache {
 }
 
 private actor NeteaseArtworkFiles {
-    struct Snapshot: Sendable {
-        let revision: Int
-        let files: [String: URL]
+    enum Snapshot: Sendable {
+        case full(revision: Int, files: [String: URL])
+        case delta(revision: Int, added: (String, URL)?, removed: [String])
     }
     private struct File {
         let url: URL
@@ -237,6 +262,7 @@ private actor NeteaseArtworkFiles {
     private let byteLimit: Int
     private let countLimit: Int
     private var files: [String: File] = [:]
+    private var totalBytes = 0
     private var loaded = false
     private var revision = 0
 
@@ -248,26 +274,31 @@ private actor NeteaseArtworkFiles {
 
     func snapshot() throws -> Snapshot {
         try load()
-        return currentSnapshot
+        return .full(revision: revision, files: files.mapValues(\.url))
     }
 
-    func cachedFile(key: String) throws -> Snapshot {
+    func cachedFile(key: String) throws -> Snapshot? {
         try Task.checkCancellation()
-        guard files[key] == nil, !loaded else { return currentSnapshot }
+        guard files[key] == nil, !loaded else { return nil }
         let url = directory.appendingPathComponent(key)
         let attributes = try url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
         try Task.checkCancellation()
-        if let bytes = attributes.fileSize, bytes > 0 {
-            files[key] = File(url: url, bytes: bytes, updated: attributes.contentModificationDate ?? .distantPast)
-            revision += 1
-        }
-        return currentSnapshot
+        guard let bytes = attributes.fileSize, bytes > 0 else { return nil }
+        files[key] = File(url: url, bytes: bytes, updated: attributes.contentModificationDate ?? .distantPast)
+        totalBytes += bytes
+        revision += 1
+        return .delta(revision: revision, added: (key, url), removed: [])
     }
 
     func store(_ data: Data, key: String) throws -> Snapshot {
+        let wasLoaded = loaded
         try load()
         try Task.checkCancellation()
-        if files[key] != nil { return currentSnapshot }
+        if let existing = files[key] {
+            return wasLoaded
+                ? .delta(revision: revision, added: (key, existing.url), removed: [])
+                : .full(revision: revision, files: files.mapValues(\.url))
+        }
         guard data.count <= byteLimit else { throw URLError(.dataLengthExceedsMaximum) }
         let url = directory.appendingPathComponent(key)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -276,13 +307,12 @@ private actor NeteaseArtworkFiles {
         do { try Task.checkCancellation() }
         catch { try? FileManager.default.removeItem(at: url); throw error }
         files[key] = File(url: url, bytes: data.count, updated: Date())
+        totalBytes += data.count
         revision += 1
-        try trim(keeping: key)
-        return currentSnapshot
-    }
-
-    private var currentSnapshot: Snapshot {
-        Snapshot(revision: revision, files: files.mapValues(\.url))
+        let removed = try trim(keeping: key)
+        return wasLoaded
+            ? .delta(revision: revision, added: (key, url), removed: removed)
+            : .full(revision: revision, files: files.mapValues(\.url))
     }
 
     private func load() throws {
@@ -296,26 +326,33 @@ private actor NeteaseArtworkFiles {
                 try Task.checkCancellation()
                 let attributes = try url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
                 if let bytes = attributes.fileSize, bytes > 0 {
-                    files[url.lastPathComponent] = File(url: url, bytes: bytes, updated: attributes.contentModificationDate ?? .distantPast)
+                    let key = url.lastPathComponent
+                    if let previous = files[key] { totalBytes -= previous.bytes }
+                    files[key] = File(url: url, bytes: bytes, updated: attributes.contentModificationDate ?? .distantPast)
+                    totalBytes += bytes
                 }
             }
-            try trim()
+            _ = try trim()
         }
         // A complete index supersedes any earlier single-file lookup snapshots.
         revision += 1
         loaded = true
     }
 
-    private func trim(keeping key: String? = nil) throws {
-        var bytes = files.values.reduce(0) { $0 + $1.bytes }
+    @discardableResult
+    private func trim(keeping key: String? = nil) throws -> [String] {
+        guard files.count > countLimit || totalBytes > byteLimit else { return [] }
         let oldest = files.filter { $0.key != key }.sorted {
             $0.value.updated == $1.value.updated ? $0.key < $1.key : $0.value.updated < $1.value.updated
         }
-        for (name, file) in oldest where files.count > countLimit || bytes > byteLimit {
+        var removed: [String] = []
+        for (name, file) in oldest where files.count > countLimit || totalBytes > byteLimit {
             try FileManager.default.removeItem(at: file.url)
             files[name] = nil
-            bytes -= file.bytes
+            totalBytes -= file.bytes
             revision += 1
+            removed.append(name)
         }
+        return removed
     }
 }

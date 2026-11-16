@@ -569,6 +569,117 @@ import XCTest
         XCTAssertEqual(projection.committedOutput, 30)
     }
 
+    func testAsyncListProjectionPlaceholderAvoidsBlockingInitialFrameAndTracksResolution() async {
+        let projection = AsyncListProjection<Int, [Int]>()
+        XCTAssertFalse(projection.isResolved(for: 1, fastPath: { _ in nil }))
+        XCTAssertEqual(projection.currentValue(for: 1, fastPath: { _ in nil }, placeholder: { _ in [] }), [])
+
+        await projection.computeIfNeeded(
+            for: 1,
+            fastPath: { _ in nil },
+            background: {
+                XCTAssertFalse(Thread.isMainThread)
+                return [1, 2, 3]
+            },
+            finish: { $0 }
+        )
+        XCTAssertTrue(projection.isResolved(for: 1, fastPath: { _ in nil }))
+        XCTAssertEqual(projection.currentValue(for: 2, fastPath: { _ in nil }, placeholder: { _ in [] }), [1, 2, 3],
+                       "Changing controls keeps previous list visible instead of flashing placeholder")
+
+        XCTAssertTrue(projection.isResolved(for: 0, fastPath: { _ in [0] }))
+        XCTAssertEqual(projection.currentValue(for: 0, fastPath: { _ in [0] }, placeholder: { _ in [] }), [0])
+    }
+
+    func testTitleSectionSortKeyASCIIFastPathAndCJKSorting() {
+        XCTAssertEqual(TitleSection<String>.sortKey("Alpha Track 01"), "alpha track 01")
+        XCTAssertEqual(TitleSection<String>.sortKey("Artist\u{0001}Album\u{0001}0001"), "artist\u{0001}album\u{0001}0001")
+        let grouped = TitleSection.group(["周杰伦", "apple", "123"], by: { $0 })
+        XCTAssertEqual(grouped.map(\.letter), ["A", "Z", "#"])
+    }
+
+    func testDownloadMetadataPlanClassifiesExistingAndMissingFilesOffMainThread() async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directory = root.appendingPathComponent("网易云/Artist/Album", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let presentPath = "网易云/Artist/Album/1.flac"
+        let missingPath = "网易云/Artist/Album/2.flac"
+        let traversalPath = "网易云/../escape.flac"
+        try Data("audio".utf8).write(to: root.appendingPathComponent(presentPath))
+
+        func makeRecord(id: Int64, path: String, albumID: Int64) -> NeteaseDownloadRecord {
+            let song = NeteaseMusicSong(id: id, title: "Song \(id)", artist: "Artist", album: "Album \(albumID)",
+                                        artworkURL: nil, duration: 180, albumID: albumID)
+            let meta = NeteaseDownloadSong(song: song, albumArtist: "Artist", trackNumber: Int(id), discNumber: 1)
+            return NeteaseDownloadRecord(metadata: meta, relativePath: path, lyricsRelativePath: nil,
+                                         quality: .lossless, downloadedAt: Date(), ownerID: 42)
+        }
+        let records: [Int64: NeteaseDownloadRecord] = [
+            1: makeRecord(id: 1, path: presentPath, albumID: 20),
+            2: makeRecord(id: 2, path: missingPath, albumID: 10),
+            3: makeRecord(id: 3, path: traversalPath, albumID: 30),
+        ]
+        let collection = NeteaseDownloadCollection(kind: .playlist, id: 77, ownerID: 42,
+                                                   title: "Offline List", artist: "Me", orderedSongIDs: [1, 2])
+        let plan = await Task.detached {
+            DownloadMusicIntegration.prepareMetadataPlan(
+                records: records,
+                collections: [collection.key: collection],
+                musicDirectory: root
+            )
+        }.value
+
+        XCTAssertEqual(plan.availableSongIDs, [1])
+        XCTAssertEqual(Set(plan.missingPaths), [missingPath, traversalPath])
+        XCTAssertEqual(Set(plan.unavailableRecordIDs), [2, 3])
+        XCTAssertEqual(plan.byPath[presentPath], 1)
+        XCTAssertEqual(plan.albumGroups.map(\.albumID), [20])
+        XCTAssertEqual(plan.collectionPlaylists.map(\.id), ["downloaded:playlist:77"])
+    }
+
+    func testSelectiveReconciliationUpdatesCatalogRevisionAndSkipsReadOnlyPlaylists() throws {
+        let library = SongLibrary(songs: [], defaults: UserDefaults(suiteName: "SelectiveReconcile.\(UUID().uuidString)")!)
+        let revision0 = library.catalogRevision
+        let onlineTrack = song(1)
+        XCTAssertTrue(library.replaceOnline([onlineTrack]))
+        let revision1 = library.catalogRevision
+        XCTAssertGreaterThan(revision1, revision0)
+        XCTAssertFalse(library.replaceOnline([onlineTrack]))
+        XCTAssertEqual(library.catalogRevision, revision1)
+
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let playlists = PlaylistLibrary(playlists: [
+            LibraryPlaylistItem(id: "local", title: "Local", artwork: .playlist)
+        ])
+        XCTAssertTrue(playlists.configurePersistence(url: root.appendingPathComponent("playlists.json"), songs: []))
+        playlists.restoreOnlineIdentity(ownerID: "42")
+        let placeholderTrack = LibrarySongItem.unavailable(onlineTrack.id)
+        playlists.addSongs([placeholderTrack], to: "local")
+        let readOnlyItem = LibraryPlaylistItem(id: "netease-playlist:42:99", title: "Online", artwork: .playlist, sourceOwnerID: "42")
+        playlists.replaceOnlinePlaylists(items: [readOnlyItem], songs: [readOnlyItem.id: [placeholderTrack]], ownerID: "42")
+        playlists.reconcileOnlineSongs([onlineTrack], excludingReadOnly: true)
+        XCTAssertEqual(playlists.songs(in: "local").first?.title, onlineTrack.title)
+        XCTAssertEqual(playlists.songs(in: readOnlyItem.id).first?.title, placeholderTrack.title)
+
+        let player = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false)
+        defer { player.shutdownPlayback() }
+        player.reconcileAvailability(songs: [onlineTrack])
+        XCTAssertTrue(player.queue.isEmpty)
+        XCTAssertTrue(player.unavailableIDs.isEmpty)
+
+        player.restoreOnlineIdentity(ownerID: "42")
+        player.play([placeholderTrack], from: "Local", shuffled: false)
+        let catalog = (1...200).map {
+            LibrarySongItem(id: "netease:42:\($0)", title: "Catalog \($0)", artist: "Artist", album: "Album",
+                            albumArtist: "Artist", trackNumber: $0, artwork: .missing)
+        }
+        player.reconcileAvailability(songs: catalog)
+        XCTAssertEqual(player.queue.count, 1)
+        XCTAssertEqual(player.queue.first?.title, "Catalog 1")
+    }
+
     private func song(_ id: Int) -> LibrarySongItem {
         .init(id: "netease:42:\(id)", title: "Song \(id)", artist: "Artist", album: "Album",
               albumArtist: "Artist", trackNumber: id, artwork: .missing)

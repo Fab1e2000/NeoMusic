@@ -37,6 +37,21 @@ final class AsyncListProjection<Input: Equatable, Output> {
         return initial
     }
 
+    /// Returns fast-path results immediately, retains the last committed output while recomputing
+    /// subsequent changes, and supplies `placeholder` on first appearance so navigation pushes never block.
+    func currentValue(for input: Input,
+                      fastPath: (Input) -> Output?,
+                      placeholder: (Input) -> Output) -> Output {
+        if let fast = fastPath(input) { return fast }
+        if let committedOutput { return committedOutput }
+        return placeholder(input)
+    }
+
+    /// True once `input` hits the synchronous fast path or an initial background projection has committed.
+    func isResolved(for input: Input, fastPath: (Input) -> Output?) -> Bool {
+        fastPath(input) != nil || committedOutput != nil
+    }
+
     func computeIfNeeded<Intermediate: Sendable>(
         for input: Input,
         fastPath: (Input) -> Output?,

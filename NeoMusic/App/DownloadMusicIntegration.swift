@@ -9,6 +9,7 @@ final class DownloadMusicIntegration {
     private var resolving: Set<LibraryRoute> = []
     private var publishing = false
     private var metadataTask: Task<Void, Never>?
+    private var metadataGeneration = 0
     private var stateAliases: [Int64: Set<String>] = [:]
     private var progressAliases: [Int64: Set<String>] = [:]
     private var progressCollections: [Int64: Set<String>] = [:]
@@ -23,11 +24,8 @@ final class DownloadMusicIntegration {
         store.onProgressChanged = { [weak self] in self?.publishProgress($0) }
         store.onFileCommitted = { path in Task { await LocalLibrary.runtime.importFile(path) } }
         store.onChange = { [weak self] in self?.publishStates() }
-        store.onRecordsChanged = { [weak self, weak store] in
-            guard let self, let store else { return }
-            self.scheduleMetadataPublication()
-            let missing = store.records.values.filter { store.resource(songID: $0.songID) == nil }.map(\.relativePath)
-            if !missing.isEmpty { Task { await LocalLibrary.runtime.removeMissingFiles(missing) } }
+        store.onRecordsChanged = { [weak self] in
+            self?.scheduleMetadataPublication(removeMissingFiles: true)
         }
         LocalLibrary.runtime.configureOfflineResolver { [weak self] id in
             guard let self, let songID = self.songID(id), let url = store.resource(songID: songID) else { return nil }
@@ -51,7 +49,7 @@ final class DownloadMusicIntegration {
             guard let self, let id = self.songID(song.id), store.records[id] != nil else { return false }
             guard let music = self.account.music, music.userID != nil else { self.requestLogin?(); return true }
             Task {
-                do { try await music.setLiked(songID: id, liked: liked); self.publishMetadata() }
+                do { try await music.setLiked(songID: id, liked: liked); await self.publishMetadataAsync() }
                 catch is CancellationError { }
                 catch { LocalLibrary.toasts.show(.error(error.localizedDescription)) }
             }
@@ -113,53 +111,148 @@ final class DownloadMusicIntegration {
         }
     }
 
-    func restore() async {
-        await account.downloads?.restore()
-        publishMetadata()
+    struct MetadataPlan: Sendable {
+        let byPath: [String: Int64]
+        let availableSongIDs: Set<Int64>
+        let missingPaths: [String]
+        let unavailableRecordIDs: [Int64]
+        let albumGroups: [(albumID: Int64, firstRecord: NeteaseDownloadRecord)]
+        let collectionPlaylists: [(id: String, collection: NeteaseDownloadCollection)]
     }
 
-    func scheduleMetadataPublication() {
-        guard metadataTask == nil else { return }
+    func restore() async {
+        await account.downloads?.restore()
+        await publishMetadataAsync()
+    }
+
+    func scheduleMetadataPublication(removeMissingFiles: Bool = false) {
+        metadataTask?.cancel()
+        metadataGeneration &+= 1
+        let generation = metadataGeneration
         metadataTask = Task { @MainActor [weak self] in
             await Task.yield()
-            guard let self, !Task.isCancelled else { return }
-            self.metadataTask = nil
-            self.publishMetadata()
+            guard let self, !Task.isCancelled, self.metadataGeneration == generation else { return }
+            await self.runOffMainMetadataPublication(generation: generation, removeMissingFiles: removeMissingFiles)
+            if self.metadataGeneration == generation { self.metadataTask = nil }
         }
+    }
+
+    func publishMetadataAsync(removeMissingFiles: Bool = false) async {
+        metadataTask?.cancel()
+        metadataTask = nil
+        metadataGeneration &+= 1
+        let generation = metadataGeneration
+        await runOffMainMetadataPublication(generation: generation, removeMissingFiles: removeMissingFiles)
+    }
+
+    private func runOffMainMetadataPublication(generation: Int, removeMissingFiles: Bool) async {
+        guard let store = account.downloads else { return }
+        let revision = store.sessionRevision
+        let records = store.records
+        let collections = store.collections
+        let musicDirectory = store.musicDirectory
+        let plan = await Task.detached(priority: .userInitiated) {
+            Self.prepareMetadataPlan(records: records, collections: collections, musicDirectory: musicDirectory)
+        }.value
+        guard !Task.isCancelled, metadataGeneration == generation,
+              let currentStore = account.downloads, currentStore.sessionRevision == revision else { return }
+        if removeMissingFiles, !plan.missingPaths.isEmpty {
+            let paths = plan.missingPaths
+            Task { await LocalLibrary.runtime.removeMissingFiles(paths) }
+        }
+        applyMetadataPlan(plan, store: currentStore)
     }
 
     func publishMetadata() {
         metadataTask?.cancel()
         metadataTask = nil
+        metadataGeneration &+= 1
         guard !publishing, let store = account.downloads else { return }
+        let plan = Self.prepareMetadataPlan(records: store.records, collections: store.collections, musicDirectory: store.musicDirectory)
+        applyMetadataPlan(plan, store: store)
+    }
+
+    nonisolated static func prepareMetadataPlan(records: [Int64: NeteaseDownloadRecord],
+                                                collections: [String: NeteaseDownloadCollection],
+                                                musicDirectory: URL) -> MetadataPlan {
+        let root = musicDirectory.standardizedFileURL.resolvingSymlinksInPath()
+        let rootPrefix = root.path + "/"
+        var byPath: [String: Int64] = [:]
+        byPath.reserveCapacity(records.count)
+        var availableSongIDs = Set<Int64>()
+        availableSongIDs.reserveCapacity(records.count)
+        var missingPaths: [String] = []
+        var unavailableRecordIDs: [Int64] = []
+        var albumsByID: [Int64: NeteaseDownloadRecord] = [:]
+
+        for record in records.values {
+            byPath[record.relativePath] = record.songID
+            let path = record.relativePath
+            let url = root.appending(path: path).standardizedFileURL.resolvingSymlinksInPath()
+            let validPath = path.hasPrefix("网易云/") && url.path.hasPrefix(rootPrefix) && !path.split(separator: "/").contains("..")
+            if validPath, FileManager.default.fileExists(atPath: url.path) {
+                availableSongIDs.insert(record.songID)
+                if let albumID = record.song.albumID, albumsByID[albumID] == nil {
+                    albumsByID[albumID] = record
+                }
+            } else {
+                missingPaths.append(path)
+                unavailableRecordIDs.append(record.songID)
+            }
+        }
+        let albumGroups = albumsByID.keys.sorted().compactMap { id in
+            albumsByID[id].map { (albumID: id, firstRecord: $0) }
+        }
+        let collectionPlaylists = collections.values
+            .filter { $0.kind == .playlist }
+            .sorted { $0.key < $1.key }
+            .map { (id: "downloaded:playlist:\($0.id)", collection: $0) }
+
+        return MetadataPlan(
+            byPath: byPath,
+            availableSongIDs: availableSongIDs,
+            missingPaths: missingPaths,
+            unavailableRecordIDs: unavailableRecordIDs,
+            albumGroups: albumGroups,
+            collectionPlaylists: collectionPlaylists
+        )
+    }
+
+    private func applyMetadataPlan(_ plan: MetadataPlan, store: NeteaseDownloadStore) {
+        guard !publishing else { return }
         publishing = true
         defer { publishing = false }
-        byPath = Dictionary(store.records.values.map { ($0.relativePath, $0.songID) }, uniquingKeysWith: { first, _ in first })
-        remapLocalReferences(ids: store.records.keys.filter { store.resource(songID: $0) == nil })
+        byPath = plan.byPath
+        remapLocalReferences(ids: plan.unavailableRecordIDs)
         stateAliases = [:]
         for item in LocalLibrary.player.queue + LocalLibrary.allSongs {
             if let id = songID(item.id) { stateAliases[id, default: []].insert(item.id) }
         }
-        let local = Dictionary(store.records.values.filter { store.resource(songID: $0.songID) != nil }.map {
-            ($0.relativePath, song($0, id: $0.relativePath))
-        }, uniquingKeysWith: { first, _ in first })
-        let updatedAlbums = makeDownloadedAlbums(store: store, localSongs: local)
+        var local: [String: LibrarySongItem] = [:]
+        local.reserveCapacity(plan.availableSongIDs.count)
+        for songID in plan.availableSongIDs {
+            guard let record = store.records[songID] else { continue }
+            local[record.relativePath] = song(record, id: record.relativePath, isAvailable: true)
+        }
+        let updatedAlbums = makeDownloadedAlbums(albumGroups: plan.albumGroups, localSongs: local)
         if LocalLibrary.catalog.downloadedAlbums != updatedAlbums {
             LocalLibrary.catalog.downloadedAlbums = updatedAlbums
         }
         var referenced: [String: LibrarySongItem] = [:]
         if let owner = account.music?.userID {
+            referenced.reserveCapacity(store.records.count)
             for record in store.records.values {
                 let id = "netease:\(owner):\(record.songID)"
-                referenced[id] = song(record, id: id)
+                referenced[id] = song(record, id: id, isAvailable: plan.availableSongIDs.contains(record.songID))
             }
         }
         for queued in LocalLibrary.player.queue where queued.isOnline {
-            guard let id = songID(queued.id), let record = store.records[id], store.resource(songID: id) != nil else { continue }
-            referenced[queued.id] = song(record, id: queued.id)
+            guard let id = songID(queued.id), plan.availableSongIDs.contains(id),
+                  let record = store.records[id] else { continue }
+            referenced[queued.id] = song(record, id: queued.id, isAvailable: true)
         }
         let sortedReferenced = referenced.values.sorted { $0.id < $1.id }
-        let previousAllSongs = LocalLibrary.songLibrary.allSongs
+        let previousCatalogRevision = LocalLibrary.songLibrary.catalogRevision
         LocalLibrary.songLibrary.applyBatch(
             localMetadata: local,
             externalSongs: sortedReferenced,
@@ -169,14 +262,17 @@ final class DownloadMusicIntegration {
         var items: [LibraryPlaylistItem] = []
         var contents: [String: [LibrarySongItem]] = [:]
         var aliases: [String: String] = [:]
-        for collection in store.collections.values.sorted(by: { $0.key < $1.key }) where collection.kind == .playlist {
-            let id = "downloaded:playlist:\(collection.id)"
+        items.reserveCapacity(plan.collectionPlaylists.count)
+        contents.reserveCapacity(plan.collectionPlaylists.count)
+        for entry in plan.collectionPlaylists {
+            let collection = entry.collection
+            let id = entry.id
             let songs = collection.orderedSongIDs.map { value -> LibrarySongItem in
                 let owner = account.music?.userID ?? collection.ownerID
                 let identity = "netease:\(owner):\(value)"
                 stateAliases[value, default: []].insert(identity)
                 guard let record = store.records[value] else { return .unavailable(identity) }
-                return song(record, id: identity)
+                return song(record, id: identity, isAvailable: plan.availableSongIDs.contains(value))
             }
             var item = LibraryPlaylistItem(id: id, title: collection.title, artwork: songs.first?.artwork ?? .playlist, subtitle: collection.artist)
             item.isDownloadedSnapshot = true
@@ -186,20 +282,22 @@ final class DownloadMusicIntegration {
         LocalLibrary.playlistLibrary.replaceDownloadedPlaylists(items: items, songs: contents, onlineAliases: aliases)
         publishStates()
         LocalLibrary.refreshDownloadedPlaylistsPresentation()
-        LocalLibrary.player.reconcileOfflineAvailability()
-        if LocalLibrary.songLibrary.allSongs != previousAllSongs {
+        if LocalLibrary.songLibrary.catalogRevision != previousCatalogRevision {
             LocalLibrary.player.reconcileAvailability(songs: LocalLibrary.allSongs)
+        } else {
+            LocalLibrary.player.reconcileOfflineAvailability()
         }
     }
 
     private func offlineSong(_ id: String) -> LibrarySongItem? {
         guard let store = account.downloads, let value = songID(id), let record = store.records[value], store.resource(songID: value) != nil else { return nil }
-        return song(record, id: id)
+        return song(record, id: id, isAvailable: true)
     }
 
-    private func song(_ record: NeteaseDownloadRecord, id: String) -> LibrarySongItem {
+    private func song(_ record: NeteaseDownloadRecord, id: String, isAvailable: Bool? = nil) -> LibrarySongItem {
         let local = LocalLibrary.songLibrary.song(id: record.relativePath)
         let value = record.song
+        let hasFile = isAvailable ?? (account.downloads?.resource(songID: value.id) != nil)
         return LibrarySongItem(id: id, title: value.title, artist: value.artist, album: value.album,
             albumArtist: record.metadata.albumArtist, trackNumber: record.metadata.trackNumber,
             artwork: local?.artwork ?? .missing, albumDirectory: (record.relativePath as NSString).deletingLastPathComponent,
@@ -207,22 +305,17 @@ final class DownloadMusicIntegration {
             artworkBackdrop: local?.artworkBackdrop, duration: Int(value.duration), isPinned: local?.isPinned ?? false, addedOrder: local?.addedOrder ?? 0,
             isFavorite: account.music?.likedIDs.contains(value.id) == true,
             favoriteAddedAt: account.music?.likedAt[value.id],
-            unavailabilityReason: account.downloads?.resource(songID: value.id) == nil && account.music?.userID == nil ? "请登录网易云账号后重试" : nil,
+            unavailabilityReason: !hasFile && account.music?.userID == nil ? "请登录网易云账号后重试" : nil,
             onlineAlbumID: value.albumID,
             artistReferences: (value.artists ?? []).map { .init(id: "catalog:artist:\($0.id)", name: $0.name) })
     }
 
-    private func makeDownloadedAlbums(store: NeteaseDownloadStore, localSongs: [String: LibrarySongItem]) -> [LibraryShelfItem] {
-        var grouped: [Int64: [NeteaseDownloadRecord]] = [:]
-        for record in store.records.values where store.resource(songID: record.songID) != nil {
-            guard let albumID = record.song.albumID else { continue }
-            grouped[albumID, default: []].append(record)
-        }
+    private func makeDownloadedAlbums(albumGroups: [(albumID: Int64, firstRecord: NeteaseDownloadRecord)],
+                                      localSongs: [String: LibrarySongItem]) -> [LibraryShelfItem] {
         let catalogByID = Dictionary(uniqueKeysWithValues: LocalLibrary.catalog.albums.map { ($0.id, $0) })
-        return grouped.keys.sorted().compactMap { albumID in
+        return albumGroups.map { albumID, first in
             let routeID = "catalog:album:\(albumID)"
             if let existing = catalogByID[routeID] { return existing }
-            guard let first = grouped[albumID]?.first else { return nil }
             let local = localSongs[first.relativePath] ?? LocalLibrary.songLibrary.song(id: first.relativePath)
             let subtitle = first.metadata.albumArtist.isEmpty ? first.song.artist : first.metadata.albumArtist
             return LibraryShelfItem(
@@ -420,14 +513,26 @@ final class DownloadMusicIntegration {
         var collections: [LibraryRoute: LibraryDownloads.CollectionState] = [:]
         for collection in store.collections.values {
             for id in collection.orderedSongIDs { progressCollections[id, default: []].insert(collection.key) }
-            let states = collection.orderedSongIDs.map { store.states[$0] }
-            let complete = states.filter { $0 == .downloaded }.count
-            let active = states.filter { $0?.isActive == true }.count
-            let failed = states.filter { if case .failed = $0 { true } else { false } }.count
-            let progress = states.reduce(0.0) { total, state in
-                switch state { case .downloaded, .processing: total + 1; case .downloading(let value): total + value; default: total }
-            } / Double(max(1, states.count))
-            let summary = LibraryDownloads.CollectionState(totalCount: states.count, completedCount: complete, activeCount: active, failedCount: failed, progress: progress)
+            var complete = 0, active = 0, failed = 0
+            var progress = 0.0
+            for songID in collection.orderedSongIDs {
+                switch store.states[songID] {
+                case .downloaded:
+                    complete += 1; progress += 1
+                case .processing:
+                    active += 1; progress += 1
+                case .downloading(let value):
+                    active += 1; progress += value
+                case .queued, .waiting:
+                    active += 1
+                case .failed:
+                    failed += 1
+                case nil:
+                    break
+                }
+            }
+            let summary = LibraryDownloads.CollectionState(totalCount: collection.orderedSongIDs.count, completedCount: complete,
+                activeCount: active, failedCount: failed, progress: progress / Double(max(1, collection.orderedSongIDs.count)))
             if collection.kind == .album { collections[.album("catalog:album:\(collection.id)")] = summary }
             else {
                 collections[.playlist("netease-playlist:\(collection.ownerID):\(collection.id)")] = summary

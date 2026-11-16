@@ -239,8 +239,8 @@ struct SongsListView: View {
         let indices: [Int]
     }
 
-    private static func computeGroupedIndices(entries: [SongSortEntry], query: String,
-                                              filter: LibraryFilter, sort: SongSort) -> [GroupedIndices] {
+    nonisolated private static func computeGroupedIndices(entries: [SongSortEntry], query: String,
+                                                          filter: LibraryFilter, sort: SongSort) -> [GroupedIndices] {
         let matching = query.isEmpty ? entries : entries.filter {
             $0.title.localizedStandardContains(query)
                 || $0.artist.localizedStandardContains(query)
@@ -259,10 +259,14 @@ struct SongsListView: View {
         }
     }
 
+    private static func fastPath(_ input: ProjectionInput) -> Projection? {
+        input.songs.count <= 120 ? input.calculate() : nil
+    }
+
     var body: some View {
         let input = ProjectionInput(songs: songs, query: query, filter: filter, sort: sort)
-        let fastPath: (ProjectionInput) -> Projection? = { $0.songs.count <= 120 ? $0.calculate() : nil }
-        let result = projection.currentValue(for: input, fastPath: fastPath, synchronousInitial: { $0.calculate() })
+        let result = projection.currentValue(for: input, fastPath: Self.fastPath,
+                                             placeholder: { _ in Projection(sections: [], ordered: []) })
         let sections = result.sections
         let ordered = result.ordered
         List {
@@ -298,7 +302,7 @@ struct SongsListView: View {
         .scrollContentBackground(.hidden)
         .background(Color(.systemBackground))
         .overlay {
-            if ordered.isEmpty {
+            if ordered.isEmpty, projection.isResolved(for: input, fastPath: Self.fastPath) {
                 LibraryListEmptyState(noun: "歌曲", symbol: "music.note", query: $query, filter: $filter)
             }
         }
@@ -317,7 +321,7 @@ struct SongsListView: View {
             let currentSort = input.sort
             await projection.computeIfNeeded(
                 for: input,
-                fastPath: { $0.songs.count <= 120 ? $0.calculate() : nil },
+                fastPath: Self.fastPath,
                 background: {
                     Self.computeGroupedIndices(entries: entries, query: currentQuery, filter: currentFilter, sort: currentSort)
                 },
@@ -367,7 +371,7 @@ struct SongRow: View {
 // MARK: - 专辑
 
 /// 专辑页的排序方式，对照 Apple Music：名称、添加日期、艺人（A-Z）、年份。
-enum AlbumSort: Hashable {
+enum AlbumSort: Hashable, Sendable {
     case name, addedDate, artist, year
 
     static let options = [
@@ -394,7 +398,7 @@ struct AlbumsGridView: View {
     @State private var filter = LibraryFilter.all
     @State private var sort = AlbumSort.artist
     @State private var layout = LibraryLayout.grid
-    @State private var projection = LibraryListProjection<ProjectionInput, [LibraryShelfItem]>()
+    @State private var projection = AsyncListProjection<ProjectionInput, [LibraryShelfItem]>()
     @Environment(\.dynamicTypeSize) private var textSize
     private var columns: [GridItem] {
         Array(repeating: GridItem(.flexible(), spacing: 12), count: textSize.isAccessibilitySize ? 1 : 2)
@@ -405,15 +409,51 @@ struct AlbumsGridView: View {
         let query: String
         let filter: LibraryFilter
         let sort: AlbumSort
-    }
 
-    var body: some View {
-        let shown = projection.value(for: ProjectionInput(albums: albums, query: query, filter: filter, sort: sort)) {
+        func calculate() -> [LibraryShelfItem] {
             let matching = query.isEmpty ? albums : albums.filter {
                 $0.title.localizedStandardContains(query) || ($0.subtitle?.localizedStandardContains(query) ?? false)
             }
             return sort.apply(to: filter == .favorites ? matching.filter(\.isFavorite) : matching)
         }
+    }
+
+    private struct AlbumSortEntry: Sendable {
+        let index: Int
+        let title: String
+        let subtitle: String
+        let addedOrder: Int
+        let year: Int
+        let isFavorite: Bool
+    }
+
+    private static func fastPath(_ input: ProjectionInput) -> [LibraryShelfItem]? {
+        input.albums.count <= 80 ? input.calculate() : nil
+    }
+
+    nonisolated private static func computeAlbumIndices(entries: [AlbumSortEntry], query: String,
+                                                        filter: LibraryFilter, sort: AlbumSort) -> [Int] {
+        let matching = query.isEmpty ? entries : entries.filter {
+            $0.title.localizedStandardContains(query) || $0.subtitle.localizedStandardContains(query)
+        }
+        let filtered = filter == .favorites ? matching.filter(\.isFavorite) : matching
+        let ordered: [AlbumSortEntry]
+        switch sort {
+        case .name:
+            ordered = filtered.sorted(byName: \.title)
+        case .addedDate:
+            ordered = filtered.sorted { $0.addedOrder > $1.addedOrder }
+        case .artist:
+            ordered = filtered.sorted(byName: { [$0.subtitle, $0.title].joined(separator: "\u{1}") })
+        case .year:
+            ordered = filtered.sorted { ($0.year, $1.title) > ($1.year, $0.title) }
+        }
+        return ordered.map(\.index)
+    }
+
+    var body: some View {
+        let input = ProjectionInput(albums: albums, query: query, filter: filter, sort: sort)
+        let shown = projection.currentValue(for: input, fastPath: Self.fastPath, placeholder: { _ in [] })
         ScrollView {
             VStack(spacing: 24) {
                 if !shown.isEmpty {
@@ -440,7 +480,7 @@ struct AlbumsGridView: View {
             .padding(.bottom, 24)
         }
         .overlay {
-            if shown.isEmpty {
+            if shown.isEmpty, projection.isResolved(for: input, fastPath: Self.fastPath) {
                 LibraryListEmptyState(noun: "专辑", symbol: "square.stack", query: $query, filter: $filter)
             }
         }
@@ -449,6 +489,23 @@ struct AlbumsGridView: View {
         .libraryRootAccountButton()
         // Keep the search drawer independent of the library home’s whole-bar minimization during push/pop.
         .librarySearchable(text: $query, prompt: "搜索专辑")
+        .task(id: input) {
+            let entries = input.albums.enumerated().map { index, album in
+                AlbumSortEntry(index: index, title: album.title, subtitle: album.subtitle ?? "",
+                               addedOrder: album.addedOrder, year: album.year ?? 0, isFavorite: album.isFavorite)
+            }
+            let currentQuery = input.query
+            let currentFilter = input.filter
+            let currentSort = input.sort
+            await projection.computeIfNeeded(
+                for: input,
+                fastPath: Self.fastPath,
+                background: {
+                    Self.computeAlbumIndices(entries: entries, query: currentQuery, filter: currentFilter, sort: currentSort)
+                },
+                finish: { indices in indices.map { input.albums[$0] } }
+            )
+        }
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 LibraryFilterMenu(filter: $filter, allTitle: "所有专辑", allImage: "square.stack")

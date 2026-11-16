@@ -238,15 +238,21 @@ final class NeteaseMusicStore {
     }
 
     func loadFavorites(force: Bool = false) async {
-        guard userID != nil, !Task.isCancelled else { return }
+        guard let favoritesID = await loadFavoritesPreview(force: force) else { return }
+        _ = await completePlaylist(id: favoritesID)
+    }
+
+    @discardableResult
+    func loadFavoritesPreview(force: Bool = false) async -> Int64? {
+        guard userID != nil, !Task.isCancelled else { return nil }
         let revision = generation
         await refresh(force: force)
         guard revision == generation, !Task.isCancelled,
-              let favorites = playlists.first(where: \.isFavorites) else { return }
-        if force, playlistErrors[favorites.id] != nil { return }
+              let favorites = playlists.first(where: \.isFavorites) else { return nil }
+        if force, playlistErrors[favorites.id] != nil { return nil }
         await loadPlaylist(id: favorites.id)
-        guard revision == generation, !Task.isCancelled, playlistErrors[favorites.id] == nil else { return }
-        _ = await completePlaylist(id: favorites.id)
+        guard revision == generation, !Task.isCancelled, playlistErrors[favorites.id] == nil else { return nil }
+        return favorites.id
     }
 
     func loadPlaylist(id: Int64, force: Bool = false) async {
@@ -423,7 +429,9 @@ final class NeteaseMusicStore {
         if likedContentChanged { likedSongRevision &+= 1 }
         if detail.isComplete { morePlaylistIDs.remove(id) } else { morePlaylistIDs.insert(id) }
         if detail.playlist.isFavorites, detail.playlist.creatorID == userID {
-            for (id, date) in detail.addedTimes { likedAt[id] = date }
+            for (id, date) in detail.addedTimes where likedAt[id] != date {
+                likedAt[id] = date
+            }
         }
         if persist {
             restoredPlaylists.insert(id)

@@ -16,7 +16,8 @@ final class PlaylistLibrary {
     /// 播放列表所在文件夹；不在表中即在最外层。
     private(set) var placement: [String: String] = [:]
     private var nextOrder = 1000
-    private var contents: [String: [LibrarySongItem]] = [:]
+    @ObservationIgnored private var songEntriesByID: [String: [(playlistID: String, item: LibrarySongItem)]]?
+    private var contents: [String: [LibrarySongItem]] = [:] { didSet { songEntriesByID = nil } }
     /// 歌曲加入某个自建播放列表的时间。已在列表中的旧歌没有这项记录。
     private var songAddedAt: [String: Date] = [:]
     private(set) var downloadedSnapshotItems: [LibraryPlaylistItem] = []
@@ -30,14 +31,42 @@ final class PlaylistLibrary {
     }
 
     func reconcileOfflineAvailability() {
-        for (id, existing) in contents {
-            let updated = existing.map { song in
-                if let offline = offlineSong?(song.id) { return offline }
-                if song.isOnline, song.onlineOwnerID != restoredOnlineOwnerID { return LibrarySongItem.unavailable(song.id) }
-                return song
-            }
-            if existing != updated { contents[id] = updated }
+        _ = transformContents { song in
+            if let offline = offlineSong?(song.id) { return offline }
+            if song.isOnline, song.onlineOwnerID != restoredOnlineOwnerID { return LibrarySongItem.unavailable(song.id) }
+            return song
         }
+    }
+
+    @discardableResult
+    private func transformContents(includingReadOnly: Bool = true,
+                                   matching predicate: (String) -> Bool = { _ in true },
+                                   map: (LibrarySongItem) -> LibrarySongItem) -> (changedAny: Bool, changedLocal: Bool) {
+        let readOnlyByID = Dictionary(playlists.map { ($0.id, $0.isReadOnly) }, uniquingKeysWith: { first, _ in first })
+        var changedAny = false
+        var changedLocal = false
+        let keys = Array(contents.keys)
+        for id in keys {
+            guard predicate(id) else { continue }
+            let isReadOnly = readOnlyByID[id] ?? true
+            if !includingReadOnly && isReadOnly { continue }
+            guard let existing = contents[id] else { continue }
+            var updated: [LibrarySongItem]?
+            for index in existing.indices {
+                let current = existing[index]
+                let candidate = map(current)
+                if candidate != current {
+                    if updated == nil { updated = existing }
+                    updated?[index] = candidate
+                }
+            }
+            if let updated {
+                contents[id] = updated
+                changedAny = true
+                if readOnlyByID[id] == false { changedLocal = true }
+            }
+        }
+        return (changedAny, changedLocal)
     }
 
     func replaceDownloadedPlaylists(items: [LibraryPlaylistItem], songs: [String: [LibrarySongItem]],
@@ -163,7 +192,6 @@ final class PlaylistLibrary {
             restoreOnlineIdentity(ownerID: ownerID)
             let sameOwner = onlineOwnerID == ownerID
             let previousItems = sameOwner ? Dictionary(uniqueKeysWithValues: playlists.filter { $0.sourceOwnerID == ownerID && $0.isReadOnly }.map { ($0.id, $0) }) : [:]
-            let previousContents = sameOwner ? contents : [:]
             if onlineOwnerID != ownerID {
                 saveOnlinePreferences()
                 onlinePreferences = [:]
@@ -179,9 +207,8 @@ final class PlaylistLibrary {
                 onlineTrackCounts = [:]
             }
             let oldOnline = Set(playlists.filter { $0.isReadOnly && !$0.isDownloadedSnapshot }.map(\.id))
-            var updatedContents = contents
             var updatedPlacement = placement
-            for id in oldOnline { updatedContents[id] = nil; updatedPlacement[id] = nil }
+            for id in oldOnline { updatedPlacement[id] = nil }
             var updatedPlaylists = playlists.filter { !$0.isReadOnly }
             let discoveredAt = Date()
             var visible = items
@@ -196,6 +223,7 @@ final class PlaylistLibrary {
                         sourceOwnerID: ownerID, subtitle: retained.subtitle))
                 }
             }
+            var newOnlineContents: [String: [LibrarySongItem]] = [:]
             var inserted = Set<String>()
             for var item in visible where item.sourceOwnerID == ownerID && ownerID != nil && inserted.insert(item.id).inserted {
                 if let preference = onlinePreferences[item.id] {
@@ -208,19 +236,22 @@ final class PlaylistLibrary {
                 if item.addedAt == nil { item.addedAt = discoveredAt }
                 updatedPlaylists.append(item)
                 let retainedSongs = onlinePreferences[item.id]?.retained.map { retained in
-                    previousContents[item.id] ?? retained.songIDs.map(LibrarySongItem.unavailable)
+                    (sameOwner ? contents[item.id] : nil) ?? retained.songIDs.map(LibrarySongItem.unavailable)
                 }
-                updatedContents[item.id] = songs[item.id] ?? retainedSongs ?? []
+                newOnlineContents[item.id] = songs[item.id] ?? retainedSongs ?? []
             }
-            for id in updatedContents.keys where !oldOnline.contains(id) {
-                updatedContents[id] = updatedContents[id]?.map { song in
-                    if let offline = offlineSong?(song.id) { return offline }
-                    guard song.id.hasPrefix("netease:") else { return song }
-                    let owner = song.id.split(separator: ":").dropFirst().first.map(String.init)
-                    return owner == ownerID ? song : LibrarySongItem.unavailable(song.id)
-                }
+            for id in oldOnline where newOnlineContents[id] == nil {
+                contents[id] = nil
             }
-            if contents != updatedContents { contents = updatedContents }
+            for (id, nextSongs) in newOnlineContents where contents[id] != nextSongs {
+                contents[id] = nextSongs
+            }
+            _ = transformContents(matching: { !oldOnline.contains($0) && newOnlineContents[$0] == nil }) { song in
+                if let offline = offlineSong?(song.id) { return offline }
+                guard song.id.hasPrefix("netease:") else { return song }
+                let owner = song.id.split(separator: ":").dropFirst().first.map(String.init)
+                return owner == ownerID ? song : LibrarySongItem.unavailable(song.id)
+            }
             publishDownloadedPlaylists(onto: updatedPlaylists)
             if placement != updatedPlacement { placement = updatedPlacement }
             saveOnlinePreferences()
@@ -229,34 +260,60 @@ final class PlaylistLibrary {
 
     /// Publish only changed covers; collection identity, load state and organization stay stable.
     func updateArtwork(songs: [String: LibrarySongItem], playlists artwork: [String: Artwork] = [:]) {
-        for index in playlists.indices {
-            if let cover = artwork[playlists[index].id], cover != playlists[index].artwork {
-                playlists[index].$artwork.update(cover)
+        if !artwork.isEmpty {
+            for index in playlists.indices {
+                if let cover = artwork[playlists[index].id], cover != playlists[index].artwork {
+                    playlists[index].$artwork.update(cover)
+                }
             }
         }
         guard !songs.isEmpty else { return }
+        let entries = indexedSongEntries()
+        var playlistsByID: [String: LibraryPlaylistItem]?
         var changedLocalContent = false
-        for (id, existing) in contents where existing.contains(where: { songs[$0.id] != nil }) {
-            for item in existing {
-                let offline = offlineSong?(item.id)
-                guard !item.isOnline || offline != nil || playlist(id)?.isReadOnly == true || item.onlineOwnerID == restoredOnlineOwnerID,
-                      var replacement = songs[item.id] else { continue }
-                if let offline {
-                    let file: URL?
-                    if let url = offline.artworkURL { file = url }
-                    else if case .file(let url) = offline.artwork { file = url }
-                    else { file = nil }
-                    if let file, file.isFileURL, FileManager.default.fileExists(atPath: file.path) {
-                        replacement = offline
-                    }
+        for (songID, songReplacement) in songs {
+            guard let targets = entries[songID], !targets.isEmpty else { continue }
+            let offline = offlineSong?(songID)
+            var resolvedOffline: LibrarySongItem?
+            if let offline {
+                let file: URL?
+                if let url = offline.artworkURL { file = url }
+                else if case .file(let url) = offline.artwork { file = url }
+                else { file = nil }
+                if let file, file.isFileURL, FileManager.default.fileExists(atPath: file.path) {
+                    resolvedOffline = offline
                 }
-                item.publishArtwork(from: replacement)
-                // Another catalog may already have published this shared resource.
-                // Retained playlist metadata still needs to persist the delivered file.
-                if playlist(id)?.isReadOnly == false, item.isOnline { changedLocalContent = true }
+            }
+            let byID = playlistsByID ?? {
+                let map = Dictionary(playlists.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+                playlistsByID = map
+                return map
+            }()
+            let replacement = resolvedOffline ?? songReplacement
+            for (id, item) in targets {
+                let meta = byID[id]
+                let isReadOnly = meta?.isReadOnly ?? false
+                guard !item.isOnline || offline != nil || isReadOnly || item.onlineOwnerID == restoredOnlineOwnerID else { continue }
+                if item.publishArtwork(from: replacement), meta?.isReadOnly == false, item.isOnline {
+                    // Another catalog may already have published this shared resource.
+                    // Retained playlist metadata still needs to persist the delivered file.
+                    changedLocalContent = true
+                }
             }
         }
         if changedLocalContent { markRestoredMetadataChanged() }
+    }
+
+    private func indexedSongEntries() -> [String: [(playlistID: String, item: LibrarySongItem)]] {
+        if let songEntriesByID { return songEntriesByID }
+        var index: [String: [(playlistID: String, item: LibrarySongItem)]] = [:]
+        for (playlistID, items) in contents {
+            for item in items {
+                index[item.id, default: []].append((playlistID, item))
+            }
+        }
+        songEntriesByID = index
+        return index
     }
 
     var onlineStatus: String?
@@ -265,37 +322,33 @@ final class PlaylistLibrary {
 
     func updateSongFavorites(_ replacements: [String: LibrarySongItem]) {
         guard !replacements.isEmpty else { return }
-        var changedLocal = false
-        for (id, songs) in contents where songs.contains(where: { replacements[$0.id] != nil }) {
-            contents[id] = songs.map { song in
-                guard let replacement = replacements[song.id] else { return song }
-                var updated = song
-                updated.isFavorite = replacement.isFavorite
-                updated.favoriteAddedAt = replacement.favoriteAddedAt
-                return updated
+        let result = transformContents { song in
+            guard let replacement = replacements[song.id],
+                  song.isFavorite != replacement.isFavorite || song.favoriteAddedAt != replacement.favoriteAddedAt else {
+                return song
             }
-            if playlist(id)?.isReadOnly == false { changedLocal = true }
+            var updated = song
+            updated.isFavorite = replacement.isFavorite
+            updated.favoriteAddedAt = replacement.favoriteAddedAt
+            return updated
         }
-        if changedLocal { markRestoredMetadataChanged() }
+        if result.changedLocal { markRestoredMetadataChanged() }
     }
 
     /// Online refreshes update only online metadata; local scan owns local availability.
-    func reconcileOnlineSongs(_ songs: [LibrarySongItem]) {
-        let lookup = Dictionary(songs.filter { $0.isOnline && $0.onlineOwnerID == restoredOnlineOwnerID }.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        var changedLocalContent = false
-        for id in contents.keys {
-            let updated = contents[id]?.map { song in
-                if let offline = offlineSong?(song.id) { return offline }
-                guard song.id.hasPrefix("netease:") else { return song }
-                guard song.onlineOwnerID == restoredOnlineOwnerID else { return LibrarySongItem.unavailable(song.id) }
-                return lookup[song.id] ?? song
-            }
-            if contents[id] != updated {
-                contents[id] = updated
-                if playlist(id)?.isReadOnly == false { changedLocalContent = true }
-            }
+    func reconcileOnlineSongs(_ songs: [LibrarySongItem], excludingReadOnly: Bool = false) {
+        guard !contents.isEmpty else { return }
+        var lookup: [String: LibrarySongItem] = [:]
+        for song in songs where song.isOnline && song.onlineOwnerID == restoredOnlineOwnerID {
+            if lookup[song.id] == nil { lookup[song.id] = song }
         }
-        if changedLocalContent { markRestoredMetadataChanged() }
+        let result = transformContents(includingReadOnly: !excludingReadOnly) { song in
+            if let offline = offlineSong?(song.id) { return offline }
+            guard song.id.hasPrefix("netease:") else { return song }
+            guard song.onlineOwnerID == restoredOnlineOwnerID else { return LibrarySongItem.unavailable(song.id) }
+            return lookup[song.id] ?? song
+        }
+        if result.changedLocal { markRestoredMetadataChanged() }
     }
 
     /// File removal changes the resource reference without removing a playlist entry.

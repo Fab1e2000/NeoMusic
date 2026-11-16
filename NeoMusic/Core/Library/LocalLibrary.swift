@@ -141,12 +141,19 @@ final class SongLibrary {
         }
     }
     private(set) var albumIndex = LocalAlbumIndex(songs: [])
-    private(set) var onlineSongs: [LibrarySongItem] = [] { didSet { rebuildCatalog() } }
+    @ObservationIgnored private var onlineSongsByID: [String: LibrarySongItem] = [:]
+    private(set) var onlineSongs: [LibrarySongItem] = [] {
+        didSet {
+            onlineSongsByID = Dictionary(onlineSongs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            rebuildCatalog()
+        }
+    }
     private(set) var externalSongs: [LibrarySongItem] = [] { didSet { rebuildCatalog() } }
     private var externalSources: [String: [LibrarySongItem]] = [:]
     private(set) var allSongs: [LibrarySongItem] = []
     private(set) var favoriteSongs: [LibrarySongItem] = []
     private var songsByID: [String: LibrarySongItem] = [:]
+    @ObservationIgnored private(set) var catalogRevision = 0
     private var isBatching = false
     @ObservationIgnored var downloadedFileID: (@MainActor (String) -> String?)?
     @ObservationIgnored var downloadedFavoriteAction: (@MainActor (LibrarySongItem, Bool) -> Bool)?
@@ -194,20 +201,44 @@ final class SongLibrary {
 
     private func rebuildCatalog() {
         guard !isBatching else { return }
-        let existing = Set((songs + onlineSongs).map(\.id))
-        let candidates = songs + onlineSongs + externalSongs.filter { !existing.contains($0.id) }
-        var visibleFileIDs = Set(songs.map(\.id))
-        let updated = candidates.filter { song in
-            guard song.isOnline, let localID = downloadedFileID?(song.id) else { return true }
-            return visibleFileIDs.insert(localID).inserted
+        var existing = Set<String>()
+        existing.reserveCapacity(songs.count + onlineSongs.count)
+        for song in songs { existing.insert(song.id) }
+        for song in onlineSongs { existing.insert(song.id) }
+
+        var candidates: [LibrarySongItem] = []
+        candidates.reserveCapacity(songs.count + onlineSongs.count + externalSongs.count)
+        candidates.append(contentsOf: songs)
+        candidates.append(contentsOf: onlineSongs)
+        for song in externalSongs where !existing.contains(song.id) {
+            candidates.append(song)
+        }
+
+        var visibleFileIDs = Set<String>()
+        visibleFileIDs.reserveCapacity(songs.count)
+        for song in songs { visibleFileIDs.insert(song.id) }
+
+        var updated: [LibrarySongItem] = []
+        updated.reserveCapacity(candidates.count)
+        for song in candidates {
+            if song.isOnline, let localID = downloadedFileID?(song.id) {
+                guard visibleFileIDs.insert(localID).inserted else { continue }
+            }
+            updated.append(song)
         }
         if allSongs != updated {
+            catalogRevision &+= 1
             allSongs = updated
             let updatedFavorites = Self.orderedFavorites(updated)
             if favoriteSongs != updatedFavorites { favoriteSongs = updatedFavorites }
         }
         // Detail routes and old queue entries keep their original online identity.
-        songsByID = Dictionary(candidates.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var byID: [String: LibrarySongItem] = [:]
+        byID.reserveCapacity(candidates.count)
+        for candidate in candidates where byID[candidate.id] == nil {
+            byID[candidate.id] = candidate
+        }
+        songsByID = byID
     }
     func replaceExternalSongs(_ values: [LibrarySongItem], source: String = "home") {
         var transaction = Transaction(animation: nil)
@@ -256,9 +287,14 @@ final class SongLibrary {
     }
 
     func updateOnlineFavorites(_ replacements: [String: LibrarySongItem], order: [String]) {
+        guard !onlineSongs.isEmpty || !replacements.isEmpty else { return }
         let existingIDs = Set(onlineSongs.map(\.id))
-        let changed = onlineSongs.map { replacements[$0.id] ?? $0 }
-            + replacements.values.filter { $0.isOnline && !existingIDs.contains($0.id) }
+        var changed: [LibrarySongItem] = []
+        changed.reserveCapacity(onlineSongs.count + replacements.count)
+        for song in onlineSongs { changed.append(replacements[song.id] ?? song) }
+        for song in replacements.values where song.isOnline && !existingIDs.contains(song.id) {
+            changed.append(song)
+        }
         let positions = Dictionary(order.enumerated().map { ($0.element, $0.offset) }, uniquingKeysWith: { first, _ in first })
         let updated = changed.sorted { lhs, rhs in
             let a = positions[lhs.id], b = positions[rhs.id]
@@ -273,9 +309,14 @@ final class SongLibrary {
     /// Image arrivals update their owning catalog without reloading playback availability.
     func updateOnlineArtwork(_ replacements: [String: LibrarySongItem], source: String? = nil) {
         guard !replacements.isEmpty else { return }
-        let existing = source.map { externalSources[$0] ?? [] } ?? onlineSongs
-        for item in existing {
-            if let replacement = replacements[item.id] { item.publishArtwork(from: replacement) }
+        if let source {
+            for item in externalSources[source] ?? [] {
+                if let replacement = replacements[item.id] { item.publishArtwork(from: replacement) }
+            }
+            return
+        }
+        for (id, replacement) in replacements {
+            onlineSongsByID[id]?.publishArtwork(from: replacement)
         }
     }
 

@@ -189,7 +189,7 @@ import SwiftUI
         await restored.invalidate()
     }
 
-    func testFavoritesPageLoadsAllSongsWhenAccountRestoresAfterPageAppears() async throws {
+    func testFavoritesPageLoadsPreviewWhenAccountRestoresAfterPageAppears() async throws {
         let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let network = network(try playlistFixtures(count: 2, favorites: true))
@@ -206,10 +206,10 @@ import SwiftUI
         let account = NeteaseAccount(readSession: { saved }, saveSession: { _ in }, deleteSession: {},
             validateCredential: { _ in saved.profile }, cachedAvatar: { _ in nil },
             loadAvatar: { _ in Data() }, clearAvatarCache: {}, music: music)
-        let loaded = expectation(description: "The favorites route completes every page")
+        let loaded = expectation(description: "The favorites route publishes the first page")
         var didLoad = false
         music.onChange = {
-            if !didLoad, music.playlistTracks[7]?.count == 205 {
+            if !didLoad, music.playlistTracks[7]?.count == 100 {
                 didLoad = true
                 loaded.fulfill()
             }
@@ -223,12 +223,13 @@ import SwiftUI
 
         await account.restoreCachedContent()
         await fulfillment(of: [loaded], timeout: 5)
-        XCTAssertEqual(music.playlistTracks[7], Array(1...205).map(Int64.init))
+        XCTAssertEqual(music.playlistTracks[7], Array(1...100).map(Int64.init))
+        XCTAssertEqual(music.playlistTotalCount(id: 7), 205)
         XCTAssertEqual(music.likedIDs, Set((1...205).map(Int64.init)))
-        XCTAssertFalse(music.hasMorePlaylist(id: 7))
+        XCTAssertTrue(music.hasMorePlaylist(id: 7))
         let requests = LoadingProtocol.state.withLock { $0.startedPaths }
         XCTAssertEqual(requests.filter { $0 == "/eapi/v6/playlist/detail" }.count, 1)
-        XCTAssertEqual(requests.filter { $0 == "/eapi/v3/song/detail" }.count, 2)
+        XCTAssertEqual(requests.filter { $0 == "/eapi/v3/song/detail" }.count, 0)
         music.onChange = nil
         window.isHidden = true
         window.rootViewController = nil
@@ -868,6 +869,49 @@ import SwiftUI
         XCTAssertEqual(restored.cachedArtworkURL(present), root.appendingPathComponent("42-present.image"))
         XCTAssertNil(restored.cachedArtworkURL(missing))
         await restored.invalidate()
+    }
+
+    func testLargeCatalogAsyncPublicationAndSessionInvalidationGuard() async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let network = network(try playlistFixtures(count: 260, favorites: true))
+        defer { network.invalidateAndCancel() }
+        let saved = try session()
+        let music = NeteaseMusicStore(client: client(network), directory: root, artworkSession: network)
+        let account = NeteaseAccount(readSession: { saved }, saveSession: { _ in }, deleteSession: {},
+            validateCredential: { _ in saved.profile }, cachedAvatar: { _ in nil },
+            loadAvatar: { _ in Data() }, clearAvatarCache: {}, music: music)
+        await LocalLibrary.runtime.restoreCachedState()
+        let previousOnline = LocalLibrary.songLibrary.onlineSongs
+        let previousRestored = LocalLibrary.runtime.onLibraryRestored
+        defer {
+            LocalLibrary.songLibrary.replaceOnline(previousOnline)
+            LocalLibrary.playlistLibrary.replaceOnlinePlaylists(items: [], songs: [:], ownerID: nil)
+            LocalLibrary.runtime.onLibraryRestored = previousRestored
+        }
+        await account.restoreCachedContent()
+        await music.loadFavorites()
+        _ = await music.completePlaylist(id: 7)
+        XCTAssertEqual(music.songs.count, 260)
+
+        let integration = OnlineMusicIntegration(account: account)
+        var publications = 0
+        integration.onPublication = { publications += 1 }
+        integration.connect()
+        XCTAssertEqual(LocalLibrary.songLibrary.onlineSongs.count, 260)
+
+        try await music.setLiked(songID: 1, liked: false)
+        for _ in 0..<50 {
+            if publications >= 2 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(LocalLibrary.songLibrary.song(id: "netease:42:1")?.isFavorite, false)
+
+        music.onChange?()
+        await music.invalidate()
+        try await Task.sleep(for: .milliseconds(40))
+        XCTAssertTrue(LocalLibrary.songLibrary.onlineSongs.isEmpty,
+                      "An in-flight async publication must never publish into an invalidated session")
     }
 }
 

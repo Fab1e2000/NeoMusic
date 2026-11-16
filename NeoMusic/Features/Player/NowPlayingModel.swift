@@ -854,32 +854,57 @@ final class NowPlayingModel {
     }
 
     func reconcileAvailability(songs: [LibrarySongItem]) {
-        let offline = Dictionary(queue.compactMap { song in
-            offlineSong?(song.id).map { (song.id, $0) }
-        }, uniquingKeysWith: { first, _ in first })
+        guard !queue.isEmpty else {
+            if !offlineSongIDs.isEmpty { offlineSongIDs = [] }
+            if !unavailableIDs.isEmpty { unavailableIDs = [] }
+            return
+        }
+        let queueIDs = Set(queue.map(\.id))
+        var offline: [String: LibrarySongItem] = [:]
+        offline.reserveCapacity(queueIDs.count)
+        for id in queueIDs {
+            if let resolved = offlineSong?(id) { offline[id] = resolved }
+        }
         offlineSongIDs = Set(offline.keys)
         for id in offline.keys { pendingRestoredSongs.removeValue(forKey: id) }
-        let refreshed = Dictionary(songs.filter { song in
-            guard let owner = song.onlineOwnerID else { return true }
-            return hasResolvedOnlineIdentity && owner == resolvedOnlineOwnerID
-        }.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let updated = queue.map { song in
-            if let downloaded = offline[song.id] { return downloaded }
-            if let owner = song.onlineOwnerID, !hasResolvedOnlineIdentity || owner != resolvedOnlineOwnerID {
-                return Self.unavailableOnlineSong(song.id)
+
+        var refreshed: [String: LibrarySongItem] = [:]
+        refreshed.reserveCapacity(queueIDs.count)
+        for song in songs where queueIDs.contains(song.id) {
+            if let owner = song.onlineOwnerID, !(hasResolvedOnlineIdentity && owner == resolvedOnlineOwnerID) {
+                continue
             }
-            return refreshed[song.id]?.retainingArtwork(from: song) ?? song
+            if refreshed[song.id] == nil { refreshed[song.id] = song }
         }
+
+        var updated: [LibrarySongItem]?
         var ids = Set(refreshed.keys)
         ids.formUnion(offline.keys)
-        // An authenticated stable online identity is playable without a loaded detail page.
-        ids.formUnion(updated.filter { song in
-            song.onlineOwnerID != nil && hasResolvedOnlineIdentity && song.onlineOwnerID == resolvedOnlineOwnerID
-                && !Self.blocksPlayback(song)
-        }.map(\.id))
-        let unavailable = Set(queue.map(\.id)).subtracting(ids).union(updated.filter(Self.blocksPlayback).map(\.id))
-        let changed = updated != queue || unavailable != unavailableIDs
-        if updated != queue { queue = updated }
+        var unavailable: Set<String> = []
+        for index in queue.indices {
+            let song = queue[index]
+            let next: LibrarySongItem
+            if let downloaded = offline[song.id] {
+                next = downloaded
+            } else if let owner = song.onlineOwnerID, !hasResolvedOnlineIdentity || owner != resolvedOnlineOwnerID {
+                next = Self.unavailableOnlineSong(song.id)
+            } else {
+                next = refreshed[song.id]?.retainingArtwork(from: song) ?? song
+            }
+            if next != song {
+                if updated == nil { updated = queue }
+                updated?[index] = next
+            }
+            // An authenticated stable online identity is playable without a loaded detail page.
+            if next.onlineOwnerID != nil && hasResolvedOnlineIdentity && next.onlineOwnerID == resolvedOnlineOwnerID && !Self.blocksPlayback(next) {
+                ids.insert(next.id)
+            } else if !ids.contains(next.id) || Self.blocksPlayback(next) {
+                unavailable.insert(next.id)
+            }
+        }
+        let queueChanged = updated != nil
+        let changed = queueChanged || unavailable != unavailableIDs
+        if let updated { queue = updated }
         if hasCurrent, unavailableIDs.contains(current.id), !unavailable.contains(current.id) { errorMessage = nil }
         if unavailable != unavailableIDs { unavailableIDs = unavailable }
         if hasCurrent && unavailableIDs.contains(current.id) {

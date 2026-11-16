@@ -29,6 +29,8 @@ import Observation
     @ObservationIgnored private var likedAt: [Int64: Date] = [:]
     @ObservationIgnored private var displayedOwner: Int64?
     @ObservationIgnored private var sessionRevision: UUID?
+    @ObservationIgnored private var songsPublishGeneration = 0
+    @ObservationIgnored private var songsPublishTask: Task<Void, Never>?
     @Observable final class DetailState {
         var artist: ArtistDetail?
         var album: CollectionDetail?
@@ -89,6 +91,9 @@ import Observation
             if sessionRevision != store?.sessionRevision || displayedOwner != owner {
                 sessionRevision = store?.sessionRevision
                 displayedOwner = owner
+                songsPublishTask?.cancel()
+                songsPublishTask = nil
+                songsPublishGeneration &+= 1
                 for task in backdropTasks.values { task.cancel() }
                 backdropTasks = [:]; backdropSources = [:]; backdrops = [:]
                 for state in detailStates.values { state.artist = nil; state.album = nil; state.error = nil }
@@ -106,7 +111,7 @@ import Observation
                 publishSubscribedArtists(); publishSubscribedAlbums()
                 for id in store.details.keys { rebuild("artist:\(id)", updateSongs: true, publishSongs: false) }
                 for id in store.albums.keys { rebuild("album:\(id)", updateSongs: true, publishSongs: false) }
-                publishSongs()
+                publishSongs(preferAsync: true)
             case .artist(let id): rebuild("artist:\(id)", updateSongs: true)
             case .album(let id): rebuild("album:\(id)", updateSongs: true)
             case .song(let id):
@@ -146,17 +151,41 @@ import Observation
         }
         if LocalLibrary.catalog.albums != items { LocalLibrary.catalog.albums = items }
     }
-    private func publishSongs() {
+    private func publishSongs(preferAsync: Bool = false) {
+        if preferAsync, projectedSongs.count > 120 {
+            songsPublishTask?.cancel()
+            songsPublishGeneration &+= 1
+            let generation = songsPublishGeneration
+            let revision = sessionRevision
+            let currentOwner = displayedOwner
+            let keys = Array(projectedSongs.keys)
+            songsPublishTask = Task { @MainActor [weak self] in
+                let sortedKeys = await Task.detached(priority: .userInitiated) {
+                    keys.sorted()
+                }.value
+                guard let self, !Task.isCancelled, self.songsPublishGeneration == generation,
+                      self.sessionRevision == revision, self.displayedOwner == currentOwner else { return }
+                self.songsPublishTask = nil
+                let items = sortedKeys.compactMap { self.projectedSongs[$0] }
+                LocalLibrary.songLibrary.replaceExternalSongs(items, source: "artists")
+            }
+            return
+        }
+        songsPublishTask?.cancel()
+        songsPublishTask = nil
+        songsPublishGeneration &+= 1
         LocalLibrary.songLibrary.replaceExternalSongs(projectedSongs.keys.sorted().compactMap { projectedSongs[$0] }, source: "artists")
     }
     @discardableResult private func discardUnreferencedSongs() -> Bool {
+        let orphanCandidates = songValues.keys.filter {
+            songRoutes[$0]?.isEmpty != false && !independentSongIDs.contains($0)
+        }
+        guard !orphanCandidates.isEmpty else { return false }
         let playlistSongs = playlistLibrary.playlists.filter { !$0.isReadOnly && !$0.isSystem }
             .flatMap { playlistLibrary.songs(in: $0.id) }
         let referenced = Set((player.queue + playlistSongs)
             .filter { $0.onlineOwnerID == owner.map(String.init) }.compactMap(\.onlineSongID))
-        let unused = songValues.keys.filter {
-            songRoutes[$0]?.isEmpty != false && !independentSongIDs.contains($0) && !referenced.contains($0)
-        }
+        let unused = orphanCandidates.filter { !referenced.contains($0) }
         for id in unused {
             if let url = songValues[id]?.artworkURL { artworkSongs[url]?.removeAll { $0.id == id } }
             songValues[id] = nil; projectedSongs[id] = nil; songRoutes[id] = nil
@@ -208,15 +237,22 @@ import Observation
                 if let url = value.artworkURL { urls.insert(url) }
             }
         }
-        for id in (routeArtists[route] ?? []).subtracting(artistIDs) { artistRoutes[id]?.remove(route) }
-        for id in (routeAlbums[route] ?? []).subtracting(albumIDs) { albumRoutes[id]?.remove(route) }
-        for id in artistIDs { artistRoutes[id, default: []].insert(route) }
-        for id in albumIDs { albumRoutes[id, default: []].insert(route) }
-        routeArtists[route] = artistIDs; routeAlbums[route] = albumIDs
+        if routeArtists[route] != artistIDs {
+            for id in (routeArtists[route] ?? []).subtracting(artistIDs) { artistRoutes[id]?.remove(route) }
+            for id in artistIDs { artistRoutes[id, default: []].insert(route) }
+            routeArtists[route] = artistIDs
+        }
+        if routeAlbums[route] != albumIDs {
+            for id in (routeAlbums[route] ?? []).subtracting(albumIDs) { albumRoutes[id]?.remove(route) }
+            for id in albumIDs { albumRoutes[id, default: []].insert(route) }
+            routeAlbums[route] = albumIDs
+        }
         urls.formUnion(values.compactMap(\.artworkURL))
-        for url in routeArtwork[route] ?? [] { artworkRoutes[url]?.remove(route) }
-        for url in urls { artworkRoutes[url, default: []].insert(route) }
-        routeArtwork[route] = urls
+        if routeArtwork[route] != urls {
+            for url in routeArtwork[route] ?? [] { artworkRoutes[url]?.remove(route) }
+            for url in urls { artworkRoutes[url, default: []].insert(route) }
+            routeArtwork[route] = urls
+        }
         guard shouldUpdateSongs, routeSongs[route] != values else { return }
         let previousIDs = Set((routeSongs[route] ?? []).map(\.id))
         let currentIDs = Set(values.map(\.id))

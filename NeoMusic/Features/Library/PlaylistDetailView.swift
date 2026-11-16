@@ -69,7 +69,8 @@ struct PlaylistDetailView: View {
     private var tracks: [LibrarySongItem] { library.songs(in: playlistID) }
     private var displayed: Projection {
         let input = ProjectionInput(tracks: tracks, query: query, sort: sort)
-        return projection.currentValue(for: input, fastPath: Self.fastPath, synchronousInitial: { $0.calculate() })
+        return projection.currentValue(for: input, fastPath: Self.fastPath,
+                                       placeholder: { _ in Projection(tracks: [], totalDuration: 0) })
     }
     private var visibleTracks: [LibrarySongItem] { displayed.tracks }
 
@@ -94,8 +95,8 @@ struct PlaylistDetailView: View {
         let totalDuration: Int
     }
 
-    private static func computeTrackIndices(entries: [TrackSortEntry], query: String,
-                                            sort: DetailSort) -> TrackProjectionIndices {
+    nonisolated private static func computeTrackIndices(entries: [TrackSortEntry], query: String,
+                                                        sort: DetailSort) -> TrackProjectionIndices {
         let filtered = query.isEmpty ? entries : entries.filter {
             $0.title.localizedStandardContains(query)
                 || $0.artist.localizedStandardContains(query) || $0.album.localizedStandardContains(query)
@@ -174,6 +175,7 @@ struct PlaylistDetailView: View {
         }
         .task(id: ProjectionInput(tracks: tracks, query: query, sort: sort)) {
             let input = ProjectionInput(tracks: tracks, query: query, sort: sort)
+            guard Self.fastPath(input) == nil else { return }
             let entries = input.tracks.enumerated().map { index, track in
                 TrackSortEntry(index: index, title: track.title, artist: track.artist,
                                album: track.album, duration: track.duration)
@@ -226,76 +228,67 @@ struct PlaylistDetailView: View {
         let displayed = displayed
         let visibleTracks = displayed.tracks
         let hasQuery = !query.isEmpty
-        return List {
-            Group {
-                header(playlist)
-                    .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: tracks.isEmpty ? 39 : 24, trailing: 20))
-                    .listRowBackground(Color.clear)
-                    .listRowSeparator(.hidden, edges: .top)
-                    .listRowSeparator(query.isEmpty || !visibleTracks.isEmpty ? .visible : .hidden, edges: .bottom)
-                    .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
-                    .alignmentGuide(.listRowSeparatorTrailing) { $0[.trailing] }
-                if let error = library.onlineErrors[playlistID] {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(error).font(.subheadline).foregroundStyle(.secondary)
-                        Button("重试") { Task { await library.loadOnlinePlaylist?(playlistID) } }
-                    }
-                    .listRowBackground(Color.clear)
-                }
-                Section {
-                    ForEach(visibleTracks) { song in
-                        let removeAction: () -> Void = { withAnimation { library.removeSong(song.id, from: playlistID) } }
-                        trackRow(song, title: playlist.title, remove: playlist.isReadOnly ? nil : removeAction)
-                            .task(id: visibleTracks.count) {
-                                guard song.id == visibleTracks.last?.id, query.isEmpty, sort == .order,
-                                      library.onlineHasMore.contains(playlistID), library.onlineErrors[playlistID] == nil else { return }
-                                await library.loadMoreOnlinePlaylist?(playlistID)
-                            }
-                            .songListRow(
-                                song,
-                                mode: playlist.isReadOnly ? .standard() : .editablePlaylist(remove: removeAction),
-                                swipeBackground: pageBackground,
-                                colorScheme: preparedBackdrop?.colorScheme ?? colorScheme
-                            )
-                            .listRowInsets(EdgeInsets(top: 4, leading: 20, bottom: 4, trailing: 20))
-                            .alignmentGuide(.listRowSeparatorLeading) { _ in
-                                hasQuery && song.id == visibleTracks.last?.id ? 0 : 60
-                            }
-                            .alignmentGuide(.listRowSeparatorTrailing) { $0.width }
-                    }
-                    if query.isEmpty && !playlist.isReadOnly {
-                        addMusicRow
-                            .listRowInsets(EdgeInsets(top: 4, leading: 20, bottom: 4, trailing: 20))
-                            .listRowBackground(Color.clear)
-                            .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
-                            .alignmentGuide(.listRowSeparatorTrailing) { $0.width }
-                    }
-                }
-                .listSectionSeparator(.hidden, edges: .top)
-                .listSectionSeparator(.visible, edges: .bottom)
-                if query.isEmpty {
-                    if !tracks.isEmpty {
-                        Text(library.onlineHasMore.contains(playlistID)
-                             ? "\(library.onlineTrackCounts[playlistID] ?? tracks.count)首歌"
-                             : "\(tracks.count)首歌，\(displayed.totalDuration / 60)分钟")
-                            .font(.subheadline)
-                            .modifier(PlaylistSecondaryText())
-                            .padding(.top, 14)
-                            .padding(.bottom, 30)
-                            .listRowBackground(Color.clear)
-                            .listRowSeparator(.hidden)
-                            .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
-                    }
-
-                }
+        let scheme = preparedBackdrop?.colorScheme ?? colorScheme
+        let errorBanner: AnyView? = library.onlineErrors[playlistID].map { error in
+            AnyView(VStack(alignment: .leading, spacing: 8) {
+                Text(error).font(.subheadline).foregroundStyle(.secondary)
+                Button("重试") { Task { await library.loadOnlinePlaylist?(playlistID) } }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 8))
         }
-        .listStyle(.plain)
-        .listSectionSpacing(0)
-        .environment(\.defaultMinListRowHeight, 0)
-        .scrollContentBackground(.hidden)
+        let summaryFooter: AnyView? = (query.isEmpty && !tracks.isEmpty) ? AnyView(
+            Text(library.onlineHasMore.contains(playlistID)
+                 ? "\(library.onlineTrackCounts[playlistID] ?? tracks.count)首歌"
+                 : "\(tracks.count)首歌，\(displayed.totalDuration / 60)分钟")
+                .font(.subheadline)
+                .foregroundStyle(resolvedSecondaryColor)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 20)
+                .padding(.top, 14)
+                .padding(.bottom, 30)
+        ) : nil
+        return NativePlaylistTrackList(
+            songs: visibleTracks,
+            title: playlist.title,
+            header: AnyView(header(playlist)
+                .padding(.horizontal, 20)
+                .padding(.bottom, tracks.isEmpty ? 39 : 24)),
+            banner: errorBanner,
+            footer: summaryFooter,
+            showsAddMusicRow: query.isEmpty && !playlist.isReadOnly,
+            pageColor: UIColor(pageBackground),
+            scheme: scheme,
+            rowCornerRadius: 5,
+            headerSeparatorInset: 0,
+            lastSongSeparatorLeading: hasQuery ? 20 : 80,
+            usePageBlendSecondaryColors: true,
+            swipeMode: playlist.isReadOnly
+                ? .standard(animateFavoriteRemoval: false)
+                : .editablePlaylist(remove: { song in withAnimation { library.removeSong(song.id, from: playlistID) } }),
+            onPlaySong: { song, _ in
+                playbackTask?.cancel()
+                if library.onlineHasMore.contains(playlistID) {
+                    playbackTask = Task {
+                        guard await library.prepareCompleteCollection(playlistID), !Task.isCancelled else { return }
+                        playVisibleSong(song.id, title: playlist.title)
+                    }
+                } else {
+                    playVisibleSong(song.id, title: playlist.title)
+                }
+            },
+            onAddMusic: { showsAddMusic = true },
+            onReachedEnd: {
+                guard query.isEmpty, sort == .order,
+                      library.onlineHasMore.contains(playlistID),
+                      library.onlineErrors[playlistID] == nil else { return }
+                Task { await library.loadMoreOnlinePlaylist?(playlistID) }
+            }
+        )
+        .ignoresSafeArea(.container, edges: .vertical)
         .background(pageBackground)
-        .environment(\.colorScheme, preparedBackdrop?.colorScheme ?? colorScheme)
+        .environment(\.colorScheme, scheme)
         .toolbarColorScheme(preparedBackdrop?.colorScheme, for: .navigationBar)
         .libraryTitleDisplayMode(.inline)
         .modifier(PlaylistRootChrome(isRoot: chrome?.isRoot == true))
@@ -338,7 +331,9 @@ struct PlaylistDetailView: View {
             Text(playlist.subtitle ?? "我").font(.title3).padding(.top, 4)
             if externalActions == nil, let updatedAt = playlist.updatedAt {
                 Text("更新于 \(updatedAt, format: .relative(presentation: .named))")
-                    .font(.caption2.weight(.semibold)).modifier(PlaylistSecondaryText()).padding(.top, 4 + 1.0 / 3)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(resolvedSecondaryColor)
+                    .padding(.top, 4 + 1.0 / 3)
             }
             if !tracks.isEmpty || playlist.offersCollection {
                 HStack(spacing: 14) {
@@ -416,50 +411,10 @@ struct PlaylistDetailView: View {
             .background(Color(.tertiarySystemFill), in: .circle)
     }
 
-    private func trackRow(_ song: LibrarySongItem, title: String, remove: (() -> Void)?) -> some View {
-        let secondaryStyle = AnyShapeStyle(Color(white: 0.5).blendMode(
-            (preparedBackdrop?.colorScheme ?? colorScheme) == .dark ? .plusLighter : .plusDarker))
-        let appearance = SongRowAppearance(
-            subtitleUsesPlaylistBlend: true,
-            moreColor: resolvedSecondaryColor,
-            moreFont: .system(size: 16, weight: .semibold),
-            favoriteMarkColor: Color(white: 0.5),
-            favoriteMarkUsesPlaylistBlend: true,
-            downloadStatusStyle: secondaryStyle,
-            minHeight: 0
-        )
-        return SharedSongRow(song: song, appearance: appearance, onRemoveFromPlaylist: remove) {
-            playbackTask?.cancel()
-            if library.onlineHasMore.contains(playlistID) {
-                playbackTask = Task {
-                    guard await library.prepareCompleteCollection(playlistID), !Task.isCancelled else { return }
-                    playVisibleSong(song.id, title: title)
-                }
-            } else { playVisibleSong(song.id, title: title) }
-        } leading: {
-            PlaylistSongArtwork(song: song, cornerRadius: 5).frame(width: 48, height: 48)
-        }
-    }
-
     private func playVisibleSong(_ songID: String, title: String) {
         let list = visibleTracks
         guard let index = list.firstIndex(where: { $0.id == songID }) else { return }
         songActions.play(list, index, title)
-    }
-
-    private var addMusicRow: some View {
-        Button { showsAddMusic = true } label: {
-            HStack(spacing: 12) {
-                Image(systemName: "plus")
-                    .font(.system(size: 20, weight: .medium))
-                    .frame(width: 48, height: 48)
-                    .background(Color(.tertiarySystemFill), in: .rect(cornerRadius: 5))
-                Text("添加音乐").font(.system(size: 16))
-                Spacer()
-            }
-            .foregroundStyle(.primary)
-        }
-        .buttonStyle(.plain)
     }
 
     @ViewBuilder private func detailMenu(_ playlist: LibraryPlaylistItem) -> some View {

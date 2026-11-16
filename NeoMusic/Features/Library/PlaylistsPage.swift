@@ -37,7 +37,7 @@ struct LibraryPlaylistItem: Identifiable, Equatable {
 }
 
 /// 播放列表页的排序方式，对照 Apple Music。按类型时依次为系统播放列表、文件夹、其他播放列表。
-enum PlaylistSort: Hashable {
+enum PlaylistSort: Hashable, Sendable {
     case name, addedDate, lastPlayed, updated, type
 
     static let options = [
@@ -145,7 +145,7 @@ struct PlaylistsListView: View {
     @State private var filter = LibraryFilter.all
     @State private var sort = PlaylistSort.type
     @State private var layout = LibraryLayout.list
-    @State private var projection = LibraryListProjection<ProjectionInput, [PlaylistEntry]>()
+    @State private var projection = AsyncListProjection<ProjectionInput, [PlaylistEntry]>()
     @State private var isNamingFolder = false
     @State private var isCreatingPlaylist = false
     @Namespace private var playlistCreationTransition
@@ -170,29 +170,143 @@ struct PlaylistsListView: View {
         let query: String
         let filter: LibraryFilter
         let sort: PlaylistSort
-    }
 
-    private var entries: [PlaylistEntry] {
-        let input = ProjectionInput(playlists: library.playlists, folders: library.folders, placement: library.placement,
-                                    folderID: folderID, query: query, filter: filter, sort: sort)
-        return projection.value(for: input) {
-            let playlists = input.playlists.filter { input.placement[$0.id] == input.folderID }
+        func calculate() -> [PlaylistEntry] {
+            let playlists = playlists.filter { placement[$0.id] == folderID }
             let entries: [PlaylistEntry]
-            if input.filter == .favorites {
+            if filter == .favorites {
                 entries = playlists.filter(\.isFavorite).map(PlaylistEntry.playlist)
             } else {
-                let folders = input.folders.filter { $0.parentID == input.folderID }.map { folder in
-                    PlaylistEntry.folder(folder, playlists: input.playlists.filter { input.placement[$0.id] == folder.id })
+                let folders = folders.filter { $0.parentID == folderID }.map { folder in
+                    PlaylistEntry.folder(folder, playlists: self.playlists.filter { placement[$0.id] == folder.id })
                 }
                 entries = folders + playlists.map(PlaylistEntry.playlist)
             }
-            let matching = input.query.isEmpty ? entries : entries.filter { $0.title.localizedStandardContains(input.query) }
-            return matching.sorted(by: input.sort)
+            let matching = query.isEmpty ? entries : entries.filter { $0.title.localizedStandardContains(query) }
+            return matching.sorted(by: sort)
         }
     }
 
+    private struct PlaylistSortEntry: Sendable {
+        let index: Int
+        let id: String
+        let title: String
+        let isFavorite: Bool
+        let isSystem: Bool
+        let addedOrder: Int
+        let lastPlayedOrder: Int
+        let updatedOrder: Int
+        let addedAt: Date?
+        let lastPlayedAt: Date?
+        let updatedAt: Date?
+        let folderID: String?
+
+        var typeRank: Int { isSystem ? 0 : 2 }
+
+        func date(for sort: PlaylistSort) -> Date? {
+            switch sort {
+            case .addedDate: addedAt
+            case .lastPlayed: lastPlayedAt
+            case .updated: updatedAt
+            default: nil
+            }
+        }
+
+        func order(for sort: PlaylistSort) -> Int {
+            switch sort {
+            case .lastPlayed: lastPlayedOrder
+            case .updated: updatedOrder
+            default: addedOrder
+            }
+        }
+    }
+
+    private struct FolderSortEntry: Sendable {
+        let index: Int
+        let id: String
+        let name: String
+        let parentID: String?
+        let addedOrder: Int
+    }
+
+    private enum ProjectedEntry: Sendable {
+        case folder(index: Int, playlistIndices: [Int])
+        case playlist(index: Int)
+    }
+
+    private struct EntrySortWrapper: Sendable {
+        let entry: ProjectedEntry
+        let title: String
+        let typeRank: Int
+        let date: Date?
+        let order: Int
+    }
+
+    private static func fastPath(_ input: ProjectionInput) -> [PlaylistEntry]? {
+        (input.playlists.count + input.folders.count) <= 80 ? input.calculate() : nil
+    }
+
+    nonisolated private static func computeProjectedEntries(playlists: [PlaylistSortEntry],
+                                                            folders: [FolderSortEntry],
+                                                            folderID: String?,
+                                                            query: String,
+                                                            filter: LibraryFilter,
+                                                            sort: PlaylistSort) -> [ProjectedEntry] {
+        var wrapped: [EntrySortWrapper] = []
+        if filter != .favorites {
+            var playlistsByFolder: [String: [Int]] = [:]
+            for item in playlists {
+                if let folder = item.folderID {
+                    playlistsByFolder[folder, default: []].append(item.index)
+                }
+            }
+            for folder in folders where folder.parentID == folderID {
+                wrapped.append(EntrySortWrapper(
+                    entry: .folder(index: folder.index, playlistIndices: playlistsByFolder[folder.id, default: []]),
+                    title: folder.name,
+                    typeRank: 1,
+                    date: nil,
+                    order: folder.addedOrder
+                ))
+            }
+        }
+        for item in playlists where item.folderID == folderID {
+            if filter == .favorites, !item.isFavorite { continue }
+            wrapped.append(EntrySortWrapper(
+                entry: .playlist(index: item.index),
+                title: item.title,
+                typeRank: item.typeRank,
+                date: item.date(for: sort),
+                order: item.order(for: sort)
+            ))
+        }
+        let matching = query.isEmpty ? wrapped : wrapped.filter { $0.title.localizedStandardContains(query) }
+        let ordered: [EntrySortWrapper]
+        switch sort {
+        case .name:
+            ordered = matching.sorted(byName: \.title)
+        case .type:
+            ordered = matching.sorted { ($0.typeRank, $0.order) < ($1.typeRank, $1.order) }
+        case .addedDate, .lastPlayed, .updated:
+            ordered = matching.enumerated().sorted { lhs, rhs in
+                let left = lhs.element.date, right = rhs.element.date
+                if left != right { return (left ?? .distantPast) > (right ?? .distantPast) }
+                if left != nil { return lhs.offset < rhs.offset }
+                return lhs.element.order > rhs.element.order
+            }.map(\.element)
+        }
+        return ordered.map(\.entry)
+    }
+
+    private var currentInput: ProjectionInput {
+        ProjectionInput(playlists: library.playlists, folders: library.folders, placement: library.placement,
+                        folderID: folderID, query: query, filter: filter, sort: sort)
+    }
+
     var body: some View {
-        let entries = entries
+        let input = currentInput
+        let entries = projection.currentValue(for: input, fastPath: Self.fastPath, placeholder: { _ in [] })
+        let resolved = projection.isResolved(for: input, fastPath: Self.fastPath)
         content(entries)
             .safeAreaInset(edge: .top, spacing: 0) {
                 if let status = library.onlineStatus {
@@ -207,19 +321,21 @@ struct PlaylistsListView: View {
                 }
             }
             .overlay {
-                if entries.isEmpty, folderID != nil, query.isEmpty, filter == .all {
-                    // 空文件夹：大图标与一行说明，对照 Apple Music。
-                    VStack(spacing: 11) {
-                        Image(systemName: "music.note.list")
-                            .font(.system(size: 50))
-                        Text("添加到此文件夹的播放列表将在这里显示。")
-                            .font(.body)
+                if resolved {
+                    if entries.isEmpty, folderID != nil, query.isEmpty, filter == .all {
+                        // 空文件夹：大图标与一行说明，对照 Apple Music。
+                        VStack(spacing: 11) {
+                            Image(systemName: "music.note.list")
+                                .font(.system(size: 50))
+                            Text("添加到此文件夹的播放列表将在这里显示。")
+                                .font(.body)
+                        }
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 20)
+                    } else if entries.isEmpty {
+                        LibraryListEmptyState(noun: "播放列表", symbol: "music.note.list", query: $query, filter: $filter)
                     }
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 20)
-                } else if entries.isEmpty {
-                    LibraryListEmptyState(noun: "播放列表", symbol: "music.note.list", query: $query, filter: $filter)
                 }
             }
             .overlay(alignment: .bottom) {
@@ -242,7 +358,44 @@ struct PlaylistsListView: View {
             .libraryNavigationTitle(title)
             .libraryTitleDisplayMode(.large)
             .libraryRootAccountButton()
-            .modifier(PlaylistSearch(query: $query, isEnabled: !entries.isEmpty || !query.isEmpty))
+            .modifier(PlaylistSearch(query: $query, isEnabled: !entries.isEmpty || !query.isEmpty || !resolved))
+            .task(id: input) {
+                let playlistEntries = input.playlists.enumerated().map { index, item in
+                    PlaylistSortEntry(
+                        index: index, id: item.id, title: item.title, isFavorite: item.isFavorite, isSystem: item.isSystem,
+                        addedOrder: item.addedOrder, lastPlayedOrder: item.lastPlayedOrder, updatedOrder: item.updatedOrder,
+                        addedAt: item.addedAt, lastPlayedAt: item.lastPlayedAt, updatedAt: item.updatedAt,
+                        folderID: input.placement[item.id]
+                    )
+                }
+                let folderEntries = input.folders.enumerated().map { index, folder in
+                    FolderSortEntry(index: index, id: folder.id, name: folder.name,
+                                    parentID: folder.parentID, addedOrder: folder.addedOrder)
+                }
+                let targetFolderID = input.folderID
+                let currentQuery = input.query
+                let currentFilter = input.filter
+                let currentSort = input.sort
+                await projection.computeIfNeeded(
+                    for: input,
+                    fastPath: Self.fastPath,
+                    background: {
+                        Self.computeProjectedEntries(playlists: playlistEntries, folders: folderEntries,
+                                                     folderID: targetFolderID, query: currentQuery,
+                                                     filter: currentFilter, sort: currentSort)
+                    },
+                    finish: { projected in
+                        projected.map { entry in
+                            switch entry {
+                            case .folder(let folderIndex, let playlistIndices):
+                                .folder(input.folders[folderIndex], playlists: playlistIndices.map { input.playlists[$0] })
+                            case .playlist(let playlistIndex):
+                                .playlist(input.playlists[playlistIndex])
+                            }
+                        }
+                    }
+                )
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {

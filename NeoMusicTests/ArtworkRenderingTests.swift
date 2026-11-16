@@ -10,7 +10,7 @@ final class ArtworkRenderingTests: XCTestCase {
         let url = fileURL()
         try XCTUnwrap(solid(.red).pngData()).write(to: url)
         defer { try? FileManager.default.removeItem(at: url) }
-        let thumbnail = await LocalArtworkImages.load(url, pixels: 192)
+        let thumbnail = await LocalArtworkImages.loadThumbnail(url, pixels: 192)
         XCTAssertNotNil(thumbnail)
         XCTAssertNil(LocalArtworkImages.cachedBackdrop(for: .file(url)))
         let large = await LocalArtworkImages.load(url, pixels: 512)

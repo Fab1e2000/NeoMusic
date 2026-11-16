@@ -174,6 +174,7 @@ private enum LibraryTitleSortKeys {
     }()
 
     static func key(for title: String) -> String {
+        if title.utf8.allSatisfy({ $0 < 0x80 }) { return title.lowercased() }
         let source = title as NSString
         if let value = cache.object(forKey: source) { return value as String }
         let key = (title.applyingTransform(.toLatin, reverse: false)?

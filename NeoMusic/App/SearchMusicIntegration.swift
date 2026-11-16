@@ -23,7 +23,21 @@ final class SearchMusicIntegration {
     @ObservationIgnored private let libraryMatcher = LibrarySearchMatcher()
     @ObservationIgnored private var libraryPublicationTask: Task<Void, Never>?
     @ObservationIgnored private var libraryPublicationID = UUID()
-    @ObservationIgnored private var libraryItems: [MusicSearchItem]?
+    @ObservationIgnored private var activeLibraryItems: [MusicSearchItem] = []
+    @ObservationIgnored private var cachedLocalEntries: [LocalCandidateEntry]?
+
+    private enum LocalEntrySource: Sendable {
+        case localSong(songID: String)
+        case playlistSong(playlistID: String, index: Int)
+        case playlist(id: String)
+        case album(id: String)
+        case artist(id: String)
+    }
+
+    private struct LocalCandidateEntry: Sendable {
+        let candidate: LibrarySearchMatcher.Candidate
+        let source: LocalEntrySource
+    }
 
     @ObservationIgnored var prepareNavigation: ((LibraryNavigationPreview) -> Void)?
     @ObservationIgnored var onPublication: (() -> Void)?
@@ -82,7 +96,8 @@ final class SearchMusicIntegration {
         if sessionID != store?.sessionID {
             sessionID = store?.sessionID
             queryTask?.cancel(); queryID = UUID()
-            libraryPublicationTask?.cancel(); libraryPublicationID = UUID(); libraryItems = nil
+            libraryPublicationTask?.cancel(); libraryPublicationID = UUID()
+            activeLibraryItems = []; cachedLocalEntries = nil
             resources = [:]; artworkURLs = [:]; libraryResults = []; publishedSongs = [:]
             lastPublished = []
             LocalLibrary.songLibrary.replaceExternalSongs([], source: "search")
@@ -129,7 +144,7 @@ final class SearchMusicIntegration {
             _ = account.downloads?.records
             _ = account.music?.likedIDs
         } onChange: { [weak self] in Task { @MainActor in self?.observeLibraryPresentation() } }
-        libraryItems = nil
+        cachedLocalEntries = nil; activeLibraryItems = []
         if model.scope == .library, !model.query.isEmpty { runQuery() }
         else { publish() }
     }
@@ -153,13 +168,15 @@ final class SearchMusicIntegration {
         if displayedQuery != query {
             displayedQuery = query
             model.cachedGroups = [:]; model.groups = []
-            let playlistSongs = playlistLibrary.playlists.filter { !$0.isReadOnly && !$0.isSystem }
-                .flatMap { playlistLibrary.songs(in: $0.id) }
-            let referenced = player.queue + playlistSongs
-            let ids = Set(referenced.map(\.id))
-            let onlineIDs = Set(referenced.filter { $0.onlineOwnerID == account.profile.map({ String($0.userID) }) }.compactMap(\.onlineSongID))
-            publishedSongs = publishedSongs.filter { ids.contains($0.key) }
-            resources = resources.filter { $0.value.song.map { onlineIDs.contains($0.id) } == true }
+            if !publishedSongs.isEmpty || !resources.isEmpty {
+                let playlistSongs = playlistLibrary.playlists.filter { !$0.isReadOnly && !$0.isSystem }
+                    .flatMap { playlistLibrary.songs(in: $0.id) }
+                let referenced = player.queue + playlistSongs
+                let ids = Set(referenced.map(\.id))
+                let onlineIDs = Set(referenced.filter { $0.onlineOwnerID == account.profile.map({ String($0.userID) }) }.compactMap(\.onlineSongID))
+                publishedSongs = publishedSongs.filter { ids.contains($0.key) }
+                resources = resources.filter { $0.value.song.map { onlineIDs.contains($0.id) } == true }
+            }
             libraryResults = []
         }
         model.history = store?.recent(scope: scopeKey) ?? []
@@ -316,51 +333,96 @@ final class SearchMusicIntegration {
         onPublication?()
     }
 
-    private func makeLibraryItems() -> [MusicSearchItem] {
-        if let libraryItems { return libraryResults.map(mapItem) + libraryItems }
-        var items: [MusicSearchItem] = []
+    private func localEntriesSnapshot() -> [LocalCandidateEntry] {
+        if let cachedLocalEntries { return cachedLocalEntries }
+        var entries: [LocalCandidateEntry] = []
         let downloads = account.downloads?.records.values ?? Dictionary<Int64, NeteaseDownloadRecord>().values
-        let paths = Dictionary(downloads.map { ($0.relativePath, $0.songID) }, uniquingKeysWith: { a, _ in a })
-        for song in LocalLibrary.songs {
+        var paths: [String: Int64] = [:]
+        paths.reserveCapacity(downloads.count)
+        for record in downloads where paths[record.relativePath] == nil {
+            paths[record.relativePath] = record.songID
+        }
+        let localSongs = LocalLibrary.songs
+        entries.reserveCapacity(localSongs.count + 64)
+        for song in localSongs {
             let id = paths[song.id].map { "1:\($0)" } ?? "local-song:\(song.id)"
-            items.append(.init(id: id, kind: .song, title: song.title, subtitle: song.artist, artwork: song.artwork, song: song))
+            entries.append(LocalCandidateEntry(
+                candidate: .init(id: id, title: song.title, subtitle: song.artist, album: song.album, prefersLocal: !song.isOnline),
+                source: .localSong(songID: song.id)
+            ))
         }
         for playlist in playlistLibrary.playlists where playlist.sourceOwnerID == nil {
-            items.append(.init(id: "local-playlist:\(playlist.id)", kind: .playlist, title: playlist.title,
-                subtitle: playlist.subtitle ?? "我", artwork: playlistLibrary.displayArtwork(of: playlist), route: .playlist(playlist.id)))
-            for song in playlistLibrary.songs(in: playlist.id) {
+            entries.append(LocalCandidateEntry(
+                candidate: .init(id: "local-playlist:\(playlist.id)", title: playlist.title,
+                                 subtitle: playlist.subtitle ?? "我", album: "", prefersLocal: true),
+                source: .playlist(id: playlist.id)
+            ))
+            let songs = playlistLibrary.songs(in: playlist.id)
+            for (index, song) in songs.enumerated() {
                 let onlineID = song.onlineSongID ?? paths[song.id]
                 let id = onlineID.map { "1:\($0)" } ?? "local-song:\(song.id)"
-                items.append(.init(id: id, kind: .song, title: song.title, subtitle: song.artist, artwork: song.artwork, song: song))
+                entries.append(LocalCandidateEntry(
+                    candidate: .init(id: id, title: song.title, subtitle: song.artist, album: song.album, prefersLocal: !song.isOnline),
+                    source: .playlistSong(playlistID: playlist.id, index: index)
+                ))
             }
         }
         for album in LocalLibrary.albums where !album.id.hasPrefix("catalog:") {
-            items.append(.init(id: "local-album:\(album.id)", kind: .album, title: album.title,
-                subtitle: album.subtitle ?? "", artwork: album.artwork, route: .album(album.id)))
+            entries.append(LocalCandidateEntry(
+                candidate: .init(id: "local-album:\(album.id)", title: album.title,
+                                 subtitle: album.subtitle ?? "", album: "", prefersLocal: true),
+                source: .album(id: album.id)
+            ))
         }
         for artist in LocalLibrary.artists where !artist.id.hasPrefix("catalog:") {
-            items.append(.init(id: "local-artist:\(artist.id)", kind: .artist, title: artist.name,
-                subtitle: "艺人", artwork: artist.artwork ?? .missing, route: .artist(artist.id)))
+            entries.append(LocalCandidateEntry(
+                candidate: .init(id: "local-artist:\(artist.id)", title: artist.name,
+                                 subtitle: "艺人", album: "", prefersLocal: true),
+                source: .artist(id: artist.id)
+            ))
         }
-        // Bind the cached cards to the source resources without observing images in the index.
-        let playlistByID = Dictionary(playlistLibrary.playlists.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let albumByID = Dictionary(LocalLibrary.albums.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let artistByID = Dictionary(LocalLibrary.artists.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        for item in items {
-            if let song = item.song { observeLibraryArtwork(item, read: { song.artwork }) }
-            else if case .playlist(let id) = item.route,
-                    let playlist = playlistByID[id] {
-                observeLibraryArtwork(item, read: { [playlistLibrary] in playlistLibrary.displayArtwork(of: playlist) })
-            } else if case .album(let id) = item.route,
-                      let album = albumByID[id] {
-                observeLibraryArtwork(item, read: { album.artwork })
-            } else if case .artist(let id) = item.route,
-                      let artist = artistByID[id] {
-                observeLibraryArtwork(item, read: { artist.artwork ?? .missing })
-            }
+        cachedLocalEntries = entries
+        return entries
+    }
+
+    private func materializeLocalItem(_ entry: LocalCandidateEntry,
+                                    playlistsByID: [String: LibraryPlaylistItem],
+                                    albumsByID: [String: LibraryShelfItem],
+                                    artistsByID: [String: LibraryArtistItem]) -> MusicSearchItem? {
+        let candidate = entry.candidate
+        switch entry.source {
+        case .localSong(let songID):
+            guard let song = LocalLibrary.songLibrary.song(id: songID) else { return nil }
+            let item = MusicSearchItem(id: candidate.id, kind: .song, title: song.title, subtitle: song.artist, artwork: song.artwork, song: song)
+            observeLibraryArtwork(item, read: { song.artwork })
+            return item
+        case .playlistSong(let playlistID, let index):
+            let songs = playlistLibrary.songs(in: playlistID)
+            guard songs.indices.contains(index) else { return nil }
+            let song = songs[index]
+            let item = MusicSearchItem(id: candidate.id, kind: .song, title: song.title, subtitle: song.artist, artwork: song.artwork, song: song)
+            observeLibraryArtwork(item, read: { song.artwork })
+            return item
+        case .playlist(let id):
+            guard let playlist = playlistsByID[id] else { return nil }
+            let item = MusicSearchItem(id: candidate.id, kind: .playlist, title: playlist.title,
+                                       subtitle: playlist.subtitle ?? "我",
+                                       artwork: playlistLibrary.displayArtwork(of: playlist), route: .playlist(playlist.id))
+            observeLibraryArtwork(item, read: { [playlistLibrary] in playlistLibrary.displayArtwork(of: playlist) })
+            return item
+        case .album(let id):
+            guard let album = albumsByID[id] else { return nil }
+            let item = MusicSearchItem(id: candidate.id, kind: .album, title: album.title,
+                                       subtitle: album.subtitle ?? "", artwork: album.artwork, route: .album(album.id))
+            observeLibraryArtwork(item, read: { album.artwork })
+            return item
+        case .artist(let id):
+            guard let artist = artistsByID[id] else { return nil }
+            let item = MusicSearchItem(id: candidate.id, kind: .artist, title: artist.name,
+                                       subtitle: "艺人", artwork: artist.artwork ?? .missing, route: .artist(artist.id))
+            observeLibraryArtwork(item, read: { artist.artwork ?? .missing })
+            return item
         }
-        libraryItems = items
-        return libraryResults.map(mapItem) + items
     }
 
     @MainActor private final class LibraryArtworkBinding {
@@ -378,7 +440,7 @@ final class SearchMusicIntegration {
     private func observeLibraryArtwork(_ binding: LibraryArtworkBinding) {
         let value = withObservationTracking { binding.read() } onChange: { [weak self] in
             Task { @MainActor in
-                guard let self, self.libraryItems?.contains(where: { $0.$artwork === binding.item.$artwork }) == true else { return }
+                guard let self, self.activeLibraryItems.contains(where: { $0.$artwork === binding.item.$artwork }) else { return }
                 self.observeLibraryArtwork(binding)
             }
         }
@@ -388,15 +450,44 @@ final class SearchMusicIntegration {
     private func publishLibrary() {
         libraryPublicationTask?.cancel()
         let id = UUID(); libraryPublicationID = id
-        let items = makeLibraryItems()
-        let candidates = items.map { LibrarySearchMatcher.Candidate(id: $0.id, title: $0.title,
-            subtitle: $0.subtitle, album: $0.song?.album ?? "", prefersLocal: $0.song?.isOnline == false) }
         let query = model.query, owner = sessionID, kind = model.kind, submitted = model.submitted
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            activeLibraryItems = []
+            if submitted { assign(\.groups, []) } else { assign(\.keywords, []); assign(\.suggestions, []) }
+            assign(\.hasMore, false); assign(\.isLoadingMore, false); assign(\.moreError, nil)
+            return
+        }
+        let remoteResults = libraryResults
+        let localEntries = localEntriesSnapshot()
+        let downloads = account.downloads
+        let remoteCandidates = remoteResults.map { resource -> LibrarySearchMatcher.Candidate in
+            let hasDownloadedLocal = resource.song.map {
+                downloads?.records[$0.id] != nil && downloads?.resource(songID: $0.id) != nil
+            } ?? false
+            return LibrarySearchMatcher.Candidate(
+                id: resource.id, title: resource.title, subtitle: resource.subtitle,
+                album: resource.song?.album ?? "", prefersLocal: hasDownloadedLocal
+            )
+        }
+        let candidates = remoteCandidates + localEntries.map(\.candidate)
         libraryPublicationTask = Task {
             let indices = await libraryMatcher.match(candidates, query: query)
             guard !Task.isCancelled, libraryPublicationID == id, sessionID == owner,
                   model.scope == .library, model.query == query else { return }
-            let matched = indices.map { items[$0] }
+            let playlistByID = Dictionary(playlistLibrary.playlists.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            let albumByID = Dictionary(LocalLibrary.albums.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            let artistByID = Dictionary(LocalLibrary.artists.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            let remoteCount = remoteResults.count
+            let matched: [MusicSearchItem] = indices.compactMap { index in
+                if index < remoteCount {
+                    return mapItem(remoteResults[index])
+                }
+                let localIndex = index - remoteCount
+                guard localEntries.indices.contains(localIndex) else { return nil }
+                return materializeLocalItem(localEntries[localIndex], playlistsByID: playlistByID,
+                                            albumsByID: albumByID, artistsByID: artistByID)
+            }
+            activeLibraryItems = matched
             if submitted {
                 let groups: [MusicSearchGroup] = MusicSearchKind.allCases.filter { $0 != .combined && (kind == .combined || kind == $0) }.compactMap { kind in
                     let values = matched.filter { $0.kind == kind }
