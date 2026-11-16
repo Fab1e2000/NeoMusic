@@ -287,7 +287,6 @@ private struct NowPlayingQueueModeControls: View {
 
 struct NowPlayingQueueRow: View {
     let entry: PlayerQueueEntry
-    var onSwipeActions: ([SongRowAction]) -> Void = { _ in }
     let onPlay: () -> Void
 
     var body: some View {
@@ -320,11 +319,7 @@ struct NowPlayingQueueRow: View {
 
             }
             .contextMenu { ReferenceSongMenuContents(configuration: configuration) }
-            .onAppear { onSwipeActions(configuration.trailingSongActions) }
-            .onChange(of: [entry.song.id] + configuration.trailingSongActions.map { "\($0.id)/\($0.title)" }) {
-                onSwipeActions(configuration.trailingSongActions)
-            }
-            .onDisappear { onSwipeActions([]) }
+
         }
     }
 }

@@ -18,6 +18,17 @@ final class LocalMusicScanTests: XCTestCase, @unchecked Sendable {
         try file.write(from: buffer)
     }
 
+    func testKnownFileScanDoesNotReadOtherAudioFiles() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appending(path: "new.wav")
+        try writeWave(file)
+        try Data("invalid".utf8).write(to: root.appending(path: "unrelated.wav"))
+        let result = try await LocalMusicScanner().scan(root: root, files: [file])
+        XCTAssertEqual(result.tracks.map(\.id), ["new.wav"])
+        XCTAssertTrue(result.failures.isEmpty)
+    }
+
     func testFLACVorbisTrackNumberUsesTagInsteadOfFilename() async throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

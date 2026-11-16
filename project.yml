@@ -61,8 +61,8 @@ targets:
         INFOPLIST_KEY_NSCameraUsageDescription: 拍摄照片作为播放列表封面。
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
-        MARKETING_VERSION: 0.0.1
-        CURRENT_PROJECT_VERSION: 3
+        MARKETING_VERSION: 0.0.2
+        CURRENT_PROJECT_VERSION: 1
         TARGETED_DEVICE_FAMILY: "1"
         SWIFT_OBJC_BRIDGING_HEADER: NeoMusic/NeoMusic-Bridging-Header.h
   FullScreenPlayer:

@@ -241,13 +241,26 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
         XCTAssertFalse(coordinator.update(with: try XCTUnwrap(coordinator.latest)),
                        "The accepted native order needs no second snapshot application")
 
-        XCTAssertNotNil(coordinator.trailingActions(at: from))
+        let swipe = try XCTUnwrap(coordinator.trailingActions(at: from))
+        XCTAssertEqual(swipe.actions.count, 1)
+        XCTAssertEqual(swipe.actions.first?.style, .destructive)
+        XCTAssertNil(swipe.actions.first?.title)
+        XCTAssertEqual(swipe.actions.first?.image?.accessibilityLabel, "从继续播放列表删除")
         collectionView.contentOffset.y = 320
         try await settle(host)
         collectionView.contentOffset.y = 0
         try await settle(host)
         XCTAssertNotNil(coordinator.trailingActions(at: from),
                         "A prepared row must restore swipe actions when it returns onscreen")
+        let entryToRemove = player.upcomingQueueEntries[0].id
+        let removal = try XCTUnwrap(coordinator.trailingActions(at: from)?.actions.first)
+        var succeeded = false
+        removal.handler(removal, UIView()) { succeeded = $0 }
+        XCTAssertTrue(succeeded)
+        XCTAssertFalse(owner.entryIDs.contains(entryToRemove))
+        XCTAssertEqual(owner.entryIDs.count, 1_999)
+        XCTAssertEqual(owner.entryIDs[owner.currentIndex], current)
+
     }
 
     func testPageVisibilityChangesKeepListAndSnapshotForAllQueueLengths() async throws {

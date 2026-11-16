@@ -1,4 +1,5 @@
 import SwiftUI
+import Observation
 
 /// 专辑、播放列表或歌曲的封面。
 enum Artwork: Equatable {
@@ -235,5 +236,42 @@ private struct LoadedArtworkView: View {
         .onChange(of: artwork) {
             if case .deferred(_, let kind) = artwork { placeholderKind = kind }
         }
+    }
+}
+
+/// Image arrivals notify image readers without replacing their containing collection.
+@propertyWrapper struct ArtworkResource<Value: Equatable>: Equatable {
+    private var state: ArtworkResourceState<Value>
+    init(wrappedValue: Value) { state = ArtworkResourceState(wrappedValue) }
+    var wrappedValue: Value {
+        get { state.value }
+        set { state = ArtworkResourceState(newValue) }
+    }
+    var projectedValue: ArtworkResourceState<Value> { state }
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.state === rhs.state || lhs.state.snapshot == rhs.state.snapshot
+    }
+}
+
+@Observable final class ArtworkResourceState<Value: Equatable> {
+    @ObservationIgnored private(set) var snapshot: Value
+    init(_ value: Value) { snapshot = value }
+    var value: Value {
+        access(keyPath: \.value)
+        return snapshot
+    }
+    func update(_ value: Value) {
+        guard snapshot != value else { return }
+        withMutation(keyPath: \.value) { snapshot = value }
+    }
+}
+
+/// Reads the resource inside the image subtree, keeping grid layout out of image notifications.
+struct ResourceArtworkView: View {
+    let resource: ArtworkResourceState<Artwork>
+    var contentID: String?
+    var cornerRadius: CGFloat = 8
+    var body: some View {
+        ArtworkView(artwork: resource.value, contentID: contentID, cornerRadius: cornerRadius)
     }
 }

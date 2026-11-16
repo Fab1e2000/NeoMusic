@@ -442,11 +442,75 @@ import XCTest
         XCTAssertNotEqual(original, edited)
     }
 
+    func testCardArtworkArrivalPreservesCollectionsAndCopySemantics() {
+        let model = HomeContentModel()
+        model.sections = [.init(id: "cards", title: "Cards", kind: .covers, items: (0..<100).map {
+            .init(id: String($0), title: "Card", subtitle: "Artist", artwork: .missing, action: .playSong)
+        })]
+        let before = model.sections
+        let listChanges = Mutex(0), imageChanges = Mutex(0)
+        withObservationTracking { _ = model.sections == before } onChange: { listChanges.withLock { $0 += 1 } }
+        for item in model.sections[0].items {
+            withObservationTracking { _ = item.artwork } onChange: { imageChanges.withLock { $0 += 1 } }
+            item.$artwork.update(.file(URL(fileURLWithPath: "/tmp/card-\(item.id).jpg")))
+        }
+        XCTAssertEqual(listChanges.withLock { $0 }, 0)
+        XCTAssertEqual(imageChanges.withLock { $0 }, 100)
+        var edited = model.sections[0].items[0]
+        edited.artwork = .favorites
+        XCTAssertNotEqual(edited.artwork, model.sections[0].items[0].artwork)
+        let image = model.sections[0].items[0]
+        let eviction = Mutex(0)
+        withObservationTracking { _ = image.artwork } onChange: { eviction.withLock { $0 += 1 } }
+        image.$artwork.update(.missing)
+        XCTAssertEqual(eviction.withLock { $0 }, 1)
+        model.sections = []
+        XCTAssertEqual(listChanges.withLock { $0 }, 1)
+    }
+
     private func makeSongLibrary() -> SongLibrary {
         SongLibrary(songs: [], defaults: UserDefaults(suiteName: "IntegrationPublicationTests.\(UUID().uuidString)")!)
     }
 
     private func song(_ id: String, title: String = "Song", artwork: Artwork = .missing) -> LibrarySongItem {
         .init(id: "netease:42:\(id)", title: title, artist: "Artist", album: "Album", albumArtist: "Artist", trackNumber: 1, artwork: artwork)
+    }
+}
+
+@MainActor final class FavoritePublicationTests: XCTestCase {
+    func testFavoriteDeltaPreservesMetadataAndRollsBackOrdering() {
+        let defaults = UserDefaults(suiteName: "FavoritePublicationTests.\(UUID().uuidString)")!
+        let library = SongLibrary(songs: [], defaults: defaults)
+        let first = song(1), second = song(2)
+        library.replaceOnline([first, second])
+        var liked = second
+        liked.isFavorite = true
+        liked.favoriteAddedAt = Date(timeIntervalSince1970: 10)
+        library.updateOnlineFavorites([liked.id: liked], order: [liked.id])
+        XCTAssertEqual(library.onlineSongs.map(\.id), [second.id, first.id])
+        XCTAssertTrue(library.onlineSongs[0].isFavorite)
+        XCTAssertEqual(library.onlineSongs[1], first)
+        library.updateOnlineFavorites([second.id: second], order: [])
+        XCTAssertEqual(library.onlineSongs, [first, second])
+    }
+
+    func testFavoriteOrderUpdatesWithoutReplacementAndAddsKnownMissingSong() {
+        let defaults = UserDefaults(suiteName: "FavoritePublicationTests.\(UUID().uuidString)")!
+        let library = SongLibrary(songs: [], defaults: defaults)
+        let first = song(1), second = song(2)
+        library.replaceOnline([first, second])
+        library.updateOnlineFavorites([:], order: [second.id])
+        XCTAssertEqual(library.onlineSongs.map(\.id), [second.id, first.id])
+        library.updateOnlineFavorites([:], order: [])
+        XCTAssertEqual(library.onlineSongs, [first, second])
+        var third = song(3)
+        third.isFavorite = true
+        library.updateOnlineFavorites([third.id: third], order: [third.id])
+        XCTAssertEqual(library.onlineSongs, [third, first, second])
+    }
+
+    private func song(_ id: Int) -> LibrarySongItem {
+        .init(id: "netease:42:\(id)", title: "Song \(id)", artist: "Artist", album: "Album",
+              albumArtist: "Artist", trackNumber: id, artwork: .missing)
     }
 }

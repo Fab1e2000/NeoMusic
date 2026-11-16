@@ -9,7 +9,7 @@ enum ArtistSection: String, Hashable { case songs, albums, singles, similar
 }
 struct ArtistDetail {
     let name: String
-    var artwork: Artwork?
+    @ArtworkResource var artwork: Artwork?
     var isFavorite = false
     let albums: [LibraryShelfItem]
     var id = ""

@@ -16,10 +16,14 @@ import Observation
     private var playbackTask: Task<Void, Never>?
     private var playbackRevision = UUID()
     private var loaded: [String: (LibraryPlaylistItem, [NeteaseMusicSong])] = [:]
+    @ObservationIgnored private var favoriteOwner: String?
+    @ObservationIgnored private var publishedLikedIDs: Set<Int64> = []
+    @ObservationIgnored private var publishedLikedAt: [Int64: Date] = [:]
     private var owner: String?
     private var pendingFeedPlayback: (songs: [NeteaseMusicSong], index: Int, title: String)?
     private(set) var pendingQuickAction: HomeQuickAction?
     @ObservationIgnored private var artworkSongs: [URL: [NeteaseMusicSong]] = [:]
+    @ObservationIgnored private var feedArtwork: [URL: [ArtworkResourceState<Artwork>]] = [:]
     @ObservationIgnored private var retainedArtworkIDs: Set<String> = []
     @ObservationIgnored private var retainedArtworkSession: UUID?
     @ObservationIgnored private var roamingFill: Task<Void, Never>?
@@ -129,7 +133,13 @@ import Observation
     /// 喜欢状态变了之后，正在看的歌单曲目要换成爱心或删除、下载。
     private func refreshOpenCollectionFavorites() {
         guard owner != nil, account.music?.userID.map(String.init) == owner else { return }
-        for (id, value) in loaded {
+        let liked = account.music?.likedIDs ?? []
+        let times = account.music?.likedAt ?? [:]
+        let changed = publishedLikedIDs.symmetricDifference(liked).union(
+            Set(publishedLikedAt.keys).union(times.keys).filter { publishedLikedAt[$0] != times[$0] })
+        let ownerChanged = favoriteOwner != owner
+        favoriteOwner = owner; publishedLikedIDs = liked; publishedLikedAt = times
+        for (id, value) in loaded where ownerChanged || value.1.contains(where: { changed.contains($0.id) }) {
             updateDetail(id, item: value.0, songs: value.1)
         }
     }
@@ -297,7 +307,7 @@ import Observation
         Self.updateRetainedArtwork(in: LocalLibrary.playlistLibrary, home: home, owner: owner)
     }
 
-    private func updateRecent() {
+    private func updateRecent(artworkOnly: Bool = false) {
         let recent: [HomeContentItem] = history.recent(for: owner).compactMap { reference in
             let route: LibraryRoute
             let cover: Artwork
@@ -322,24 +332,10 @@ import Observation
             }
             return .init(id: "\(reference.kind.rawValue):\(reference.ownerID ?? "local"):\(reference.id)", title: reference.title, subtitle: "", artwork: cover, style: reference.kind == .favorites ? .favorites : .artwork, action: .navigate(route))
         }
-        if model.recent != recent { model.recent = recent }
-    }
-
-    /// Feed and quick-action covers are the only home images that replace the visible sections.
-    /// A song cover that is not on screen skips that rebuild.
-    private func artworkAffectsVisibleHome(_ urls: Set<URL>) -> Bool {
-        guard let home = account.home, home.userID == account.profile?.userID else { return false }
-        if home.displayFeedBlocks.contains(where: { block in
-            block.resources.contains {
-                if let id = $0.resourceID.flatMap(Int64.init), ["list", "playlist"].contains($0.resourceType ?? "") {
-                    return home.cachedDetail(id: id)?.displayArtworkURL(ownerID: home.userID).map(urls.contains) == true
-                }
-                return $0.artworkURL.map(urls.contains) == true
-            }
-        }) { return true }
-        return NeteaseHomeQuickAction.allCases.contains { action in
-            home.quickActionArtwork(action).map(urls.contains) == true
-        }
+        if artworkOnly {
+            let covers = Dictionary(uniqueKeysWithValues: recent.map { ($0.id, $0.artwork) })
+            for item in model.recent { if let cover = covers[item.id] { item.$artwork.update(cover) } }
+        } else if model.recent != recent { model.recent = recent }
     }
 
     private func publishArtwork(_ urls: Set<URL>) {
@@ -349,10 +345,9 @@ import Observation
         for index in model.recommendations.indices {
             if let remote = remoteByID[model.recommendations[index].id] ?? nil, urls.contains(remote) {
                 let cover = artwork(remote)
-                if model.recommendations[index].artwork != cover { model.recommendations[index].artwork = cover }
+                if model.recommendations[index].artwork != cover { model.recommendations[index].$artwork.update(cover) }
             }
         }
-        if artworkAffectsVisibleHome(urls) { publishFeed() }
         var songs: [String: LibrarySongItem] = [:]
         for remote in urls {
             for value in artworkSongs[remote] ?? [] {
@@ -377,6 +372,17 @@ import Observation
             }
         }
         player.updateArtwork(songs)
+        for url in urls {
+            for resource in feedArtwork[url] ?? [] { resource.update(artwork(url)) }
+        }
+        for item in model.quickActions {
+            let action = NeteaseHomeQuickAction(rawValue: item.action.rawValue)!
+            if item.action == .similarSongs, Self.currentOnlineSongID(player.current, owner: owner) != nil {
+                item.$artwork.update(player.current.artwork)
+            } else if let url = home.quickActionArtwork(action), urls.contains(url) {
+                item.$artwork.update(artwork(url))
+            }
+        }
         detailLibrary.updateArtwork(songs: songs, playlists: covers)
         if let owner {
             Self.updateRetainedArtwork(in: LocalLibrary.playlistLibrary, home: home, owner: owner, urls: urls, songs: songs)
@@ -385,7 +391,7 @@ import Observation
             if let replacement = songs[item.id] { item.publishArtwork(from: replacement) }
         }
         LocalLibrary.songLibrary.updateOnlineArtwork(songs, source: "home")
-        updateRecent()
+        updateRecent(artworkOnly: true)
     }
     /// A retained Home collection keeps its stable library identity when its images arrive later.
     /// With no URL filter, replay cached files when either the Home cache or retained collections restore.
@@ -428,6 +434,21 @@ import Observation
         let issues = matches ? Self.feedIssues(home) : []
         let sections = Self.feedSections(matches ? displayFeed : nil, issues: issues, artwork: { self.artwork($0) }, playlistArtwork: { Self.playlistArtwork(id: $0, home: home) })
         if model.sections != sections { model.sections = sections }
+        feedArtwork = [:]
+        if matches, let home {
+            for block in home.displayFeedBlocks {
+                guard let section = model.sections.first(where: { $0.id == block.id }) else { continue }
+                for resource in block.resources {
+                    var remote = resource.artworkURL
+                    if ["list", "playlist"].contains(resource.resourceType ?? ""), let id = resource.numericID {
+                        remote = home.cachedDetail(id: id)?.displayArtworkURL(ownerID: home.userID)
+                    }
+                    if let remote, let item = section.items.first(where: { $0.id == resource.id }) {
+                        feedArtwork[remote, default: []].append(item.$artwork)
+                    }
+                }
+            }
+        }
         if model.feedIssues != issues { model.feedIssues = issues }
         publishQuickActions()
     }
@@ -538,7 +559,7 @@ import Observation
         return id
     }
 
-    private func publishQuickActions() {
+    private func publishQuickActions(artworkOnly: Bool = false) {
         let home = account.home
         let matches = home?.userID == account.profile?.userID
         let items = HomeQuickAction.allCases.map { action -> HomeQuickActionItem in
@@ -559,7 +580,11 @@ import Observation
             }
             return .init(action: action, artwork: cover, subtitle: subtitle)
         }
-        if model.quickActions != items { model.quickActions = items }
+        if artworkOnly {
+            for item in model.quickActions {
+                if let replacement = items.first(where: { $0.id == item.id }) { item.$artwork.update(replacement.artwork) }
+            }
+        } else if model.quickActions != items { model.quickActions = items }
         let states: [HomeQuickAction: HomeQuickActionState] = Dictionary(uniqueKeysWithValues:
             (matches ? home?.quickActionStates ?? [:] : [:]).compactMap { key, value in
                 guard let action = HomeQuickAction(rawValue: key.rawValue) else { return nil }

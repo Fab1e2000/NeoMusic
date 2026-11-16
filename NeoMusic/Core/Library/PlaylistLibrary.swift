@@ -231,7 +231,7 @@ final class PlaylistLibrary {
     func updateArtwork(songs: [String: LibrarySongItem], playlists artwork: [String: Artwork] = [:]) {
         for index in playlists.indices {
             if let cover = artwork[playlists[index].id], cover != playlists[index].artwork {
-                playlists[index].artwork = cover
+                playlists[index].$artwork.update(cover)
             }
         }
         guard !songs.isEmpty else { return }
@@ -262,6 +262,22 @@ final class PlaylistLibrary {
     var onlineStatus: String?
     var isRefreshingOnline = false
     @ObservationIgnored var retryOnline: (@MainActor () async -> Void)?
+
+    func updateSongFavorites(_ replacements: [String: LibrarySongItem]) {
+        guard !replacements.isEmpty else { return }
+        var changedLocal = false
+        for (id, songs) in contents where songs.contains(where: { replacements[$0.id] != nil }) {
+            contents[id] = songs.map { song in
+                guard let replacement = replacements[song.id] else { return song }
+                var updated = song
+                updated.isFavorite = replacement.isFavorite
+                updated.favoriteAddedAt = replacement.favoriteAddedAt
+                return updated
+            }
+            if playlist(id)?.isReadOnly == false { changedLocal = true }
+        }
+        if changedLocal { markRestoredMetadataChanged() }
+    }
 
     /// Online refreshes update only online metadata; local scan owns local availability.
     func reconcileOnlineSongs(_ songs: [LibrarySongItem]) {

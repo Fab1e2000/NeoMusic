@@ -47,6 +47,7 @@ final class LocalLibraryRuntime {
     private(set) var isInitialPresentationReady = false
     private(set) var isInitialPlaybackReady = false
     private var refreshPending = false
+    private var pendingImports: Set<String> = []
     private var cacheWarning: String?
     private let scanner = LocalMusicScanner()
     private let cache = LocalLibraryTrackCache()
@@ -101,7 +102,10 @@ final class LocalLibraryRuntime {
     func restoreCachedState() async {
         guard !hasRestoredPlayback, !isScanning else { return }
         isScanning = true
-        defer { isScanning = false }
+        defer {
+            isScanning = false
+            if !pendingImports.isEmpty { Task { await self.importPendingFiles() } }
+        }
         do {
             try await cache.prepare(documents: documents, store: store)
             try await restoreSavedState()
@@ -141,7 +145,10 @@ final class LocalLibraryRuntime {
     func refresh() async {
         guard !isScanning else { refreshPending = true; return }
         isScanning = true
-        defer { isScanning = false }
+        defer {
+            isScanning = false
+            if !pendingImports.isEmpty { Task { await self.importPendingFiles() } }
+        }
         repeat {
             refreshPending = false
             do {
@@ -156,6 +163,56 @@ final class LocalLibraryRuntime {
                 isInitialLibraryReady = true
             }
         } while refreshPending && !Task.isCancelled
+    }
+
+    func removeMissingFiles(_ paths: [String]) async {
+        // Queue behind an active scan so its snapshot cannot restore a removed download.
+        for path in paths { pendingImports.insert(path) }
+        await importPendingFiles()
+    }
+
+    /// Known committed files are read directly; external edits continue through refresh().
+    func importFile(_ path: String) async {
+        pendingImports.insert(path)
+        await importPendingFiles()
+    }
+
+    private func importPendingFiles() async {
+        guard !isScanning, !pendingImports.isEmpty else { return }
+        isScanning = true
+        var succeeded = false
+        let paths = pendingImports
+        pendingImports.subtract(paths)
+        defer {
+            isScanning = false
+            if refreshPending { Task { await self.refresh() } }
+            else if succeeded && !pendingImports.isEmpty { Task { await self.importPendingFiles() } }
+        }
+        do {
+            try await cache.prepare(documents: documents, store: store)
+            if !hasRestoredPlayback { try await restoreSavedState() }
+            let existing = paths.map { root.appending(path: $0) }.filter { FileManager.default.fileExists(atPath: $0.path) }
+            let result = try await scanner.scan(root: root, files: existing)
+            try Task.checkCancellation()
+            let imported = Set(result.tracks.map(\.id))
+            let absent = Set(paths.filter { !FileManager.default.fileExists(atPath: root.appending(path: $0).path) })
+            let merged = cachedTracks.filter { !imported.contains($0.id) && !absent.contains($0.id) } + result.tracks
+            let tracks = try await cache.write(merged, to: store.appending(path: "tracks.json"))
+            try Task.checkCancellation()
+            failedIDs.subtract(imported.union(absent))
+            failedIDs.formUnion(result.failures)
+            if tracks != cachedTracks { apply(tracks) }
+            playlistLibrary.reconcileSongs(localSongs, failedIDs: failedIDs)
+            player.reconcileAvailability(songs: allSongs.filter { !failedIDs.contains($0.id) })
+            if !result.issues.isEmpty { status = result.issues.joined(separator: "\n") }
+            succeeded = true
+        } catch {
+            pendingImports.formUnion(paths)
+            status = "读取下载文件失败：\(error.localizedDescription)"
+            // Retry on the next explicit refresh or file commit.
+            isScanning = false
+            return
+        }
     }
 
     private func restoreSavedState() async throws {

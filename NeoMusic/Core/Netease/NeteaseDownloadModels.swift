@@ -43,7 +43,7 @@ struct NeteaseDownloadSource: Sendable {
     let size: Int64?
 }
 
-struct NeteaseDownloadJob: Codable, Sendable {
+struct NeteaseDownloadJob: Codable, Sendable, Equatable {
     let id: UUID
     let ownerID: Int64
     let metadata: NeteaseDownloadSong

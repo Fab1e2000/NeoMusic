@@ -67,6 +67,19 @@ final class LibraryDownloads {
             if status.value != value { status.value = value }
         }
     }
+    func update(states: [String: SongState], collections: [LibraryRoute: CollectionState]) {
+        for (id, value) in states {
+            remoteStates[id] = value
+            managedSongIDs.insert(id)
+            let status = status(of: id)
+            if status.value != value { status.value = value }
+        }
+        for (route, value) in collections {
+            let status = collectionStatuses[route] ?? CollectionStatus()
+            collectionStatuses[route] = status
+            if status.value != value { status.value = value }
+        }
+    }
     func publishCollections(_ values: [LibraryRoute: CollectionState]) {
         for route in Set(collectionStatuses.keys).union(values.keys) {
             let status = collectionStatuses[route] ?? CollectionStatus()

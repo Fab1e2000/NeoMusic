@@ -40,7 +40,7 @@ enum HomeQuickAction: String, CaseIterable, Identifiable {
 
 struct HomeQuickActionItem: Identifiable, Equatable {
     let action: HomeQuickAction
-    var artwork: Artwork? = nil
+    @ArtworkResource var artwork: Artwork? = nil
     var subtitle: String
     var id: HomeQuickAction { action }
 }
@@ -57,7 +57,7 @@ struct HomeContentItem: Identifiable, Equatable {
     let id: String
     let title: String
     let subtitle: String
-    var artwork: Artwork
+    @ArtworkResource var artwork: Artwork
     var style: HomeContentStyle = .artwork
     var eyebrow: String? = nil
     var groupID: String? = nil

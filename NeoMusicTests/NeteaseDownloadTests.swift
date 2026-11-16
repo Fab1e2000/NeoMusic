@@ -28,7 +28,7 @@ final class NeteaseDownloadTests: XCTestCase, @unchecked Sendable {
         configuration.protocolClasses = [DownloadFixtureProtocol.self]
         return NeteaseMusicClient(transport: NeteaseAccountClient(session: URLSession(configuration: configuration)))
     }
-    @MainActor private func store(_ root: URL, responses: [String] = [], processor: NeteaseDownloadStore.Processor? = nil) -> NeteaseDownloadStore {
+    @MainActor private func store(_ root: URL, responses: [String] = [], processor: NeteaseDownloadStore.Processor? = nil, writer: NeteaseDownloadStore.IndexWriter? = nil) -> NeteaseDownloadStore {
         let defaults = UserDefaults(suiteName: "download-tests-" + UUID().uuidString)!
         let configuration = URLSessionConfiguration.ephemeral
         let transport = NeteaseDownloadTransport(spool: root.appending(path: "Transfers"), configuration: configuration)
@@ -37,7 +37,7 @@ final class NeteaseDownloadTests: XCTestCase, @unchecked Sendable {
                 let output = staging.appending(path: "processed.flac")
                 try FileManager.default.copyItem(at: file, to: output)
                 return output
-            })
+            }, writeIndex: writer ?? NeteaseDownloadStore.writeIndexFile)
     }
     private func persist(_ snapshot: Saved, root: URL) throws {
         try JSONEncoder().encode(snapshot).write(to: root.appending(path: "index.json"))
@@ -296,6 +296,39 @@ final class NeteaseDownloadTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(store.records[99], record); XCTAssertEqual(store.resource(songID: 99), file)
         XCTAssertEqual(try Data(contentsOf: file), Data("existing-audio".utf8))
     }
+    @MainActor func testFinalCommitRemainsConsistentDuringStopAndAccountSwitch() async throws {
+        for switchingAccount in [false, true] {
+            let root = try directory(), job = try stage(root), gate = DownloadProcessingGate()
+            try persist(Saved(jobs: [job]), root: root)
+            let held = Mutex(false)
+            let store = store(root, responses: [#"{"code":200}"#], writer: { data, url in
+                let snapshot = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+                let shouldPause = (snapshot?["records"] as? [Any])?.count == 1 && held.withLock { value in
+                    if value { return false }; value = true; return true
+                }
+                if shouldPause { await gate.pause() }
+                try await NeteaseDownloadStore.writeIndexFile(data, url)
+            })
+            await store.activate(try saved())
+            await gate.waitUntilStarted()
+            let replacement = try saved(2)
+            let action = Task {
+                if switchingAccount { await store.activate(replacement) }
+                else { await store.stop(songIDs: [12]) }
+            }
+            if switchingAccount { while store.userID != 2 { await Task.yield() } }
+            else { await Task.yield() }
+            await gate.open()
+            await action.value
+            await store.waitForProcessing()
+            let data = try Data(contentsOf: root.appending(path: "index.json"))
+            let snapshot = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            XCTAssertEqual((snapshot["jobs"] as? [Any])?.count, 0)
+            XCTAssertEqual((snapshot["records"] as? [Any])?.count, 1)
+            XCTAssertNotNil(store.resource(songID: 12))
+        }
+    }
+
     @MainActor func testCorruptIndexDoesNotOverwriteSavedData() async throws {
         let root = try directory(), original = Data("broken-index".utf8)
         try original.write(to: root.appending(path: "index.json"))

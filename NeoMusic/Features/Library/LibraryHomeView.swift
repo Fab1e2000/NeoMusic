@@ -6,7 +6,7 @@ struct LibraryShelfItem: Identifiable, Equatable {
     let id: String
     let title: String
     var subtitle: String?
-    var artwork: Artwork
+    @ArtworkResource var artwork: Artwork
     var route: LibraryRoute?
     var isFavorite = false
     var isPinned = false

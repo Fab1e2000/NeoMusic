@@ -64,11 +64,27 @@ import Observation
         let firstChanges = DownloadObservationCounter(), secondChanges = DownloadObservationCounter()
         withObservationTracking { _ = first.value } onChange: { firstChanges.increment() }
         withObservationTracking { _ = second.value } onChange: { secondChanges.increment() }
-        downloads.publish(states: ["1": .downloading(0.5), "2": .downloaded], managedSongIDs: ["1", "2"])
+        downloads.update(states: ["1": .downloading(0.5)], collections: [:])
         XCTAssertEqual(firstChanges.value, 1)
         XCTAssertEqual(secondChanges.value, 0)
         XCTAssertTrue(first === downloads.status(of: "1"))
         XCTAssertTrue(second === downloads.status(of: "2"))
+    }
+
+    func testIncrementalProgressPreservesUnrelatedCollectionAndManagedIdentity() {
+        let downloads = LibraryDownloads()
+        let first = LibraryRoute.playlist("first"), other = LibraryRoute.playlist("other")
+        let initial = LibraryDownloads.CollectionState(totalCount: 1, completedCount: 0, activeCount: 1, failedCount: 0, progress: 0.2)
+        downloads.publish(states: ["song": .downloading(0.2)], managedSongIDs: ["song"])
+        downloads.publishCollections([first: initial, other: initial])
+        var changed = initial
+        changed.progress = 0.5
+        downloads.update(states: ["song": .downloading(0.5)], collections: [first: changed])
+        XCTAssertEqual(downloads.collectionState(of: other), initial)
+        XCTAssertEqual(downloads.collectionState(of: first), changed)
+        downloads.publish(states: [:], managedSongIDs: ["song"])
+        downloads.setLocalSongs([song("song")])
+        XCTAssertNil(downloads.state(of: "song"))
     }
 
     func testCancelledRemovalDoesNotSubmitAFileOperation() {

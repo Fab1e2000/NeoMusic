@@ -243,7 +243,7 @@ struct SearchResultRow: View {
         HStack(spacing: 12) {
             Button { open() } label: {
                 HStack(spacing: 12) {
-                    LibraryCardArtwork(content: AnyView(ArtworkView(artwork: item.artwork, contentID: item.id, cornerRadius: 0)),
+                    LibraryCardArtwork(content: AnyView(ResourceArtworkView(resource: item.$artwork, contentID: item.id, cornerRadius: 0)),
                         sources: sources, sourceID: item.id, cornerRadius: item.kind == .artist ? 28 : 5)
                         .frame(width: 56, height: 56)
                     VStack(alignment: .leading, spacing: 2) {
@@ -303,7 +303,7 @@ struct SearchCategoryContent: View {
                         openRoute(route, preview: preview, sourceProvider: { [sources, id = item.id] in sources.view(for: id) })
                     } label: {
                         VStack(alignment: .leading, spacing: 5) {
-                            LibraryCardArtwork(content: AnyView(ArtworkView(artwork: item.artwork, contentID: item.id, cornerRadius: 0)),
+                            LibraryCardArtwork(content: AnyView(ResourceArtworkView(resource: item.$artwork, contentID: item.id, cornerRadius: 0)),
                                 sources: sources, sourceID: item.id, cornerRadius: 8).aspectRatio(1, contentMode: .fit)
                             Text(item.title).font(.subheadline).lineLimit(titleLineLimit).foregroundStyle(.primary)
                             Text(item.subtitle).font(.caption).lineLimit(subtitleLineLimit).foregroundStyle(.secondary)

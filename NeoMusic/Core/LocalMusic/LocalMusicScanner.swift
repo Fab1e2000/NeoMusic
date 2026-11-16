@@ -70,7 +70,7 @@ actor LocalMusicScanner {
         return 1
     }
 
-    func scan(root: URL, previousTracks: [LocalTrack] = []) async throws -> LocalScanResult {
+    func scan(root: URL, previousTracks: [LocalTrack] = [], files selectedFiles: [URL]? = nil) async throws -> LocalScanResult {
         generation += 1
         let scanGeneration = generation
         let previous = Dictionary(previousTracks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -118,7 +118,9 @@ actor LocalMusicScanner {
             }
             return result
         }
-        let listed = try files(in: root).sorted(by: { $0.path < $1.path })
+        let listed: [URL]
+        if let selectedFiles { listed = selectedFiles.sorted { $0.path < $1.path } }
+        else { listed = try files(in: root).sorted { $0.path < $1.path } }
         result.failedDirectoryPaths = unreadableDirectories.map { $0.pathComponents.dropFirst(rootComponents.count).joined(separator: "/") }
         result.issues = directoryIssues
         result.failures = listingFailures

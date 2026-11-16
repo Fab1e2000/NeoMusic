@@ -328,20 +328,41 @@ import Observation
             backdropSources[id] = nil
             backdrops[id] = nil
         }
-        for route in routes { rebuild(route, updateSongs: false) }
+        player.updateArtwork(songs)
+        for route in routes {
+            guard let id = route.split(separator: ":").last.flatMap({ Int64($0) }) else { continue }
+            let current = state(route)
+            if route.hasPrefix("album:"), let value = store.albums[id], let detail = current.album {
+                let cover = artwork(value.album.artworkURL)
+                if case .file(let url) = cover, LocalArtworkImages.cached(url, pixels: 0) == nil, backdropSources[id] != url {
+                    detail.$artwork.update(.missing)
+                } else { detail.$artwork.update(cover) }
+                for song in detail.songs { if let image = songs[song.id] { song.publishArtwork(from: image) } }
+            } else if let detail = current.artist {
+                if let remote = store.details[id]?.artist.artworkURL, urls.contains(remote) { detail.$artwork.update(artwork(remote)) }
+                let releases = Dictionary((store.releases[id] ?? []).map { ("catalog:album:\($0.id)", $0.artworkURL) }, uniquingKeysWith: { first, _ in first })
+                for item in detail.albums + detail.singles + [detail.latest].compactMap({ $0 }) {
+                    if let remote = releases[item.id] ?? nil, urls.contains(remote) { item.$artwork.update(artwork(remote)) }
+                }
+                let similar = Dictionary((store.similar[id] ?? []).map { ("catalog:artist:\($0.id)", $0.artworkURL) }, uniquingKeysWith: { first, _ in first })
+                for item in detail.similar {
+                    if let remote = similar[item.id] ?? nil, urls.contains(remote) { item.$artwork.update(artwork(remote)) }
+                }
+                for song in detail.songs { if let image = songs[song.id] { song.publishArtwork(from: image) } }
+            }
+        }
         for value in store.subscribedArtists where value.artworkURL.map(urls.contains) == true {
             if let index = LocalLibrary.catalog.artists.firstIndex(where: { $0.id == "catalog:artist:\(value.id)" }) {
                 let item = artistItem(value)
-                if LocalLibrary.catalog.artists[index] != item { LocalLibrary.catalog.artists[index] = item }
+                LocalLibrary.catalog.artists[index].$artwork.update(item.artwork)
             }
         }
         for value in store.subscribedAlbums where value.artworkURL.map(urls.contains) == true {
             if let index = LocalLibrary.catalog.albums.firstIndex(where: { $0.id == "catalog:album:\(value.id)" }) {
                 let item = albumItem(value)
-                if LocalLibrary.catalog.albums[index] != item { LocalLibrary.catalog.albums[index] = item }
+                LocalLibrary.catalog.albums[index].$artwork.update(item.artwork)
             }
         }
-        player.updateArtwork(songs)
         LocalLibrary.songLibrary.updateOnlineArtwork(songs, source: "artists")
         playlistLibrary.updateArtwork(songs: songs)
         for route in routes where route.hasPrefix("album:") {
@@ -354,7 +375,7 @@ import Observation
               let url = store.cachedArtworkURL(remote), backdropSources[id] != url, backdropTasks[id] == nil else { return }
         let revision = store.sessionRevision
         backdropTasks[id] = Task { [weak self] in
-            _ = await LocalArtworkImages.load(url, pixels: 128)
+            _ = await LocalArtworkImages.load(url, pixels: 512)
             guard let self, !Task.isCancelled, self.store?.sessionRevision == revision,
                   self.store?.userID == self.owner else { return }
             self.backdropTasks[id] = nil
@@ -364,7 +385,12 @@ import Observation
             }
             self.backdropSources[id] = url
             self.backdrops[id] = LocalArtworkImages.cachedBackdrop(for: .file(url))
-            self.rebuild("album:\(id)", updateSongs: false)
+            let state = self.state("album:\(id)")
+            if var detail = state.album {
+                detail.$artwork.update(.file(url))
+                detail.albumBackdrop = self.backdrops[id]
+                state.album = detail
+            }
         }
     }
 

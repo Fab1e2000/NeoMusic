@@ -20,6 +20,11 @@ final class SearchMusicIntegration {
     @ObservationIgnored private var lastPublished: [LibrarySongItem] = []
     @ObservationIgnored private var displayedQuery = ""
     @ObservationIgnored private var indexedRevision: Int?
+    @ObservationIgnored private let libraryMatcher = LibrarySearchMatcher()
+    @ObservationIgnored private var libraryPublicationTask: Task<Void, Never>?
+    @ObservationIgnored private var libraryPublicationID = UUID()
+    @ObservationIgnored private var libraryItems: [MusicSearchItem]?
+
     @ObservationIgnored var prepareNavigation: ((LibraryNavigationPreview) -> Void)?
     @ObservationIgnored var onPublication: (() -> Void)?
 
@@ -77,6 +82,7 @@ final class SearchMusicIntegration {
         if sessionID != store?.sessionID {
             sessionID = store?.sessionID
             queryTask?.cancel(); queryID = UUID()
+            libraryPublicationTask?.cancel(); libraryPublicationID = UUID(); libraryItems = nil
             resources = [:]; artworkURLs = [:]; libraryResults = []; publishedSongs = [:]
             lastPublished = []
             LocalLibrary.songLibrary.replaceExternalSongs([], source: "search")
@@ -114,11 +120,16 @@ final class SearchMusicIntegration {
             _ = model.scope
             if model.scope == .library {
                 _ = LocalLibrary.songLibrary.songs
-                _ = playlistLibrary.playlists
+                _ = LocalLibrary.albums
+                _ = LocalLibrary.artists
+                for playlist in playlistLibrary.playlists where playlist.sourceOwnerID == nil {
+                    _ = playlistLibrary.songs(in: playlist.id)
+                }
             }
             _ = account.downloads?.records
             _ = account.music?.likedIDs
         } onChange: { [weak self] in Task { @MainActor in self?.observeLibraryPresentation() } }
+        libraryItems = nil
         if model.scope == .library, !model.query.isEmpty { runQuery() }
         else { publish() }
     }
@@ -136,6 +147,7 @@ final class SearchMusicIntegration {
 
     private func runQuery(force: Bool = false) {
         queryTask?.cancel()
+        libraryPublicationTask?.cancel(); libraryPublicationID = UUID()
         let id = UUID(); queryID = id
         let query = model.query, scope = model.scope, kind = model.kind, submitted = model.submitted
         if displayedQuery != query {
@@ -278,23 +290,24 @@ final class SearchMusicIntegration {
         guard sessionID == store?.sessionID else { return }
         let affected = resources.values.filter { $0.artworkURL.map(urls.contains) == true }
         let replacements = Dictionary(uniqueKeysWithValues: affected.map { ($0.id, mapItem($0, retainingPreviousArtwork: false)) })
-        func update(_ items: inout [MusicSearchItem]) {
-            for i in items.indices {
-                if let replacement = replacements[items[i].id] { items[i] = replacement }
+        let songs = Dictionary(replacements.values.compactMap(\.song).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        player.updateArtwork(songs)
+        func update(_ items: [MusicSearchItem]) {
+            for item in items {
+                guard let replacement = replacements[item.id] else { continue }
+                item.$artwork.update(replacement.artwork)
+                if let song = replacement.song { item.song?.publishArtwork(from: song) }
             }
         }
-        update(&model.suggestions); update(&model.categoryItems)
-        for i in model.groups.indices { update(&model.groups[i].items) }
-        for kind in model.cachedGroups.keys {
-            guard var groups = model.cachedGroups[kind] else { continue }
-            for i in groups.indices { update(&groups[i].items) }
-            model.cachedGroups[kind] = groups
+        update(model.suggestions); update(model.categoryItems)
+        for group in model.groups { update(group.items) }
+        for groups in model.cachedGroups.values {
+            for group in groups { update(group.items) }
         }
-        publishSongs()
-        let songs = Dictionary(replacements.values.compactMap(\.song).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        LocalLibrary.songLibrary.updateOnlineArtwork(songs, source: "search")
         playlistLibrary.updateArtwork(songs: songs)
-        player.updateArtwork(songs)
     }
+
     private func publishSongs() {
         let values = publishedSongs.values.sorted { $0.id < $1.id }
         guard values != lastPublished else { return }
@@ -303,8 +316,9 @@ final class SearchMusicIntegration {
         onPublication?()
     }
 
-    private func publishLibrary() {
-        var items = libraryResults.map(mapItem)
+    private func makeLibraryItems() -> [MusicSearchItem] {
+        if let libraryItems { return libraryResults.map(mapItem) + libraryItems }
+        var items: [MusicSearchItem] = []
         let downloads = account.downloads?.records.values ?? Dictionary<Int64, NeteaseDownloadRecord>().values
         let paths = Dictionary(downloads.map { ($0.relativePath, $0.songID) }, uniquingKeysWith: { a, _ in a })
         for song in LocalLibrary.songs {
@@ -328,16 +342,71 @@ final class SearchMusicIntegration {
             items.append(.init(id: "local-artist:\(artist.id)", kind: .artist, title: artist.name,
                 subtitle: "艺人", artwork: artist.artwork ?? .missing, route: .artist(artist.id)))
         }
-        let matched = Self.matchLibrary(items, query: model.query)
-        if model.submitted {
-            let groups: [MusicSearchGroup] = MusicSearchKind.allCases.filter { $0 != .combined && (model.kind == .combined || model.kind == $0) }.compactMap { kind in
-                let values = matched.filter { $0.kind == kind }
-                return values.isEmpty ? nil : .init(kind: kind, items: values, hasMore: values.count > 3)
+        // Bind the cached cards to the source resources without observing images in the index.
+        let playlistByID = Dictionary(playlistLibrary.playlists.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let albumByID = Dictionary(LocalLibrary.albums.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let artistByID = Dictionary(LocalLibrary.artists.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        for item in items {
+            if let song = item.song { observeLibraryArtwork(item, read: { song.artwork }) }
+            else if case .playlist(let id) = item.route,
+                    let playlist = playlistByID[id] {
+                observeLibraryArtwork(item, read: { [playlistLibrary] in playlistLibrary.displayArtwork(of: playlist) })
+            } else if case .album(let id) = item.route,
+                      let album = albumByID[id] {
+                observeLibraryArtwork(item, read: { album.artwork })
+            } else if case .artist(let id) = item.route,
+                      let artist = artistByID[id] {
+                observeLibraryArtwork(item, read: { artist.artwork ?? .missing })
             }
-            assign(\.groups, groups)
-            if model.cachedGroups[model.kind] != groups { model.cachedGroups[model.kind] = groups }
-        } else { assign(\.keywords, []); assign(\.suggestions, matched) }
-        assign(\.hasMore, false); assign(\.isLoadingMore, false); assign(\.moreError, nil)
+        }
+        libraryItems = items
+        return libraryResults.map(mapItem) + items
+    }
+
+    @MainActor private final class LibraryArtworkBinding {
+        let item: MusicSearchItem
+        let read: @MainActor () -> Artwork
+        init(item: MusicSearchItem, read: @escaping @MainActor () -> Artwork) {
+            self.item = item; self.read = read
+        }
+    }
+
+    private func observeLibraryArtwork(_ item: MusicSearchItem, read: @escaping @MainActor () -> Artwork) {
+        observeLibraryArtwork(LibraryArtworkBinding(item: item, read: read))
+    }
+
+    private func observeLibraryArtwork(_ binding: LibraryArtworkBinding) {
+        let value = withObservationTracking { binding.read() } onChange: { [weak self] in
+            Task { @MainActor in
+                guard let self, self.libraryItems?.contains(where: { $0.$artwork === binding.item.$artwork }) == true else { return }
+                self.observeLibraryArtwork(binding)
+            }
+        }
+        binding.item.$artwork.update(value)
+    }
+
+    private func publishLibrary() {
+        libraryPublicationTask?.cancel()
+        let id = UUID(); libraryPublicationID = id
+        let items = makeLibraryItems()
+        let candidates = items.map { LibrarySearchMatcher.Candidate(id: $0.id, title: $0.title,
+            subtitle: $0.subtitle, album: $0.song?.album ?? "", prefersLocal: $0.song?.isOnline == false) }
+        let query = model.query, owner = sessionID, kind = model.kind, submitted = model.submitted
+        libraryPublicationTask = Task {
+            let indices = await libraryMatcher.match(candidates, query: query)
+            guard !Task.isCancelled, libraryPublicationID == id, sessionID == owner,
+                  model.scope == .library, model.query == query else { return }
+            let matched = indices.map { items[$0] }
+            if submitted {
+                let groups: [MusicSearchGroup] = MusicSearchKind.allCases.filter { $0 != .combined && (kind == .combined || kind == $0) }.compactMap { kind in
+                    let values = matched.filter { $0.kind == kind }
+                    return values.isEmpty ? nil : .init(kind: kind, items: values, hasMore: values.count > 3)
+                }
+                assign(\.groups, groups)
+                if model.cachedGroups[kind] != groups { model.cachedGroups[kind] = groups }
+            } else { assign(\.keywords, []); assign(\.suggestions, matched) }
+            assign(\.hasMore, false); assign(\.isLoadingMore, false); assign(\.moreError, nil)
+        }
     }
 
     static func matchLibrary(_ items: [MusicSearchItem], query: String) -> [MusicSearchItem] {
@@ -375,5 +444,49 @@ final class SearchMusicIntegration {
         actions.playNext = { authorized($0, next) }; actions.playLater = { authorized($0, later) }
         actions.toggleFavorite = { authorized($0, favorite) }; actions.addToPlaylist = { authorized($0, add) }
         return actions
+    }
+}
+
+/// Only value snapshots cross the actor boundary; artwork and UI state stay on MainActor.
+actor LibrarySearchMatcher {
+    struct Candidate: Sendable, Equatable {
+        let id: String
+        let title: String
+        let subtitle: String
+        let album: String
+        let prefersLocal: Bool
+    }
+    private struct Entry {
+        let candidate: Candidate
+        let title: String
+        let text: String
+    }
+    private var entries: [Entry] = []
+
+    func match(_ candidates: [Candidate], query: String) -> [Int] {
+        var updated: [Entry] = []
+        updated.reserveCapacity(candidates.count)
+        for (index, candidate) in candidates.enumerated() {
+            if entries.indices.contains(index), entries[index].candidate == candidate {
+                updated.append(entries[index])
+            } else {
+                updated.append(Entry(candidate: candidate,
+                    title: NeteaseLibrarySearchIndex.normalized(candidate.title),
+                    text: NeteaseLibrarySearchIndex.normalized([candidate.title, candidate.subtitle, candidate.album].joined(separator: "\n"))))
+            }
+        }
+        entries = updated
+        let query = NeteaseLibrarySearchIndex.normalized(query.trimmingCharacters(in: .whitespacesAndNewlines))
+        guard !query.isEmpty else { return [] }
+        var unique: [String: Int] = [:]
+        for (index, entry) in entries.enumerated() where entry.text.contains(query) {
+            if unique[entry.candidate.id] == nil || entry.candidate.prefersLocal { unique[entry.candidate.id] = index }
+        }
+        func rank(_ title: String) -> Int { title == query ? 0 : (title.hasPrefix(query) ? 1 : 2) }
+        return unique.values.sorted {
+            let a = entries[$0], b = entries[$1]
+            if rank(a.title) != rank(b.title) { return rank(a.title) < rank(b.title) }
+            return a.title == b.title ? a.candidate.id < b.candidate.id : a.title < b.title
+        }
     }
 }

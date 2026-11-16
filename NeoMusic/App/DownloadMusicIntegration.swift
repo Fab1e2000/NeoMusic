@@ -1,4 +1,5 @@
 import SwiftUI
+import Observation
 
 /// Joins account-owned transfers to the existing local library and player.
 @MainActor
@@ -8,17 +9,24 @@ final class DownloadMusicIntegration {
     private var resolving: Set<LibraryRoute> = []
     private var publishing = false
     private var stateAliases: [Int64: Set<String>] = [:]
+    private var progressAliases: [Int64: Set<String>] = [:]
+    private var progressCollections: [Int64: Set<String>] = [:]
+    private var progressPlaylists: [Int64: Set<String>] = [:]
     var requestLogin: (() -> Void)?
 
     init(account: NeteaseAccount) { self.account = account }
 
     func connect() {
         guard let store = account.downloads else { return }
+        observeLocalPlaylists()
+        store.onProgressChanged = { [weak self] in self?.publishProgress($0) }
+        store.onFileCommitted = { path in Task { await LocalLibrary.runtime.importFile(path) } }
         store.onChange = { [weak self] in self?.publishStates() }
-        store.onRecordsChanged = { [weak self] in
-            guard let self else { return }
+        store.onRecordsChanged = { [weak self, weak store] in
+            guard let self, let store else { return }
             self.publishMetadata()
-            Task { await LocalLibrary.runtime.refresh() }
+            let missing = store.records.values.filter { store.resource(songID: $0.songID) == nil }.map(\.relativePath)
+            if !missing.isEmpty { Task { await LocalLibrary.runtime.removeMissingFiles(missing) } }
         }
         LocalLibrary.runtime.configureOfflineResolver { [weak self] id in
             guard let self, let songID = self.songID(id), let url = store.resource(songID: songID) else { return nil }
@@ -270,6 +278,70 @@ final class DownloadMusicIntegration {
         }
     }
 
+    private func observeLocalPlaylists() {
+        withObservationTracking {
+            for playlist in LocalLibrary.playlistLibrary.playlists where !playlist.isReadOnly {
+                _ = LocalLibrary.playlistLibrary.songs(in: playlist.id)
+            }
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                self?.publishStates()
+                self?.observeLocalPlaylists()
+            }
+        }
+    }
+
+    private func publishProgress(_ id: Int64) {
+        guard let store = account.downloads, let state = store.states[id] else { return }
+        let shown: LibraryDownloads.SongState
+        switch state {
+        case .downloading(let value): shown = .downloading(value)
+        case .waiting: shown = .waiting
+        default: publishStates(); return
+        }
+        var aliases = progressAliases[id, default: []]
+        if let owner = store.userID { aliases.insert("netease:\(owner):\(id)") }
+        if let record = store.records[id] { aliases.insert(record.relativePath) }
+        LocalLibrary.downloads.update(states: Dictionary(uniqueKeysWithValues: aliases.map { ($0, shown) }), collections: [:])
+        var values: [LibraryRoute: LibraryDownloads.CollectionState] = [:]
+        for key in progressCollections[id, default: []] {
+            guard let collection = store.collections[key] else { continue }
+            var complete = 0, active = 0, failed = 0
+            var progress = 0.0
+            for songID in collection.orderedSongIDs {
+                let state = store.states[songID]
+                if state == .downloaded { complete += 1 }
+                if state?.isActive == true { active += 1 }
+                switch state {
+                case .downloaded, .processing: progress += 1
+                case .downloading(let value): progress += value
+                case .failed: failed += 1
+                default: break
+                }
+            }
+            let summary = LibraryDownloads.CollectionState(totalCount: collection.orderedSongIDs.count,
+                completedCount: complete, activeCount: active, failedCount: failed,
+                progress: progress / Double(max(1, collection.orderedSongIDs.count)))
+            if collection.kind == .album { values[.album("catalog:album:\(collection.id)")] = summary }
+            else {
+                for route in ["netease-playlist:\(collection.ownerID):\(collection.id)", "downloaded:playlist:\(collection.id)", "home:playlist:\(collection.id)"] { values[.playlist(route)] = summary }
+            }
+        }
+        for playlist in progressPlaylists[id, default: []] {
+            values[.playlist(playlist)] = progressSummary(LocalLibrary.playlistLibrary.songs(in: playlist))
+        }
+        for route in resolving where values[route] != nil { values[route]?.isResolving = true }
+        LocalLibrary.downloads.update(states: [:], collections: values)
+    }
+
+    private func progressSummary(_ songs: [LibrarySongItem]) -> LibraryDownloads.CollectionState {
+        let states = songs.map { LocalLibrary.downloads.state(of: $0.id) }
+        return .init(totalCount: songs.count, completedCount: states.filter { $0 == .downloaded }.count,
+            activeCount: states.filter { $0?.isActive == true }.count,
+            failedCount: states.filter { if case .failed = $0 { true } else { false } }.count,
+            progress: LocalLibrary.downloads.progress(of: songs))
+    }
+
     private func publishStates() {
         guard let store = account.downloads else { return }
         var values: [String: LibraryDownloads.SongState] = [:]
@@ -295,9 +367,12 @@ final class DownloadMusicIntegration {
             }
             for alias in aliases[id, default: []] { values[alias] = shown; managed.insert(alias) }
         }
+        progressAliases = aliases
+        progressCollections = [:]; progressPlaylists = [:]
         LocalLibrary.downloads.publish(states: values, managedSongIDs: managed)
         var collections: [LibraryRoute: LibraryDownloads.CollectionState] = [:]
         for collection in store.collections.values {
+            for id in collection.orderedSongIDs { progressCollections[id, default: []].insert(collection.key) }
             let states = collection.orderedSongIDs.map { store.states[$0] }
             let complete = states.filter { $0 == .downloaded }.count
             let active = states.filter { $0?.isActive == true }.count
@@ -316,6 +391,7 @@ final class DownloadMusicIntegration {
         for playlist in LocalLibrary.playlistLibrary.playlists where !playlist.isReadOnly {
             let songs = LocalLibrary.playlistLibrary.songs(in: playlist.id)
             guard songs.contains(where: { songID($0.id) != nil }) else { continue }
+            for song in songs { if let id = songID(song.id) { progressPlaylists[id, default: []].insert(playlist.id) } }
             let states = songs.map { LocalLibrary.downloads.state(of: $0.id) }
             let completed = states.filter { $0 == .downloaded }.count
             let active = states.filter { $0?.isActive == true }.count

@@ -158,7 +158,7 @@ struct LibraryArtistReference: Equatable {
 struct LibraryArtistItem: Identifiable, Equatable {
     let id: String
     let name: String
-    var artwork: Artwork?
+    @ArtworkResource var artwork: Artwork?
     var isFavorite = false
 }
 

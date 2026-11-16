@@ -298,7 +298,6 @@ struct NowPlayingQueueList: UIViewRepresentable {
         private(set) var latest: NowPlayingQueueList?
         private var entriesByID: [PlayerQueueEntry.ID: PlayerQueueEntry] = [:]
         private(set) var dataSource: UICollectionViewDiffableDataSource<Section, Item>?
-        private var swipeActionsByID: [PlayerQueueEntry.ID: [SongRowAction]] = [:]
         private weak var collectionView: UICollectionView?
         private var hasApplied = false
         private var requestedItemIdentifiers: [Item] = []
@@ -309,20 +308,18 @@ struct NowPlayingQueueList: UIViewRepresentable {
 
         func trailingActions(at indexPath: IndexPath) -> UISwipeActionsConfiguration? {
             guard case .track(let id) = dataSource?.itemIdentifier(for: indexPath),
-                  let items = swipeActionsByID[id], !items.isEmpty else { return nil }
-            let actions = items.map { item in
-                let action = UIContextualAction(style: .normal, title: item.title) { [weak self] _, _, completion in
-                    guard let current = self?.swipeActionsByID[id]?.first(where: { $0.id == item.id }), !current.disabled else {
-                        completion(false); return
-                    }
-                    current.perform()
-                    completion(true)
+                  entriesByID[id] != nil else { return nil }
+            let action = UIContextualAction(style: .destructive, title: nil) { [weak self] _, _, completion in
+                guard let self, let entry = self.entriesByID[id], let latest = self.latest else {
+                    completion(false); return
                 }
-                action.image = UIImage(systemName: item.systemImage)
-                action.backgroundColor = item.id == "favorite" ? .systemPink : .systemBlue
-                return action
+                latest.player.removeFromQueue(at: entry.queueIndex)
+                completion(true)
             }
-            return UISwipeActionsConfiguration(actions: actions)
+            action.image = UIImage(systemName: "minus.circle.fill")
+            action.image?.accessibilityLabel = "从继续播放列表删除"
+            action.backgroundColor = .systemRed
+            return UISwipeActionsConfiguration(actions: [action])
         }
 
         func attach(to collectionView: UICollectionView, initial: NowPlayingQueueList) {
@@ -536,9 +533,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
             case .track(let id):
                 guard let entry = entriesByID[id] else { return }
                 cell.contentConfiguration = UIHostingConfiguration {
-                    NowPlayingQueueRow(entry: entry, onSwipeActions: { [weak self] actions in
-                        self?.swipeActionsByID[id] = actions.isEmpty ? nil : actions
-                    }) { [weak self] in
+                    NowPlayingQueueRow(entry: entry) { [weak self] in
                         guard let self, let index = self.entriesByID[id]?.queueIndex else { return }
                         self.latest?.onPlay(index)
                     }

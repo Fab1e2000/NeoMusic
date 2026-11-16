@@ -11,7 +11,7 @@ struct CollectionDetail {
     var subtitle: String?
     /// 专辑的发行年份或播放列表的更新时间。
     var caption: String?
-    let artwork: Artwork
+    @ArtworkResource var artwork: Artwork
     /// 页面底色，取自封面主色。
     let tint: Color
     /// Prepared from the displayed artwork before the library publishes this album.

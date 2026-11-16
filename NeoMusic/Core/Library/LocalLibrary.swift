@@ -214,6 +214,21 @@ final class SongLibrary {
         }
     }
 
+    func updateOnlineFavorites(_ replacements: [String: LibrarySongItem], order: [String]) {
+        let existingIDs = Set(onlineSongs.map(\.id))
+        let changed = onlineSongs.map { replacements[$0.id] ?? $0 }
+            + replacements.values.filter { $0.isOnline && !existingIDs.contains($0.id) }
+        let positions = Dictionary(order.enumerated().map { ($0.element, $0.offset) }, uniquingKeysWith: { first, _ in first })
+        let updated = changed.sorted { lhs, rhs in
+            let a = positions[lhs.id], b = positions[rhs.id]
+            if let a, let b { return a < b }
+            if a != nil { return true }
+            if b != nil { return false }
+            return (lhs.onlineSongID ?? 0) < (rhs.onlineSongID ?? 0)
+        }
+        if onlineSongs != updated { onlineSongs = updated }
+    }
+
     /// Image arrivals update their owning catalog without reloading playback availability.
     func updateOnlineArtwork(_ replacements: [String: LibrarySongItem], source: String? = nil) {
         guard !replacements.isEmpty else { return }

@@ -373,6 +373,23 @@ import XCTest
         XCTAssertEqual(SearchMusicIntegration.matchLibrary(values, query: "artist").count, 3)
     }
 
+    func testBackgroundLibraryMatcherPreservesLocalPriorityAndRefreshesIndex() async {
+        let matcher = LibrarySearchMatcher()
+        let online = LibrarySearchMatcher.Candidate(id: "song", title: "Moon", subtitle: "Artist", album: "", prefersLocal: false)
+        let local = LibrarySearchMatcher.Candidate(id: "song", title: "Moon", subtitle: "Artist", album: "", prefersLocal: true)
+        let prefix = LibrarySearchMatcher.Candidate(id: "prefix", title: "Moonrise", subtitle: "Artist", album: "", prefersLocal: false)
+        let values = [online, prefix, local]
+        let first = await matcher.match(values, query: "ｍｏｏｎ")
+        XCTAssertEqual(first, [2, 1])
+        let repeated = await matcher.match(values, query: "artist")
+        XCTAssertEqual(repeated, [2, 1])
+        let changed = LibrarySearchMatcher.Candidate(id: "song", title: "Sun", subtitle: "Artist", album: "", prefersLocal: true)
+        let refreshed = await matcher.match([changed], query: "moon")
+        XCTAssertTrue(refreshed.isEmpty)
+        let empty = await matcher.match([changed], query: "  ")
+        XCTAssertTrue(empty.isEmpty)
+    }
+
     func testRapidInputDebouncesAndAccountChangeCancelsSuggestions() async throws {
         let (client, network) = client(responses: [
             "/weapi/search/suggest/keyword": [Data(#"{"code":200,"result":{"allMatch":[{"keyword":"Latest"}]}}"#.utf8)],

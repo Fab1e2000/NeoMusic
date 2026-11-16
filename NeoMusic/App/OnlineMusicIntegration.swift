@@ -240,6 +240,18 @@ final class OnlineMusicIntegration {
         LocalLibrary.player.restoreOnlineIdentity(ownerID: ownerID)
         let content = Content(owner: owner, revision: music.sessionRevision, playlists: music.playlists, songs: music.songs,
                               tracks: music.playlistTracks, liked: music.likedIDs, likedAt: music.likedAt)
+        if let previous = published, Self.isFavoriteOnlyChange(from: previous, to: content) {
+            let changed = previous.liked.symmetricDifference(content.liked).union(
+                Set(previous.likedAt.keys).union(content.likedAt.keys).filter { previous.likedAt[$0] != content.likedAt[$0] })
+            let replacements = Dictionary(uniqueKeysWithValues: changed.compactMap { id in
+                music.songs[id].map { value in let item = song(value, owner: owner, music: music); return (item.id, item) }
+            })
+            LocalLibrary.songLibrary.updateOnlineFavorites(replacements,
+                order: content.playlists.first(where: \.isFavorites).flatMap { content.tracks[$0.id] }?.map { "netease:\(owner):\($0)" } ?? [])
+            LocalLibrary.playlistLibrary.updateSongFavorites(replacements)
+            LocalLibrary.player.reconcileAvailability(songs: LocalLibrary.allSongs)
+            published = content
+        }
         if published != content {
             let ownerChanged = published?.owner != owner
             if ownerChanged { artworkSongs = [:] }
@@ -286,6 +298,14 @@ final class OnlineMusicIntegration {
             LocalLibrary.playlistLibrary.updateOnlineSongs(playlistID: item.id, songs: LocalLibrary.playlistLibrary.songs(in: item.id),
                 error: music.playlistErrors[id], loading: music.loadingPlaylists.contains(id))
         }
+    }
+
+    private static func isFavoriteOnlyChange(from old: Content, to new: Content) -> Bool {
+        guard old.liked != new.liked || old.likedAt != new.likedAt else { return false }
+        guard old.owner == new.owner, old.revision == new.revision, old.songs == new.songs,
+              old.playlists.filter({ !$0.isFavorites }) == new.playlists.filter({ !$0.isFavorites }) else { return false }
+        let favorites = Set((old.playlists + new.playlists).filter(\.isFavorites).map(\.id))
+        return old.tracks.filter { !favorites.contains($0.key) } == new.tracks.filter { !favorites.contains($0.key) }
     }
 
     private func song(_ value: NeteaseMusicSong, owner: Int64, music: NeteaseMusicStore) -> LibrarySongItem {

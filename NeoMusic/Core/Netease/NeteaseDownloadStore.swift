@@ -3,6 +3,7 @@ import Observation
 
 @MainActor @Observable
 final class NeteaseDownloadStore {
+    typealias IndexWriter = @Sendable (Data, URL) async throws -> Void
     typealias Processor = @Sendable (URL, String, DownloadedAudioTags.Metadata, URL) async throws -> URL
     private(set) var states: [Int64: NeteaseDownloadState] = [:]
     private(set) var records: [Int64: NeteaseDownloadRecord] = [:]
@@ -21,6 +22,8 @@ final class NeteaseDownloadStore {
         }
     }
     @ObservationIgnored var onChange: (() -> Void)?
+    @ObservationIgnored var onProgressChanged: ((Int64) -> Void)?
+    @ObservationIgnored var onFileCommitted: ((String) -> Void)?
     @ObservationIgnored var onRecordsChanged: (() -> Void)?
     let musicDirectory: URL
     @ObservationIgnored private let directory: URL
@@ -28,6 +31,8 @@ final class NeteaseDownloadStore {
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let transport: NeteaseDownloadTransport
     @ObservationIgnored private let process: Processor
+    @ObservationIgnored private let writeIndex: IndexWriter
+    @ObservationIgnored private var committingJobs: Set<UUID> = []
     @ObservationIgnored private var session: NeteaseSavedSession?
     @ObservationIgnored private var jobs: [UUID: NeteaseDownloadJob] = [:]
     @ObservationIgnored private var workers: [UUID: Task<Void, Never>] = [:]
@@ -38,6 +43,7 @@ final class NeteaseDownloadStore {
     @ObservationIgnored private var changingSession = false
     @ObservationIgnored private var changingNetwork = false
     @ObservationIgnored private var hasActivated = false
+    @ObservationIgnored private var persistenceTask: Task<Void, Error>?
     @ObservationIgnored private var restoreTask: Task<Void, Never>?
 
     private struct Snapshot: Codable, Sendable {
@@ -50,16 +56,18 @@ final class NeteaseDownloadStore {
          directory: URL = URL.applicationSupportDirectory.appending(path: "NeteaseDownloads", directoryHint: .isDirectory),
          musicDirectory: URL = URL.documentsDirectory.appending(path: "音乐", directoryHint: .isDirectory),
          defaults: UserDefaults = .standard, transport: NeteaseDownloadTransport? = nil,
-         process: @escaping Processor = NeteaseDownloadStore.prepare) {
+         process: @escaping Processor = NeteaseDownloadStore.prepare,
+         writeIndex: @escaping IndexWriter = NeteaseDownloadStore.writeIndexFile) {
         self.client = client; self.directory = directory; self.musicDirectory = musicDirectory; self.defaults = defaults
         self.quality = defaults.string(forKey: "netease.download.quality").flatMap(NeteaseMusicQuality.init(rawValue:)) ?? .lossless
         self.allowsCellular = defaults.object(forKey: "netease.download.cellular") as? Bool ?? true
         self.transport = transport ?? NeteaseDownloadTransport(spool: directory.appending(path: "Transfers"))
-        self.process = process
+        self.process = process; self.writeIndex = writeIndex
         self.transport.onEvent = { [weak self] in self?.receive($0) }
         self.transport.onFinishedEvents = { [weak self] in
             guard let self else { return }
             for work in self.workers.values { await work.value }
+            _ = await self.persistenceTask?.result
         }
     }
 
@@ -151,7 +159,7 @@ final class NeteaseDownloadStore {
         }
         jobs = jobs.filter { !obsolete.contains($0.key) }
         hasActivated = true; changingSession = false
-        do { try persist() } catch { self.error = error.localizedDescription }
+        do { try await persist() } catch { self.error = error.localizedDescription }
         onChange?(); pump()
     }
 
@@ -231,12 +239,23 @@ final class NeteaseDownloadStore {
                 self.jobs[job.id] = job
                 self.states[songID] = .queued
             }
-            do { try self.persist() }
+            let submittedCollections = self.collections, submittedJobs = self.jobs, submittedStates = self.states
+            do { try await self.persist() }
             catch {
-                self.collections = oldCollections; self.jobs = oldJobs; self.states = oldStates
+                for key in Set(oldCollections.keys).union(submittedCollections.keys) where self.collections[key] == submittedCollections[key] {
+                    self.collections[key] = oldCollections[key]
+                }
+                for key in Set(oldJobs.keys).union(submittedJobs.keys) where self.jobs[key] == submittedJobs[key] {
+                    self.jobs[key] = oldJobs[key]
+                }
+                for key in Set(oldStates.keys).union(submittedStates.keys) where self.states[key] == submittedStates[key] {
+                    self.states[key] = oldStates[key]
+                }
                 throw error
             }
             for (id, previous) in oldJobs where self.jobs[id] == nil { self.cleanupTransfer(previous) }
+            try Task.checkCancellation()
+            guard self.sessionRevision == revision else { throw NeteaseDownloadError.accountChanged }
             self.error = nil; self.onRecordsChanged?(); self.onChange?(); self.pump()
         }
         plans[key] = PlanningTask(id: planID, task: task)
@@ -267,7 +286,7 @@ final class NeteaseDownloadStore {
         for id in ids { await workers[id]?.value; if let job = jobs[id] { cleanupTransfer(job) }; jobs.removeValue(forKey: id) }
         transferring.subtract(ids)
         for id in songs where resource(songID: id) == nil { states.removeValue(forKey: id) }
-        do { try persist() } catch { self.error = error.localizedDescription }
+        do { try await persist() } catch { self.error = error.localizedDescription }
         onChange?(); pump()
     }
 
@@ -286,7 +305,7 @@ final class NeteaseDownloadStore {
             // Retain source identity and collection references for online fallback and future downloads.
             states.removeValue(forKey: id)
         }
-        try persist()
+        try await persist()
     }
 
     func resource(songID: Int64) -> URL? {
@@ -298,6 +317,7 @@ final class NeteaseDownloadStore {
     /// Used by background-event completion and deterministic integration tests.
     func waitForProcessing() async {
         while !workers.isEmpty { for task in workers.values { await task.value } }
+        _ = await persistenceTask?.result
     }
     func lyricsURL(songID: Int64) -> URL? {
         guard let path = records[songID]?.lyricsRelativePath else { return nil }
@@ -329,7 +349,8 @@ final class NeteaseDownloadStore {
                         try self.check(job.id, revision: revision)
                         self.jobs[job.id]?.actualQuality = source.quality; self.jobs[job.id]?.type = source.type
                         self.jobs[job.id]?.expectedSize = source.size
-                        try self.persist()
+                        try await self.persist()
+                        try self.check(job.id, revision: revision)
                         self.transferring.insert(job.id)
                         self.transport.start(id: job.id, url: source.url, allowsCellular: self.allowsCellular)
                         self.set(.downloading(0), for: job.metadata.song.id)
@@ -357,8 +378,13 @@ final class NeteaseDownloadStore {
             transferring.remove(id)
             guard let job = jobs[id], !job.cancelled else { try? FileManager.default.removeItem(at: file); return }
             jobs[id]?.stagedFilename = file.lastPathComponent
-            do { try persist() } catch { fail(id, message: error.localizedDescription); return }
-            pump()
+            let write = enqueuePersistence()
+            workers[id] = Task { [weak self] in
+                guard let self else { return }
+                defer { self.workers.removeValue(forKey: id); self.pump() }
+                do { try await write.value }
+                catch { self.fail(id, message: error.localizedDescription) }
+            }
         case let .failed(id, message, cancelled):
             transferring.remove(id)
             guard let job = jobs[id], !job.cancelled, !changingNetwork, !changingSession else { return }
@@ -401,7 +427,8 @@ final class NeteaseDownloadStore {
         if FileManager.default.fileExists(atPath: destination.path), !recoveringCommit { throw CocoaError(.fileWriteFileExists) }
         // Persist ownership before the move so a process exit between file and index commits is recoverable.
         jobs[job.id]?.destinationRelativePath = relative
-        try persist()
+        try await persist()
+        try check(job.id, revision: revision)
         if !recoveringCommit { try FileManager.default.moveItem(at: prepared, to: destination) }
         let lyricPath = lyricText.map { _ in String(relative.dropLast(prepared.pathExtension.count)) + "lrc" }
         let previousRecord = records[song.id]
@@ -409,15 +436,20 @@ final class NeteaseDownloadStore {
             if let lyricPath, let lyricText { try lyricText.write(to: ownedFile(lyricPath), atomically: true, encoding: .utf8) }
             records[song.id] = .init(metadata: job.metadata, relativePath: relative, lyricsRelativePath: lyricPath,
                                      quality: actual, downloadedAt: Date(), ownerID: saved.profile.userID)
+            committingJobs.insert(job.id)
+            try await persist()
+            committingJobs.remove(job.id)
             jobs.removeValue(forKey: job.id)
-            try persist()
         } catch {
-            records[song.id] = previousRecord; jobs[job.id] = job
+            committingJobs.remove(job.id)
+            records[song.id] = previousRecord
+            if jobs[job.id] == nil { jobs[job.id] = job }
             if !recoveringCommit { try? FileManager.default.removeItem(at: destination) }
             if let lyricPath { try? FileManager.default.removeItem(at: ownedFile(lyricPath)) }
+            _ = enqueuePersistence()
             throw error
         }
-        cleanupTransfer(job); set(.downloaded, for: song.id); onRecordsChanged?()
+        cleanupTransfer(job); set(.downloaded, for: song.id); if let onFileCommitted { onFileCommitted(relative) } else { onRecordsChanged?() }
     }
 
     private func optionalLyrics(_ id: Int64, credential: NeteaseCredential) async -> String? {
@@ -447,20 +479,41 @@ final class NeteaseDownloadStore {
         guard let job = jobs[id] else { return }
         jobs[id]?.error = message
         set(.failed(message), for: job.metadata.song.id)
-        do { try persist() } catch { self.error = error.localizedDescription }
+        let write = enqueuePersistence()
+        Task { [weak self] in
+            do { try await write.value } catch { self?.error = error.localizedDescription }
+        }
     }
     private func set(_ state: NeteaseDownloadState, for id: Int64) {
         guard states[id] != state else { return }
-        states[id] = state; onChange?()
+        states[id] = state
+        switch state {
+        case .downloading, .waiting:
+            if let onProgressChanged { onProgressChanged(id) } else { onChange?() }
+        default: onChange?()
+        }
     }
     private func cleanupTransfer(_ job: NeteaseDownloadJob) {
         let path = transport.spool.appending(path: job.stagedFilename ?? job.id.uuidString + ".transfer")
         try? FileManager.default.removeItem(at: path)
     }
-    private func persist() throws {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let value = Snapshot(records: Array(records.values), collections: Array(collections.values), jobs: Array(jobs.values))
-        try JSONEncoder().encode(value).write(to: directory.appending(path: "index.json"), options: .atomic)
+    private func persist() async throws {
+        try await enqueuePersistence().value
+    }
+    // Capture in main-actor submission order; a failed write must not prevent a later recovery write.
+    private func enqueuePersistence() -> Task<Void, Error> {
+        let value = Snapshot(records: Array(records.values), collections: Array(collections.values), jobs: jobs.values.filter { !committingJobs.contains($0.id) })
+        let previous = persistenceTask, directory = directory, writeIndex = writeIndex
+        let task = Task.detached {
+            _ = await previous?.result
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try await writeIndex(JSONEncoder().encode(value), directory.appending(path: "index.json"))
+        }
+        persistenceTask = task
+        return task
+    }
+    @concurrent static func writeIndexFile(_ data: Data, _ url: URL) async throws {
+        try data.write(to: url, options: .atomic)
     }
     private func ownedFile(_ path: String) throws -> URL {
         let root = musicDirectory.standardizedFileURL.resolvingSymlinksInPath()

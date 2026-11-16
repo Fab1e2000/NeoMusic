@@ -11,7 +11,7 @@ struct MusicSearchItem: Identifiable, Equatable {
     let kind: MusicSearchKind
     let title: String
     let subtitle: String
-    var artwork: Artwork
+    @ArtworkResource var artwork: Artwork
     var song: LibrarySongItem?
     var route: LibraryRoute?
 }

@@ -4,7 +4,7 @@ import SwiftUI
 struct LibraryPlaylistItem: Identifiable, Equatable {
     let id: String
     var title: String
-    var artwork: Artwork
+    @ArtworkResource var artwork: Artwork
     var description = ""
     var showsOnProfile = true
     var isFavorite = false
