@@ -36,6 +36,11 @@ public class RemoteAudioSource: AudioStreamSource {
     private var relativePosition: Int
     private var seekOffset: Int
     private var supportsSeek: Bool
+    private var cachedPrefixData = Data()
+    private var cachedPrefixEOF = false
+    private var hasCompletedInitialRequest = false
+    private var activeStreamGeneration = 0
+    private let maxPrefixCacheBytes = 64 * 1024 * 1024
 
     var metadataStreamProcessor: MetadataStreamSource
 
@@ -149,6 +154,8 @@ public class RemoteAudioSource: AudioStreamSource {
     }
 
     public func seek(at offset: Int) {
+        activeStreamGeneration &+= 1
+        let generation = activeStreamGeneration
         close()
 
         relativePosition = 0
@@ -158,13 +165,27 @@ public class RemoteAudioSource: AudioStreamSource {
             return
         }
 
+        if parsedHeaderOutput?.isMp4 != true,
+           !cachedPrefixData.isEmpty,
+           offset >= 0,
+           offset < cachedPrefixData.count || (offset == cachedPrefixData.count && cachedPrefixEOF)
+        {
+            retrierTimeout.cancel()
+            metadataStreamProcessor.reset()
+            icycastHeadersProcessor.reset()
+            shouldTryParsingIcycastHeaders = false
+            streamOperationQueue.isSuspended = false
+            replayCachedPrefix(from: offset, generation: generation)
+            return
+        }
+
         mp4Restructure.clear()
         retrierTimeout.cancel()
         metadataStreamProcessor.reset()
         icycastHeadersProcessor.reset()
         shouldTryParsingIcycastHeaders = false
 
-        performOpen(seek: offset)
+        performOpen(seek: offset, generation: generation)
     }
 
     public func suspend() {
@@ -188,32 +209,77 @@ public class RemoteAudioSource: AudioStreamSource {
         }
     }
 
-    private func performOpen(seek seekOffset: Int) {
+    private func replayCachedPrefix(from offset: Int, generation: Int) {
+        let snapshot = cachedPrefixData
+        let reachedEOF = cachedPrefixEOF
+        let canResumeNetwork = supportsSeek
+        let chunkSize = 64 * 1024
+
+        var cursor = offset
+        while cursor < snapshot.count {
+            let end = min(cursor + chunkSize, snapshot.count)
+            let chunk = snapshot.subdata(in: cursor..<end)
+            addStreamOperation { [weak self] in
+                guard let self, self.activeStreamGeneration == generation else { return }
+                self.delegate?.dataAvailable(source: self, data: chunk)
+                self.relativePosition += chunk.count
+            }
+            cursor = end
+        }
+
+        if reachedEOF {
+            addCompletionOperation { [weak self] in
+                guard let self, self.activeStreamGeneration == generation else { return }
+                self.delegate?.endOfFileOccurred(source: self)
+            }
+        } else if canResumeNetwork {
+            addStreamOperation { [weak self] in
+                guard let self, self.activeStreamGeneration == generation else { return }
+                self.seekOffset = snapshot.count
+                self.relativePosition = 0
+                self.doPerfomOpen(seek: snapshot.count, generation: generation)
+            }
+        } else {
+            performOpen(seek: 0, generation: generation)
+        }
+    }
+
+    private func performOpen(seek seekOffset: Int, generation: Int) {
         if seekOffset == 0 {
-            initialRequest { [weak self] in
-                guard let self else { return }
-                if self.parsedHeaderOutput?.isMp4 == true {
-                    self.handleMp4Files()
+            if hasCompletedInitialRequest {
+                if parsedHeaderOutput?.isMp4 == true {
+                    handleMp4Files(generation: generation)
                 } else {
-                    self.doPerfomOpen(seek: 0)
+                    doPerfomOpen(seek: 0, generation: generation)
+                }
+                return
+            }
+            initialRequest { [weak self] in
+                guard let self, self.activeStreamGeneration == generation else { return }
+                self.hasCompletedInitialRequest = true
+                if self.parsedHeaderOutput?.isMp4 == true {
+                    self.handleMp4Files(generation: generation)
+                } else {
+                    self.doPerfomOpen(seek: 0, generation: generation)
                 }
             }
         } else {
             if mp4Restructure.dataOptimized {
                 let adjustedOffset = mp4Restructure.seekAdjusted(offset: seekOffset)
-                doPerfomOpen(seek: adjustedOffset)
+                doPerfomOpen(seek: adjustedOffset, generation: generation)
             } else {
-                doPerfomOpen(seek: seekOffset)
+                doPerfomOpen(seek: seekOffset, generation: generation)
             }
         }
     }
 
-    private func doPerfomOpen(seek seekOffset: Int) {
+    private func doPerfomOpen(seek seekOffset: Int, generation: Int) {
+        guard activeStreamGeneration == generation else { return }
         let urlRequest = buildUrlRequest(with: url, seekIfNeeded: seekOffset)
         streamRequest = networkingClient.stream(request: urlRequest)
             .responseStream { [weak self] event in
-                guard let self = self else { return }
-                self.handleResponse(event: event)
+                guard let self, self.activeStreamGeneration == generation else { return }
+                self.handleResponse(event: event, generation: generation)
             }
             .resume()
 
@@ -235,19 +301,20 @@ public class RemoteAudioSource: AudioStreamSource {
         }.resume()
     }
 
-    private func handleMp4Files() {
+    private func handleMp4Files(generation: Int) {
         mp4Restructure.optimizeIfNeeded { [weak self] result in
-            guard let self else { return }
+            guard let self, self.activeStreamGeneration == generation else { return }
             switch result {
             case let .success(value):
                 if let value {
                     self.addStreamOperation {
+                        guard self.activeStreamGeneration == generation else { return }
                         let audioCount = self.processAudio(data: value.initialData)
                         self.relativePosition += audioCount
                     }
-                    self.doPerfomOpen(seek: value.mdatOffset)
+                    self.doPerfomOpen(seek: value.mdatOffset, generation: generation)
                 } else {
-                    self.doPerfomOpen(seek: 0)
+                    self.doPerfomOpen(seek: 0, generation: generation)
                 }
             case let .failure(failure):
                 self.delegate?.errorOccurred(source: self, error: failure)
@@ -257,13 +324,14 @@ public class RemoteAudioSource: AudioStreamSource {
 
     // MARK: - Network Handle Methods
 
-    private func handleResponse(event: NetworkDataStream.ResponseEvent) {
+    private func handleResponse(event: NetworkDataStream.ResponseEvent, generation: Int) {
+        guard activeStreamGeneration == generation else { return }
         switch event {
         case let .response(urlResponse):
             parseResponseHeader(response: urlResponse)
             streamOperationQueue.isSuspended = false
         case let .stream(.success(response)):
-            handleSuccessfulStreamEvent(response: response)
+            handleSuccessfulStreamEvent(response: response, generation: generation)
         case let .stream(.failure(error)):
             handleFailedStreamEvent(error: error)
         case let .complete(event):
@@ -271,20 +339,25 @@ public class RemoteAudioSource: AudioStreamSource {
                 delegate?.errorOccurred(source: self, error: error)
             } else {
                 addCompletionOperation { [weak self] in
-                    guard let self = self else { return }
+                    guard let self, self.activeStreamGeneration == generation else { return }
+                    if self.parsedHeaderOutput?.isMp4 != true,
+                       self.seekOffset + self.relativePosition == self.cachedPrefixData.count
+                    {
+                        self.cachedPrefixEOF = true
+                    }
                     self.delegate?.endOfFileOccurred(source: self)
                 }
             }
         }
     }
 
-    private func handleSuccessfulStreamEvent(response: NetworkDataStream.Response) {
+    private func handleSuccessfulStreamEvent(response: NetworkDataStream.Response, generation: Int) {
         guard let audioData = response.data else {
             delegate?.errorOccurred(source: self, error: NetworkError.missingData)
             return
         }
         addStreamOperation { [weak self] in
-            guard let self = self else { return }
+            guard let self, self.activeStreamGeneration == generation else { return }
             if self.shouldTryParsingIcycastHeaders {
                 let (header, extractedAudio) = self.icycastHeadersProcessor.process(data: audioData)
                 if let header = header {
@@ -317,14 +390,20 @@ public class RemoteAudioSource: AudioStreamSource {
     /// - Parameter data: The audio to be processed
     /// - Returns: An `Int` value representing the amount of audio data bytes.
     private func processAudio(data: Data) -> Int {
+        let output: Data
         if metadataStreamProcessor.canProcessMetadata {
-            let extractedAudioData = metadataStreamProcessor.processMetadata(data: data)
-            delegate?.dataAvailable(source: self, data: extractedAudioData)
-            return extractedAudioData.count
+            output = metadataStreamProcessor.processMetadata(data: data)
         } else {
-            delegate?.dataAvailable(source: self, data: data)
-            return data.count
+            output = data
         }
+        if parsedHeaderOutput?.isMp4 != true,
+           seekOffset + relativePosition == cachedPrefixData.count,
+           cachedPrefixData.count + output.count <= maxPrefixCacheBytes
+        {
+            cachedPrefixData.append(output)
+        }
+        delegate?.dataAvailable(source: self, data: output)
+        return output.count
     }
 
     private func parseResponseHeader(response: HTTPURLResponse?) {

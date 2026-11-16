@@ -12,6 +12,7 @@
     private var operationStarted = ProcessInfo.processInfo.systemUptime
     private var operation = "load"
     private var audio: AudioStreaming.AudioPlayer?
+    private var localNode: LocalFilePlaybackNode?
     private var source: URL?
     private var initialPosition: Double?
     private var wantsPlayback = false
@@ -19,13 +20,23 @@
     private var entryID: AudioEntryId?
     private var analyzer = AudioSpectrumAnalyzer()
     private var readiness: [UUID: CheckedContinuation<Void, Error>] = [:]
-    var volume: Float = 1 { didSet { if !isLoading { audio?.volume = volume } } }
-    var rate: Float { wantsPlayback && !isLoading && audio?.state == .playing ? 1 : 0 }
+    var volume: Float = 1 {
+        didSet {
+            localNode?.volume = volume
+            if !isLoading { audio?.volume = volume }
+        }
+    }
+    var rate: Float {
+        if let localNode { return wantsPlayback && localNode.isPlaying ? 1 : 0 }
+        return wantsPlayback && !isLoading && audio?.state == .playing ? 1 : 0
+    }
     var currentPlaybackTime: Double? {
+        if let localNode { return localNode.currentTime }
         guard !isLoading else { return nil }
         return finishedPosition ?? audio?.progress
     }
     var playbackDuration: Double? {
+        if let localNode { return localNode.duration }
         guard let duration = audio?.duration, duration > 0 else { return nil }
         return duration
     }
@@ -37,12 +48,44 @@
         operation = "load"; operationStarted = ProcessInfo.processInfo.systemUptime
         PerformanceDiagnostics.restoration("stream.load.request")
         let identity = itemID
+        if url.isFileURL {
+            preparation = Task { [weak self] in
+                await Task.yield()
+                guard !Task.isCancelled, let self, self.itemID == identity else { return }
+                self.preparation = nil
+                do {
+                    let file = try AVAudioFile(forReading: url)
+                    let startAt = self.initialPosition ?? 0
+                    self.initialPosition = nil
+                    let node = LocalFilePlaybackNode(file: file, analyzer: self.analyzer, volume: self.volume, initialPosition: startAt)
+                    node.onEnded = { [weak self] in
+                        guard let self, self.itemID == identity else { return }
+                        self.wantsPlayback = false
+                        self.onChange?()
+                        self.onEnded?()
+                    }
+                    self.localNode = node
+                    self.isLoading = false
+                    if self.wantsPlayback { node.play() }
+                    PerformanceDiagnostics.restoration("stream.\(self.operation).ready elapsed_ms=\((ProcessInfo.processInfo.systemUptime - self.operationStarted) * 1000) position=\(node.currentTime ?? 0)")
+                    self.finishReadiness(.success(()))
+                    self.onChange?()
+                } catch {
+                    self.error = error
+                    self.isLoading = false
+                    self.wantsPlayback = false
+                    self.finishReadiness(.failure(error))
+                    self.onChange?()
+                }
+            }
+            return
+        }
         preparation = Task { [weak self] in
             let format = await Self.readFormat(url: url)
             guard !Task.isCancelled, let self, self.itemID == identity else { return }
             self.preparation = nil
             let player = AudioStreaming.AudioPlayer(configuration: AudioPlayerConfiguration(
-                bufferSizeInSeconds: 8, secondsRequiredToStartPlaying: 0.3, gracePeriodAfterSeekInSeconds: 0.1), outputFormat: format)
+                bufferSizeInSeconds: 8, secondsRequiredToStartPlaying: 0.15, gracePeriodAfterSeekInSeconds: 0.02), outputFormat: format)
             self.audio = player; player.volume = 0; player.delegate = self
             let analyzer = self.analyzer
             player.frameFiltering.add(entry: "neomusic.spectrum", filter: Self.spectrumCallback(analyzer))
@@ -59,15 +102,35 @@
     }
     func play() {
         wantsPlayback = true
+        if let localNode {
+            localNode.play()
+            onChange?()
+            return
+        }
         audio?.resumeAfterSeek = true
         if audio?.state == .stopped { seek(to: 0) }
         audio?.resume()
     }
-    func pause() { wantsPlayback = false; audio?.resumeAfterSeek = false; if !isLoading { audio?.pause() } }
+    func pause() {
+        wantsPlayback = false
+        if let localNode {
+            localNode.pause()
+            onChange?()
+            return
+        }
+        audio?.resumeAfterSeek = false
+        if !isLoading { audio?.pause() }
+    }
     func seek(to seconds: Double) {
         guard itemID != nil else { return }
         operation = "seek"; operationStarted = ProcessInfo.processInfo.systemUptime
         PerformanceDiagnostics.restoration("stream.seek.request target=\(seconds)")
+        if let localNode {
+            localNode.seek(to: seconds)
+            PerformanceDiagnostics.restoration("stream.seek.ready elapsed_ms=\((ProcessInfo.processInfo.systemUptime - operationStarted) * 1000) position=\(localNode.currentTime ?? 0)")
+            onChange?()
+            return
+        }
         guard let audio else { initialPosition = seconds; return }
         finishedPosition = nil; isLoading = true; audio.volume = 0
         if initialPosition != nil { initialPosition = seconds }
@@ -77,6 +140,7 @@
     func clear() {
         preparation?.cancel(); preparation = nil
         finishReadiness(.failure(CancellationError()))
+        localNode?.stopAndClean(); localNode = nil
         audio?.delegate = nil; audio?.stop(); audio = nil
         itemID = nil; source = nil; initialPosition = nil; finishedPosition = nil
         entryID = nil; wantsPlayback = false; isLoading = false; error = nil
