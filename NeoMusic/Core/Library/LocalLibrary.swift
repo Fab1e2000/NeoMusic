@@ -217,12 +217,9 @@ final class SongLibrary {
     /// Image arrivals update their owning catalog without reloading playback availability.
     func updateOnlineArtwork(_ replacements: [String: LibrarySongItem], source: String? = nil) {
         guard !replacements.isEmpty else { return }
-        if let source {
-            let existing = externalSources[source] ?? []
-            replaceExternalSongs(existing.map { item in replacements[item.id].map { item.replacingArtwork(from: $0) } ?? item }, source: source)
-        } else {
-            let updated = onlineSongs.map { item in replacements[item.id].map { item.replacingArtwork(from: $0) } ?? item }
-            if onlineSongs != updated { onlineSongs = updated }
+        let existing = source.map { externalSources[$0] ?? [] } ?? onlineSongs
+        for item in existing {
+            if let replacement = replacements[item.id] { item.publishArtwork(from: replacement) }
         }
     }
 

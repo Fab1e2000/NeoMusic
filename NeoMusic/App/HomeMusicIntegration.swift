@@ -376,14 +376,15 @@ import Observation
                 songs[item.id] = item
             }
         }
+        player.updateArtwork(songs)
         detailLibrary.updateArtwork(songs: songs, playlists: covers)
         if let owner {
             Self.updateRetainedArtwork(in: LocalLibrary.playlistLibrary, home: home, owner: owner, urls: urls, songs: songs)
         }
-        let updated = cachedSongs.map { item in songs[item.id].map { item.replacingArtwork(from: $0) } ?? item }
-        if cachedSongs != updated { cachedSongs = updated }
+        for item in cachedSongs {
+            if let replacement = songs[item.id] { item.publishArtwork(from: replacement) }
+        }
         LocalLibrary.songLibrary.updateOnlineArtwork(songs, source: "home")
-        player.updateArtwork(songs)
         updateRecent()
     }
     /// A retained Home collection keeps its stable library identity when its images arrive later.

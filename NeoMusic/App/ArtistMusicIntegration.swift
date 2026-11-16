@@ -341,9 +341,9 @@ import Observation
                 if LocalLibrary.catalog.albums[index] != item { LocalLibrary.catalog.albums[index] = item }
             }
         }
+        player.updateArtwork(songs)
         LocalLibrary.songLibrary.updateOnlineArtwork(songs, source: "artists")
         playlistLibrary.updateArtwork(songs: songs)
-        player.updateArtwork(songs)
         for route in routes where route.hasPrefix("album:") {
             if let id = Int64(route.dropFirst("album:".count)) { prepareBackdrop(id) }
         }

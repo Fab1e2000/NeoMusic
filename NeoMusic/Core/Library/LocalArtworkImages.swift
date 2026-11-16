@@ -83,7 +83,7 @@ import ImageIO
                 guard let prepared = await decoder.load(url, pixels: pixels) else { return nil }
                 let variants = images.object(forKey: url as NSURL) ?? Variants()
                 variants.images[pixels] = prepared.image
-                variants.backdrop = prepared.backdrop
+                if let backdrop = prepared.backdrop { variants.backdrop = backdrop }
                 images.setObject(variants, forKey: url as NSURL, cost: variants.cost)
                 return prepared.image
             }
@@ -105,7 +105,9 @@ private actor LocalArtworkDecoder {
     func load(_ url: URL, pixels: Int) async -> Prepared? {
         guard !Task.isCancelled else { return nil }
         guard let data = try? Data(contentsOf: url) else { return nil }
-        let colors = try? await backdrops.prepareAdditionalArtwork([url.absoluteString: data])
+        // Row thumbnails only need pixels. Prepare navigation backdrop colors for
+        // large artwork; detail pages also resolve their own background on demand.
+        let colors = pixels >= 512 ? try? await backdrops.prepareAdditionalArtwork([url.absoluteString: data]) : nil
         guard !Task.isCancelled else { return nil }
         return autoreleasepool {
             guard let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),

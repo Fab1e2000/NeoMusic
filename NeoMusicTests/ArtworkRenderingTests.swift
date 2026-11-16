@@ -6,6 +6,18 @@ import Nuke
 
 @MainActor
 final class ArtworkRenderingTests: XCTestCase {
+    func testRowThumbnailSkipsBackdropPreparationAndLargeArtworkStillPreparesIt() async throws {
+        let url = fileURL()
+        try XCTUnwrap(solid(.red).pngData()).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let thumbnail = await LocalArtworkImages.load(url, pixels: 192)
+        XCTAssertNotNil(thumbnail)
+        XCTAssertNil(LocalArtworkImages.cachedBackdrop(for: .file(url)))
+        let large = await LocalArtworkImages.load(url, pixels: 512)
+        XCTAssertNotNil(large)
+        XCTAssertNotNil(LocalArtworkImages.cachedBackdrop(for: .file(url)))
+    }
+
     func testPlayerCoverSurvivesSameSongRefreshAndNeverLeaksToAnotherSong() async throws {
         let firstURL = fileURL(), secondURL = fileURL()
         try XCTUnwrap(solid(.red).pngData()).write(to: firstURL)

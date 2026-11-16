@@ -9,13 +9,26 @@ struct LibrarySongItem: Identifiable, Equatable {
     let album: String
     let albumArtist: String
     let trackNumber: Int
-    var artwork: Artwork
+    private var artworkState: SongArtworkState
+    var artwork: Artwork {
+        get { artworkState.value.artwork }
+        set { var value = artworkState.snapshot; value.artwork = newValue; artworkState = SongArtworkState(value) }
+    }
     var albumDirectory: String? = nil
     var discNumber: Int = 1
-    var artworkData: Data? = nil
-    var artworkURL: URL? = nil
+    var artworkData: Data? {
+        get { artworkState.value.artworkData }
+        set { var value = artworkState.snapshot; value.artworkData = newValue; artworkState = SongArtworkState(value) }
+    }
+    var artworkURL: URL? {
+        get { artworkState.value.artworkURL }
+        set { var value = artworkState.snapshot; value.artworkURL = newValue; artworkState = SongArtworkState(value) }
+    }
     /// Prepared with the original artwork before the song becomes visible.
-    var artworkBackdrop: AlbumArtworkBackdrop? = nil
+    var artworkBackdrop: AlbumArtworkBackdrop? {
+        get { artworkState.value.artworkBackdrop }
+        set { var value = artworkState.snapshot; value.artworkBackdrop = newValue; artworkState = SongArtworkState(value) }
+    }
     var duration: Int = 0
     var isPinned = false
     var addedOrder = 0
@@ -24,6 +37,31 @@ struct LibrarySongItem: Identifiable, Equatable {
     var unavailabilityReason: String? = nil
     var onlineAlbumID: Int64? = nil
     var artistReferences: [LibraryArtistReference] = []
+
+    init(id: String, title: String, artist: String, album: String, albumArtist: String,
+         trackNumber: Int, artwork: Artwork, albumDirectory: String? = nil, discNumber: Int = 1,
+         artworkData: Data? = nil, artworkURL: URL? = nil, artworkBackdrop: AlbumArtworkBackdrop? = nil,
+         duration: Int = 0, isPinned: Bool = false, addedOrder: Int = 0, isFavorite: Bool = false,
+         favoriteAddedAt: Date? = nil, unavailabilityReason: String? = nil,
+         onlineAlbumID: Int64? = nil, artistReferences: [LibraryArtistReference] = []) {
+        self.id = id; self.title = title; self.artist = artist; self.album = album
+        self.albumArtist = albumArtist; self.trackNumber = trackNumber
+        self.albumDirectory = albumDirectory; self.discNumber = discNumber
+        self.artworkState = SongArtworkState(.init(artwork: artwork, artworkData: artworkData,
+                                                   artworkURL: artworkURL, artworkBackdrop: artworkBackdrop))
+        self.duration = duration; self.isPinned = isPinned; self.addedOrder = addedOrder
+        self.isFavorite = isFavorite; self.favoriteAddedAt = favoriteAddedAt
+        self.unavailabilityReason = unavailabilityReason; self.onlineAlbumID = onlineAlbumID
+        self.artistReferences = artistReferences
+    }
+
+    /// Resource arrivals notify image readers without replacing the song or its list.
+    /// Ordinary property setters retain value semantics for metadata edits and snapshots.
+    @discardableResult
+    func publishArtwork(from replacement: Self) -> Bool {
+        guard id == replacement.id else { return false }
+        return artworkState.update(replacement.artworkState.snapshot)
+    }
 
     var onlineOwnerID: String? {
         let parts = id.split(separator: ":")
@@ -34,6 +72,34 @@ struct LibrarySongItem: Identifiable, Equatable {
         return id.split(separator: ":").last.flatMap { Int64($0) }
     }
     var isOnline: Bool { onlineOwnerID != nil }
+}
+
+/// Image resource state is observed separately from song metadata and list ordering.
+@Observable private final class SongArtworkState: Equatable {
+    struct Snapshot: Equatable {
+        var artwork: Artwork
+        var artworkData: Data?
+        var artworkURL: URL?
+        var artworkBackdrop: AlbumArtworkBackdrop?
+    }
+    @ObservationIgnored private(set) var snapshot: Snapshot
+    init(_ snapshot: Snapshot) { self.snapshot = snapshot }
+
+    var value: Snapshot {
+        access(keyPath: \.value)
+        return snapshot
+    }
+
+    func update(_ value: Snapshot) -> Bool {
+        guard snapshot != value else { return false }
+        withMutation(keyPath: \.value) { snapshot = value }
+        return true
+    }
+
+    // Comparing list inputs must not subscribe the list to individual image arrivals.
+    static func == (lhs: SongArtworkState, rhs: SongArtworkState) -> Bool {
+        lhs === rhs || lhs.snapshot == rhs.snapshot
+    }
 }
 
 extension LibrarySongItem {

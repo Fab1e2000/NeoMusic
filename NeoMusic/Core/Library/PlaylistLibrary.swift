@@ -237,10 +237,10 @@ final class PlaylistLibrary {
         guard !songs.isEmpty else { return }
         var changedLocalContent = false
         for (id, existing) in contents where existing.contains(where: { songs[$0.id] != nil }) {
-            let updated = existing.map { item in
+            for item in existing {
                 let offline = offlineSong?(item.id)
                 guard !item.isOnline || offline != nil || playlist(id)?.isReadOnly == true || item.onlineOwnerID == restoredOnlineOwnerID,
-                      var replacement = songs[item.id] else { return item }
+                      var replacement = songs[item.id] else { continue }
                 if let offline {
                     let file: URL?
                     if let url = offline.artworkURL { file = url }
@@ -250,11 +250,10 @@ final class PlaylistLibrary {
                         replacement = offline
                     }
                 }
-                return item.replacingArtwork(from: replacement)
-            }
-            if existing != updated {
-                contents[id] = updated
-                if playlist(id)?.isReadOnly == false, updated.contains(where: \.isOnline) { changedLocalContent = true }
+                item.publishArtwork(from: replacement)
+                // Another catalog may already have published this shared resource.
+                // Retained playlist metadata still needs to persist the delivered file.
+                if playlist(id)?.isReadOnly == false, item.isOnline { changedLocalContent = true }
             }
         }
         if changedLocalContent { markRestoredMetadataChanged() }

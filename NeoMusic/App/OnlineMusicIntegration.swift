@@ -341,8 +341,8 @@ final class OnlineMusicIntegration {
                 covers["netease-playlist:\(owner):\(item.id)"] = artwork(remote, music: music, placeholder: .playlist)
             }
         }
+        LocalLibrary.player.updateArtwork(songs)
         LocalLibrary.songLibrary.updateOnlineArtwork(songs)
         LocalLibrary.playlistLibrary.updateArtwork(songs: songs, playlists: covers)
-        LocalLibrary.player.updateArtwork(songs)
     }
 }

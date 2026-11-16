@@ -261,7 +261,7 @@ import XCTest
         let artistCover = song("1", title: "Stale artist metadata", artwork: .file(URL(fileURLWithPath: "/tmp/artist-cover.jpg")))
         library.updateOnlineArtwork([artistCover.id: artistCover], source: "artists")
         XCTAssertEqual(library.externalSongs, [artist.replacingArtwork(from: artistCover)])
-        XCTAssertEqual(changes.withLock { $0 }, 1)
+        XCTAssertEqual(changes.withLock { $0 }, 0, "Artwork arrival leaves the source list stable")
         library.replaceExternalSongs([], source: "artists")
         XCTAssertEqual(library.externalSongs, [home.replacingArtwork(from: homeCover)])
         let online = song("1", title: "Library metadata")
@@ -392,6 +392,54 @@ import XCTest
         }
         HomeMusicIntegration.updateRetainedArtwork(in: library, home: home, owner: "other", urls: [remote], songs: [original.id: original])
         XCTAssertEqual(changes.withLock { $0 }, 0)
+    }
+
+    func testArtworkBurstOnlyInvalidatesItsImageReaders() throws {
+        let tracks = (0..<100).map { song(String($0)) }
+        let playlists = PlaylistLibrary(playlists: [])
+        let item = LibraryPlaylistItem(id: "home:playlist:burst", title: "List", artwork: .playlist, isReadOnlyContent: true)
+        playlists.setExternalCollection(item: item, songs: tracks)
+        let catalog = makeSongLibrary()
+        catalog.replaceExternalSongs(tracks, source: "home")
+        let listChanges = Mutex(0), imageChanges = Mutex(0)
+        let projection = LibraryListProjection<PlaylistDetailView.ProjectionInput, PlaylistDetailView.Projection>()
+        withObservationTracking {
+            let input = PlaylistDetailView.ProjectionInput(tracks: playlists.songs(in: item.id), query: "", sort: .title)
+            _ = projection.value(for: input, calculate: input.calculate)
+            _ = catalog.allSongs
+            _ = catalog.song(id: tracks[0].id)?.title
+        } onChange: { listChanges.withLock { $0 += 1 } }
+        for track in tracks {
+            withObservationTracking { _ = track.artwork } onChange: { imageChanges.withLock { $0 += 1 } }
+        }
+        for (index, track) in tracks.enumerated() {
+            var replacement = track
+            replacement.artwork = .file(URL(fileURLWithPath: "/tmp/cover-\(index).jpg"))
+            catalog.updateOnlineArtwork([track.id: replacement], source: "home")
+            playlists.updateArtwork(songs: [track.id: replacement])
+        }
+        XCTAssertEqual(imageChanges.withLock { $0 }, 100)
+        XCTAssertEqual(listChanges.withLock { $0 }, 0)
+        XCTAssertEqual(playlists.songs(in: item.id).map(\.id), tracks.map(\.id))
+        // A cache eviction still updates the image, while structural removal updates the list.
+        let invalidations = Mutex(0)
+        withObservationTracking { _ = tracks[0].artwork } onChange: { invalidations.withLock { $0 += 1 } }
+        let missing = song("0", artwork: .deferred(id: "new-session:cover", placeholder: .missing))
+        playlists.updateArtwork(songs: [missing.id: missing])
+        XCTAssertEqual(invalidations.withLock { $0 }, 1)
+        XCTAssertEqual(tracks[0].artwork, missing.artwork)
+        catalog.replaceExternalSongs([], source: "home")
+        XCTAssertEqual(listChanges.withLock { $0 }, 1)
+    }
+
+    func testArtworkPropertyEditsKeepSongValueSemantics() {
+        let original = song("1")
+        var edited = original
+        edited.artwork = .favorites
+        edited.artworkURL = URL(fileURLWithPath: "/tmp/edited.jpg")
+        XCTAssertEqual(original.artwork, .missing)
+        XCTAssertNil(original.artworkURL)
+        XCTAssertNotEqual(original, edited)
     }
 
     private func makeSongLibrary() -> SongLibrary {
