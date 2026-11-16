@@ -14,7 +14,7 @@ Local presentation correction:
   presentation using the existing native layout operation. The open and close
   animator keeps touch delivery enabled. A new pull that starts while the player
   is still springing back stops that animator where it is and continues the drag,
-  so the screen corners stay on and the pan is not rebound under the finger.
+  so the screen corners stay on and the pan is not rebound under the finger. Attach the dismiss pan to opening content before starting the spring so a new downward gesture can interrupt it.
 - `_LNPopupTransitionAnimator.mm`: carry the mini-player's resolved interface style
   into the sibling glass transition wrapper, so opening and closing retain the
   endpoint appearance even when the page overrides the system style.

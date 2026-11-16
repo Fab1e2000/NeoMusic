@@ -47,6 +47,7 @@ targets:
       properties:
         CADisableMinimumFrameDurationOnPhone: true
         UIBackgroundModes: [audio]
+        NSBluetoothAlwaysUsageDescription: 读取当前耳机型号，以显示对应的音频设备图标。
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
         CFBundleShortVersionString: $(MARKETING_VERSION)

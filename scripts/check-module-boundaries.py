@@ -48,6 +48,7 @@ def check_source(relative: Path, text: str) -> list[str]:
             allowed |= (app or (player and not component)) and module == "FullScreenPlayer"
             if component:
                 allowed = module in COMPONENT_IMPORTS
+                allowed |= relative == COMPONENT_ROOT / "NowPlaying/NowPlayingAirPlayButton.swift" and module == "CoreBluetooth"
             if not allowed:
                 errors.append(f"import {module} is outside this source's dependency boundary")
     if component:

@@ -864,6 +864,13 @@ __attribute__((objc_direct_members))
 			[self _beginTransitionLockWithUserInteractionEnabled:state == LNPopupPresentationStateOpen];
 		}
 		
+		// The opening content must receive a new dismiss pan before the spring settles.
+		if(state == LNPopupPresentationStateOpen && stateAtStart == LNPopupPresentationStateBarPresented)
+		{
+			[_currentContentController.viewForPopupInteractionGestureRecognizer addGestureRecognizer:self.popupContentView.popupInteractionGestureRecognizer];
+			[self _fixupGestureRecognizersForController:_currentContentController];
+		}
+
 		[_runningPopupAnimation startAnimation];
 		
 		if(animated == NO)
