@@ -98,6 +98,46 @@ static void processTap(MTAudioProcessingTapRef tap, CMItemCount frames, MTAudioP
     MTAudioProcessingTapRef _tap;
     Analysis *_state;
 }
+- (instancetype)init {
+    if ((self = [super init])) {
+        _state = calloc(1, sizeof(Analysis));
+        if (!_state) return nil;
+        _state->fft = vDSP_create_fftsetup(11, kFFTRadix2);
+        if (!_state->fft) { free(_state); _state = NULL; return nil; }
+        _state->rate = 44100;
+        initializeWindow(_state);
+    }
+    return self;
+}
+- (void)consumeBuffer:(AVAudioPCMBuffer *)buffer {
+    Analysis *s = _state;
+    if (!s || _tap || buffer.format.commonFormat != AVAudioPCMFormatFloat32) return;
+    double rate = buffer.format.sampleRate;
+    if (rate <= 0) return;
+    if (s->rate != rate) {
+        s->rate = rate; s->filled = 0;
+        initializeWindow(s);
+    }
+    const AudioBufferList *buffers = buffer.audioBufferList;
+    for (AVAudioFrameCount i = 0; i < buffer.frameLength; i++) {
+        float mono = 0; UInt32 channels = 0;
+        for (UInt32 b = 0; b < buffers->mNumberBuffers; b++) {
+            const AudioBuffer *input = &buffers->mBuffers[b];
+            const float *data = input->mData;
+            if (!data) continue;
+            for (UInt32 c = 0; c < input->mNumberChannels; c++) {
+                mono += data[i * input->mNumberChannels + c]; channels++;
+            }
+        }
+        s->input[s->filled++] = channels ? mono / channels : 0;
+        if (s->filled == N) {
+            analyze(s);
+            memmove(s->input, s->input + s->hop, (N - s->hop) * sizeof(float));
+            s->filled = N - s->hop;
+        }
+    }
+    atomic_fetch_add(&s->samples, buffer.frameLength);
+}
 - (BOOL)attachToItem:(AVPlayerItem *)item track:(AVAssetTrack *)track {
     if(_tap || item.audioMix != nil) return NO;
     Analysis *s=calloc(1,sizeof(Analysis));
@@ -109,6 +149,7 @@ static void processTap(MTAudioProcessingTapRef tap, CMItemCount frames, MTAudioP
     if(MTAudioProcessingTapCreate(kCFAllocatorDefault,&callbacks,kMTAudioProcessingTapCreationFlag_PostEffects,&_tap)!=noErr) {
         vDSP_destroy_fftsetup(s->fft); free(s); return NO;
     }
+    if (_state) { vDSP_destroy_fftsetup(_state->fft); free(_state); }
     _state=s;
     AVMutableAudioMixInputParameters *parameters=[AVMutableAudioMixInputParameters audioMixInputParametersWithTrack:track];
     parameters.audioTapProcessor=_tap;
@@ -126,5 +167,8 @@ static void processTap(MTAudioProcessingTapRef tap, CMItemCount frames, MTAudioP
     NSArray *result=@[@(atomic_load(&s->levels[0])),@(atomic_load(&s->levels[1])),@(atomic_load(&s->levels[2])),@(atomic_load(&s->levels[3])),@(atomic_load(&s->levels[4]))];
     vDSP_destroy_fftsetup(s->fft); free(s); return result;
 }
-- (void)dealloc { if(_tap) CFRelease(_tap); }
+- (void)dealloc {
+    if (_tap) CFRelease(_tap);
+    else if (_state) { vDSP_destroy_fftsetup(_state->fft); free(_state); }
+}
 @end

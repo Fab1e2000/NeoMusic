@@ -9,6 +9,8 @@ settings:
   base:
     SWIFT_VERSION: "6.0"
 packages:
+  AudioStreaming:
+    path: Packages/AudioStreaming
   AudioTags:
     path: Packages/AudioTags
   LNPopupUI:
@@ -34,6 +36,7 @@ targets:
           - Features/Player/FullScreenPlayer
     dependencies:
       - target: FullScreenPlayer
+      - package: AudioStreaming
       - package: AudioTags
         product: AudioTagBridge
       - package: LNPopupUI

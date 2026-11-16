@@ -93,6 +93,14 @@ class ModuleBoundaryTests(unittest.TestCase):
             self.assertTrue(boundaries.check_source(Path("NeoMusic/Core/Netease/Account.swift"), "import " + module))
             self.assertTrue(boundaries.check_source(Path("NeoMusic/Core/Library/LocalLibrary.swift"), "import " + module))
 
+    def test_stream_decoder_has_one_host_owner(self):
+        deck = Path("NeoMusic/Core/Playback/StreamingPlaybackDeck.swift")
+        self.assertEqual(boundaries.check_source(deck, "@preconcurrency import AudioStreaming"), [])
+        self.assertTrue(boundaries.check_source(deck, "let account: NeteaseAccount"))
+        for path in ["NeoMusic/Core/Library/LocalLibrary.swift", "NeoMusic/Core/Netease/Client.swift",
+                     "NeoMusic/Features/Player/FullScreenPlayer/Shared/PlayerContracts.swift"]:
+            self.assertTrue(boundaries.check_source(Path(path), "import AudioStreaming"))
+
     def test_player_shaders_are_scanned_in_their_owner(self):
         self.assertEqual(boundaries.check_source(Path("NeoMusic/Features/Player/PlayerEDRShaders.metal"), "#include <metal_stdlib>"), [])
         self.assertTrue(boundaries.check_source(Path("NeoMusic/Features/Home/PlayerEDRShaders.metal"), "#include <metal_stdlib>"))

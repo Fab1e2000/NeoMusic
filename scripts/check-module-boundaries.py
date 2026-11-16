@@ -43,6 +43,7 @@ def check_source(relative: Path, text: str) -> list[str]:
                 Path("NeoMusic/Core/Netease/NeteasePageCache.swift"),
                 Path("NeoMusic/Core/Netease/NeteaseLibrarySearchIndex.swift"),
             } and module == "SQLite3"
+            allowed |= relative == Path("NeoMusic/Core/Playback/StreamingPlaybackDeck.swift") and module == "AudioStreaming"
             allowed |= relative == Path("NeoMusic/Core/PerformanceDiagnostics.swift") and module == "os"
             allowed |= relative == Path("NeoMusic/Core/LocalMusic/DownloadedAudioTags.swift") and module == "AudioTagBridge"
             allowed |= (app or (player and not component)) and module == "FullScreenPlayer"

@@ -375,11 +375,11 @@ final class OnlinePlaybackTests: XCTestCase {
         await model.waitForResourceResolution()
         try await waitForSeekState { !model.isLoading }
         let engine = try XCTUnwrap(Mirror(reflecting: model).children.first { $0.label == "_audio" }?.value as? LocalPlaybackEngine)
-        let native = try XCTUnwrap(Mirror(reflecting: engine).children.first { $0.label == "player" }?.value as? AVQueuePlayer)
+        let native = try XCTUnwrap(Mirror(reflecting: engine).children.first { $0.label == "player" }?.value as? StreamingPlaybackDeck)
         XCTAssertNil(model.errorMessage)
         XCTAssertFalse(model.isPlaying)
         XCTAssertEqual(model.elapsed, 6.375, accuracy: 0.002)
-        XCTAssertEqual(native.currentTime().seconds, 6.375, accuracy: 0.002)
+        XCTAssertEqual((native.currentPlaybackTime ?? 0), 6.375, accuracy: 0.002)
         await model.flushQueuePersistence()
         let saved = try JSONDecoder().decode(NowPlayingModel.SavedQueue.self, from: Data(contentsOf: stateURL))
         XCTAssertEqual(saved.elapsed, 6.375, accuracy: 0.002)

@@ -19,6 +19,7 @@
 | Nuke | 13.2.0 | Swift Package Manager |
 | LNSwiftUIUtils | 1.1.5 | Swift Package Manager |
 | LNSystemMarqueeLabel | 0.1.2 | Swift Package Manager |
+| AudioStreaming（播放试验） | 上游 1.2.8，MeloX `3b937b3` 的准确定位修订；来源与许可见包内 NOTICE | `Packages/AudioStreaming` |
 | AudioTags / TagLib | TagLib 2.3.2 的 MP3／FLAC 标签封装 | `Packages/AudioTags` |
 
 远程依赖版本由 `project.yml` 和工程内的 `Package.resolved` 锁定，首次构建需要解析远程包。播放器来源、导入基线与哈希保留在 [来源清单](../NeoMusic/Features/Player/Resources/PlayerSourceManifest.json)；其哈希记录上游导入来源，不是当前文件完整性校验值。

@@ -320,9 +320,9 @@ final class PlaybackTests: XCTestCase {
         XCTAssertNil(model.pendingPlay)
     }
 
-    private func queuePlayer(in model: NowPlayingModel) throws -> AVQueuePlayer {
+    private func queuePlayer(in model: NowPlayingModel, prepared: Bool = false) throws -> StreamingPlaybackDeck {
         let engine = try XCTUnwrap(Mirror(reflecting: model).children.first { $0.label == "_audio" }?.value as? LocalPlaybackEngine)
-        return try XCTUnwrap(Mirror(reflecting: engine).children.first { $0.label == "player" }?.value as? AVQueuePlayer)
+        return try XCTUnwrap(Mirror(reflecting: engine).children.first { $0.label == (prepared ? "incoming" : "player") }?.value as? StreamingPlaybackDeck)
     }
 
     func testClockKeepsUIProgressWithoutRepublishingNowPlayingUntilPlaybackChanges() async throws {
@@ -380,12 +380,11 @@ final class PlaybackTests: XCTestCase {
         let state = root.appendingPathComponent("queue.json")
         model.configurePlayback(resolveURL: { _ in url }, persistenceURL: state)
         model.startCurrent()
-        let player = try queuePlayer(in: model)
         let ids = model.entryIDs
         for index in [1, 2, 0] {
-            let prepared = try XCTUnwrap(player.items().dropFirst().first)
+            let prepared = try queuePlayer(in: model, prepared: true)
             model.select(index)
-            XCTAssertTrue(player.currentItem === prepared, "Manual next should keep the enqueued AVPlayerItem")
+            XCTAssertTrue(try queuePlayer(in: model) === prepared, "Manual next should keep the prepared decoded stream")
             XCTAssertEqual(model.currentIndex, index)
             XCTAssertEqual(model.entryIDs, ids)
             XCTAssertFalse(model.isPlaying)
@@ -404,10 +403,9 @@ final class PlaybackTests: XCTestCase {
         defer { model.shutdownPlayback() }
         model.configurePlayback(resolveURL: { _ in url }, persistenceURL: root.appendingPathComponent("queue.json"))
         model.startCurrent()
-        let player = try queuePlayer(in: model)
-        let prepared = try XCTUnwrap(player.items().dropFirst().first)
+        let prepared = try queuePlayer(in: model, prepared: true)
         model.select(1)
-        XCTAssertTrue(player.currentItem === prepared)
+        XCTAssertTrue(try queuePlayer(in: model) === prepared)
         XCTAssertTrue(model.isPlaying)
         XCTAssertEqual(model.current.id, "b")
         await model.flushQueuePersistence()
@@ -428,14 +426,13 @@ final class PlaybackTests: XCTestCase {
         model.startCurrent()
         await model.waitForResourceResolution()
         XCTAssertEqual(model.actualQuality, "lossless")
-        let player = try queuePlayer(in: model)
         for index in 1...2 {
-            for _ in 0..<100 where player.items().count < 2 {
+            for _ in 0..<100 where (try queuePlayer(in: model, prepared: true)).itemID == nil {
                 try await Task.sleep(for: .milliseconds(20))
             }
-            let prepared = try XCTUnwrap(player.items().dropFirst().first)
+            let prepared = try queuePlayer(in: model, prepared: true)
             model.select(index)
-            XCTAssertTrue(player.currentItem === prepared)
+            XCTAssertTrue(try queuePlayer(in: model) === prepared)
             XCTAssertEqual(model.currentIndex, index)
             XCTAssertEqual(model.actualQuality, qualities[index])
             XCTAssertFalse(model.isPlaying)
@@ -453,11 +450,10 @@ final class PlaybackTests: XCTestCase {
                                 persistenceURL: root.appendingPathComponent("queue.json"))
         model.repeatMode = .one
         model.startCurrent()
-        let player = try queuePlayer(in: model)
-        let repeated = try XCTUnwrap(player.items().dropFirst().first)
+        let repeated = try queuePlayer(in: model, prepared: true)
         model.select(1)
-        XCTAssertFalse(player.currentItem === repeated)
-        XCTAssertNil(player.currentItem)
+        XCTAssertFalse(try queuePlayer(in: model) === repeated)
+        XCTAssertNil(try queuePlayer(in: model).itemID)
         XCTAssertEqual(model.current.id, "b")
         XCTAssertFalse(model.isPlaying)
         XCTAssertNotNil(model.errorMessage)
@@ -472,11 +468,10 @@ final class PlaybackTests: XCTestCase {
         defer { model.shutdownPlayback() }
         model.configurePlayback(resolveURL: { _ in url }, persistenceURL: root.appendingPathComponent("queue.json"))
         model.startCurrent()
-        let player = try queuePlayer(in: model)
-        let preparedNext = try XCTUnwrap(player.items().dropFirst().first)
+        let preparedNext = try queuePlayer(in: model, prepared: true)
         model.select(0)
-        XCTAssertNotNil(player.currentItem)
-        XCTAssertFalse(player.currentItem === preparedNext)
+        XCTAssertNotNil(try queuePlayer(in: model).itemID)
+        XCTAssertFalse(try queuePlayer(in: model) === preparedNext)
         XCTAssertEqual(model.current.id, "a")
         XCTAssertFalse(model.isPlaying)
         XCTAssertNil(model.errorMessage)
