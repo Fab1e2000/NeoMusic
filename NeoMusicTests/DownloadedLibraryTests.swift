@@ -179,4 +179,31 @@ final class DownloadedLibraryTests: XCTestCase {
         restored.restoreOnlineIdentity(ownerID: "1")
         XCTAssertEqual(restored.songs(in: "local"), expected)
     }
+
+    func testFavoritesKeepOnlineRowIdentityAcrossDownloadStateChanges() {
+        let liked = Date(timeIntervalSince1970: 1_800_000_000)
+        let older = Date(timeIntervalSince1970: 1_700_000_000)
+        func favorite(_ id: String, _ date: Date) -> LibrarySongItem {
+            LibrarySongItem(id: id, title: id, artist: "Artist", album: "Album", albumArtist: "Artist",
+                            trackNumber: 1, artwork: .missing, isFavorite: true, favoriteAddedAt: date)
+        }
+        let local = favorite("网易云/Album [1]/01-01 Song [9].flac", liked)
+        let online = favorite("netease:1:9", liked)
+        let other = favorite("Imported/other.flac", older)
+        let downloadedSongID: (String) -> Int64? = { $0 == local.id ? 9 : nil }
+        let expected = [online.id, other.id]
+
+        // 下载文件存在时，喜爱歌曲使用在线身份，而不是被替换成本地文件行。
+        XCTAssertEqual(LocalLibrary.favoriteRows(online: [online], favorites: [local, other],
+                                                 downloadedSongID: downloadedSongID).map(\.id), expected)
+        // 移除下载后，同一行继续保留在线身份。
+        XCTAssertEqual(LocalLibrary.favoriteRows(online: [online], favorites: [online, other],
+                                                 downloadedSongID: downloadedSongID).map(\.id), expected)
+        // 文件删除与在线条目回填之间的瞬间同时出现两份，也只保留一行。
+        XCTAssertEqual(LocalLibrary.favoriteRows(online: [online], favorites: [local, online, other],
+                                                 downloadedSongID: downloadedSongID).map(\.id), expected)
+        // 未登录或在线条目尚未加载时仍显示本地收藏。
+        XCTAssertEqual(LocalLibrary.favoriteRows(online: [], favorites: [local, other],
+                                                 downloadedSongID: downloadedSongID).map(\.id), [local.id, other.id])
+    }
 }

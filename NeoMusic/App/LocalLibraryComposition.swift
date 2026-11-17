@@ -17,7 +17,32 @@ enum LocalLibrary {
         return song
     }
     static var favorites: [LibrarySongItem] {
-        songLibrary.favoriteSongs.filter { $0.isOnline || !deletedAlbums.ids.contains($0.albumID) }
+        favoriteRows(online: songLibrary.onlineSongs, favorites: songLibrary.favoriteSongs,
+                     downloadedSongID: { catalog.downloadedOnlineSongID?($0) })
+            .filter { $0.isOnline || !deletedAlbums.ids.contains($0.albumID) }
+    }
+
+    /// 已下载的网易云歌曲在喜爱歌曲里沿用在线条目：下载状态变化只更新行内标记，不替换行身份。
+    static func favoriteRows(online: [LibrarySongItem],
+                             favorites: [LibrarySongItem],
+                             downloadedSongID: (String) -> Int64?) -> [LibrarySongItem] {
+        var onlineBySongID: [Int64: LibrarySongItem] = [:]
+        for song in online where song.isFavorite {
+            guard let id = song.onlineSongID, onlineBySongID[id] == nil else { continue }
+            onlineBySongID[id] = song
+        }
+        var seen: Set<String> = []
+        var items: [LibrarySongItem] = []
+        items.reserveCapacity(favorites.count + onlineBySongID.count)
+        for song in favorites {
+            let shown = song.isOnline ? song : downloadedSongID(song.id).flatMap { onlineBySongID[$0] } ?? song
+            if seen.insert(shown.id).inserted { items.append(shown) }
+        }
+        // 下载完成到本地扫描回填之间，在线条目暂时不在 favoriteSongs 里，也要保留在列表原位。
+        for song in online where song.isFavorite {
+            if seen.insert(song.id).inserted { items.append(song) }
+        }
+        return SongLibrary.orderedFavorites(items)
     }
     static let pinnedAlbums = LibrarySelectionSet(ids: [], key: "pinnedAlbums")
     private static let pinnedOrder = PinnedOrderStore()
