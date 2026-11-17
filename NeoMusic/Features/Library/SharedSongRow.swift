@@ -208,13 +208,6 @@ private struct SongListRowModifier: ViewModifier {
             downloadState: downloads?.state(of: song.id),
             canDownload: downloads?.isDownloadable(song) == true
         )
-        let allowsTrailingFullSwipe: Bool = {
-            switch mode {
-            case .standard: return trailingItems.first != .removeFromLiked
-            case .editablePlaylist: return false
-            case .libraryDownloads: return !song.isFavorite || downloads?.canRemove(song) == true || downloads?.state(of: song.id)?.isActive == true
-            }
-        }()
 
         let base = content
             .songContextMenu(song, onRemoveFromPlaylist: removeFromPlaylistAction)
@@ -232,7 +225,7 @@ private struct SongListRowModifier: ViewModifier {
                 .labelStyle(.iconOnly)
                 .tint(.orange)
             }
-            .swipeActions(edge: .trailing, allowsFullSwipe: allowsTrailingFullSwipe) {
+            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                 trailingSwipeButtons(items: trailingItems)
             }
 

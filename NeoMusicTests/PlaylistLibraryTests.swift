@@ -506,4 +506,19 @@ final class OnlineSongTrailingSwipeTests: XCTestCase {
         XCTAssertEqual(OnlineSongTrailingSwipe.actions(isFavorite: true, downloadState: .downloaded, canDownload: true), [.removeFromLiked])
         XCTAssertEqual(OnlineSongTrailingSwipe.actions(isFavorite: true, downloadState: nil, canDownload: false), [.removeFromLiked])
     }
+
+    @MainActor
+    func testRemovalSwipePerformsItsEdgeActionOnFullSwipe() {
+        let song = LibrarySongItem(id: "song", title: "歌曲", artist: "艺人", album: "专辑", albumArtist: "艺人",
+                                   trackNumber: 1, artwork: .missing, isFavorite: true)
+        let actions = SongMenuActions()
+        let liked = CollectionTrackUI.trailingSwipeConfiguration(
+            for: song, mode: .standard(animateFavoriteRemoval: true),
+            downloads: nil, songActions: actions, notify: { _ in })
+        let playlist = CollectionTrackUI.trailingSwipeConfiguration(
+            for: song, mode: .editablePlaylist(remove: { _ in }),
+            downloads: nil, songActions: actions, notify: { _ in })
+        XCTAssertEqual(liked?.performsFirstActionWithFullSwipe, true)
+        XCTAssertEqual(playlist?.performsFirstActionWithFullSwipe, true)
+    }
 }

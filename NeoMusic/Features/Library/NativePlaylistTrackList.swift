@@ -92,7 +92,7 @@ enum CollectionTrackUI {
             removeAction.backgroundColor = .systemRed
             removeAction.image?.accessibilityLabel = "移除"
             let configuration = UISwipeActionsConfiguration(actions: [removeAction])
-            configuration.performsFirstActionWithFullSwipe = false
+            configuration.performsFirstActionWithFullSwipe = true
             return configuration
 
         case .standard(let animateFavoriteRemoval):
@@ -107,7 +107,7 @@ enum CollectionTrackUI {
             }
             guard !items.isEmpty else { return nil }
             let configuration = UISwipeActionsConfiguration(actions: items)
-            configuration.performsFirstActionWithFullSwipe = chosen.first != .removeFromLiked
+            configuration.performsFirstActionWithFullSwipe = true
             return configuration
         }
     }
