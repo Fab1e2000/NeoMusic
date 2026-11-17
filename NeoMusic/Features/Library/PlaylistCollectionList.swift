@@ -5,11 +5,13 @@ import UIKit
 /// 行上的放置目标收不到。这里由集合视图统一处理点按、长按菜单与“拖到文件夹上移入”，
 /// 行内容仍由 SwiftUI 渲染。交互对照 Apple Music：长按先出菜单，接着拖动即拿起封面缩略图，
 /// 拖到文件夹上整行高亮，松手移入。
-struct PlaylistCollectionList: UIViewControllerRepresentable {
-    let entries: [PlaylistEntry]
-    let menu: (PlaylistEntry) -> UIMenu
-    let open: (LibraryRoute, @escaping () -> UIView?) -> Void
-    let movePlaylist: (_ playlistID: String, _ folderID: String) -> Void
+struct GenericCollectionList<Item: Identifiable & Equatable>: UIViewControllerRepresentable {
+    let items: [Item]
+    let menu: (Item) -> UIMenu
+    let open: (Item, @escaping () -> UIView?) -> Void
+    let moveItem: ((_ id: String, _ folderID: String) -> Void)?
+    let shelfItem: (Item) -> LibraryShelfItem
+    let route: (Item) -> LibraryRoute
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -38,8 +40,8 @@ struct PlaylistCollectionList: UIViewControllerRepresentable {
 
     @MainActor
     final class Coordinator: NSObject, UICollectionViewDelegate, UICollectionViewDragDelegate, UICollectionViewDropDelegate {
-        private var latest: PlaylistCollectionList?
-        private var entriesByID: [String: PlaylistEntry] = [:]
+        private var latest: GenericCollectionList<Item>?
+        private var itemsByID: [String: Item] = [:]
         private var dataSource: UICollectionViewDiffableDataSource<Int, String>?
         private var hasApplied = false
         private var environment = EnvironmentValues()
@@ -48,11 +50,10 @@ struct PlaylistCollectionList: UIViewControllerRepresentable {
         private var configuredDynamicTypeSize: DynamicTypeSize?
         private var configuredLocale: Locale?
 
-        /// 分隔线从标题起点画到右边距，最后一行不画；与 SwiftUI 版本及 Apple Music 一致。
-        private static let separatorLeading: CGFloat = 20 + 64 + 12
-        private static let rowHeight: CGFloat = 80
+        private static var separatorLeading: CGFloat { 20 + 64 + 12 }
+        private static var rowHeight: CGFloat { 80 }
 
-        func attach(to collectionView: UICollectionView, initial: PlaylistCollectionList, environment: EnvironmentValues) {
+        func attach(to collectionView: UICollectionView, initial: GenericCollectionList<Item>, environment: EnvironmentValues) {
             self.collectionView = collectionView
             let registration = UICollectionView.CellRegistration<UICollectionViewListCell, String> { [weak self] cell, _, id in
                 self?.configure(cell, id: id)
@@ -63,22 +64,21 @@ struct PlaylistCollectionList: UIViewControllerRepresentable {
             update(with: initial, environment: environment)
         }
 
-        func update(with list: PlaylistCollectionList, environment: EnvironmentValues, animated: Bool = false) {
+        func update(with list: GenericCollectionList<Item>, environment: EnvironmentValues, animated: Bool = false) {
             guard let dataSource else { return }
             self.environment = environment
-            let previous = entriesByID
+            let previous = itemsByID
             latest = list
-            entriesByID = Dictionary(list.entries.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            itemsByID = Dictionary(list.items.map { ($0.id as! String, $0) }, uniquingKeysWith: { first, _ in first })
 
             var snapshot = NSDiffableDataSourceSnapshot<Int, String>()
             snapshot.appendSections([0])
-            snapshot.appendItems(list.entries.map(\.id))
+            snapshot.appendItems(list.items.map { $0.id as! String })
             let appearanceChanged = configuredColorScheme != environment.colorScheme
                 || configuredDynamicTypeSize != environment.dynamicTypeSize || configuredLocale != environment.locale
-            // 行内容与显式传给独立 SwiftUI 宿主的外观值变化后重新配置。
-            let changed = list.entries.filter { entry in
-                previous[entry.id].map { $0.shelfItem != entry.shelfItem || appearanceChanged } ?? false
-            }.map(\.id)
+            let changed = list.items.filter { item in
+                previous[item.id as! String].map { $0 != item || appearanceChanged } ?? false
+            }.map { $0.id as! String }
             snapshot.reconfigureItems(changed)
             if hasApplied, changed.isEmpty, dataSource.snapshot().itemIdentifiers == snapshot.itemIdentifiers { return }
             let needsLayout = configuredDynamicTypeSize != environment.dynamicTypeSize
@@ -91,15 +91,15 @@ struct PlaylistCollectionList: UIViewControllerRepresentable {
             hasApplied = true
         }
 
-        private func entry(at indexPath: IndexPath) -> PlaylistEntry? {
-            dataSource?.itemIdentifier(for: indexPath).flatMap { entriesByID[$0] }
+        private func item(at indexPath: IndexPath) -> Item? {
+            dataSource?.itemIdentifier(for: indexPath).flatMap { itemsByID[$0] }
         }
 
         private func configure(_ cell: UICollectionViewListCell, id: String) {
-            guard let entry = entriesByID[id] else { return }
+            guard let item = itemsByID[id], let latest else { return }
             let environment = environment
             cell.contentConfiguration = UIHostingConfiguration {
-                PlaylistListRow(item: entry.shelfItem, usesCellArtwork: true)
+                PlaylistListRow(item: latest.shelfItem(item), usesCellArtwork: true)
                     .libraryHostedAppearance(environment)
                     .environment(\.nativeArtworkSurfaceEnabled, false)
             }
@@ -122,35 +122,28 @@ struct PlaylistCollectionList: UIViewControllerRepresentable {
             return separator
         }
 
-        // MARK: 点按
-
         func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
-            if let entry = entry(at: indexPath) { open(entry) }
-        }
-
-        private func open(_ entry: PlaylistEntry) {
-            let id = entry.id
-            latest?.open(entry.route) { [weak self] in
-                guard let self, let path = self.dataSource?.indexPath(for: id),
-                      let cell = self.collectionView?.cellForItem(at: path) else { return nil }
-                return cell.libraryArtworkSource()
+            if let item = item(at: indexPath), let latest {
+                latest.open(item) { [weak self] in
+                    guard let self, let path = self.dataSource?.indexPath(for: item.id as! String),
+                          let cell = self.collectionView?.cellForItem(at: path) else { return nil }
+                    return cell.libraryArtworkSource()
+                }
             }
         }
 
-        // MARK: 长按菜单
-
         func collectionView(_ collectionView: UICollectionView, contextMenuConfigurationForItemsAt indexPaths: [IndexPath],
                             point: CGPoint) -> UIContextMenuConfiguration? {
-            guard indexPaths.count == 1, let indexPath = indexPaths.first, let entry = entry(at: indexPath),
+            guard indexPaths.count == 1, let indexPath = indexPaths.first, let item = item(at: indexPath),
                   let latest else { return nil }
-            let item = entry.shelfItem
+            let shelfItem = latest.shelfItem(item)
             let environment = environment
             let traits = collectionView.traitCollection.modifyingTraits {
                 $0.preferredContentSizeCategory = UIContentSizeCategory(environment.dynamicTypeSize)
             }
-            return UIContextMenuConfiguration(identifier: entry.id as NSString) {
-                let size = MenuPreviewCard.size(for: item.previewLines, compatibleWith: traits)
-                let preview = UIHostingController(rootView: MenuPreviewCard(artwork: item.artwork, lines: item.previewLines)
+            return UIContextMenuConfiguration(identifier: item.id as! String as NSString) {
+                let size = MenuPreviewCard.size(for: shelfItem.previewLines, compatibleWith: traits)
+                let preview = UIHostingController(rootView: MenuPreviewCard(artwork: shelfItem.artwork, lines: shelfItem.previewLines)
                     .libraryHostedAppearance(environment)
                     .frame(width: size.width, height: size.height))
                 preview.traitOverrides.preferredContentSizeCategory = traits.preferredContentSizeCategory
@@ -159,29 +152,32 @@ struct PlaylistCollectionList: UIViewControllerRepresentable {
                 preview.view.backgroundColor = .clear
                 return preview
             } actionProvider: { _ in
-                latest.menu(entry)
+                latest.menu(item)
             }
         }
 
-        /// 点按菜单上方的预览卡片进入详情。
         func collectionView(_ collectionView: UICollectionView,
                             willPerformPreviewActionForMenuWith configuration: UIContextMenuConfiguration,
                             animator: any UIContextMenuInteractionCommitAnimating) {
-            guard let id = configuration.identifier as? String, let entry = entriesByID[id] else { return }
+            guard let id = configuration.identifier as? String, let item = itemsByID[id], let latest else { return }
             animator.preferredCommitStyle = .dismiss
-            animator.addCompletion { [weak self] in self?.open(entry) }
+            animator.addCompletion { [weak self] in
+                latest.open(item) { [weak self] in
+                    guard let self, let path = self.dataSource?.indexPath(for: id),
+                          let cell = self.collectionView?.cellForItem(at: path) else { return nil }
+                    return cell.libraryArtworkSource()
+                }
+            }
         }
-
-        // MARK: 拖动
 
         func collectionView(_ collectionView: UICollectionView, itemsForBeginning session: UIDragSession,
                             at indexPath: IndexPath) -> [UIDragItem] {
-            guard case .playlist(let playlist) = entry(at: indexPath) else { return [] }
-            let item = UIDragItem(itemProvider: NSItemProvider(object: playlist.id as NSString))
-            item.localObject = playlist.id
-            // 拖动时只显示封面缩略图，与 Apple Music 一致。
-            if let image = Self.thumbnail(for: playlist.artwork, scale: collectionView.traitCollection.displayScale) {
-                item.previewProvider = {
+            guard let item = item(at: indexPath), let latest else { return [] }
+            let shelfItem = latest.shelfItem(item)
+            let dragItem = UIDragItem(itemProvider: NSItemProvider(object: item.id as! String as NSString))
+            dragItem.localObject = item.id
+            if let image = Self.thumbnail(for: shelfItem.artwork, scale: collectionView.traitCollection.displayScale) {
+                dragItem.previewProvider = {
                     let view = UIImageView(image: image)
                     view.frame = CGRect(x: 0, y: 0, width: 64, height: 64)
                     let parameters = UIDragPreviewParameters()
@@ -189,7 +185,7 @@ struct PlaylistCollectionList: UIViewControllerRepresentable {
                     return UIDragPreview(view: view, parameters: parameters)
                 }
             }
-            return [item]
+            return [dragItem]
         }
 
         private static func thumbnail(for artwork: Artwork, scale: CGFloat) -> UIImage? {
@@ -198,16 +194,14 @@ struct PlaylistCollectionList: UIViewControllerRepresentable {
             return renderer.uiImage
         }
 
-        // MARK: 放置
-
         func collectionView(_ collectionView: UICollectionView, canHandle session: UIDropSession) -> Bool {
-            session.localDragSession != nil
+            latest?.moveItem != nil && session.localDragSession != nil
         }
 
-        /// 只能放进文件夹：手指在文件夹行上时整行高亮，其他位置不接收。
         func collectionView(_ collectionView: UICollectionView, dropSessionDidUpdate session: UIDropSession,
                             withDestinationIndexPath destinationIndexPath: IndexPath?) -> UICollectionViewDropProposal {
-            guard let destinationIndexPath, case .folder = entry(at: destinationIndexPath) else {
+            guard let destinationIndexPath, let item = item(at: destinationIndexPath),
+                  case .playlistFolder = (latest?.route(item)) else {
                 return UICollectionViewDropProposal(operation: .cancel)
             }
             return UICollectionViewDropProposal(operation: .move, intent: .insertIntoDestinationIndexPath)
@@ -215,16 +209,16 @@ struct PlaylistCollectionList: UIViewControllerRepresentable {
 
         func collectionView(_ collectionView: UICollectionView, performDropWith coordinator: UICollectionViewDropCoordinator) {
             guard let destination = coordinator.destinationIndexPath,
-                  case .folder(let folder, _) = entry(at: destination), let latest else { return }
+                  let targetItem = item(at: destination),
+                  case .playlistFolder(let folderID) = latest?.route(targetItem), let latest else { return }
             let cell = collectionView.cellForItem(at: destination)
             for item in coordinator.items {
                 guard let id = item.dragItem.localObject as? String else { continue }
-                // 缩略图落进文件夹那一行的封面处后消失。
                 if let cell {
                     let target = CGRect(x: 20 + 32 - 1, y: cell.bounds.midY - 1, width: 2, height: 2)
                     coordinator.drop(item.dragItem, intoItemAt: destination, rect: target)
                 }
-                latest.movePlaylist(id, folder.id)
+                latest.moveItem?(id, folderID)
             }
         }
     }

@@ -68,7 +68,7 @@ extension Array where Element == PlaylistEntry {
 }
 
 /// 播放列表页的一项：文件夹或播放列表。
-enum PlaylistEntry: Identifiable {
+enum PlaylistEntry: Identifiable, Equatable {
     case folder(PlaylistFolder, playlists: [LibraryPlaylistItem])
     case playlist(LibraryPlaylistItem)
 
@@ -492,19 +492,23 @@ struct PlaylistsListView: View {
     @ViewBuilder private func content(_ entries: [PlaylistEntry]) -> some View {
         switch layout {
         case .list:
-            PlaylistCollectionList(entries: entries, menu: { entry in
-                if let folder = entry.folder { return folderSections(folder).nativeMenu(firstSectionIsRow: false) }
-                return collectionActions.sections(for: entry.shelfItem, route: entry.route).nativeMenu(firstSectionIsRow: true)
-            }, open: { route, source in
-                guard let entry = entries.first(where: { $0.route == route }) else { return }
-                openLibraryRoute(entry.shelfItem, sourceProvider: source)
-            }, movePlaylist: { id, folderID in
-                guard library.playlists.contains(where: { $0.id == id }),
-                      library.folders.contains(where: { $0.id == folderID }) else { return }
-                withAnimation { library.move(playlistID: id, to: folderID) }
-            })
-            // UIKit hosts the large title in the scrolling content during a push.
-            // Let its adjustedContentInset position rows without clipping that title.
+            GenericCollectionList(
+                items: entries,
+                menu: { entry in
+                    if let folder = entry.folder { return folderSections(folder).nativeMenu(firstSectionIsRow: false) }
+                    return collectionActions.sections(for: entry.shelfItem, route: entry.route).nativeMenu(firstSectionIsRow: true)
+                },
+                open: { entry, source in
+                    openLibraryRoute(entry.shelfItem, sourceProvider: source)
+                },
+                moveItem: { id, folderID in
+                    guard library.playlists.contains(where: { $0.id == id }),
+                          library.folders.contains(where: { $0.id == folderID }) else { return }
+                    withAnimation { library.move(playlistID: id, to: folderID) }
+                },
+                shelfItem: { $0.shelfItem },
+                route: { $0.route }
+            )
             .ignoresSafeArea(.container, edges: .vertical)
         case .grid:
             ScrollView {

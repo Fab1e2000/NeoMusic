@@ -144,6 +144,7 @@
 		771835E110DB7DC48F31C427 /* PlaybackCollectionHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34AF70F49498A883FCE904D4 /* PlaybackCollectionHistory.swift */; };
 		77424610533C01EA7DD02D52 /* AudioSpectrumTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF7799ACBF8A0D93DBD3DCC2 /* AudioSpectrumTests.swift */; };
 		788FDB05723970D21090E1B1 /* ReferenceMiniPlayerTitlePager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C6D8057A9433B94260EF520 /* ReferenceMiniPlayerTitlePager.swift */; };
+		7895FA96506E82B8B2F47354 /* NativeSongsList.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E4314A6A66F82EBC906BAAE /* NativeSongsList.swift */; };
 		7901C40A5BC3B9187A0B59CA /* LibraryDetailNavigationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66201021F7E661B20B07D421 /* LibraryDetailNavigationTests.swift */; };
 		792BDC821FB3A7A34FC64C74 /* PlaybackStartupBenchmarkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6884FE40F93EBF38C8668F63 /* PlaybackStartupBenchmarkTests.swift */; };
 		79983E1C373ED221A1B94D5D /* NowPlayingAudioQuality.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BDBAA7297FBFA67E8B3E909 /* NowPlayingAudioQuality.swift */; };
@@ -473,6 +474,7 @@
 		3B9AE53C4EB35DF7A9CC5674 /* AddPlaylistMusicView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddPlaylistMusicView.swift; sourceTree = "<group>"; };
 		3C6D8057A9433B94260EF520 /* ReferenceMiniPlayerTitlePager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceMiniPlayerTitlePager.swift; sourceTree = "<group>"; };
 		3CD1A7EA83C61548C6FF44C6 /* ArtistPreviewSources.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = ArtistPreviewSources.txt; sourceTree = "<group>"; };
+		3E4314A6A66F82EBC906BAAE /* NativeSongsList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeSongsList.swift; sourceTree = "<group>"; };
 		3E4EED48E2C9ABEF2CDDD2BD /* LibraryRecentAdditions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryRecentAdditions.swift; sourceTree = "<group>"; };
 		3F52E19077F3118F03C277E1 /* PinnedCollectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PinnedCollectionView.swift; sourceTree = "<group>"; };
 		3FA04764FC10B38DE0B73CB7 /* PlayerActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerActions.swift; sourceTree = "<group>"; };
@@ -1167,6 +1169,7 @@
 				EEAC6DE76024634922350058 /* MoveToFolderView.swift */,
 				008C0B6156F3E5581AF4A373 /* NativeContextMenu.swift */,
 				43B8723FDD83A65B7B9D0285 /* NativePlaylistTrackList.swift */,
+				3E4314A6A66F82EBC906BAAE /* NativeSongsList.swift */,
 				205D48BF77E2F173EE9D2682 /* NewPlaylistView.swift */,
 				30E7BCA243EB2A589A79385E /* OnlineLibraryPreviewRoot.swift */,
 				3F52E19077F3118F03C277E1 /* PinnedCollectionView.swift */,
@@ -1724,6 +1727,7 @@
 				E444A84DAF19DF6F4577076F /* NativeContextMenu.swift in Sources */,
 				B618976C9416F4947F66A54D /* NativePlayerPagePreview.swift in Sources */,
 				A7D716E5BC5D2C78130C4CF3 /* NativePlaylistTrackList.swift in Sources */,
+				7895FA96506E82B8B2F47354 /* NativeSongsList.swift in Sources */,
 				5114EB3C6C2FBABCDC0302A8 /* NavigationDiagnostics.swift in Sources */,
 				B8055DE66D0B8BCFB9A1D0A5 /* NeoMusicApp.swift in Sources */,
 				1EE0EBA14D19951ADC118203 /* NeoMusicPlayerServices.swift in Sources */,

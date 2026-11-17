@@ -201,6 +201,7 @@ struct SongsListView: View {
     @State private var query = ""
     @State private var projection = AsyncListProjection<ProjectionInput, Projection>()
     @Environment(\.songMenuActions) private var actions
+    @Environment(\.openLibraryRoute) private var openLibraryRoute
 
     struct ProjectionInput: Equatable {
         let songs: [LibrarySongItem]
@@ -267,45 +268,24 @@ struct SongsListView: View {
         let input = ProjectionInput(songs: songs, query: query, filter: filter, sort: sort)
         let result = projection.currentValue(for: input, fastPath: Self.fastPath,
                                              placeholder: { _ in Projection(sections: [], ordered: []) })
-        let sections = result.sections
         let ordered = result.ordered
-        List {
-            if !ordered.isEmpty {
-                PlayShuffleButtons(play: { playAll(ordered, false) }, shuffle: { playAll(ordered, true) })
-                    .listRowInsets(EdgeInsets(top: 10, leading: 20, bottom: 8, trailing: 20))
-                    .listRowSeparator(.hidden)
-            }
-            ForEach(sections) { section in
-                // 字母标题作为普通行而非分组标题，滚动时不吸顶，与 Apple Music 一致。
-                Section {
-                    if !section.letter.isEmpty {
-                        Text(section.letter)
-                            .font(.headline)
-                            .accessibilityAddTraits(.isHeader)
-                            .listRowInsets(EdgeInsets(top: 22, leading: 20, bottom: 6, trailing: 20))
-                            .listRowSeparator(.hidden)
-                    }
-                    ForEach(section.items) { song in
-                        SongRow(song: song) {
-                            actions.play(ordered, ordered.firstIndex { $0.id == song.id } ?? 0, "歌曲")
-                        }
-                        .listRowSeparator(.visible, edges: .bottom)
-                    }
-                }
-                .sectionIndexLabel(section.letter.isEmpty ? nil : Text(section.letter))
-            }
-        }
-        .listStyle(.plain)
-        .listSectionIndexVisibility(sort == .addedDate ? .hidden : .visible)
-        .environment(\.defaultMinListRowHeight, 0)
-        .listSectionSpacing(0)
-        .scrollContentBackground(.hidden)
-        .background(Color(.systemBackground))
-        .overlay {
-            if ordered.isEmpty, projection.isResolved(for: input, fastPath: Self.fastPath) {
-                LibraryListEmptyState(noun: "歌曲", symbol: "music.note", query: $query, filter: $filter)
-            }
-        }
+        
+        GenericCollectionList(
+            items: ordered,
+            menu: { song in
+                let sections = actions.rowMenuSections(for: song) { openLibraryRoute($0) }
+                return sections.nativeMenu(firstSectionIsRow: (sections.first?.count ?? 0) > 1)
+            },
+            open: { song, _ in
+                actions.play(ordered, ordered.firstIndex { $0.id == song.id } ?? 0, "歌曲")
+            },
+            moveItem: nil,
+            shelfItem: { song in
+                LibraryShelfItem(id: song.id, title: song.title, subtitle: song.artist, artwork: song.artwork,
+                                 route: nil, songID: song.id)
+            },
+            route: { song in .album(song.albumID) }
+        )
         .libraryNavigationTitle("歌曲")
         .libraryTitleDisplayMode(.large)
         .librarySearchable(text: $query, prompt: "搜索歌曲")
@@ -591,23 +571,22 @@ struct ArtistsListView: View {
     let artists: [LibraryArtistItem]
     @State private var filter = LibraryFilter.all
     @Environment(\.dynamicTypeSize) private var textSize
+    @Environment(\.openLibraryRoute) private var openLibraryRoute
 
     var body: some View {
-        List(filter == .favorites ? artists.filter(\.isFavorite) : artists) { artist in
-            LibraryRouteLink(value: LibraryRoute.artist(artist.id), preview: artistPreview(artist)) {
-                HStack(spacing: 12) {
-                    ArtistAvatar(artwork: artist.artwork)
-                        .frame(width: 48, height: 48)
-                        .overlay(alignment: .leading) { FavoriteMark(isFavorite: artist.isFavorite, color: .yellow) }
-                    Text(artist.name).font(.callout).lineLimit(textSize.isAccessibilitySize ? nil : 1)
-                }
-                .frame(minHeight: 56)
-                .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] + 60 }
-            }
-            .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
-            .listSectionSeparator(.hidden)
-        }
-        .listStyle(.plain)
+        let artists = filter == .favorites ? artists.filter(\.isFavorite) : artists
+        GenericCollectionList(
+            items: artists,
+            menu: { _ in UIMenu() },
+            open: { artist, source in
+                openLibraryRoute(.artist(artist.id), sourceProvider: source)
+            },
+            moveItem: nil,
+            shelfItem: { artist in
+                LibraryShelfItem(id: artist.id, title: artist.name, artwork: artist.artwork ?? .missing, route: .artist(artist.id))
+            },
+            route: { artist in .artist(artist.id) }
+        )
         .libraryNavigationTitle("艺人")
         .libraryTitleDisplayMode(.large)
         .libraryRootAccountButton()
