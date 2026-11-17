@@ -13,7 +13,7 @@ SwiftUI 与 UIKit 原生构建 · iOS 27 · AVFoundation 播放
 [![SwiftUI](https://img.shields.io/badge/UI-SwiftUI-0A84FF?style=flat-square)](https://developer.apple.com/xcode/swiftui/)
 [![License: GPL v3](https://img.shields.io/badge/license-GPL_v3-8A8F98?style=flat-square)](LICENSE)
 
-[功能亮点](#功能亮点) · [获取应用](#获取应用) · [从源码构建](#从源码构建) · [开发指南](docs/development.md) · [阶段计划](docs/roadmap.md)
+[功能亮点](#功能亮点) · [获取应用](#获取应用) · [从源码构建](#从源码构建) · [开发指南](docs/development.md) · [当前进度](docs/roadmap.md)
 
 </div>
 
@@ -33,7 +33,7 @@ SwiftUI 与 UIKit 原生构建 · iOS 27 · AVFoundation 播放
 <p align="center"><sub>截图同时展示浅色与深色外观。</sub></p>
 
 > [!IMPORTANT]
-> NeoMusic 是个人开发的非官方第三方客户端，与网易云音乐及 Apple 均无关联，项目用于学习与交流，代码按 GPL v3.0 授权。项目正在开发中：网易云账户、歌单、搜索、下载与在线播放已接入、待体验验收，当前状态见阶段计划。
+> NeoMusic 是个人开发的非官方第三方客户端，与网易云音乐及 Apple 均无关联，项目用于学习与交流，代码按 GPL v3.0 授权。项目正在开发中：网易云账户、歌单、搜索、下载与在线播放已接入、待体验验收，当前状态见[当前进度](docs/roadmap.md)。
 
 ## 为什么做 NeoMusic
 
@@ -68,7 +68,7 @@ SwiftUI 与 UIKit 原生构建 · iOS 27 · AVFoundation 播放
 - **标签栏自定义**：在账户页「标签页」可把喜爱歌曲、歌单、专辑、艺人、歌曲挂上底部标签栏，连同搜索最多 5 个，拖动调整顺序
 - **账户一处可达**：主页与各标签右上角共用同一账户入口，未登录同样可以浏览
 
-网易云在线能力（账户、歌单、搜索、下载、在线播放）均已接入，整体处于体验验收阶段；各阶段验证与验收状态见[阶段计划](docs/roadmap.md)。
+网易云在线能力（账户、歌单、搜索、下载、在线播放）均已接入，整体处于体验验收阶段；各阶段验证与验收状态见[当前进度](docs/roadmap.md)。
 
 ## 环境要求
 
@@ -107,7 +107,7 @@ Packages/           # LNPopupUI、LNPopupController、AudioTags（TagLib 封装�
 NeoMusicTests/                # 单元与业务回归测试
 NeoMusicNavigationUITests/    # 原生交互测试
 NeoMusicFunctionalParityTests/ # 专项对照测试
-docs/               # 开发指南、阶段计划与发布说明
+docs/               # 开发指南、当前进度与发布说明
 scripts/            # 本机检查、推送门禁与发布脚本
 ```
 
@@ -116,7 +116,7 @@ scripts/            # 本机检查、推送门禁与发布脚本
 | 文档 | 内容 |
 | --- | --- |
 | [开发指南](docs/development.md) | 环境、依赖、构建、测试与账户预览方法 |
-| [阶段计划](docs/roadmap.md) | 各阶段目标、验证与验收状态 |
+| [当前进度](docs/roadmap.md) | 阶段目标、已验收能力与待定事项 |
 | [发布说明](docs/releases) | 每个版本的变化 |
 | [项目规范](AGENTS.md) | 仓库规则、职责边界与验证要求 |
 
