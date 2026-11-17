@@ -1270,13 +1270,6 @@
 			path = LocalMusic;
 			sourceTree = "<group>";
 		};
-		"TEMP_8460E38D-3BD4-4F04-9366-5A9F110E1631" /* Imported */ = {
-			isa = PBXGroup;
-			children = (
-			);
-			path = Imported;
-			sourceTree = "<group>";
-		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
