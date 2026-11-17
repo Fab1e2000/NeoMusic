@@ -169,21 +169,19 @@ private struct NowPlayingCapsuleTrack: View {
                 .fill(.white.opacity(NowPlayingVisualHierarchy.trackUnfilledOpacity))
                 .blendMode(.plusLighter)
 
-            if clampedFraction > 0 {
-                Capsule(style: .circular)
-                    .fill(.white)
-                    .animation(spatialAnimation, value: isPressed)
-                    .opacity(deltaOpacity)
-                    .animation(highlightAnimation, value: isPressed)
-                    .mask {
-                        HStack(spacing: 0) {
-                            Rectangle()
-                                .frame(width: baseWidth * clampedFraction)
-                            Spacer(minLength: 0)
-                        }
+            Capsule(style: .circular)
+                .fill(.white)
+                .animation(spatialAnimation, value: isPressed)
+                .opacity(deltaOpacity)
+                .animation(highlightAnimation, value: isPressed)
+                .mask {
+                    HStack(spacing: 0) {
+                        Rectangle()
+                            .frame(width: baseWidth * clampedFraction)
+                        Spacer(minLength: 0)
                     }
-                    .blendMode(.plusLighter)
-            }
+                }
+                .blendMode(.plusLighter)
         }
         .frame(width: baseWidth, height: currentHeight)
         .animation(spatialAnimation, value: isPressed)
@@ -707,8 +705,15 @@ final class AlignedSystemVolumeView: MPVolumeView {
                 // Ignore delayed / quantized AVAudioSession IPC echoes while dragging,
                 // coasting on flick inertia, or during the brief post-release settle window.
                 guard !self.isDragging, !self.isCoasting, ContinuousClock.now >= self.suppressObserverUntil else { return }
+                let changed = abs(volume - self.lastReportedFraction) > 0.0001
                 self.lastReportedFraction = volume
-                self.volumeState?.volumeFraction = CGFloat(volume)
+                if changed && !UIAccessibility.isReduceMotionEnabled {
+                    withAnimation(.smooth(duration: 0.22)) {
+                        self.volumeState?.volumeFraction = CGFloat(volume)
+                    }
+                } else {
+                    self.volumeState?.volumeFraction = CGFloat(volume)
+                }
             }
         }
         let refreshNames: [Notification.Name] = [
