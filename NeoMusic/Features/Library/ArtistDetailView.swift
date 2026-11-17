@@ -182,9 +182,13 @@ private struct ArtistPageShade: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .onScrollGeometryChange(for: CGFloat.self) {
-                max(44, 96 - max(0, $0.contentOffset.y + $0.contentInsets.top - 192) * 0.047)
-            } action: { _, value in shade = value }
+            .onScrollGeometryChange(for: Int.self) {
+                let raw = max(44, 96 - max(0, $0.contentOffset.y + $0.contentInsets.top - 192) * 0.047)
+                return Int((raw * 2).rounded())
+            } action: { _, quantized in
+                let value = CGFloat(quantized) / 2
+                if shade != value { shade = value }
+            }
             .background {
                 Color(red: shade / 255, green: (shade - 1) / 255, blue: (shade - 2) / 255).ignoresSafeArea()
             }

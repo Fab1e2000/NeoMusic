@@ -79,18 +79,7 @@ public struct NowPlayingMarqueeText: View {
                 .offset(x: -progress * distance)
                 .frame(width: width, alignment: .leading)
                 .clipped()
-                .mask {
-                    // 停着时只有右侧渐隐（文字被截在右边）；滚动时左侧也渐隐。
-                    HStack(spacing: 0) {
-                        LinearGradient(colors: [.clear, .black], startPoint: .leading, endPoint: .trailing)
-                            .frame(width: fadeWidth)
-                            .opacity(progress > 0 ? 1 : 0)
-                            .overlay { Color.black.opacity(progress > 0 ? 0 : 1) }
-                        Rectangle()
-                        LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
-                            .frame(width: fadeWidth)
-                    }
-                }
+                .modifier(MarqueeHorizontalEdgeMask(width: width, fadeWidth: fadeWidth, leadingFadeOpacity: progress > 0 ? 1 : 0))
         } keyframes: { _ in
             MoveKeyframe(CGFloat.zero)
             LinearKeyframe(CGFloat.zero, duration: Self.pause)
@@ -98,5 +87,30 @@ public struct NowPlayingMarqueeText: View {
         }
         .id(text)
         .accessibilityHidden(true)
+    }
+}
+
+private struct MarqueeHorizontalEdgeMask: ViewModifier {
+    let width: CGFloat
+    let fadeWidth: CGFloat
+    let leadingFadeOpacity: Double
+
+    func body(content: Content) -> some View {
+        let total = max(width, 1)
+        let leadStop = min(Double(fadeWidth / total), 0.45)
+        let trailStop = max(1.0 - leadStop, leadStop)
+        let leadingAlpha = 1.0 - leadingFadeOpacity
+        content.mask {
+            LinearGradient(
+                stops: [
+                    .init(color: .black.opacity(leadingAlpha), location: 0),
+                    .init(color: .black, location: leadStop),
+                    .init(color: .black, location: trailStop),
+                    .init(color: .clear, location: 1)
+                ],
+                startPoint: .leading,
+                endPoint: .trailing
+            )
+        }
     }
 }

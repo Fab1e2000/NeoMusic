@@ -930,8 +930,8 @@ __attribute__((objc_direct_members))
 	{
 		case UIGestureRecognizerStateEnded:
 		{
-			[_containerController.view setNeedsLayout];
-			[_containerController.view layoutIfNeeded];
+			[self.popupBar layoutIfNeeded];
+			[self.popupContentView layoutIfNeeded];
 			_gesturesIgnored = YES;
 			[self openPopupAnimated:YES completion:^{
 				_gesturesIgnored = NO;

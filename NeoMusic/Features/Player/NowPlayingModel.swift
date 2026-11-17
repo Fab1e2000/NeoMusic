@@ -645,10 +645,12 @@ final class NowPlayingModel {
         // New-track resolution has no loaded entry and retains its requested position.
         if resolvingResource, !hasCurrent || loadedEntry != entryIDs[currentIndex] { return }
         let stopped = isPlaying && !audio.isPlaying && !audio.isActivating
-        updatingTime = true
-        elapsed = audio.elapsed
-        updatingTime = false
-        if !audio.isActivating { isPlaying = audio.isPlaying }
+        if abs(elapsed - audio.elapsed) > 0.0001 {
+            updatingTime = true
+            elapsed = audio.elapsed
+            updatingTime = false
+        }
+        if !audio.isActivating, isPlaying != audio.isPlaying { isPlaying = audio.isPlaying }
         if audio.isPlaying, let collection = pendingCollection {
             pendingCollection = nil
             onCollectionPlaybackStarted?(collection)

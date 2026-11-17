@@ -26,6 +26,7 @@ struct GenericCollectionList<Item: Identifiable & Equatable>: UIViewControllerRe
         let collectionView = controller.collectionView!
         collectionView.backgroundColor = .clear
         collectionView.delegate = coordinator
+        collectionView.prefetchDataSource = coordinator
         collectionView.dragDelegate = coordinator
         collectionView.dropDelegate = coordinator
         collectionView.dragInteractionEnabled = true
@@ -39,7 +40,7 @@ struct GenericCollectionList<Item: Identifiable & Equatable>: UIViewControllerRe
     }
 
     @MainActor
-    final class Coordinator: NSObject, UICollectionViewDelegate, UICollectionViewDragDelegate, UICollectionViewDropDelegate {
+    final class Coordinator: NSObject, UICollectionViewDelegate, UICollectionViewDataSourcePrefetching, UICollectionViewDragDelegate, UICollectionViewDropDelegate {
         private var latest: GenericCollectionList<Item>?
         private var itemsByID: [String: Item] = [:]
         private var dataSource: UICollectionViewDiffableDataSource<Int, String>?
@@ -49,6 +50,7 @@ struct GenericCollectionList<Item: Identifiable & Equatable>: UIViewControllerRe
         private var configuredColorScheme: ColorScheme?
         private var configuredDynamicTypeSize: DynamicTypeSize?
         private var configuredLocale: Locale?
+        private var prefetchTasks: [IndexPath: Task<Void, Never>] = [:]
 
         private static var separatorLeading: CGFloat { 20 + 64 + 12 }
         private static var rowHeight: CGFloat { 80 }
@@ -219,6 +221,52 @@ struct GenericCollectionList<Item: Identifiable & Equatable>: UIViewControllerRe
                     coordinator.drop(item.dragItem, intoItemAt: destination, rect: target)
                 }
                 latest.moveItem?(id, folderID)
+            }
+        }
+
+        func collectionView(_ collectionView: UICollectionView, prefetchItemsAt indexPaths: [IndexPath]) {
+            guard let latest else { return }
+            let pixels = LocalArtworkImages.pixelSize(64 * max(1, collectionView.traitCollection.displayScale))
+            let loadAction = environment.artworkLoadAction
+            for path in indexPaths where prefetchTasks[path] == nil {
+                guard let item = item(at: path) else { continue }
+                let artwork = latest.shelfItem(item).artwork
+                switch artwork {
+                case .file(let url):
+                    guard LocalArtworkImages.cached(url, pixels: pixels) == nil else { continue }
+                    prefetchTasks[path] = Task { [weak self] in
+                        defer { self?.prefetchTasks[path] = nil }
+                        _ = await LocalArtworkImages.loadThumbnail(url, pixels: pixels)
+                    }
+                case .deferred(let loadID, _):
+                    if LocalArtworkImages.cachedResolved(loadID, pixels: pixels) != nil { continue }
+                    if let resolved = LocalArtworkImages.resolvedURL(for: loadID) {
+                        prefetchTasks[path] = Task { [weak self] in
+                            defer { self?.prefetchTasks[path] = nil }
+                            _ = await LocalArtworkImages.loadThumbnail(resolved, pixels: pixels)
+                        }
+                        continue
+                    }
+                    prefetchTasks[path] = Task { [weak self] in
+                        defer { self?.prefetchTasks[path] = nil }
+                        if let file = await loadAction.resolve?(loadID) {
+                            guard !Task.isCancelled else { return }
+                            LocalArtworkImages.registerResolvedArtwork(loadID, url: file)
+                            _ = await LocalArtworkImages.loadThumbnail(file, pixels: pixels)
+                            return
+                        }
+                        guard !Task.isCancelled else { return }
+                        loadAction(loadID)
+                    }
+                default:
+                    break
+                }
+            }
+        }
+
+        func collectionView(_ collectionView: UICollectionView, cancelPrefetchingForItemsAt indexPaths: [IndexPath]) {
+            for path in indexPaths {
+                prefetchTasks.removeValue(forKey: path)?.cancel()
             }
         }
     }

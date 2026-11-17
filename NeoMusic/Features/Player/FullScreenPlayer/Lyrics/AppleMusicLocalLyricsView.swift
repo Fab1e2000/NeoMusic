@@ -417,12 +417,12 @@ private final class NativeLyricsScrollView: UIScrollView, UIScrollViewDelegate {
     private func startDisplayLink() {
         guard displayLink == nil else { return }
         let link = CADisplayLink(target: self, selector: #selector(refreshVisualGeometry))
-        link.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 120, maximum: 120, preferred: 120)
         link.add(to: .main, forMode: .common)
         displayLink = link
     }
     private func stopDisplayLinkIfIdle() {
-        if animators.isEmpty && fadeAnimator == nil {
+        if animators.isEmpty && fadeAnimator == nil && !isDragging && !isDecelerating {
             displayLink?.invalidate()
             displayLink = nil
         }
@@ -525,6 +525,7 @@ private final class NativeLyricsScrollView: UIScrollView, UIScrollViewDelegate {
         visibility.begin(isInterfaceVisible: !(input?.isInterfaceHidden ?? false))
         previousOffset = contentOffset.y
         updateAppearances(activeIndex: focusedIndex, animated: true)
+        startDisplayLink()
     }
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         guard !positioning else { return }
@@ -537,9 +538,15 @@ private final class NativeLyricsScrollView: UIScrollView, UIScrollViewDelegate {
         setNeedsLayout()
     }
     func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
-        if !decelerate { resumeFollowing() }
+        if !decelerate {
+            stopDisplayLinkIfIdle()
+            resumeFollowing()
+        }
     }
-    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { resumeFollowing() }
+    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+        stopDisplayLinkIfIdle()
+        resumeFollowing()
+    }
     private func resumeFollowing() {
         visibility.end()
         guard browsing else { return }
@@ -649,6 +656,9 @@ private final class NativeLyricRowView: UIView {
     let appearance: LyricsRowAppearance
     let content: UIView
     var isMoving = false
+    private let cachedFadeTargets = NSPointerArray.weakObjects()
+    private var needsFadeTargetDiscovery = true
+    private var hasActiveEdgeMask = false
     var onTap: (() -> Void)? {
         get { appearance.onTap }
         set { appearance.onTap = newValue }
@@ -680,9 +690,11 @@ private final class NativeLyricRowView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         content.frame = bounds.insetBy(dx: -Self.horizontalBleed, dy: 0)
+        needsFadeTargetDiscovery = true
     }
     override func layoutSublayers(of layer: CALayer) {
         super.layoutSublayers(of: layer)
+        if layer === self.layer { needsFadeTargetDiscovery = true }
         // UIKit coalesces row layout changes into the scroll view's next layout pass.
         // A row must not synchronously refresh every other row's geometry.
         if let scrollView = superview as? NativeLyricsScrollView, !scrollView.isRefreshing {
@@ -691,15 +703,29 @@ private final class NativeLyricRowView: UIView {
     }
 
     func applyEdgeFade(_ fade: LyricsViewportFade, viewportTop: CGFloat, in scroll: UIScrollView, presentation: Bool) {
+        if !presentation, viewportTop >= fade.topEnd, viewportTop + bounds.height <= fade.bottomStart {
+            guard hasActiveEdgeMask else { return }
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            removeEdgeMask(in: layer)
+            CATransaction.commit()
+            hasActiveEdgeMask = false
+            return
+        }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
-        if !presentation, viewportTop >= fade.topEnd, viewportTop + bounds.height <= fade.bottomStart {
-            removeEdgeMask(in: layer)
-            return
+        var targets = cachedFadeTargets.allObjects.compactMap { $0 as? CALayer }.filter { $0.superlayer != nil }
+        if needsFadeTargetDiscovery || targets.isEmpty {
+            targets.removeAll(keepingCapacity: true)
+            collectTargets(in: layer, targets: &targets)
+            cachedFadeTargets.count = 0
+            for target in targets {
+                cachedFadeTargets.addPointer(Unmanaged.passUnretained(target).toOpaque())
+            }
+            needsFadeTargetDiscovery = false
         }
-        var targets: [CALayer] = []
-        collectTargets(in: layer, targets: &targets)
+        hasActiveEdgeMask = !targets.isEmpty
         for target in targets {
             let mask = (target.mask as? LyricsEdgeMaskLayer) ?? LyricsEdgeMaskLayer()
             let destination = (presentation ? target.presentation() : nil) ?? target

@@ -76,10 +76,14 @@ struct NowPlayingQueueList: UIViewRepresentable {
     private final class EdgeFadedListCell: UICollectionViewListCell {
         weak var edgeFadeCollectionView: EdgeFadedCollectionView?
         var contentRevision: UInt64?
+        fileprivate let cachedEdgeTargets = NSPointerArray.weakObjects()
+        fileprivate var needsTargetDiscovery = true
 
         override func prepareForReuse() {
             super.prepareForReuse()
             contentRevision = nil
+            needsTargetDiscovery = true
+            cachedEdgeTargets.count = 0
             edgeFadeCollectionView?.clearEdgeMasks(for: self)
         }
 
@@ -87,6 +91,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
             // UIView lays out its subviews here; refresh once after that work finishes.
             super.layoutSublayers(of: layer)
             if layer === self.layer {
+                needsTargetDiscovery = true
                 edgeFadeCollectionView?.updateEdgeMask(for: self)
             }
         }
@@ -198,10 +203,26 @@ struct NowPlayingQueueList: UIViewRepresentable {
             maskedCells.add(cell)
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            var targets: [CALayer] = []
-            collectEdgeMaskTargets(in: cell.layer, targets: &targets)
-            for target in targets {
-                setEdgeMask(on: target, metrics: metrics)
+            if let listCell = cell as? EdgeFadedListCell {
+                var targets = listCell.cachedEdgeTargets.allObjects.compactMap { $0 as? CALayer }.filter { $0.superlayer != nil }
+                if listCell.needsTargetDiscovery || targets.isEmpty {
+                    targets.removeAll(keepingCapacity: true)
+                    collectEdgeMaskTargets(in: cell.layer, targets: &targets)
+                    listCell.cachedEdgeTargets.count = 0
+                    for target in targets {
+                        listCell.cachedEdgeTargets.addPointer(Unmanaged.passUnretained(target).toOpaque())
+                    }
+                    listCell.needsTargetDiscovery = false
+                }
+                for target in targets {
+                    setEdgeMask(on: target, metrics: metrics)
+                }
+            } else {
+                var targets: [CALayer] = []
+                collectEdgeMaskTargets(in: cell.layer, targets: &targets)
+                for target in targets {
+                    setEdgeMask(on: target, metrics: metrics)
+                }
             }
             CATransaction.commit()
         }

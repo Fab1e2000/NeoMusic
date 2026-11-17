@@ -20,7 +20,7 @@ typedef struct {
 static void initializeWindow(Analysis *s) {
     vDSP_hann_window(s->window,N,vDSP_HANN_NORM);
     s->ceiling=-20;
-    s->hop=MAX(1,MIN(N,(int)lround(s->rate/60)));
+    s->hop=MAX(1,MIN(N,(int)lround(s->rate/120)));
 }
 static void analyze(Analysis *s) {
     vDSP_vmul(s->input,1,s->window,1,s->work,1,N);
@@ -62,7 +62,7 @@ static void prepareTap(MTAudioProcessingTapRef tap, CMItemCount maxFrames, const
     s->rate=f->mSampleRate;
     s->supported=f->mFormatID==kAudioFormatLinearPCM && (f->mFormatFlags & kAudioFormatFlagIsFloat) && f->mBitsPerChannel==32;
     s->filled=0;
-    s->hop=MAX(1,MIN(N,(int)lround(s->rate/60)));
+    s->hop=MAX(1,MIN(N,(int)lround(s->rate/120)));
     s->ceiling=-20;
     memset(s->displayed,0,sizeof(s->displayed));
     for(int i=0;i<5;i++) atomic_store(&s->levels[i],0);

@@ -178,9 +178,18 @@ private struct LoadedArtworkView: View {
         _initialArtwork = State(initialValue: previewArtwork)
         // A cached thumbnail is already visible before the larger decode finishes.
         // Keep those pixels if metadata changes the file during that decode.
-        if case .file(let url) = artwork {
+        switch artwork {
+        case .file(let url):
             _image = State(initialValue: LocalArtworkImages.cached(url, pixels: 0))
             _imageURL = State(initialValue: url)
+        case .deferred(let id, _):
+            if let resolved = LocalArtworkImages.resolvedURL(for: id) {
+                _resolvedURL = State(initialValue: resolved)
+                _image = State(initialValue: LocalArtworkImages.cached(resolved, pixels: 0))
+                _imageURL = State(initialValue: resolved)
+            }
+        default:
+            break
         }
     }
 
@@ -227,9 +236,18 @@ private struct LoadedArtworkView: View {
             }
         }
         .task(id: artwork.loadID) {
+            guard let id = artwork.loadID else {
+                resolvedURL = nil
+                return
+            }
+            if let alreadyResolved = LocalArtworkImages.resolvedURL(for: id) {
+                if resolvedURL != alreadyResolved { resolvedURL = alreadyResolved }
+                loadArtwork(id)
+                return
+            }
             resolvedURL = nil
-            loadArtwork(artwork.loadID)
-            guard let id = artwork.loadID, let file = await loadArtwork.resolve?(id), !Task.isCancelled else { return }
+            loadArtwork(id)
+            guard let file = await loadArtwork.resolve?(id), !Task.isCancelled else { return }
             LocalArtworkImages.registerResolvedArtwork(id, url: file)
             resolvedURL = file
         }

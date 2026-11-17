@@ -15,7 +15,7 @@ import ImageIO
     }
     private static let images: NSCache<NSURL, Variants> = {
         let cache = NSCache<NSURL, Variants>()
-        cache.totalCostLimit = 48 * 1_024 * 1_024
+        cache.totalCostLimit = 192 * 1_024 * 1_024
         return cache
     }()
     private struct Request: Hashable {

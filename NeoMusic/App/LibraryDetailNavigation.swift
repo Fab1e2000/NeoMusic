@@ -14,8 +14,14 @@ final class LibraryDetailNavigation: NSObject, UINavigationControllerDelegate {
     func configure(environment: EnvironmentValues, destination: @escaping (LibraryRoute) -> AnyView) {
         self.environment = environment
         self.destination = destination
-        for case let page as LibraryDetailHostingController in navigationController?.viewControllers ?? [] {
-            page.updateEnvironment?(environment)
+        let pages = navigationController?.viewControllers.compactMap { $0 as? LibraryDetailHostingController } ?? []
+        let topPage = navigationController?.topViewController as? LibraryDetailHostingController
+        for page in pages {
+            if page === topPage || page.chrome.isActive {
+                page.applyEnvironmentIfNeeded(environment)
+            } else {
+                page.pendingEnvironment = environment
+            }
         }
     }
 
@@ -161,6 +167,7 @@ private struct LibraryNavigationControllerHost<Root: View>: UIViewControllerRepr
 final class LibraryDetailHostingController: UIHostingController<AnyView> {
     let chrome: LibraryNavigationChrome
     var updateEnvironment: ((EnvironmentValues) -> Void)?
+    var pendingEnvironment: EnvironmentValues?
     private weak var registeredScroll: UIScrollView?
     init(chrome: LibraryNavigationChrome) {
         self.chrome = chrome
@@ -171,6 +178,10 @@ final class LibraryDetailHostingController: UIHostingController<AnyView> {
         chrome.apply()
     }
     @MainActor required dynamic init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    func applyEnvironmentIfNeeded(_ environment: EnvironmentValues) {
+        pendingEnvironment = nil
+        updateEnvironment?(environment)
+    }
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         // SwiftUI List may materialize after the controller's first appearance.
@@ -189,6 +200,10 @@ final class LibraryDetailHostingController: UIHostingController<AnyView> {
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         chrome.isActive = true
+        if let pending = pendingEnvironment {
+            pendingEnvironment = nil
+            updateEnvironment?(pending)
+        }
         chrome.apply()
     }
     override func viewDidDisappear(_ animated: Bool) {

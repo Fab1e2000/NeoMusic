@@ -1131,9 +1131,10 @@ final class LibraryDetailNavigationTests: XCTestCase {
         let scene = try await applicationWindowScene()
         let window = UIWindow(windowScene: scene)
         defer { window.isHidden = true }
-        let list = PlaylistCollectionList(
-            entries: [.playlist(.init(id: "playlist", title: "播放列表", artwork: .playlist))],
-            menu: { _ in UIMenu() }, open: { _, _ in }, movePlaylist: { _, _ in })
+        let list = GenericCollectionList<PlaylistEntry>(
+            items: [.playlist(.init(id: "playlist", title: "播放列表", artwork: .playlist))],
+            menu: { _ in UIMenu() }, open: { _, _ in }, moveItem: { _, _ in },
+            shelfItem: \.shelfItem, route: \.route)
         func content(_ colorScheme: ColorScheme, _ typeSize: DynamicTypeSize, _ locale: Locale) -> AnyView {
             AnyView(list.environment(\.colorScheme, colorScheme)
                 .environment(\.dynamicTypeSize, typeSize).environment(\.locale, locale))

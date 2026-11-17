@@ -4,6 +4,7 @@ struct SearchPageView: View {
     @Bindable var model: SearchPageModel
     @Environment(\.openLibraryRoute) private var openRoute
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @State private var mountedResultKinds: Set<MusicSearchKind> = [.combined]
     var body: some View {
         Group {
             if !model.isSearching && !model.submitted { browse }
@@ -121,24 +122,32 @@ struct SearchPageView: View {
             }
             ZStack {
                 ForEach(MusicSearchKind.allCases) { kind in
-                    let active = kind == model.kind
-                    SearchResultList(
-                        kind: kind,
-                        groups: active ? model.groups : (model.cachedGroups[kind] ?? []),
-                        active: active,
-                        error: active ? model.error : nil,
-                        moreError: active ? model.moreError : nil,
-                        hasMore: active && model.hasMore,
-                        isLoading: active && model.isLoading,
-                        query: active ? model.query : "",
-                        submitted: active && model.submitted,
-                        model: model
-                    )
-                    .equatable()
-                    .opacity(active ? 1 : 0)
-                    .allowsHitTesting(active)
-                    .accessibilityHidden(!active)
+                    if kind == model.kind || mountedResultKinds.contains(kind) {
+                        let active = kind == model.kind
+                        SearchResultList(
+                            kind: kind,
+                            groups: active ? model.groups : (model.cachedGroups[kind] ?? []),
+                            active: active,
+                            error: active ? model.error : nil,
+                            moreError: active ? model.moreError : nil,
+                            hasMore: active && model.hasMore,
+                            isLoading: active && model.isLoading,
+                            query: active ? model.query : "",
+                            submitted: active && model.submitted,
+                            model: model
+                        )
+                        .equatable()
+                        .opacity(active ? 1 : 0)
+                        .allowsHitTesting(active)
+                        .accessibilityHidden(!active)
+                    }
                 }
+            }
+            .onChange(of: model.kind, initial: true) { _, nextKind in
+                mountedResultKinds.insert(nextKind)
+            }
+            .onChange(of: model.query) { _, _ in
+                mountedResultKinds = [model.kind]
             }
         }
     }

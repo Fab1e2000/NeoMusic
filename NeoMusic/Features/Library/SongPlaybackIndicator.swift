@@ -84,10 +84,16 @@ struct SongPlaybackIndicator: UIViewRepresentable {
 }
 
 final class SpectrumBarsView: UIView {
-    var barColor: UIColor = .label { didSet { if oldValue != barColor { setNeedsDisplay() } } }
+    var barColor: UIColor = .label { didSet { if oldValue != barColor { applyBarColor() } } }
     var samples: () -> [Float] = { [] }
     var active = false { didSet { updateClock() } }
     private var levels = [CGFloat](repeating: 0, count: 5)
+    private let barLayers: [CALayer] = (0..<5).map { _ in
+        let bar = CALayer()
+        bar.cornerRadius = 1.1
+        bar.cornerCurve = .circular
+        return bar
+    }
     private var displayLink: CADisplayLink?
     var hasActiveDisplayLink: Bool { displayLink?.isPaused == false }
     private lazy var target = DisplayTarget(view: self)
@@ -97,40 +103,65 @@ final class SpectrumBarsView: UIView {
         backgroundColor = .clear
         isOpaque = false
         isUserInteractionEnabled = false
-        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: SpectrumBarsView, _: UITraitCollection) in view.setNeedsDisplay() }
+        for bar in barLayers { layer.addSublayer(bar) }
+        applyBarColor()
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (view: SpectrumBarsView, _: UITraitCollection) in view.applyBarColor() }
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override func didMoveToWindow() { super.didMoveToWindow(); updateClock() }
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        layoutBars()
+    }
+
+    private func applyBarColor() {
+        let resolved = barColor.resolvedColor(with: traitCollection).cgColor
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for bar in barLayers { bar.backgroundColor = resolved }
+        CATransaction.commit()
+    }
+
+    private func layoutBars() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for i in barLayers.indices {
+            let height = 2 + 16 * levels[i]
+            barLayers[i].frame = CGRect(
+                x: CGFloat(i) * 3.4,
+                y: (bounds.height - height) / 2,
+                width: 2.2,
+                height: height
+            )
+        }
+        CATransaction.commit()
+    }
 
     private func updateClock() {
         guard active, window != nil else { stop(); return }
         guard displayLink == nil else { return }
         let link = CADisplayLink(target: target, selector: #selector(DisplayTarget.tick))
-        link.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 120, maximum: 120, preferred: 120)
         link.add(to: .main, forMode: .common)
         displayLink = link
     }
     func stop() {
         displayLink?.invalidate(); displayLink = nil
         levels = Array(repeating: 0, count: 5)
-        setNeedsDisplay()
+        layoutBars()
     }
     fileprivate func tick() {
         let values = samples()
+        var changed = false
         for i in levels.indices {
             let value = values.indices.contains(i) ? CGFloat(values[i]) : 0
             let target = value.isFinite ? min(1, max(0, value)) : 0
-            levels[i] = target // Demo C attack/release already happens in the analyzer.
+            if abs(levels[i] - target) > 0.0005 {
+                levels[i] = target // Demo C attack/release already happens in the analyzer.
+                changed = true
+            }
         }
-        setNeedsDisplay()
-    }
-    override func draw(_ rect: CGRect) {
-        barColor.setFill()
-        for i in levels.indices {
-            let height = 2 + 16 * levels[i]
-            UIBezierPath(roundedRect: CGRect(x: CGFloat(i) * 3.4, y: (bounds.height - height) / 2,
-                                             width: 2.2, height: height), cornerRadius: 1.1).fill()
-        }
+        if changed { layoutBars() }
     }
     @MainActor private final class DisplayTarget: NSObject {
         weak var view: SpectrumBarsView?

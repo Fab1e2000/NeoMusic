@@ -174,12 +174,9 @@ private struct NowPlayingCapsuleTrack: View {
                 .animation(spatialAnimation, value: isPressed)
                 .opacity(deltaOpacity)
                 .animation(highlightAnimation, value: isPressed)
-                .mask {
-                    HStack(spacing: 0) {
-                        Rectangle()
-                            .frame(width: baseWidth * clampedFraction)
-                        Spacer(minLength: 0)
-                    }
+                .mask(alignment: .leading) {
+                    Rectangle()
+                        .frame(width: baseWidth * clampedFraction)
                 }
                 .blendMode(.plusLighter)
         }
@@ -827,7 +824,7 @@ final class AlignedSystemVolumeView: MPVolumeView {
             target: VolumeDisplayLinkTarget(owner: self),
             selector: #selector(VolumeDisplayLinkTarget.step(_:))
         )
-        link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 120, maximum: 120, preferred: 120)
         link.add(to: .main, forMode: .common)
         inertiaLink = link
     }

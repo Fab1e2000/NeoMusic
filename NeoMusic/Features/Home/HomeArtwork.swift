@@ -87,6 +87,7 @@ private struct HomeStationArtwork: View {
                     .shadow(color: .black.opacity(0.12), radius: 5)
                 }
             }
+            .drawingGroup()
         }
     }
 }

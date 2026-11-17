@@ -385,7 +385,7 @@ final class TrackSwipeController {
             target: TrackSwipeDisplayLinkTarget(owner: self),
             selector: #selector(TrackSwipeDisplayLinkTarget.step(_:))
         )
-        link.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 120, maximum: 120, preferred: 120)
         link.add(to: .main, forMode: .common)
         displayLink = link
     }

@@ -22,9 +22,8 @@ enum ArtworkImagePipeline {
         }
     }
     static func configureMemoryCache() {
-        // Retain enough decoded covers for several screens without allowing Nuke's
-        // default cache to grow to 768 MB on a phone. Eviction never removes source data.
-        ImageCache.shared.costLimit = min(Int(ProcessInfo.processInfo.physicalMemory / 32), 192 * 1_024 * 1_024)
+        // Retain enough decoded covers for fast ProMotion scrolling across large catalogs. Eviction never removes source data.
+        ImageCache.shared.costLimit = min(Int(ProcessInfo.processInfo.physicalMemory / 16), 384 * 1_024 * 1_024)
     }
 
     static func request(for url: URL?, size: CGSize, displayScale: CGFloat,

@@ -686,28 +686,72 @@ private final class AlbumSongsController: UICollectionViewController {
             .environment(\.nativeArtworkSurfaceEnabled, true)
     }
 
+    private var previousTitle: String?
+    private var previousSummaryText: String?
+
     func update(_ model: NativeAlbumSongList, environment: EnvironmentValues) {
         loadViewIfNeeded()
         let previous = songsByID
         let previousScheme = self.model?.scheme
         let backgroundChanged = self.model?.pageColor != model.pageColor
-        let environmentChanged = self.environment.scenePhase != environment.scenePhase || self.environment.dynamicTypeSize != environment.dynamicTypeSize
+        let environmentChanged = self.environment.scenePhase != environment.scenePhase
+            || self.environment.dynamicTypeSize != environment.dynamicTypeSize
+            || self.environment.songRowPlayback !== environment.songRowPlayback
+            || self.environment.libraryDownloads !== environment.libraryDownloads
+            || self.environment.songPlaybackIndicatorsActive != environment.songPlaybackIndicatorsActive
+            || self.environment.accessibilityReduceMotion != environment.accessibilityReduceMotion
+        let schemeChanged = previousScheme != model.scheme
+        let globalAppearanceChanged = schemeChanged || backgroundChanged || environmentChanged
+        let previousLastID = self.model?.songs.last?.id
+
         self.model = model
         self.environment = environment
         songsByID = Dictionary(model.songs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        overrideUserInterfaceStyle = model.scheme == .dark ? .dark : .light
-        collectionView.backgroundColor = model.pageColor
+        if overrideUserInterfaceStyle != (model.scheme == .dark ? .dark : .light) {
+            overrideUserInterfaceStyle = model.scheme == .dark ? .dark : .light
+        }
+        if collectionView.backgroundColor != model.pageColor {
+            collectionView.backgroundColor = model.pageColor
+        }
         headerHost.rootView = AnyView(hosted(model.header))
+
         let oldIDs = source.snapshot().itemIdentifiers
+        let newIDs: [Item] = [.header] + model.songs.map { .song($0.id) } + [.footer]
+        let isNewAppearance = oldIDs.isEmpty
+        let lastID = model.songs.last?.id
+
+        var reconfigured: [Item] = []
+        if !isNewAppearance {
+            if globalAppearanceChanged || previousTitle != model.title || oldIDs.count != newIDs.count {
+                reconfigured.append(.header)
+                reconfigured.append(.footer)
+            }
+            for song in model.songs {
+                guard let old = previous[song.id] else { continue }
+                let separatorChanged = (song.id == previousLastID) != (song.id == lastID)
+                let metadataChanged = old.title != song.title
+                    || old.artist != song.artist
+                    || old.trackNumber != song.trackNumber
+                    || old.isFavorite != song.isFavorite
+                    || old.unavailabilityReason != song.unavailabilityReason
+                if metadataChanged || globalAppearanceChanged || separatorChanged {
+                    reconfigured.append(.song(song.id))
+                }
+            }
+        }
+        previousTitle = model.title
+        guard oldIDs != newIDs || !reconfigured.isEmpty else { return }
+
         var snapshot = NSDiffableDataSourceSnapshot<Int, Item>()
         snapshot.appendSections([0])
-        snapshot.appendItems([.header] + model.songs.map { .song($0.id) } + [.footer])
-        let changed = model.songs.filter { song in
-            guard let old = previous[song.id] else { return false }
-            return old.title != song.title || old.trackNumber != song.trackNumber || old.isFavorite != song.isFavorite || previousScheme != model.scheme || backgroundChanged || environmentChanged
-        }.map { Item.song($0.id) }
-        snapshot.reconfigureItems(changed + (oldIDs.isEmpty ? [] : [.header, .footer]))
-        source.apply(snapshot, animatingDifferences: !oldIDs.isEmpty)
+        snapshot.appendItems(newIDs)
+        if !reconfigured.isEmpty { snapshot.reconfigureItems(reconfigured) }
+        let shouldAnimate = !isNewAppearance
+            && oldIDs != newIDs
+            && !collectionView.isDragging
+            && !collectionView.isDecelerating
+            && !environment.accessibilityReduceMotion
+        source.apply(snapshot, animatingDifferences: shouldAnimate)
     }
 
     // The native accessory uses the same ±0.5 blend result against the opaque page.

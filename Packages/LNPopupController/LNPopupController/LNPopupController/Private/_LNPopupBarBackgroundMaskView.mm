@@ -150,29 +150,38 @@ static CGGradientRef _LNGradientCreateWithEaseFunction(EASE_FUNC func, UIColor* 
 	}
 	else
 	{
-		_step = 0.02 * (_targetAlpha < _currentAlpha ? -1.0 : 1.0);
-		
+		_step = 0.6 * (_targetAlpha < _currentAlpha ? -1.0 : 1.0);
+
 		if(_displayLink == nil)
 		{
-			_displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(_animationTick)];
-			_displayLink.preferredFramesPerSecond = 30;
+			_displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(_animationTick:)];
+			CGFloat max = UIScreen.mainScreen.maximumFramesPerSecond;
+			if(@available(iOS 15.0, *))
+			{
+				_displayLink.preferredFrameRateRange = CAFrameRateRangeMake(max, max, max);
+			}
+			else
+			{
+				_displayLink.preferredFramesPerSecond = max;
+			}
 			[_displayLink addToRunLoop:NSRunLoop.currentRunLoop forMode:NSRunLoopCommonModes];
 		}
 	}
 }
 
-- (void)_animationTick
+- (void)_animationTick:(CADisplayLink*)link
 {
-	_currentAlpha += _step;
-	if((_step < 0 && _currentAlpha < _targetAlpha) ||
-	   (_step > 0 && _currentAlpha > _targetAlpha))
+	CFTimeInterval dt = MAX(1.0 / 240.0, MIN(link.targetTimestamp - link.timestamp, 1.0 / 20.0));
+	_currentAlpha += _step * dt;
+	if((_step < 0 && _currentAlpha <= _targetAlpha) ||
+	   (_step > 0 && _currentAlpha >= _targetAlpha))
 	{
 		_currentAlpha = _targetAlpha;
-		
+
 		[_displayLink invalidate];
 		_displayLink = nil;
 	}
-	
+
 	[self setNeedsDisplay];
 }
 

@@ -34,7 +34,8 @@ import Observation
         bindPlayer()
         clock = Task { [weak self] in
             while !Task.isCancelled {
-                do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+                let interval: Duration = (self?.isPlaying == true) ? .milliseconds(16) : .milliseconds(100)
+                do { try await Task.sleep(for: interval) } catch { return }
                 self?.tick()
             }
         }
@@ -81,10 +82,15 @@ import Observation
         if let length = player.playbackDuration, length.isFinite { duration = max(0, length) }
     }
     private func tick() {
+        let previousElapsed = elapsed
         let previousDuration = duration
         readCurrentTime()
         updateFade()
-        if previousDuration != duration { onStateChange?() } else { onTimeChange?() }
+        if previousDuration != duration {
+            onStateChange?()
+        } else if abs(previousElapsed - elapsed) > 0.0001 {
+            onTimeChange?()
+        }
     }
     func spectrumLevels() -> [Float] {
         guard isPlaying, !isLoading, error == nil else { return Array(repeating: 0, count: 5) }

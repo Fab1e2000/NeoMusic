@@ -210,8 +210,8 @@ final class NowPlayingFluidBackdropCache: @unchecked Sendable {
 
     private let cache: NSCache<NSURL, Entry> = {
         let cache = NSCache<NSURL, Entry>()
-        cache.countLimit = 16
-        cache.totalCostLimit = 2 * 1024 * 1024
+        cache.countLimit = 64
+        cache.totalCostLimit = 8 * 1024 * 1024
         return cache
     }()
 
@@ -568,7 +568,7 @@ final class NowPlayingFluidBackdropView: UIView {
     @MainActor private final class DisplayProxy: NSObject {
         weak var view: NowPlayingFluidBackdropView?
         init(_ view: NowPlayingFluidBackdropView) { self.view = view }
-        @objc func tick(_ link: CADisplayLink) { view?.renderTick(timestamp: link.timestamp) }
+        @objc func tick(_ link: CADisplayLink) { view?.renderTick(timestamp: link.targetTimestamp) }
     }
 
     private final class EncodingGate: @unchecked Sendable {
@@ -867,14 +867,7 @@ final class NowPlayingFluidBackdropView: UIView {
             link.add(to: .main, forMode: .common)
             displayLink = link
         }
-        let needsHighRate = crossfading || !hasRenderedFrame
-        displayLink?.preferredFrameRateRange = if isTransitioning {
-            CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
-        } else if needsHighRate {
-            CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
-        } else {
-            CAFrameRateRange(minimum: 15, maximum: 24, preferred: 24)
-        }
+        displayLink?.preferredFrameRateRange = CAFrameRateRange(minimum: 120, maximum: 120, preferred: 120)
         displayLink?.isPaused = false
     }
 

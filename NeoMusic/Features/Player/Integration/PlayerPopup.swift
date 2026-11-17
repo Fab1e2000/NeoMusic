@@ -98,6 +98,10 @@ struct PlayerPopup: ViewModifier {
                       !Task.isCancelled else { return }
                 artwork = image
             }
+            .task(id: shouldShowBar && scenePhase == .active) {
+                guard shouldShowBar && scenePhase == .active else { return }
+                await PlayerServices.prewarmBackdropResources()
+            }
             .task(id: artworkLoadIDs) {
                 for id in Set(artworkLoadIDs) { loadArtwork(id) }
             }
