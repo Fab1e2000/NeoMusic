@@ -72,12 +72,10 @@
 
     func play() {
         wantsPlayback = true
+        pausedTime = nil
         if finished {
             scheduleFrom(frame: 0, startPlaying: true)
             return
-        }
-        if pausedTime != nil {
-            pausedTime = nil
         }
         startEngineAndNodeIfNeeded()
     }
@@ -117,10 +115,14 @@
 
         guard totalFrames > 0, anchoredFrame < totalFrames else {
             isPlayingState = false
-            if startPlaying, totalFrames > 0 {
+            if totalFrames > 0 {
+                // A restored position at the end must not leave an empty node that
+                // reports playing without any scheduled audio.
                 finished = true
-                wantsPlayback = false
-                onEnded?()
+                if startPlaying {
+                    wantsPlayback = false
+                    onEnded?()
+                }
             }
             return
         }

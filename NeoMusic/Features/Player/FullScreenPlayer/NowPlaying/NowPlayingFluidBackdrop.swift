@@ -598,6 +598,17 @@ final class NowPlayingFluidBackdropView: UIView {
     private let encodingGate = EncodingGate()
     private var source: NowPlayingFluidBackdropSource?
     private var currentSourceID: UUID?
+    /// A new cover that arrived while the app was inactive is displayed only
+    /// after the foreground hold, then crossfades like a normal track change.
+    private var pendingSource: NowPlayingFluidBackdropSource?
+    private var pendingCommit: Task<Void, Never>?
+    private var commitGeneration = 0
+    private var foregroundHoldUntil: TimeInterval = 0
+    private var prefersForegroundHold = false
+    /// SwiftUI can stop delivering scene-phase updates while the app is suspended,
+    /// so the UIKit view tracks the application state itself.
+    private var isAppActive = UIApplication.shared.applicationState != .background
+    private var isObservingApplicationState = false
 
     private var targetMoving: Bool = true
     private var currentSpeed: Float = 1
@@ -657,19 +668,24 @@ final class NowPlayingFluidBackdropView: UIView {
             needsRender = true
         }
         let newSourceID = source.id
-        if currentSourceID != newSourceID {
-            let hadPrevious = currentSourceID != nil && hasRenderedFrame
-            currentSourceID = newSourceID
-            self.source = source
-            if hadPrevious && !reduceMotion {
-                captureFrozenOnNextRender = true
-                crossfadeStartTimestamp = CACurrentMediaTime()
+        if newSourceID == currentSourceID {
+            // The requested artwork is already displayed; drop any held change
+            // that is no longer current.
+            cancelPendingCommit()
+        } else if pendingSource?.id != newSourceID {
+            let now = ProcessInfo.processInfo.systemUptime
+            if isAppActive, now >= foregroundHoldUntil {
+                cancelPendingCommit()
+                applySource(source, reduceMotion: reduceMotion)
             } else {
-                hasFrozenTrack = false
-                captureFrozenOnNextRender = false
-                crossfadeStartTimestamp = 0
+                pendingSource = source
+                if isAppActive {
+                    schedulePendingCommit(after: max(0, foregroundHoldUntil - now))
+                }
             }
-            needsRender = true
+        } else if pendingCommit == nil, isAppActive {
+            let now = ProcessInfo.processInfo.systemUptime
+            schedulePendingCommit(after: max(0, foregroundHoldUntil - now))
         }
 
         let nextMoving = isPlaying && !reduceMotion
@@ -683,21 +699,138 @@ final class NowPlayingFluidBackdropView: UIView {
         }
 
         updateDisplayLink()
-        if isActive, !hasRenderedFrame, bounds.width > 0, bounds.height > 0, window != nil {
+        if isActive, isAppActive, !hasRenderedFrame, bounds.width > 0, bounds.height > 0, window != nil {
             renderTick(timestamp: CACurrentMediaTime())
         }
+    }
+
+    private func applySource(_ source: NowPlayingFluidBackdropSource, reduceMotion: Bool) {
+        let hadPrevious = currentSourceID != nil && hasRenderedFrame
+        currentSourceID = source.id
+        self.source = source
+        if hadPrevious, !reduceMotion, isActive, isAppActive {
+            captureFrozenOnNextRender = true
+            crossfadeStartTimestamp = CACurrentMediaTime()
+        } else {
+            hasFrozenTrack = false
+            captureFrozenOnNextRender = false
+            crossfadeStartTimestamp = 0
+        }
+        needsRender = true
+    }
+
+    private func schedulePendingCommit(after delay: TimeInterval) {
+        pendingCommit?.cancel()
+        guard pendingSource != nil else { return }
+        commitGeneration &+= 1
+        let generation = commitGeneration
+        pendingCommit = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .milliseconds(Int((max(0, delay) * 1000).rounded())))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled, let self, self.commitGeneration == generation else { return }
+            self.commitPendingSource()
+        }
+    }
+
+    private func commitPendingSource() {
+        guard let pending = pendingSource else { return }
+        pendingSource = nil
+        pendingCommit = nil
+        applySource(pending, reduceMotion: isReduceMotion)
+        updateDisplayLink()
+    }
+
+    private func cancelPendingCommit() {
+        pendingSource = nil
+        pendingCommit?.cancel()
+        pendingCommit = nil
+        commitGeneration &+= 1
     }
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
         if window == nil {
             stopDisplayLink()
+            pendingCommit?.cancel()
+            pendingCommit = nil
+            stopObservingApplicationState()
             lastTickTimestamp = nil
         } else {
+            startObservingApplicationState()
             needsRender = true
             updateDisplayLink()
             setNeedsLayout()
         }
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    private func startObservingApplicationState() {
+        guard !isObservingApplicationState else { return }
+        isObservingApplicationState = true
+        let center = NotificationCenter.default
+        center.addObserver(self, selector: #selector(appWillResignActive),
+                           name: UIApplication.willResignActiveNotification, object: nil)
+        center.addObserver(self, selector: #selector(appDidEnterBackground),
+                           name: UIApplication.didEnterBackgroundNotification, object: nil)
+        center.addObserver(self, selector: #selector(appWillEnterForeground),
+                           name: UIApplication.willEnterForegroundNotification, object: nil)
+        center.addObserver(self, selector: #selector(appDidBecomeActive),
+                           name: UIApplication.didBecomeActiveNotification, object: nil)
+    }
+
+    private func stopObservingApplicationState() {
+        guard isObservingApplicationState else { return }
+        isObservingApplicationState = false
+        NotificationCenter.default.removeObserver(self, name: UIApplication.willResignActiveNotification, object: nil)
+        NotificationCenter.default.removeObserver(self, name: UIApplication.didEnterBackgroundNotification, object: nil)
+        NotificationCenter.default.removeObserver(self, name: UIApplication.willEnterForegroundNotification, object: nil)
+        NotificationCenter.default.removeObserver(self, name: UIApplication.didBecomeActiveNotification, object: nil)
+    }
+
+    @objc private func appWillResignActive() {
+        isAppActive = false
+        pendingCommit?.cancel()
+        pendingCommit = nil
+        stopDisplayLink()
+    }
+
+    @objc private func appDidEnterBackground() {
+        isAppActive = false
+        pendingCommit?.cancel()
+        pendingCommit = nil
+        stopDisplayLink()
+    }
+
+    @objc private func appWillEnterForeground() {
+        isAppActive = true
+        prefersForegroundHold = true
+        foregroundHoldUntil = ProcessInfo.processInfo.systemUptime + 0.5
+        lastTickTimestamp = nil
+        needsRender = true
+        if pendingSource != nil {
+            schedulePendingCommit(after: 0.5)
+        }
+    }
+
+    @objc private func appDidBecomeActive() {
+        isAppActive = true
+        let now = ProcessInfo.processInfo.systemUptime
+        if prefersForegroundHold {
+            prefersForegroundHold = false
+            // Start the visible hold once the app is actually active, not while
+            // the launch transition is still covering the player.
+            foregroundHoldUntil = max(foregroundHoldUntil, now + 0.5)
+        }
+        if pendingSource != nil {
+            schedulePendingCommit(after: max(0, foregroundHoldUntil - now))
+        }
+        updateDisplayLink()
     }
 
     override func layoutSubviews() {
@@ -716,7 +849,7 @@ final class NowPlayingFluidBackdropView: UIView {
     }
 
     private func updateDisplayLink() {
-        guard isActive, window != nil, engine != nil, source != nil else {
+        guard isActive, isAppActive, window != nil, engine != nil, source != nil else {
             stopDisplayLink()
             return
         }
@@ -755,7 +888,7 @@ final class NowPlayingFluidBackdropView: UIView {
     }
 
     private func renderTick(timestamp: CFTimeInterval) {
-        guard isActive, window != nil, let engine, let source,
+        guard isActive, isAppActive, window != nil, let engine, let source,
               bounds.width > 0, bounds.height > 0 else { return }
 
         let dt: Double

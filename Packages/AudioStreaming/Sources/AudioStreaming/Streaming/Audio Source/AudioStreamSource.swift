@@ -22,6 +22,8 @@ public protocol CoreAudioStreamSource: AnyObject {
     var position: Int { get }
     /// The length of the audio in bytes
     var length: Int { get }
+    /// Whether the source can open at a later byte offset.
+    var canSeek: Bool { get }
 
     /// An `AudioStreamSourceDelegate` object to listen for events from the source
     var delegate: AudioStreamSourceDelegate? { get set }
@@ -43,6 +45,10 @@ public protocol CoreAudioStreamSource: AnyObject {
 
     /// The `DispatchQueue` network object will receive data
     var underlyingQueue: DispatchQueue { get }
+}
+
+public extension CoreAudioStreamSource {
+    var canSeek: Bool { true }
 }
 
 protocol AudioStreamSource: CoreAudioStreamSource {

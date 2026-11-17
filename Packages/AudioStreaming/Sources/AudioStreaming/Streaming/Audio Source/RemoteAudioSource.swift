@@ -24,6 +24,8 @@ public class RemoteAudioSource: AudioStreamSource {
         return parsedHeader.fileLength
     }
 
+    public var canSeek: Bool { supportsSeek }
+
     private let url: URL
     private let httpMethod: String?
     private let httpBody: Data?
@@ -161,10 +163,6 @@ public class RemoteAudioSource: AudioStreamSource {
         relativePosition = 0
         seekOffset = offset
 
-        if !supportsSeek, offset != relativePosition {
-            return
-        }
-
         if parsedHeaderOutput?.isMp4 != true,
            !cachedPrefixData.isEmpty,
            offset >= 0,
@@ -179,13 +177,20 @@ public class RemoteAudioSource: AudioStreamSource {
             return
         }
 
+        // A response without byte-range support cannot open at a later offset.
+        // Restart from the beginning and let AudioPlayer discard the prefix up
+        // to the requested position; returning here would leave the stream dead.
+        if !supportsSeek, offset != 0 {
+            seekOffset = 0
+        }
+
         mp4Restructure.clear()
         retrierTimeout.cancel()
         metadataStreamProcessor.reset()
         icycastHeadersProcessor.reset()
         shouldTryParsingIcycastHeaders = false
 
-        performOpen(seek: offset, generation: generation)
+        performOpen(seek: seekOffset, generation: generation)
     }
 
     public func suspend() {

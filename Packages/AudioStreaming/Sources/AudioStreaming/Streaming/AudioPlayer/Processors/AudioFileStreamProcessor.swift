@@ -114,7 +114,8 @@ final class AudioFileStreamProcessor {
         // Warm the decoder before the target packet (MP3 uses a bit reservoir).
         // PCM stream parsers require the container header after a restart; they
         // reject a discontinuity even when a packet byte offset is exact.
-        if target > 0, entry.packetDuration > 0, entry.audioStreamFormat.mFormatID != kAudioFormatLinearPCM {
+        if target > 0, entry.canSeek, entry.packetDuration > 0,
+           entry.audioStreamFormat.mFormatID != kAudioFormatLinearPCM {
             let packet = max(Int64(floor((target + priming) / entry.packetDuration)) - 10, 0)
             var flags = AudioFileStreamSeekFlags()
             var offset: Int64 = 0

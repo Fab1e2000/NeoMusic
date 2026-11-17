@@ -30,6 +30,28 @@ final class AudioSeekTests: XCTestCase {
         XCTAssertGreaterThan(decoder.entry.progress, 3.125)
     }
 
+    func testNonSeekableSourceRestartsFromBeginningAndDiscardsToTarget() throws {
+        let url = try XCTUnwrap(Bundle.module.url(forResource: "cbr", withExtension: "mp3", subdirectory: "Fixtures"))
+        let data = try Data(contentsOf: url)
+        let baseline = try Decoder(data: data, hint: kAudioFileMP3Type)
+        try baseline.feed(data)
+        let reference = baseline.samples
+        let decoder = try Decoder(data: data, hint: kAudioFileMP3Type, canSeek: false)
+        try decoder.feed(data.prefix(8192), final: false)
+        let target = 3.125
+        decoder.entry.seekRequest.time = target
+        decoder.processor.processSeek()
+        XCTAssertEqual(decoder.source.position, 0, "A non-seekable source must restart from the stream beginning")
+        try decoder.feed(data)
+        let actual = Array(decoder.samples.prefix(4096))
+        let offset = Int((target * 44_100).rounded()) * 2
+        let expected = Array(reference.dropFirst(offset).prefix(actual.count))
+        XCTAssertGreaterThan(actual.count, 1000)
+        XCTAssertEqual(actual.count, expected.count)
+        let rms = sqrt(zip(actual, expected).reduce(0.0) { $0 + pow(Double($1.0 - $1.1), 2) } / Double(max(actual.count, 1)))
+        XCTAssertLessThan(rms, 0.008)
+    }
+
     func testTruncatedHeaderFailsAtEndOfInput() throws {
         let data = Data("broken".utf8)
         let decoder = try Decoder(data: data, hint: kAudioFileWAVEType)
@@ -132,9 +154,14 @@ private final class MemorySource: CoreAudioStreamSource {
     var position = 0
     let length: Int
     let audioFileHint: AudioFileTypeID
+    let canSeek: Bool
     weak var delegate: AudioStreamSourceDelegate?
     let underlyingQueue = DispatchQueue(label: "seek-test")
-    init(length: Int, hint: AudioFileTypeID) { self.length = length; audioFileHint = hint }
+    init(length: Int, hint: AudioFileTypeID, canSeek: Bool = true) {
+        self.length = length
+        self.audioFileHint = hint
+        self.canSeek = canSeek
+    }
     func seek(at offset: Int) { position = offset }
     func close() {}
     func suspend() {}
@@ -149,9 +176,9 @@ private final class Decoder {
     let processor: AudioFileStreamProcessor
     var failure: AudioPlayerError?
 
-    init(data: Data, hint: AudioFileTypeID) throws {
+    init(data: Data, hint: AudioFileTypeID, canSeek: Bool = true) throws {
         let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 44_100, channels: 2, interleaved: true)!
-        source = MemorySource(length: data.count, hint: hint)
+        source = MemorySource(length: data.count, hint: hint, canSeek: canSeek)
         entry = AudioEntry(source: source, entryId: AudioEntryId(id: "fixture"), outputAudioFormat: format)
         renderer = AudioRendererContext(configuration: AudioPlayerConfiguration(bufferSizeInSeconds: 8), outputAudioFormat: format)
         context.audioPlayingEntry = entry

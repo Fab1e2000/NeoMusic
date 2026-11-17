@@ -39,6 +39,28 @@ import SwiftUI
         await model.flushQueuePersistence()
     }
 
+    func testRestoredPositionAtEndStartsLocalFileFromBeginningAfterFirstPlay() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let audioURL = directory.appendingPathComponent("tone.wav")
+        try PlayerTestFixtures.silentAudio(at: audioURL, seconds: 10)
+        let stateURL = directory.appendingPathComponent("queue.json")
+        let saved = NowPlayingModel.SavedQueue(ids: ["tone.wav"], index: 0, elapsed: 10, repeatMode: .off, shuffled: false)
+        try JSONEncoder().encode(saved).write(to: stateURL)
+        let song = LibrarySongItem(id: "tone.wav", title: "Tone", artist: "Artist", album: "Album", albumArtist: "Artist", trackNumber: 1, artwork: .missing, duration: 10)
+        let model = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false)
+        defer { model.shutdownPlayback() }
+        model.configurePlayback(resolveURL: { _ in audioURL }, persistenceURL: stateURL)
+        XCTAssertTrue(model.restoreQueue(songs: [song]))
+        model.togglePlayback()
+        for _ in 0..<40 where model.elapsed > 9 { try await Task.sleep(for: .milliseconds(100)) }
+        XCTAssertNil(model.errorMessage)
+        XCTAssertTrue(model.isPlaying)
+        XCTAssertLessThan(model.elapsed, 3, "A restored end position must restart the local file instead of leaving it silent")
+        await model.flushQueuePersistence()
+    }
+
     func testRestoredOnlineSongResolvesOnlyOnFirstTapAndSeeksSavedProgress() async throws {
         let directory = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

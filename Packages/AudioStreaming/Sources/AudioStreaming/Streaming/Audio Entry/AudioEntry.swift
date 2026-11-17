@@ -32,6 +32,10 @@ class AudioEntry {
         source.length
     }
 
+    var canSeek: Bool {
+        source.canSeek
+    }
+
     var progress: Double {
         lock.lock(); defer { lock.unlock() }
         return seekTime + (Double(framesState.played) / outputAudioFormat.sampleRate)
