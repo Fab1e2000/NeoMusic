@@ -175,13 +175,15 @@ private struct PlayerPopupContent: View {
     }
 }
 
+/// 只切换叠加层，不切换被包裹内容的结构身份：`isActive` 会随 scenePhase 变化，
+/// 若用 if/else 包裹 content，下拉通知中心或回到前台都会重建全屏播放器并重置其 @State。
 private struct OptionalPlayerToastModifier: ViewModifier {
     let toasts: LibraryToastCenter?
-    @ViewBuilder func body(content: Content) -> some View {
-        if let toasts {
-            content.libraryToasts(toasts)
-        } else {
-            content
+    func body(content: Content) -> some View {
+        content.overlay {
+            if let toasts {
+                Color.clear.libraryToasts(toasts)
+            }
         }
     }
 }

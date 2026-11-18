@@ -61,13 +61,14 @@ struct NowPlayingArtworkBackdrop: View {
             ZStack {
                 Color.black
 
+                // 换歌时保持同一个 MeshGradient，让 SwiftUI 直接插值网格颜色与控制点；
+                // 不按调色板重建视图，避免新旧两层同时半透明而透出底下的黑色。
                 if let palette {
                     NowPlayingMeshBackdrop(
                         palette: palette,
                         animates: animatesGradient,
                         reduceMotion: accessibilityReduceMotion
                     )
-                    .id(palette)
                     .transition(.opacity)
                 }
             }
@@ -84,7 +85,7 @@ struct NowPlayingArtworkBackdrop: View {
         .ignoresSafeArea(edges: ignoresSafeArea ? .all : [])
         .accessibilityHidden(true)
         .onChange(of: palette, initial: true) { _, newValue in
-            // 首次出现直接显示；只有更换曲目才淡入淡出，避免播放器展开时多一层黑场。
+            // 首次出现直接显示；只有更换曲目才做颜色过渡，避免播放器展开时多一层黑场。
             if newValue != nil { hasDisplayedPalette = true }
             onPaletteChange?(newValue)
         }
