@@ -108,12 +108,14 @@
                 externalRenderOutput: true
             )
             let renderFormat = player.renderAudioFormat
-            let gate = StreamRenderGate(player: player, format: renderFormat)
-            let node = AVAudioSourceNode(format: renderFormat) { _, timestamp, frameCount, outputData in
-                gate.render(timestamp: timestamp, frameCount: frameCount, outputData: outputData)
-            }
+            let nodeFormat = AVAudioFormat(
+                standardFormatWithSampleRate: renderFormat.sampleRate,
+                channels: renderFormat.channelCount
+            ) ?? renderFormat
+            let gate = StreamRenderGate(player: player, sourceFormat: renderFormat)
+            let node = Self.makeSourceNode(gate: gate, format: nodeFormat)
             node.volume = self.volume
-            self.graph.attach(node, format: renderFormat)
+            self.graph.attach(node, format: nodeFormat)
             self.sourceNode = node
             self.renderGate = gate
             self.audio = player
@@ -126,6 +128,12 @@
             player.play(url: url)
         }
     }
+    nonisolated private static func makeSourceNode(gate: StreamRenderGate, format: AVAudioFormat) -> AVAudioSourceNode {
+        AVAudioSourceNode(format: format) { _, timestamp, frameCount, outputData in
+            gate.render(timestamp: timestamp, frameCount: frameCount, outputData: outputData)
+        }
+    }
+
     @concurrent private static func readFormat(url: URL) async -> AVAudioFormat? {
         guard url.isFileURL, !Task.isCancelled else { return nil }
         return (try? AVAudioFile(forReading: url))?.processingFormat
@@ -263,12 +271,18 @@ private final class StreamRenderGate: @unchecked Sendable {
     private var isActive = false
     private var startHostTime: UInt64 = 0
     private let sampleRate: Double
+    private let channelCount: Int
+    private let sourceIsInterleaved: Bool
     private let bytesPerFrame: Int
+    private var scratchBuffer: [Float]
 
-    init(player: AudioStreaming.AudioPlayer, format: AVAudioFormat) {
+    init(player: AudioStreaming.AudioPlayer, sourceFormat: AVAudioFormat) {
         self.player = player
-        self.sampleRate = max(1, format.sampleRate)
-        self.bytesPerFrame = max(1, Int(format.streamDescription.pointee.mBytesPerFrame))
+        self.sampleRate = max(1, sourceFormat.sampleRate)
+        self.channelCount = max(1, Int(sourceFormat.channelCount))
+        self.sourceIsInterleaved = sourceFormat.isInterleaved
+        self.bytesPerFrame = max(1, Int(sourceFormat.streamDescription.pointee.mBytesPerFrame))
+        self.scratchBuffer = Array(repeating: 0, count: 4096 * max(1, Int(sourceFormat.channelCount)))
     }
 
     func activate(startHostTime: UInt64) {
@@ -312,6 +326,7 @@ private final class StreamRenderGate: @unchecked Sendable {
         lock.unlock()
         guard active, let activePlayer else { return noErr }
 
+        var skipFrames: AVAudioFrameCount = 0
         if targetHostTime > 0 {
             let sliceStart = timestamp.pointee.mHostTime
             let sliceDuration = AVAudioTime.hostTime(forSeconds: Double(frameCount) / sampleRate)
@@ -321,24 +336,50 @@ private final class StreamRenderGate: @unchecked Sendable {
             lock.lock()
             startHostTime = 0
             lock.unlock()
-            if sliceStart < targetHostTime, buffers.count == 1, let baseData = buffers[0].mData {
+            if sliceStart < targetHostTime {
                 let delaySeconds = AVAudioTime.seconds(forHostTime: targetHostTime - sliceStart)
-                let skipFrames = min(frameCount, AVAudioFrameCount((delaySeconds * sampleRate).rounded()))
-                let renderFrames = frameCount - skipFrames
-                guard renderFrames > 0 else { return noErr }
-                let byteOffset = Int(skipFrames) * bytesPerFrame
-                var offsetBufferList = AudioBufferList(
-                    mNumberBuffers: 1,
-                    mBuffers: AudioBuffer(
-                        mNumberChannels: buffers[0].mNumberChannels,
-                        mDataByteSize: UInt32(Int(renderFrames) * bytesPerFrame),
-                        mData: baseData.advanced(by: byteOffset)
-                    )
-                )
-                return activePlayer.renderExternal(inNumberFrames: renderFrames, ioData: &offsetBufferList)
+                skipFrames = min(frameCount, AVAudioFrameCount((delaySeconds * sampleRate).rounded()))
             }
         }
 
-        return activePlayer.renderExternal(inNumberFrames: frameCount, ioData: outputData)
+        let renderFrames = frameCount - skipFrames
+        guard renderFrames > 0 else { return noErr }
+
+        if !sourceIsInterleaved {
+            if skipFrames == 0 {
+                return activePlayer.renderExternal(inNumberFrames: renderFrames, ioData: outputData)
+            }
+            // Non-interleaved offset render not expected for AudioStreaming, fallback to pulling full frameCount.
+            return activePlayer.renderExternal(inNumberFrames: frameCount, ioData: outputData)
+        }
+
+        let neededSamples = Int(renderFrames) * channelCount
+        if scratchBuffer.count < neededSamples {
+            scratchBuffer = Array(repeating: 0, count: neededSamples)
+        }
+        let status: OSStatus = scratchBuffer.withUnsafeMutableBytes { rawBuffer in
+            guard let baseAddress = rawBuffer.baseAddress else { return noErr }
+            memset(baseAddress, 0, neededSamples * MemoryLayout<Float>.size)
+            var interleavedList = AudioBufferList(
+                mNumberBuffers: 1,
+                mBuffers: AudioBuffer(
+                    mNumberChannels: UInt32(channelCount),
+                    mDataByteSize: UInt32(Int(renderFrames) * bytesPerFrame),
+                    mData: baseAddress
+                )
+            )
+            return activePlayer.renderExternal(inNumberFrames: renderFrames, ioData: &interleavedList)
+        }
+
+        let destOffset = Int(skipFrames)
+        let frames = Int(renderFrames)
+        let channelsToCopy = min(channelCount, buffers.count)
+        for ch in 0..<channelsToCopy {
+            guard let destData = buffers[ch].mData?.assumingMemoryBound(to: Float.self) else { continue }
+            for frame in 0..<frames {
+                destData[destOffset + frame] = scratchBuffer[frame * channelCount + ch]
+            }
+        }
+        return status
     }
 }

@@ -329,15 +329,13 @@ final class LibraryNavigationChrome: NSObject, UISearchResultsUpdating, UISearch
 
     func setSearchPage(_ model: SearchPageModel) {
         searchPage = model
-        let prompt = "\(model.scope.rawValue)中的歌曲、艺人、专辑及歌单"
+        model.selectScope(.online)
+        let prompt = "\(MusicSearchScope.online.rawValue)中的歌曲、艺人、专辑及歌单"
         setSearch(Binding(get: { model.query }, set: { model.input($0) }), prompt: prompt)
         guard let search else { return }
         search.delegate = self
         search.searchBar.delegate = self
-        let scopes = MusicSearchScope.allCases.map(\.rawValue)
-        if search.searchBar.scopeButtonTitles != scopes { search.searchBar.scopeButtonTitles = scopes }
-        search.scopeBarActivation = .onSearchActivation
-        search.searchBar.selectedScopeButtonIndex = model.scope == .online ? 0 : 1
+        if search.searchBar.scopeButtonTitles != nil { search.searchBar.scopeButtonTitles = nil }
         controller?.navigationItem.preferredSearchBarPlacement = .stacked
     }
     func activateSearchPageIfNeeded() {
@@ -368,9 +366,6 @@ final class LibraryNavigationChrome: NSObject, UISearchResultsUpdating, UISearch
     func searchBarTextDidBeginEditing(_ searchBar: UISearchBar) {
         guard searchPage?.isSearching == true else { return }
         searchPage?.resumeEditing()
-    }
-    func searchBar(_ searchBar: UISearchBar, selectedScopeButtonIndexDidChange selectedScope: Int) {
-        searchPage?.selectScope(selectedScope == 0 ? .online : .library)
     }
 }
 

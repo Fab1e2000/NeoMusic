@@ -520,6 +520,16 @@ import XCTest
         XCTAssertNil(engine.error)
     }
 
+    @MainActor func testRemoteStreamAttachesStandardFormatSourceNodeWithoutCrashing() async throws {
+        let engine = LocalPlaybackEngine(activateSession: { true })
+        defer { engine.shutdown() }
+        engine.load(url: URL(string: "https://example.invalid/stream.mp3")!, autoplay: true)
+        try await waitUntil({ (try? self.nativePlayer(in: engine))?.itemID != nil })
+        // Give the async remote preparation task a chance to attach AVAudioSourceNode to SharedAudioGraph.
+        try await Task.sleep(for: .milliseconds(100))
+        engine.stop()
+    }
+
     private func nativePlayer(in engine: LocalPlaybackEngine) throws -> StreamingPlaybackDeck {
         try XCTUnwrap(Mirror(reflecting: engine).children.first { $0.label == "player" }?.value as? StreamingPlaybackDeck)
     }
