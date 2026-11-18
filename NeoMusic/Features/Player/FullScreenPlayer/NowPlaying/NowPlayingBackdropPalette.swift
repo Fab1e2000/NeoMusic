@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-/// 每首歌只从封面采样一次的 3×3 MeshGradient 配色。
+/// 每首歌只从封面提取 2–3 个主色，再铺成 3×3 MeshGradient 配色。
 /// 亮度与彩度沿用原流体背景的 Oklab 校准思路，让极暗、极亮和高饱和封面都能作为可读背景。
 struct NowPlayingBackdropPalette: Hashable, Sendable {
     struct Swatch: Hashable, Sendable {
@@ -35,19 +35,18 @@ struct NowPlayingBackdropPalette: Hashable, Sendable {
         seed: 0
     )
 
-    /// 分析 128×128 的不透明 sRGB 像素，返回按行优先排列的九宫格配色。
+    /// 分析 128×128 的不透明 sRGB 像素，提取主色后返回按行优先排列的九宫格配色。
     static func make(fromRGBA8 bytes: UnsafePointer<UInt8>, width: Int, height: Int) -> Self {
         guard width >= columns, height >= rows else { return .fallback }
 
-        var cellSums = Array(repeating: SIMD3<Double>.zero, count: columns * rows)
-        var cellCounts = Array(repeating: 0, count: columns * rows)
         var lSamples: [Float] = []
         lSamples.reserveCapacity(width * height)
+        var colorSamples: [ColorSample] = []
+        colorSamples.reserveCapacity((width / 4 + 1) * (height / 4 + 1))
 
         var sumL: Double = 0
         var sumA: Double = 0
         var sumB: Double = 0
-        var sumC: Double = 0
         var weightedA: Double = 0
         var weightedB: Double = 0
         var weightTotal: Double = 0
@@ -58,7 +57,6 @@ struct NowPlayingBackdropPalette: Hashable, Sendable {
 
         var y = 0
         while y < height {
-            let row = min(y * rows / height, rows - 1)
             let rowPtr = bytes + y * bytesPerRow
             var x = 0
             while x < width {
@@ -68,15 +66,11 @@ struct NowPlayingBackdropPalette: Hashable, Sendable {
                 let b = lut[Int(px[2])]
                 let lab = linearToOklab(r: r, g: g, b: b)
                 let c = hypot(lab.a, lab.b)
-                let cell = row * columns + min(x * columns / width, columns - 1)
 
-                cellSums[cell] += SIMD3<Double>(Double(lab.l), Double(lab.a), Double(lab.b))
-                cellCounts[cell] += 1
                 lSamples.append(lab.l)
                 sumL += Double(lab.l)
                 sumA += Double(lab.a)
                 sumB += Double(lab.b)
-                sumC += Double(c)
 
                 // 偏中亮度的彩色作为整张封面的主色，避免暗部与过曝区域主导。
                 let lumGate = smoothstep(edge0: 0.14, edge1: 0.56, x: lab.l)
@@ -85,6 +79,13 @@ struct NowPlayingBackdropPalette: Hashable, Sendable {
                 weightedB += Double(lab.b) * w
                 weightTotal += w
 
+                if x % 4 == 0, y % 4 == 0 {
+                    colorSamples.append(ColorSample(
+                        l: lab.l, a: lab.a, b: lab.b,
+                        x: (Float(x) + 0.5) / Float(width),
+                        y: (Float(y) + 0.5) / Float(height)
+                    ))
+                }
                 if x % 8 == 0, y % 8 == 0 {
                     seed = (seed ^ UInt64(px[0])) &* 0x0000_0100_0000_01b3
                     seed = (seed ^ UInt64(px[1])) &* 0x0000_0100_0000_01b3
@@ -102,7 +103,6 @@ struct NowPlayingBackdropPalette: Hashable, Sendable {
         let meanL = Float(sumL / Double(sampleCount))
         let meanA = Float(sumA / Double(sampleCount))
         let meanB = Float(sumB / Double(sampleCount))
-        let meanC = Float(sumC / Double(sampleCount))
         let p10L = lSamples[min(Int(Float(sampleCount - 1) * 0.10), sampleCount - 1)]
         let p85L = lSamples[min(Int(Float(sampleCount - 1) * 0.85), sampleCount - 1)]
 
@@ -118,16 +118,39 @@ struct NowPlayingBackdropPalette: Hashable, Sendable {
         let range = max(p85L - p10L, 0.05)
         let lSpreadScale = min(max(0.32 / range, 0.45), 1.35)
 
-        // 九宫格只保留封面配色的轻微空间差异，整体仍是一种主色调，
-        // 避免两块补色各占一角、切歌时整屏颜色大幅翻转。
-        let wash: Float = 0.62
+        let clusters = dominantColors(in: colorSamples)
+        let dominant = clusters.isEmpty
+            ? [ColorCluster(l: meanL, a: meanA, b: meanB, x: 0.5, y: 0.5, weight: 1)]
+            : clusters
+
+        // 主色本身已经压掉了封面噪点，只留少量向平均色的收敛，
+        // 让两三种主色在画面上仍能辨认，而不是并成一块灰底。
+        let wash: Float = 0.20
+        let sigma: Float = 0.32
+        let sigmaSquaredTwice = 2 * sigma * sigma
 
         let swatches = (0..<(columns * rows)).map { index in
-            let count = max(cellCounts[index], 1)
-            let sum = cellSums[index]
-            let cellL = Float(sum.x / Double(count))
-            let cellA = Float(sum.y / Double(count))
-            let cellB = Float(sum.z / Double(count))
+            let u = Float(index % columns) / Float(max(columns - 1, 1))
+            let v = Float(index / columns) / Float(max(rows - 1, 1))
+
+            var totalWeight: Float = 0
+            var cellL: Float = 0
+            var cellA: Float = 0
+            var cellB: Float = 0
+            for cluster in dominant {
+                let dx = u - cluster.x
+                let dy = v - cluster.y
+                let weight = cluster.weight * exp(-(dx * dx + dy * dy) / sigmaSquaredTwice)
+                cellL += cluster.l * weight
+                cellA += cluster.a * weight
+                cellB += cluster.b * weight
+                totalWeight += weight
+            }
+            guard totalWeight > 1e-6 else { return Swatch(red: 0, green: 0, blue: 0) }
+            cellL /= totalWeight
+            cellA /= totalWeight
+            cellB /= totalWeight
+
             var a = cellA + (meanA - cellA) * wash
             var b = cellB + (meanB - cellB) * wash
 
@@ -161,6 +184,99 @@ struct NowPlayingBackdropPalette: Hashable, Sendable {
         }
 
         return Self(swatches: swatches, seed: seed)
+    }
+
+    private struct ColorSample {
+        let l: Float
+        let a: Float
+        let b: Float
+        let x: Float
+        let y: Float
+    }
+
+    private struct ColorCluster {
+        var l: Float
+        var a: Float
+        var b: Float
+        var x: Float
+        var y: Float
+        var weight: Float
+    }
+
+    /// 在 Oklab 上做确定性的三色聚类；颜色同时带上它在封面里的平均位置，
+    /// 让九宫格保留封面的大致色彩分布，而不是把主色均匀撒满整屏。
+    private static func dominantColors(in samples: [ColorSample]) -> [ColorCluster] {
+        guard !samples.isEmpty else { return [] }
+
+        func vector(_ sample: ColorSample) -> SIMD3<Float> {
+            SIMD3(sample.l, sample.a, sample.b)
+        }
+        func squaredDistance(_ lhs: SIMD3<Float>, _ rhs: SIMD3<Float>) -> Float {
+            let delta = lhs - rhs
+            return delta.x * delta.x + delta.y * delta.y + delta.z * delta.z
+        }
+
+        let mean = samples.reduce(SIMD3<Float>.zero) { $0 + vector($1) } / Float(samples.count)
+        var centers: [SIMD3<Float>] = [mean]
+
+        // 最远点初始化：依次挑出与已有中心差异最大的样本，结果与遍历顺序一致。
+        if let farthest = samples.max(by: { squaredDistance(vector($0), mean) < squaredDistance(vector($1), mean) }) {
+            centers.append(vector(farthest))
+            if let third = samples.max(by: { lhs, rhs in
+                let lhsDistance = min(squaredDistance(vector(lhs), centers[0]), squaredDistance(vector(lhs), centers[1]))
+                let rhsDistance = min(squaredDistance(vector(rhs), centers[0]), squaredDistance(vector(rhs), centers[1]))
+                return lhsDistance < rhsDistance
+            }), squaredDistance(vector(third), mean) > 0.0004 {
+                centers.append(vector(third))
+            }
+        }
+
+        var clusters = centers.map { ColorCluster(l: $0.x, a: $0.y, b: $0.z, x: 0.5, y: 0.5, weight: 0) }
+
+        for _ in 0..<8 {
+            var labSums = [SIMD3<Float>](repeating: .zero, count: centers.count)
+            var positionSums = [SIMD2<Float>](repeating: .zero, count: centers.count)
+            var counts = [Float](repeating: 0, count: centers.count)
+
+            for sample in samples {
+                let value = vector(sample)
+                var bestIndex = 0
+                var bestDistance = Float.greatestFiniteMagnitude
+                for (index, center) in centers.enumerated() {
+                    let distance = squaredDistance(value, center)
+                    if distance < bestDistance {
+                        bestDistance = distance
+                        bestIndex = index
+                    }
+                }
+                labSums[bestIndex] += value
+                positionSums[bestIndex] += SIMD2(sample.x, sample.y)
+                counts[bestIndex] += 1
+            }
+
+            for index in centers.indices where counts[index] > 0 {
+                let count = counts[index]
+                centers[index] = labSums[index] / count
+                clusters[index].l = centers[index].x
+                clusters[index].a = centers[index].y
+                clusters[index].b = centers[index].z
+                clusters[index].x = positionSums[index].x / count
+                clusters[index].y = positionSums[index].y / count
+                clusters[index].weight = count / Float(samples.count)
+            }
+        }
+
+        var result: [ColorCluster] = []
+        for cluster in clusters.filter({ $0.weight > 0.03 }).sorted(by: { $0.weight > $1.weight }) {
+            let duplicate = result.contains { existing in
+                squaredDistance(
+                    SIMD3(existing.l, existing.a, existing.b),
+                    SIMD3(cluster.l, cluster.a, cluster.b)
+                ) < 0.0009
+            }
+            if !duplicate { result.append(cluster) }
+        }
+        return result
     }
 
     /// 与参考实现一致的纵向压暗曲线：顶部略提亮，底部收敛。
