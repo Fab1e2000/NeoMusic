@@ -3,23 +3,74 @@ import UIKit
 
 /// Temporary playback information uses a centered glass information card.
 struct NowPlayingAudioQualityControl: View {
-    let quality: PlayerAudioQuality
+    let quality: PlayerAudioQuality?
     var openAudioQualitySettings: (() -> Void)?
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @State private var presenter = PlayerQualityPresentationController()
+    @State private var displayedQuality: PlayerAudioQuality?
+
+    /// 只把 badge 真正显示出来的内容当作身份；同一音质只是附注变化时保持不动。
+    private struct BadgeIdentity: Hashable {
+        let title: String
+        let isLocalFormat: Bool
+        let isLossless: Bool
+
+        init(_ quality: PlayerAudioQuality) {
+            title = quality.title
+            isLocalFormat = quality.isLocalFormat
+            isLossless = quality.isLossless
+        }
+    }
+
+    init(quality: PlayerAudioQuality?, openAudioQualitySettings: (() -> Void)?) {
+        self.quality = quality
+        self.openAudioQualitySettings = openAudioQualitySettings
+        _displayedQuality = State(initialValue: quality)
+    }
 
     var body: some View {
         Button {
+            guard let quality else { return }
             presenter.show(quality: quality, openSettings: quality.isLocalFormat ? nil : openAudioQualitySettings)
         } label: {
-            NowPlayingAudioQualityBadge(quality: quality)
-                .frame(minWidth: 44, minHeight: 28)
-                .contentShape(.rect)
+            ZStack {
+                if let displayedQuality {
+                    NowPlayingAudioQualityBadge(quality: displayedQuality)
+                        .transition(.opacity)
+                }
+            }
+            .frame(minWidth: 44, minHeight: 28)
+            .contentShape(.rect)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("音频质量，\(quality.title)")
-        .accessibilityValue(quality.detail ?? "")
+        .allowsHitTesting(quality != nil)
+        .accessibilityHidden(quality == nil)
+        .accessibilityLabel("音频质量，\(quality?.title ?? displayedQuality?.title ?? "")")
+        .accessibilityValue(quality?.detail ?? "")
         .accessibilityHint("显示当前播放资源的音频质量")
         .background { NowPlayingQualityPresentation(controller: presenter) }
+        .onChange(of: quality) { _, newQuality in
+            updateDisplayedQuality(with: newQuality)
+        }
+    }
+
+    /// 在线曲目切歌时音质会短暂为空；保留上一首的显示，等新值回来再交叉淡化，
+    /// 避免控件先被移除、再以新内容瞬间插回造成的闪变。
+    private func updateDisplayedQuality(with newQuality: PlayerAudioQuality?) {
+        guard let newQuality else { return }
+        let changed: Bool
+        if let displayedQuality {
+            changed = BadgeIdentity(displayedQuality) != BadgeIdentity(newQuality)
+        } else {
+            changed = true
+        }
+        guard changed else {
+            displayedQuality = newQuality
+            return
+        }
+        withAnimation(accessibilityReduceMotion ? nil : .easeInOut(duration: 0.25)) {
+            displayedQuality = newQuality
+        }
     }
 }
 
@@ -282,13 +333,19 @@ struct NowPlayingAudioQualityBadge: View {
     var body: some View {
         HStack(spacing: 4) {
             if quality.isLocalFormat {
-                Image(systemName: "waveform").font(.system(size: 11))
+                Image(systemName: "waveform")
+                    .font(.system(size: 11))
+                    .contentTransition(.symbolEffect(.replace))
+                    .transition(.opacity)
             } else if quality.isLossless {
                 PlayerLosslessSymbol()
                     .stroke(style: StrokeStyle(lineWidth: symbolWidth / 24, lineCap: .round, lineJoin: .round))
                     .frame(width: symbolWidth, height: symbolWidth * 36 / 66)
+                    .transition(.opacity)
             }
-            Text(quality.title).font(.system(size: fontSize, weight: .medium))
+            Text(quality.title)
+                .font(.system(size: fontSize, weight: .medium))
+                .contentTransition(.opacity)
         }
         .nowPlayingPlusLighter(NowPlayingVisualHierarchy.audioQualityTextOpacity)
         .padding(.horizontal, 6)

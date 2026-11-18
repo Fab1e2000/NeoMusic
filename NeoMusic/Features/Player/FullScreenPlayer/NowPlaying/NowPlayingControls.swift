@@ -121,11 +121,13 @@ struct NowPlayingProgressControl: View {
                 if player.issue != nil {
                     Image(systemName: "exclamationmark.circle")
                         .nowPlayingPlusLighter(NowPlayingVisualHierarchy.audioQualityTextOpacity)
-                } else if let quality = actions.audioQuality(for: song) {
-                    NowPlayingAudioQualityControl(quality: quality,
+                } else {
+                    NowPlayingAudioQualityControl(
+                        quality: actions.audioQuality(for: song),
                         openAudioQualitySettings: actions.canOpenAudioQualitySettings
-                            ? { actions.openAudioQualitySettings() } : nil)
-                        .accessibilityIdentifier("player.audioQuality")
+                            ? { actions.openAudioQualitySettings() } : nil
+                    )
+                    .accessibilityIdentifier("player.audioQuality")
                 }
             }
             .font(.system(size: timeFontSize, weight: .medium).monospacedDigit())
