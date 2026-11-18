@@ -9,10 +9,9 @@ import MetalKit
         XCTAssertNotNil(PlayerResources.bundle.url(forResource: "PlayerSourceNotices", withExtension: "txt"))
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("Metal device unavailable") }
         let library = try device.makeDefaultLibrary(bundle: PlayerResources.bundle)
-        for name in ["backdropVertex", "fluidBackdropComposeFragment", "trackSwipeHorizontalFade"] {
+        for name in ["lyricsViewportFade", "trackSwipeHorizontalFade"] {
             XCTAssertTrue(library.functionNames.contains(name), name)
         }
-        XCTAssertNotNil(NowPlayingBackdropMetalPipelines(device: device))
     }
 
     func testLateLyricsCannotReplaceTheNewTrackOrItsFailure() async {

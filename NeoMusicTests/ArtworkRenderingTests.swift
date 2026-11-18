@@ -152,14 +152,14 @@ final class ArtworkRenderingTests: XCTestCase {
             UIColor.red.setFill()
             context.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
         }
-        let prepared = await NowPlayingFluidBackdropCache.shared.prepare(image, for: url)
+        let prepared = await NowPlayingBackdropCache.shared.prepare(image, for: url)
         XCTAssertNotNil(prepared)
-        defer { NowPlayingFluidBackdropCache.shared.removeCached(for: url) }
+        defer { NowPlayingBackdropCache.shared.removeCached(for: url) }
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
         let window = UIWindow(windowScene: scene)
-        var displayed: NowPlayingFluidBackdropSource?
+        var displayed: NowPlayingBackdropPalette?
         let host = UIHostingController(rootView: NowPlayingArtworkBackdrop(
-            artworkURL: url, trackID: "song-a", onFluidSourceChange: { displayed = $0 }))
+            artworkURL: url, trackID: "song-a", onPaletteChange: { displayed = $0 }))
         window.rootViewController = host
         window.makeKeyAndVisible()
         defer { window.isHidden = true }
@@ -167,11 +167,11 @@ final class ArtworkRenderingTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(150))
         XCTAssertNotNil(displayed)
         host.rootView = NowPlayingArtworkBackdrop(
-            artworkURL: nil, trackID: "song-a", onFluidSourceChange: { displayed = $0 })
+            artworkURL: nil, trackID: "song-a", onPaletteChange: { displayed = $0 })
         try await Task.sleep(for: .milliseconds(150))
         XCTAssertNotNil(displayed)
         host.rootView = NowPlayingArtworkBackdrop(
-            artworkURL: nil, trackID: "song-b", onFluidSourceChange: { displayed = $0 })
+            artworkURL: nil, trackID: "song-b", onPaletteChange: { displayed = $0 })
         try await Task.sleep(for: .milliseconds(150))
         XCTAssertNil(displayed)
     }

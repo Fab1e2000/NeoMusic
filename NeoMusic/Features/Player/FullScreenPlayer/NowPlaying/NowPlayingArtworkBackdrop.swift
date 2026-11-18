@@ -1,48 +1,41 @@
 import SwiftUI
 import UIKit
 
-/// 从封面颜色生成动态流体背景；只在换歌时交叉淡入。
+/// 从封面生成 3×3 MeshGradient 背景；每首歌只取一次色，运动交给 SwiftUI 的动画系统。
 struct NowPlayingArtworkBackdrop: View {
     let artworkURL: URL?
     var trackID: String? = nil
     var isPlaying: Bool = true
-    var isTransitioning: Bool = false
     var ignoresSafeArea = true
-    /// 作为背景副本画在别的视图底下：没有封面时完全透明（露出真背景），不画黑色打底和压暗。
-    var isUnderlay = false
     /// 背景实际铺开的范围（含安全区），供外层坐标校准。
     var onFrameChange: ((CGRect) -> Void)? = nil
-    var onFluidSourceChange: ((NowPlayingFluidBackdropSource?) -> Void)? = nil
+    var onPaletteChange: ((NowPlayingBackdropPalette?) -> Void)? = nil
 
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @Environment(PlayerServices.self) private var services: PlayerServices?
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.playerVisualsActive) private var visualsActive
-    private var fluidResources = NowPlayingFluidBackdropResources.shared
-    @State private var fluidSource: NowPlayingFluidBackdropSource?
+    @State private var palette: NowPlayingBackdropPalette?
     @State private var renderedTrackID: String?
+    @State private var hasDisplayedPalette = false
 
     init(
         artworkURL: URL?,
         trackID: String? = nil,
         isPlaying: Bool = true,
-        isTransitioning: Bool = false,
         ignoresSafeArea: Bool = true,
-        isUnderlay: Bool = false,
         onFrameChange: ((CGRect) -> Void)? = nil,
-        onFluidSourceChange: ((NowPlayingFluidBackdropSource?) -> Void)? = nil
+        onPaletteChange: ((NowPlayingBackdropPalette?) -> Void)? = nil
     ) {
         self.artworkURL = artworkURL
         self.trackID = trackID
         self.isPlaying = isPlaying
-        self.isTransitioning = isTransitioning
         _renderedTrackID = State(initialValue: trackID)
         self.ignoresSafeArea = ignoresSafeArea
-        self.isUnderlay = isUnderlay
         self.onFrameChange = onFrameChange
-        self.onFluidSourceChange = onFluidSourceChange
-        _fluidSource = State(initialValue: artworkURL.flatMap {
-            NowPlayingFluidBackdropCache.shared.cached(for: $0)
+        self.onPaletteChange = onPaletteChange
+        _palette = State(initialValue: artworkURL.flatMap {
+            NowPlayingBackdropCache.shared.cached(for: $0)
         })
     }
 
@@ -55,28 +48,31 @@ struct NowPlayingArtworkBackdrop: View {
         url.map { PlayerArtworkRequest(url: $0, pixelWidth: 240, pixelHeight: 240) }
     }
 
-    /// 供 Metal 提取主色调与 128x128 颜色块的小尺寸封面解码。
-    private static let decodeSize = CGSize(width: 240, height: 240)
+    private var animatesGradient: Bool {
+        visualsActive && scenePhase == .active && isPlaying && !accessibilityReduceMotion
+    }
+
+    private var crossfadesTracks: Bool {
+        visualsActive && scenePhase == .active && !accessibilityReduceMotion
+    }
 
     var body: some View {
         GeometryReader { proxy in
             ZStack {
-                if !isUnderlay {
-                    Color.black
-                }
+                Color.black
 
-                if let fluidSource, let pipelines = fluidResources.pipelines {
-                    NowPlayingFluidBackdropRepresentable(
-                        source: fluidSource,
-                        isPlaying: isPlaying,
-                        reduceMotion: accessibilityReduceMotion,
-                        isActive: visualsActive && scenePhase == .active,
-                        isTransitioning: isTransitioning,
-                        pipelines: pipelines
+                if let palette {
+                    NowPlayingMeshBackdrop(
+                        palette: palette,
+                        animates: animatesGradient,
+                        reduceMotion: accessibilityReduceMotion
                     )
-                    .frame(width: proxy.size.width, height: proxy.size.height)
+                    .id(palette)
+                    .transition(.opacity)
                 }
             }
+            .animation(crossfadesTracks && hasDisplayedPalette ? .easeInOut(duration: 0.6) : nil,
+                       value: palette)
             .frame(width: proxy.size.width, height: proxy.size.height)
             .clipped()
             .onGeometryChange(for: CGRect.self) {
@@ -87,33 +83,81 @@ struct NowPlayingArtworkBackdrop: View {
         }
         .ignoresSafeArea(edges: ignoresSafeArea ? .all : [])
         .accessibilityHidden(true)
-        .onChange(of: fluidSource?.id, initial: true) { _, _ in onFluidSourceChange?(fluidSource) }
-        .task(id: visualsActive && scenePhase == .active) {
-            if visualsActive && scenePhase == .active { await fluidResources.prepare() }
+        .onChange(of: palette, initial: true) { _, newValue in
+            // 首次出现直接显示；只有更换曲目才淡入淡出，避免播放器展开时多一层黑场。
+            if newValue != nil { hasDisplayedPalette = true }
+            onPaletteChange?(newValue)
         }
         .task(id: BackdropRequestID(url: artworkURL, trackID: trackID)) {
-            // Retain the backdrop while loading, but never attribute another song's cover to a missing image.
+            // 加载期间保留上一张背景，但绝不把别的歌曲封面算进当前曲目。
             guard let artworkURL, let request = Self.request(for: artworkURL) else {
                 if trackID == nil || renderedTrackID != trackID {
-                    fluidSource = nil
+                    palette = nil
                 }
                 return
             }
-            let fluidCache = NowPlayingFluidBackdropCache.shared
-            let cachedFluid = fluidCache.cached(for: artworkURL)
+            let cache = NowPlayingBackdropCache.shared
 
-            let nextFluid: NowPlayingFluidBackdropSource?
-            if let cachedFluid {
-                nextFluid = cachedFluid
+            let nextPalette: NowPlayingBackdropPalette?
+            if let cached = cache.cached(for: artworkURL) {
+                nextPalette = cached
             } else if let loaded = try? await services?.artwork.load(request), !Task.isCancelled {
-                nextFluid = await fluidCache.prepare(loaded, for: artworkURL)
+                nextPalette = await cache.prepare(loaded, for: artworkURL)
             } else {
-                nextFluid = nil
+                nextPalette = nil
             }
             guard !Task.isCancelled else { return }
-            if nextFluid == nil, trackID != nil, renderedTrackID == trackID { return }
+            if nextPalette == nil, trackID != nil, renderedTrackID == trackID { return }
             renderedTrackID = trackID
-            fluidSource = nextFluid
+            palette = nextPalette
         }
+    }
+}
+
+/// 单个曲目的静态配色加缓慢形变；没有自建计时器，动画由 SwiftUI 驱动。
+private struct NowPlayingMeshBackdrop: View {
+    let palette: NowPlayingBackdropPalette
+    let animates: Bool
+    let reduceMotion: Bool
+
+    @State private var isDrifting = false
+
+    var body: some View {
+        MeshGradient(
+            width: NowPlayingBackdropPalette.columns,
+            height: NowPlayingBackdropPalette.rows,
+            points: points,
+            colors: palette.swatches.map(\.color)
+        )
+        .animation(driftAnimation, value: isDrifting)
+        .onAppear { isDrifting = animates }
+        .onChange(of: animates) { _, enabled in isDrifting = enabled }
+    }
+
+    private var driftAnimation: Animation? {
+        guard !reduceMotion else { return nil }
+        return animates
+            ? .easeInOut(duration: 24).repeatForever(autoreverses: true)
+            : .easeInOut(duration: 1.2)
+    }
+
+    /// 边界点只在各自的边上滑动，四角固定，渐变始终铺满且不会露出接缝。
+    private var points: [SIMD2<Float>] {
+        let drift = isDrifting
+        let seed = palette.seed
+        func direction(_ bit: UInt64) -> Float { (seed >> bit) & 1 == 0 ? -1 : 1 }
+
+        let topX = drift ? 0.5 + 0.09 * direction(1) : 0.5
+        let leftY = drift ? 0.5 + 0.08 * direction(3) : 0.5
+        let centerX = drift ? 0.5 + 0.09 * direction(5) : 0.5
+        let centerY = drift ? 0.5 + 0.08 * direction(7) : 0.5
+        let rightY = drift ? 0.5 + 0.08 * direction(9) : 0.5
+        let bottomX = drift ? 0.5 + 0.09 * direction(11) : 0.5
+
+        return [
+            SIMD2<Float>(0, 0), SIMD2<Float>(topX, 0), SIMD2<Float>(1, 0),
+            SIMD2<Float>(0, leftY), SIMD2<Float>(centerX, centerY), SIMD2<Float>(1, rightY),
+            SIMD2<Float>(0, 1), SIMD2<Float>(bottomX, 1), SIMD2<Float>(1, 1),
+        ]
     }
 }

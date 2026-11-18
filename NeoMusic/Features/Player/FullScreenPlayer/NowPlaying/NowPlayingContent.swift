@@ -49,6 +49,10 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
                 player.nextInOrder?.track.artworkLoadID].compactMap { $0 }
     }
 
+    private var lyricsLoadKey: String {
+        "\(player.currentTrack?.id ?? "")/\(library.contentRevision)/\(lyricsModel.revision)"
+    }
+
     var body: some View {
         GeometryReader { geometry in
             let layout = ReferenceNowPlayingLayout(contentSize: geometry.size)
@@ -58,7 +62,6 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
                     artworkURL: player.currentTrack?.coverURL,
                     trackID: player.currentTrack?.id,
                     isPlaying: player.isPlaying,
-                    isTransitioning: pageChange != nil,
                     onFrameChange: { geometryState.backdropFrame = $0 }
                 )
                 // iPhone 只支持竖屏（见 project.yml 的 UISupportedInterfaceOrientations），不保留横屏布局。
@@ -81,10 +84,7 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
         .task(id: artworkPreparationIDs) {
             for identity in Set(artworkPreparationIDs) { services?.artwork.prepare(identity) }
         }
-        .task(id: visualsActive) {
-            if visualsActive { await NowPlayingFluidBackdropResources.shared.prepare() }
-        }
-        .task(id: "\(player.currentTrack?.id ?? "")/\(library.contentRevision)/\(lyricsModel.revision)") {
+        .task(id: lyricsLoadKey) {
             guard let track = player.currentTrack else { return }
             await lyricsModel.load(track: track, library: library, player: player)
         }

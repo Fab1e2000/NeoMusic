@@ -76,10 +76,6 @@ public struct PlayerArtworkRequest: Hashable, Sendable {
                 diagnostics: PlayerDiagnostics? = nil) {
         self.actions = actions; self.lyrics = lyrics; self.artwork = artwork; self.diagnostics = diagnostics
     }
-    /// Prewarms shared GPU backdrop pipelines before the full-screen player opens.
-    public static func prewarmBackdropResources() async {
-        await NowPlayingFluidBackdropResources.shared.prepare()
-    }
 }
 
 public enum PlayerNotice { case favorited, unfavorited, playingNext, addedToQueue }

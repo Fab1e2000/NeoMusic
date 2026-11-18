@@ -8,7 +8,6 @@
 
 /* Begin PBXBuildFile section */
 		0095296B441304D3560C65BD /* NowPlayingLyricsLoadingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A99FD3F48E7050E960165012 /* NowPlayingLyricsLoadingTests.swift */; };
-		00D410C4A18266EE6496E511 /* NowPlayingFluidBackdrop.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29113CBA42866A08E4CC16C1 /* NowPlayingFluidBackdrop.swift */; };
 		019CA34A23CBCF80EAAFF6BD /* ReferenceNowPlayingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 937F6EC408829314FF850B81 /* ReferenceNowPlayingView.swift */; };
 		01EFE483DCEABDE2639D19ED /* audio-ncm-mp3.ncm in Resources */ = {isa = PBXBuildFile; fileRef = EE1372BE4FD4B4CFE906978F /* audio-ncm-mp3.ncm */; };
 		038129A503990CFA988D808B /* DownloadSourceNotices.txt in Resources */ = {isa = PBXBuildFile; fileRef = 78C0B07E0112BE535B5135BA /* DownloadSourceNotices.txt */; };
@@ -22,6 +21,7 @@
 		093A8927AE0B325109254C9B /* LibraryArtworkSurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37525F1CE4A91231706F9B42 /* LibraryArtworkSurface.swift */; };
 		0B4410FA02418F5F3FF105F8 /* TestFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC3B997400F310399E770044 /* TestFixtures.swift */; };
 		0CF2C4F3D39822431EC3AE5C /* NeteaseHomeSupplementalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25F28B52637A31094FC3A5F2 /* NeteaseHomeSupplementalTests.swift */; };
+		0D3EE9403D0A15F9565F899D /* NowPlayingStitchableShaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = BE88245D25018479D4578963 /* NowPlayingStitchableShaders.metal */; };
 		0DC32606BC9C6B7BCC11E568 /* AudioStreaming in Frameworks */ = {isa = PBXBuildFile; productRef = 5336772344A485C28BE1F618 /* AudioStreaming */; };
 		0E4A68E7B5DDBEB5F734D1EB /* NowPlayingLyricsModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED4A2F1F0CF3CAFF59BA18D1 /* NowPlayingLyricsModel.swift */; };
 		0E629D70C95493204B375E00 /* LibraryDetailNavigation.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD9F00DE2F596DA5711CC86D /* LibraryDetailNavigation.swift */; };
@@ -74,6 +74,7 @@
 		305445D688EB8B02F293383E /* audio-ncm-flac.ncm in Resources */ = {isa = PBXBuildFile; fileRef = C1FE9C49EB6832C3965664BF /* audio-ncm-flac.ncm */; };
 		30B941FE4754FAE5C79806B1 /* PlaybackCollectionHistoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CB8F578821D731A3BD79657 /* PlaybackCollectionHistoryTests.swift */; };
 		312C9881151D20953B60A81D /* IngestionTransactionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EF70E647276AB51C0879006 /* IngestionTransactionTests.swift */; };
+		3132FD6121D671A34C7C9293 /* NowPlayingBackdropPalette.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1ECDFF20EF1F34452530DF63 /* NowPlayingBackdropPalette.swift */; };
 		32B729B209A29F5BFAA07518 /* LyricsScrollInterfaceVisibilityTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 422065CDE291158FA67AA21F /* LyricsScrollInterfaceVisibilityTracker.swift */; };
 		32FEB89F70F5197F9B988144 /* CollectionPagePalette.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98DBE118F46CDD86155F88F5 /* CollectionPagePalette.swift */; };
 		35655ECE43C3D6FDD9E9A718 /* DownloadedAudioTags.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A58E4D5B3E7D11869927DB3 /* DownloadedAudioTags.swift */; };
@@ -134,7 +135,6 @@
 		6F607405611B2EF4EE7B5F3E /* LibraryStatusMessage.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5AE69E7D03B3E376AB47EE3 /* LibraryStatusMessage.swift */; };
 		6F60E59ED5B6D8AA3FF82352 /* NowPlayingModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F077DBB5EA2C541872FC6A58 /* NowPlayingModel.swift */; };
 		6FA05020083E5173A0FAFCE8 /* DownloadedPlaybackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C76ACEB569867B1D9F8AAD2 /* DownloadedPlaybackTests.swift */; };
-		6FA516998173A3395DE1CAA0 /* NowPlayingBackdropShaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = 10BE3899821B53F7B5A4914F /* NowPlayingBackdropShaders.metal */; };
 		707EBA247551EDFB5D73ECA5 /* ArtistDetailBackdrop.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F889F2ADBA0E0760ADEB418 /* ArtistDetailBackdrop.swift */; };
 		7216A6ADCC6ACE0FBD162BFD /* ThirdPartyLicenses.txt in Resources */ = {isa = PBXBuildFile; fileRef = 7C3B50303AEE57C8F768CD23 /* ThirdPartyLicenses.txt */; };
 		723907F854FDC1160C0246C0 /* HomeArtwork.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96B01BBD09E2583BD707E4EE /* HomeArtwork.swift */; };
@@ -405,7 +405,6 @@
 		0C96FA88C2CB5924BF38D330 /* NeoMusicNavigationUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = NeoMusicNavigationUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		0FA549F7E00A35F5618AE84F /* ReferencePlayerActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferencePlayerActions.swift; sourceTree = "<group>"; };
 		100FB82722AA850FDBC1B6E7 /* HomeContentModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeContentModel.swift; sourceTree = "<group>"; };
-		10BE3899821B53F7B5A4914F /* NowPlayingBackdropShaders.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = NowPlayingBackdropShaders.metal; sourceTree = "<group>"; };
 		12615DE9C8DC2FE3202E92C3 /* PlayerContracts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerContracts.swift; sourceTree = "<group>"; };
 		1370D35239AC772797EFEE02 /* HomeRetainedPlaylistTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeRetainedPlaylistTests.swift; sourceTree = "<group>"; };
 		13F24E45D547B3F13260EFAD /* PlaylistCollectionList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaylistCollectionList.swift; sourceTree = "<group>"; };
@@ -424,6 +423,7 @@
 		1D755DA4EDAEA8F894498B76 /* AppRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppRuntime.swift; sourceTree = "<group>"; };
 		1E0B9933873591CD3DD1F05F /* NowPlayingPortraitArtwork.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlayingPortraitArtwork.swift; sourceTree = "<group>"; };
 		1E98BA48DB887EDDB03379B5 /* PlayerPopup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerPopup.swift; sourceTree = "<group>"; };
+		1ECDFF20EF1F34452530DF63 /* NowPlayingBackdropPalette.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlayingBackdropPalette.swift; sourceTree = "<group>"; };
 		1F21EB9DA2130C1267909177 /* AudioTagsLicenses.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = AudioTagsLicenses.txt; sourceTree = "<group>"; };
 		1F889F2ADBA0E0760ADEB418 /* ArtistDetailBackdrop.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArtistDetailBackdrop.swift; sourceTree = "<group>"; };
 		20082A39A1B3DDEEAED4284A /* PlaylistFormDraftTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaylistFormDraftTests.swift; sourceTree = "<group>"; };
@@ -438,7 +438,6 @@
 		25F28B52637A31094FC3A5F2 /* NeteaseHomeSupplementalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NeteaseHomeSupplementalTests.swift; sourceTree = "<group>"; };
 		2816AA51E391207C4B77E96F /* ReferencePlayerAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferencePlayerAdapterTests.swift; sourceTree = "<group>"; };
 		28E729DF82ABBC9152298EA3 /* ReferencePlayerState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferencePlayerState.swift; sourceTree = "<group>"; };
-		29113CBA42866A08E4CC16C1 /* NowPlayingFluidBackdrop.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlayingFluidBackdrop.swift; sourceTree = "<group>"; };
 		29AFA18C2AB7EA9451576620 /* LNPopupUI */ = {isa = PBXFileReference; lastKnownFileType = folder; name = LNPopupUI; path = Packages/LNPopupUI; sourceTree = SOURCE_ROOT; };
 		29F8881AA7001388C76DF17F /* PlayerServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerServices.swift; sourceTree = "<group>"; };
 		2A58E4D5B3E7D11869927DB3 /* DownloadedAudioTags.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadedAudioTags.swift; sourceTree = "<group>"; };
@@ -600,6 +599,7 @@
 		BDFB88BE5B72C108558D8D46 /* NeteaseAccountTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NeteaseAccountTests.swift; sourceTree = "<group>"; };
 		BE157AD3764D17289D3F956C /* FrontendPressFeedbackPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrontendPressFeedbackPreview.swift; sourceTree = "<group>"; };
 		BE296BE60E92EB385E76B5DE /* NeteaseSearchClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NeteaseSearchClient.swift; sourceTree = "<group>"; };
+		BE88245D25018479D4578963 /* NowPlayingStitchableShaders.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = NowPlayingStitchableShaders.metal; sourceTree = "<group>"; };
 		BF60CED54C29B7599A7D65CE /* PlaylistLibraryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaylistLibraryTests.swift; sourceTree = "<group>"; };
 		BF812C2FEE52CAFB1867E97A /* PlayerControlsPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerControlsPreview.swift; sourceTree = "<group>"; };
 		C1C25252EC021069BAD40146 /* SearchInteractionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchInteractionTests.swift; sourceTree = "<group>"; };
@@ -960,11 +960,10 @@
 				839C017C97A4D997BD36DD19 /* NowPlayingArtworkPage.swift */,
 				1BDBAA7297FBFA67E8B3E909 /* NowPlayingAudioQuality.swift */,
 				469A08DA3527852AABA348F5 /* NowPlayingBackdropImage.swift */,
-				10BE3899821B53F7B5A4914F /* NowPlayingBackdropShaders.metal */,
+				1ECDFF20EF1F34452530DF63 /* NowPlayingBackdropPalette.swift */,
 				6FBD7B0767B67961E2A1EEFB /* NowPlayingBottomControls.swift */,
 				F2B0A0D8F4B628D84EDF7A07 /* NowPlayingContent.swift */,
 				AE1B3375CC2CE414276620DD /* NowPlayingControls.swift */,
-				29113CBA42866A08E4CC16C1 /* NowPlayingFluidBackdrop.swift */,
 				5AA1BA7354BD9D8CCD9C4BD4 /* NowPlayingInterfaceTransition.swift */,
 				C8664420DF9DC1D2C3AD5130 /* NowPlayingLayout.swift */,
 				ED4A2F1F0CF3CAFF59BA18D1 /* NowPlayingLyricsModel.swift */,
@@ -981,6 +980,7 @@
 				CFC0FD1A44354995832B98C8 /* NowPlayingSkipIcon.swift */,
 				EF3D16A6D41F3EAFE2C80075 /* NowPlayingSongActions.swift */,
 				DFA311EEF1B6DCEA94D9D243 /* NowPlayingSongHeader.swift */,
+				BE88245D25018479D4578963 /* NowPlayingStitchableShaders.metal */,
 				36A77F96406D7AF7A620396D /* NowPlayingTrackSwipe.swift */,
 				EA7F60493607ED80A560C5F9 /* NowPlayingTransportButtonStyle.swift */,
 				D1488F073C6F74AC07EF8D64 /* NowPlayingVisualHierarchy.swift */,
@@ -1508,11 +1508,10 @@
 				3F34F756FF2838E005DBD79D /* NowPlayingArtworkPage.swift in Sources */,
 				79983E1C373ED221A1B94D5D /* NowPlayingAudioQuality.swift in Sources */,
 				9ABCDF5148956F69792C99B3 /* NowPlayingBackdropImage.swift in Sources */,
-				6FA516998173A3395DE1CAA0 /* NowPlayingBackdropShaders.metal in Sources */,
+				3132FD6121D671A34C7C9293 /* NowPlayingBackdropPalette.swift in Sources */,
 				EB91415AC5E991AB9D6E6FD9 /* NowPlayingBottomControls.swift in Sources */,
 				F53F9C496F4CBD9D05F9F15D /* NowPlayingContent.swift in Sources */,
 				C8B110C0D881A2F732A4BC20 /* NowPlayingControls.swift in Sources */,
-				00D410C4A18266EE6496E511 /* NowPlayingFluidBackdrop.swift in Sources */,
 				D9445DA2099297DB47AE5526 /* NowPlayingInterfaceTransition.swift in Sources */,
 				04EE03E06FBF3F32E86C347D /* NowPlayingLayout.swift in Sources */,
 				0E4A68E7B5DDBEB5F734D1EB /* NowPlayingLyricsModel.swift in Sources */,
@@ -1529,6 +1528,7 @@
 				3E551B6681EC720384BA9EE9 /* NowPlayingSkipIcon.swift in Sources */,
 				038DB8528A7AE4A59E029327 /* NowPlayingSongActions.swift in Sources */,
 				E5CE1AE92ED8788F592E7225 /* NowPlayingSongHeader.swift in Sources */,
+				0D3EE9403D0A15F9565F899D /* NowPlayingStitchableShaders.metal in Sources */,
 				C11899434E9194F699DB6986 /* NowPlayingTrackSwipe.swift in Sources */,
 				654FA2609D0C7C3D5C1F977A /* NowPlayingTransportButtonStyle.swift in Sources */,
 				D3D6507144773FEEC7D57CAF /* NowPlayingVisualHierarchy.swift in Sources */,
