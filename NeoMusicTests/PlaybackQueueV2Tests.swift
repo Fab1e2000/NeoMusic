@@ -408,6 +408,41 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
         XCTAssertNil(cell.layer.mask, "A row inside the unfaded viewport releases its edge mask")
         XCTAssertTrue(custom.mask === customMask)
     }
+
+    func testEdgeMasksCoverReplacedSublayerWithoutCellRelayout() throws {
+        let list = NowPlayingQueueList.EdgeFadedCollectionView(
+            frame: CGRect(x: 0, y: 0, width: 320, height: 400),
+            collectionViewLayout: UICollectionViewFlowLayout()
+        )
+        let cell = NowPlayingQueueList.EdgeFadedListCell(frame: CGRect(x: 0, y: 20, width: 320, height: 60))
+        cell.edgeFadeCollectionView = list
+        list.addSubview(cell)
+
+        let rowContainer = CALayer()
+        let placeholderArtwork = CALayer()
+        let vibrantArtist = CALayer()
+        rowContainer.frame = cell.bounds
+        placeholderArtwork.frame = CGRect(x: 0, y: 6, width: 48, height: 48)
+        vibrantArtist.frame = CGRect(x: 60, y: 30, width: 120, height: 18)
+        vibrantArtist.compositingFilter = "plusL"
+        cell.contentView.layer.addSublayer(rowContainer)
+        rowContainer.addSublayer(placeholderArtwork)
+        rowContainer.addSublayer(vibrantArtist)
+
+        list.updateEdgeMask(for: cell)
+        XCTAssertTrue(placeholderArtwork.mask is CAGradientLayer)
+        XCTAssertTrue(vibrantArtist.mask is CAGradientLayer)
+
+        // Simulate async artwork replacement inside SwiftUI without triggering cell.layoutSublayers(of: cell.layer).
+        placeholderArtwork.removeFromSuperlayer()
+        let loadedArtwork = CALayer()
+        loadedArtwork.frame = CGRect(x: 0, y: 6, width: 48, height: 48)
+        rowContainer.addSublayer(loadedArtwork)
+
+        list.updateEdgeMask(for: cell)
+        XCTAssertTrue(loadedArtwork.mask is CAGradientLayer, "Async replaced artwork layer must receive the edge fade mask")
+        XCTAssertTrue(vibrantArtist.mask is CAGradientLayer)
+    }
 }
 
 @MainActor @Observable
