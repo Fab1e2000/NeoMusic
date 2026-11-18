@@ -6,6 +6,11 @@ import UIKit
 @MainActor @Observable
 final class LibraryDetailNavigation: NSObject, UINavigationControllerDelegate {
     var depth: Int { max(0, (navigationController?.viewControllers.count ?? 1) - 1) }
+    /// The destination route of the visible page, used to collapse a repeated
+    /// request onto the page it already opened. Root pages have no route.
+    var topRoute: LibraryRoute? {
+        (navigationController?.topViewController as? LibraryDetailHostingController)?.chrome.route
+    }
     private(set) var colorScheme: ColorScheme?
     @ObservationIgnored weak var navigationController: UINavigationController?
     @ObservationIgnored private var environment = EnvironmentValues()
@@ -52,6 +57,7 @@ final class LibraryDetailNavigation: NSObject, UINavigationControllerDelegate {
             .environment(\.collectionMenuActions, environment.collectionMenuActions)
             .environment(\.songMenuActions, environment.songMenuActions)
             .environment(\.songRowPlayback, environment.songRowPlayback)
+            .environment(\.songPlaybackIndicatorsActive, environment.songPlaybackIndicatorsActive)
             .environment(\.libraryDownloads, environment.libraryDownloads)
             .environment(\.artworkLoadAction, environment.artworkLoadAction)
             .environment(\.colorScheme, environment.colorScheme)
@@ -246,6 +252,7 @@ final class LibraryNavigationChrome: NSObject, UISearchResultsUpdating, UISearch
     /// Set by the native appearance callback; returning keeps the shelf in place.
     var hasAppeared = false
     @ObservationIgnored weak var controller: UIViewController?
+    @ObservationIgnored let route: LibraryRoute?
     @ObservationIgnored var title = ""
     @ObservationIgnored var mode: UINavigationItem.LargeTitleDisplayMode
     @ObservationIgnored let isRoot: Bool
@@ -257,6 +264,7 @@ final class LibraryNavigationChrome: NSObject, UISearchResultsUpdating, UISearch
 
     init(isRoot: Bool, route: LibraryRoute? = nil) {
         self.isRoot = isRoot
+        self.route = route
         if !isRoot, let initial = route?.initialCategoryTitle {
             title = initial.title
             mode = initial.mode == .large ? .always : .never

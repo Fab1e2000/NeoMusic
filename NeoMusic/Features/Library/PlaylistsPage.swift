@@ -256,11 +256,13 @@ struct PlaylistsListView: View {
         if filter != .favorites {
             var playlistsByFolder: [String: [Int]] = [:]
             for item in playlists {
+                if Task.isCancelled { return [] }
                 if let folder = item.folderID {
                     playlistsByFolder[folder, default: []].append(item.index)
                 }
             }
             for folder in folders where folder.parentID == folderID {
+                if Task.isCancelled { return [] }
                 wrapped.append(EntrySortWrapper(
                     entry: .folder(index: folder.index, playlistIndices: playlistsByFolder[folder.id, default: []]),
                     title: folder.name,
@@ -271,6 +273,7 @@ struct PlaylistsListView: View {
             }
         }
         for item in playlists where item.folderID == folderID {
+            if Task.isCancelled { return [] }
             if filter == .favorites, !item.isFavorite { continue }
             wrapped.append(EntrySortWrapper(
                 entry: .playlist(index: item.index),
@@ -281,6 +284,7 @@ struct PlaylistsListView: View {
             ))
         }
         let matching = query.isEmpty ? wrapped : wrapped.filter { $0.title.localizedStandardContains(query) }
+        if Task.isCancelled { return [] }
         let ordered: [EntrySortWrapper]
         switch sort {
         case .name:

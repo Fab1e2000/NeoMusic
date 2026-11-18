@@ -44,13 +44,24 @@ enum CollectionTrackUI {
         if state.isSwiped {
             background.backgroundColor = overlay.withAlphaComponent(0.06)
         } else if state.isSelected {
-            let selectionOverlay: UIColor = isDark ? .black : .white
+            let selectionOverlay: UIColor = isDark ? .white : .black
             background.backgroundColor = selectionOverlay.withAlphaComponent(isDark ? 0.10 : 0.06)
         } else {
             background.backgroundColor = .clear
         }
         background.cornerRadius = state.isSwiped ? 26 : 0
         return background
+    }
+
+    /// One VoiceOver description for song rows in playlists, Favorites, and albums.
+    /// The artist stays audible even when the visible subtitle is replaced by an
+    /// unavailability reason.
+    static func songAccessibilityLabel(for song: LibrarySongItem) -> String {
+        var components = [song.title, song.artist]
+        if let reason = song.unavailabilityReason, !reason.isEmpty {
+            components.append(reason)
+        }
+        return components.joined(separator: ", ")
     }
 
     static func leadingSwipeConfiguration(for song: LibrarySongItem,
@@ -63,6 +74,7 @@ enum CollectionTrackUI {
         }
         next.image = UIImage(systemName: "text.line.first.and.arrowtriangle.forward")
         next.backgroundColor = .systemIndigo
+        next.accessibilityLabel = "插播"
         next.image?.accessibilityLabel = "插播"
 
         let later = UIContextualAction(style: .normal, title: nil) { _, _, done in
@@ -72,6 +84,7 @@ enum CollectionTrackUI {
         }
         later.image = UIImage(systemName: "text.line.last.and.arrowtriangle.forward")
         later.backgroundColor = .systemOrange
+        later.accessibilityLabel = "添加到队列"
         later.image?.accessibilityLabel = "添加到队列"
 
         return UISwipeActionsConfiguration(actions: [next, later])
@@ -90,6 +103,7 @@ enum CollectionTrackUI {
             }
             removeAction.image = UIImage(systemName: "minus.circle.fill")
             removeAction.backgroundColor = .systemRed
+            removeAction.accessibilityLabel = "移除"
             removeAction.image?.accessibilityLabel = "移除"
             let configuration = UISwipeActionsConfiguration(actions: [removeAction])
             configuration.performsFirstActionWithFullSwipe = true
@@ -128,6 +142,7 @@ enum CollectionTrackUI {
             }
             like.image = UIImage(systemName: "heart.fill")
             like.backgroundColor = .systemPink
+            like.accessibilityLabel = "喜欢"
             like.image?.accessibilityLabel = "喜欢"
             return like
         case .download, .stopDownload:
@@ -139,6 +154,7 @@ enum CollectionTrackUI {
             }
             download.image = UIImage(systemName: active ? "stop.fill" : "arrow.down")
             download.backgroundColor = .systemBlue
+            download.accessibilityLabel = active ? "停止下载" : "下载"
             download.image?.accessibilityLabel = active ? "停止下载" : "下载"
             return download
         case .removeFromLiked:
@@ -155,6 +171,7 @@ enum CollectionTrackUI {
             }
             remove.image = UIImage(systemName: "trash")
             remove.backgroundColor = .systemRed
+            remove.accessibilityLabel = "从喜欢歌曲移除"
             remove.image?.accessibilityLabel = "从喜欢歌曲移除"
             return remove
         }
@@ -862,7 +879,7 @@ private final class PlaylistTrackCell: UICollectionViewListCell {
         favoriteStar.tintColor = favoriteColor
         moreButton.tintColor = moreColor
         downloadBadge.secondaryColor = downloadColor
-        accessibilityLabel = song.title
+        accessibilityLabel = CollectionTrackUI.songAccessibilityLabel(for: song)
         accessibilityTraits.insert(.button)
 
         updatePlaybackState(isCurrent: isCurrent, isActive: isPlayingActive, samples: samples)

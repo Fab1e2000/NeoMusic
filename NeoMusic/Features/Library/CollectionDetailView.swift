@@ -773,7 +773,7 @@ private final class AlbumSongsController: UICollectionViewController {
         cell.more.menu = UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] completion in
             completion(self?.menu(for: id).children ?? [])
         }])
-        cell.accessibilityLabel = song.title
+        cell.accessibilityLabel = CollectionTrackUI.songAccessibilityLabel(for: song)
         cell.accessibilityTraits.insert(.button)
         cell.setNeedsUpdateConfiguration()
     }

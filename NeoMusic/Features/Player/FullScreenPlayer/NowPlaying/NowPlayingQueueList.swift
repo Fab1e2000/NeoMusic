@@ -338,6 +338,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
                 completion(true)
             }
             action.image = UIImage(systemName: "minus.circle.fill")
+            action.accessibilityLabel = "从继续播放列表删除"
             action.image?.accessibilityLabel = "从继续播放列表删除"
             action.backgroundColor = .systemRed
             return UISwipeActionsConfiguration(actions: [action])

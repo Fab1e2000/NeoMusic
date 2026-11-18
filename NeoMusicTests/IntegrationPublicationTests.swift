@@ -586,9 +586,52 @@ import XCTest
         XCTAssertTrue(projection.isResolved(for: 1, fastPath: { _ in nil }))
         XCTAssertEqual(projection.currentValue(for: 2, fastPath: { _ in nil }, placeholder: { _ in [] }), [1, 2, 3],
                        "Changing controls keeps previous list visible instead of flashing placeholder")
+        XCTAssertFalse(projection.isResolved(for: 2, fastPath: { _ in nil }),
+                       "A retained result for a previous input must never resolve the new input")
 
         XCTAssertTrue(projection.isResolved(for: 0, fastPath: { _ in [0] }))
         XCTAssertEqual(projection.currentValue(for: 0, fastPath: { _ in [0] }, placeholder: { _ in [] }), [0])
+    }
+
+    func testAsyncListProjectionCancelsSupersededWorkAndNeverPublishesStaleInputs() async {
+        let projection = AsyncListProjection<Int, [Int]>()
+        await projection.computeIfNeeded(for: 1, fastPath: { _ in nil }, background: { [1, 2, 3] }, finish: { $0 })
+        XCTAssertTrue(projection.isResolved(for: 1, fastPath: { _ in nil }))
+
+        let started = expectation(description: "background started")
+        let observedCancellation = Mutex(0)
+        let stale = Task {
+            await projection.computeIfNeeded(
+                for: 2,
+                fastPath: { _ in nil },
+                background: {
+                    started.fulfill()
+                    while !Task.isCancelled { Thread.sleep(forTimeInterval: 0.01) }
+                    observedCancellation.withLock { $0 += 1 }
+                    return [20]
+                },
+                finish: { $0 }
+            )
+        }
+        await fulfillment(of: [started], timeout: 2)
+        stale.cancel()
+        await stale.value
+        XCTAssertGreaterThan(observedCancellation.withLock { $0 }, 0,
+                             "A superseded computation must receive cooperative cancellation")
+        XCTAssertEqual(projection.committedOutput, [1, 2, 3], "A cancelled task must not publish its stale result")
+        XCTAssertFalse(projection.isResolved(for: 2, fastPath: { _ in nil }))
+
+        // An empty snapshot for the previous input must not surface as the new input's empty state.
+        await projection.computeIfNeeded(for: 2, fastPath: { _ in nil }, background: { [Int]() }, finish: { $0 })
+        XCTAssertEqual(projection.currentValue(for: 3, fastPath: { _ in nil }, placeholder: { _ in [] }), [],
+                       "The previous (empty) snapshot stays visible while the new input computes")
+        XCTAssertFalse(projection.isResolved(for: 3, fastPath: { _ in nil }),
+                       "The page must not show the empty state before the new input resolves")
+
+        await projection.computeIfNeeded(for: 3, fastPath: { _ in nil }, background: { [30] }, finish: { $0 })
+        XCTAssertTrue(projection.isResolved(for: 3, fastPath: { _ in nil }))
+        XCTAssertFalse(projection.isResolved(for: 2, fastPath: { _ in nil }))
+        XCTAssertEqual(projection.currentValue(for: 3, fastPath: { _ in nil }, placeholder: { _ in [] }), [30])
     }
 
     func testTitleSectionSortKeyASCIIFastPathAndCJKSorting() {
