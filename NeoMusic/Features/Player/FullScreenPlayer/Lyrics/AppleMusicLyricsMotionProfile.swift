@@ -105,14 +105,6 @@ nonisolated struct AppleMusicLyricsMotionProfile: Equatable, Sendable {
         )
     )
 
-    func dynamicSpring(
-        sourceDuration: TimeInterval
-    ) -> LyricPhysicalSpringParameters {
-        AppleMusicLyricsDynamicSpring.parameters(
-            sourceDuration: sourceDuration
-        )
-    }
-
     var lineChangeDuration: TimeInterval { 0.30 }
 
     func isForwardLineChange(from previous: Int?, to next: Int?) -> Bool {

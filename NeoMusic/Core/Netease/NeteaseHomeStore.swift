@@ -62,8 +62,6 @@ import Observation
         var consumed = false
     }
     @ObservationIgnored private var detailTasks: [Int64: Task<NeteasePlaylistDetail, Error>] = [:]
-    @ObservationIgnored private var legacyMigration: Task<Cache?, Never>?
-    @ObservationIgnored private var legacyMigrationChecked = false
     @ObservationIgnored private var artworkTasks: [URL: Task<Void, Never>] = [:]
     @ObservationIgnored private var artworkEvictionObserver: NSObjectProtocol?
     @ObservationIgnored private let artworkCache: NeteaseArtworkCache
@@ -80,26 +78,6 @@ import Observation
         var recommendations: [NeteaseMusicPlaylist] = []
         var snapshots: [String: NeteaseDailySnapshot] = [:]
         var details: [Int64: NeteasePlaylistDetail] = [:]
-        var artworkFiles: [String: String]? = nil
-    }
-    private struct StartupCache: Decodable, Sendable {
-        let recommendations: [NeteaseMusicPlaylist]
-        let daily: NeteaseDailySnapshot?
-        let artworkFiles: [String: String]?
-        private enum CodingKeys: String, CodingKey { case recommendations, snapshots, artworkFiles }
-        private struct SnapshotKey: CodingKey {
-            let stringValue: String
-            var intValue: Int? { nil }
-            init(stringValue: String) { self.stringValue = stringValue }
-            init?(intValue: Int) { return nil }
-        }
-        init(from decoder: any Decoder) throws {
-            let values = try decoder.container(keyedBy: CodingKeys.self)
-            recommendations = try values.decodeIfPresent([NeteaseMusicPlaylist].self, forKey: .recommendations) ?? []
-            artworkFiles = try values.decodeIfPresent([String: String].self, forKey: .artworkFiles)
-            let snapshots = try values.nestedContainer(keyedBy: SnapshotKey.self, forKey: .snapshots)
-            daily = try snapshots.decodeIfPresent(NeteaseDailySnapshot.self, forKey: SnapshotKey(stringValue: NeteaseHomeStore.day()))
-        }
     }
     init(client: NeteaseMusicClient = NeteaseMusicClient(), directory: URL = URL.applicationSupportDirectory.appendingPathComponent("NeteaseHome"),
          artworkSession: URLSession? = nil, artworkCache: NeteaseArtworkCache? = nil) {
@@ -125,7 +103,6 @@ import Observation
         return formatter.string(from: date)
     }
     private var scope: String { userID.map(String.init) ?? "public" }
-    private var cacheURL: URL { directory.appendingPathComponent(userID.map(String.init) ?? "public").appendingPathExtension("json") }
     func activate(_ session: NeteaseSavedSession?, refresh: Bool = true) async {
         guard !Task.isCancelled else { return }
         if !restored || userID != session?.profile.userID || credential != session?.credential {
@@ -139,8 +116,6 @@ import Observation
             quickActionStates = [:]; likedPlaylistID = nil; likedSongIDs = []; likedSeedID = nil; likedSongs = [:]; actionSongs = []; referencedSongs = [:]
             let oldDetails = Array(detailTasks.values); detailTasks = [:]
             oldDetails.forEach { $0.cancel() }
-            let oldMigration = legacyMigration; legacyMigration = nil; oldMigration?.cancel()
-            legacyMigrationChecked = false
             let oldArtwork = Array(artworkTasks.values); artworkTasks = [:]
             oldArtwork.forEach { $0.cancel() }
             let oldSaves = Array(saveTasks.values); saveTasks = [:]; saveIDs = [:]
@@ -157,14 +132,21 @@ import Observation
             for task in oldActions { _ = await task.result }
             _ = await oldRoaming?.result
             for task in oldDetails { _ = await task.result }
-            _ = await oldMigration?.value
             for task in oldArtwork { await task.value }
             for task in oldSaves { await task.value }
             guard revision == generation, !Task.isCancelled else { return }
             userID = session?.profile.userID; credential = session?.credential
-            let loaded = await restoreStartupCache()
+            let owner = scope, date = Self.day(), signedIn = userID != nil
+            let loadedRecommendations = (try? await pageCache.load([NeteaseMusicPlaylist].self, scope: owner, key: "recommendations")) ?? []
+            let today = signedIn ? try? await pageCache.load(NeteaseDailySnapshot.self, scope: owner, key: "daily:" + date) : nil
             guard revision == generation, !Task.isCancelled else { return }
-            cache = loaded; restored = true
+            var snapshots: [String: NeteaseDailySnapshot] = [:]
+            if signedIn, let today {
+                snapshots[date] = today
+                snapshots[today.id] = today
+            }
+            cache = Cache(recommendations: loadedRecommendations, snapshots: snapshots)
+            restored = true
             let loadedFeed = try? await pageCache.load(NeteaseHomeFeed.self, scope: scope, key: "feed")
             guard revision == generation, !Task.isCancelled else { return }
             feed = loadedFeed
@@ -664,18 +646,6 @@ import Observation
             collect(snapshot.songs)
             if missing.isEmpty { return found }
         }
-        if let legacy = await cacheIO.load(Cache.self, from: directory.appendingPathComponent(scope).appendingPathExtension("json")) {
-            for detail in legacy.details.values {
-                try Task.checkCancellation()
-                collect(detail.songs)
-                if missing.isEmpty { return found }
-            }
-            for snapshot in legacy.snapshots.values {
-                try Task.checkCancellation()
-                collect(snapshot.songs)
-                if missing.isEmpty { return found }
-            }
-        }
         let history = directory.appendingPathComponent("DailyHistory", isDirectory: true).appendingPathComponent(scope, isDirectory: true)
         let files = (try? FileManager.default.contentsOfDirectory(at: history, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? []
         for file in files where file.pathExtension == "json" {
@@ -704,13 +674,6 @@ import Observation
         let revision = generation, owner = scope, archiveURL = dailyArchiveURL(id)
         var snapshot = try? await pageCache.load(NeteaseDailySnapshot.self, scope: owner, key: "daily:" + id)
         if snapshot == nil { snapshot = await cacheIO.load(NeteaseDailySnapshot.self, from: archiveURL) }
-        if snapshot == nil {
-            try Task.checkCancellation()
-            guard revision == generation else { throw CancellationError() }
-            let legacy = await migrateLegacyCache()
-            snapshot = legacy?.snapshots[id]
-            if snapshot == nil { snapshot = try? await pageCache.load(NeteaseDailySnapshot.self, scope: owner, key: "daily:" + id) }
-        }
         try Task.checkCancellation()
         guard revision == generation else { throw CancellationError() }
         if let cached = cache.snapshots[id] { return cached }
@@ -727,14 +690,7 @@ import Observation
         try Task.checkCancellation()
         if let cached = cache.details[id] { return cached }
         let revision = generation, owner = scope
-        var detail = try? await pageCache.load(NeteasePlaylistDetail.self, scope: owner, key: "playlist:\(id)")
-        if detail == nil {
-            try Task.checkCancellation()
-            guard revision == generation else { throw CancellationError() }
-            let legacy = await migrateLegacyCache()
-            detail = legacy?.details[id]
-            if detail == nil { detail = try? await pageCache.load(NeteasePlaylistDetail.self, scope: owner, key: "playlist:\(id)") }
-        }
+        let detail = try? await pageCache.load(NeteasePlaylistDetail.self, scope: owner, key: "playlist:\(id)")
         try Task.checkCancellation()
         guard revision == generation else { throw CancellationError() }
         if let cached = cache.details[id] { return cached }
@@ -865,12 +821,8 @@ import Observation
         detailTasks[id] = task
         return try await existing(task)
     }
-    private var artworkDirectory: URL { directory.appendingPathComponent(userID.map(String.init) ?? "public", isDirectory: true) }
     func cachedArtworkURL(remote: URL) -> URL? {
-        if let file = artworkCache.cachedURL(for: remote, scope: scope) { return file }
-        guard let filename = cache.artworkFiles?[remote.absoluteString] else { return nil }
-        let url = artworkDirectory.appendingPathComponent(filename)
-        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+        artworkCache.cachedURL(for: remote, scope: scope)
     }
     func cachedArtworkFile(_ remote: URL) async -> URL? {
         guard restored, !Task.isCancelled else { return nil }
@@ -927,68 +879,5 @@ import Observation
             try? await pageCache.save(value, scope: owner, key: key)
             if self?.saveIDs[key] == id { self?.saveTasks[key] = nil; self?.saveIDs[key] = nil }
         }
-    }
-
-    private func restoreStartupCache() async -> Cache {
-        let owner = scope, date = Self.day(), legacyURL = cacheURL, signedIn = userID != nil
-        let recommendations = try? await pageCache.load([NeteaseMusicPlaylist].self, scope: owner, key: "recommendations")
-        let today = signedIn ? try? await pageCache.load(NeteaseDailySnapshot.self, scope: owner, key: "daily:" + date) : nil
-        let artwork = try? await pageCache.load([String: String].self, scope: owner, key: "legacy-artwork")
-        let legacy: StartupCache?
-        if recommendations == nil || today == nil || artwork == nil {
-            legacy = await cacheIO.load(StartupCache.self, from: legacyURL)
-        } else { legacy = nil }
-        var snapshots: [String: NeteaseDailySnapshot] = [:]
-        if signedIn, let snapshot = today ?? legacy?.daily {
-            snapshots[date] = snapshot
-            snapshots[snapshot.id] = snapshot
-        }
-        return Cache(recommendations: recommendations ?? legacy?.recommendations ?? [],
-                     snapshots: snapshots, artworkFiles: artwork ?? legacy?.artworkFiles)
-    }
-
-    /// The former whole-account file is migrated only when a requested page needs it.
-    private func migrateLegacyCache() async -> Cache? {
-        if let legacyMigration { return await legacyMigration.value }
-        guard !legacyMigrationChecked, !Task.isCancelled else { return nil }
-        let owner = scope, revision = generation, legacyURL = cacheURL
-        let history = directory.appendingPathComponent("DailyHistory", isDirectory: true).appendingPathComponent(owner, isDirectory: true)
-        let task = Task<Cache?, Never> { [self] in
-            defer { if generation == revision { legacyMigration = nil } }
-            let legacy = await cacheIO.load(Cache.self, from: legacyURL)
-            guard generation == revision, !Task.isCancelled else { return nil }
-            guard let legacy else { legacyMigrationChecked = true; return nil }
-            do {
-                let snapshots = Dictionary(legacy.snapshots.values.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-                for snapshot in snapshots.values {
-                    try await cacheIO.save(snapshot, to: history.appendingPathComponent(snapshot.id).appendingPathExtension("json"))
-                }
-                for (key, snapshot) in legacy.snapshots {
-                    if try await pageCache.load(NeteaseDailySnapshot.self, scope: owner, key: "daily:" + key) == nil {
-                        try await pageCache.save(snapshot, scope: owner, key: "daily:" + key)
-                    }
-                }
-                for (id, detail) in legacy.details {
-                    if try await pageCache.load(NeteasePlaylistDetail.self, scope: owner, key: "playlist:\(id)") == nil {
-                        try await pageCache.save(detail, scope: owner, key: "playlist:\(id)")
-                    }
-                }
-                if try await pageCache.load([NeteaseMusicPlaylist].self, scope: owner, key: "recommendations") == nil {
-                    try await pageCache.save(legacy.recommendations, scope: owner, key: "recommendations")
-                }
-                if let artwork = legacy.artworkFiles, !artwork.isEmpty {
-                    try await pageCache.save(artwork, scope: owner, key: "legacy-artwork")
-                }
-                try Task.checkCancellation()
-                guard generation == revision else { return nil }
-                try await cacheIO.remove(legacyURL)
-                guard generation == revision, !Task.isCancelled else { return nil }
-                legacyMigrationChecked = true
-            } catch { }
-            guard generation == revision, !Task.isCancelled else { return nil }
-            return legacy
-        }
-        legacyMigration = task
-        return await task.value
     }
 }

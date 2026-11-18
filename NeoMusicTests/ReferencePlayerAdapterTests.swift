@@ -436,7 +436,6 @@ private struct HitTarget: UIViewRepresentable {
 
         for second in 1...5 {
             player.seek(to: Double(second))
-            owner.volume = 0.5
             let current = player.upcomingQueueEntries
             XCTAssertEqual(player.upcomingQueueVersion, version)
             initial.withUnsafeBufferPointer { originalBuffer in

@@ -245,7 +245,9 @@ struct SongsListView: View {
                 || $0.artist.localizedStandardContains(query)
                 || $0.album.localizedStandardContains(query)
         }
+        if Task.isCancelled { return [] }
         let shown = filter == .favorites ? matching.filter(\.isFavorite) : matching
+        if Task.isCancelled { return [] }
         switch sort {
         case .name:
             return TitleSection.group(shown, by: \.title).map { GroupedIndices(letter: $0.letter, indices: $0.items.map(\.index)) }
@@ -282,7 +284,8 @@ struct SongsListView: View {
                 LibraryShelfItem(id: song.id, title: song.title, subtitle: song.artist, artwork: song.artwork,
                                  route: nil, songID: song.id)
             },
-            route: { song in .album(song.albumID) }
+            route: { song in .album(song.albumID) },
+            deselectsImmediately: true
         )
         .libraryNavigationTitle("歌曲")
         .libraryTitleDisplayMode(.large)
@@ -414,7 +417,9 @@ struct AlbumsGridView: View {
         let matching = query.isEmpty ? entries : entries.filter {
             $0.title.localizedStandardContains(query) || $0.subtitle.localizedStandardContains(query)
         }
+        if Task.isCancelled { return [] }
         let filtered = filter == .favorites ? matching.filter(\.isFavorite) : matching
+        if Task.isCancelled { return [] }
         let ordered: [AlbumSortEntry]
         switch sort {
         case .name:

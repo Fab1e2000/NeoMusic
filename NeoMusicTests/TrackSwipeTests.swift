@@ -254,6 +254,95 @@ import XCTest
         XCTAssertEqual(controller.currentStep, 2)
     }
 
+    func testReversingDirectionMidSettleCommitsTheOppositeNeighbor() {
+        let controller = TrackSwipeController()
+        let baseDate = Date(timeIntervalSinceReferenceDate: 2_500)
+        var now = baseDate
+        controller.nowProvider = { now }
+        controller.feedbackHandler = {}
+        controller.prepareFeedbackHandler = {}
+
+        let song0 = makeEntry(0, artist: "A")
+        let song1 = makeEntry(1, artist: "B")
+        let song2 = makeEntry(2, artist: "C")
+        controller.syncTrack(song: song0.track, queueIndex: song0.index)
+
+        var selected: [Int] = []
+        controller.panBegan(translation: -95, distance: 278, previous: nil, next: song1)
+        controller.panEnded(
+            translation: -95,
+            velocity: -400,
+            distance: 278,
+            song: song0.track,
+            previous: nil,
+            next: song1,
+            reduceMotion: false
+        ) { selected.append($0) }
+        XCTAssertEqual(selected, [1])
+        XCTAssertEqual(controller.currentStep, 1)
+
+        // Catch the outgoing settle, then reverse past the original threshold before release.
+        now = baseDate.addingTimeInterval(0.05)
+        let liveOffset = controller.currentOffset(at: now)
+        XCTAssertGreaterThan(liveOffset, 20)
+        controller.panBegan(translation: 0, distance: 278, previous: song0, next: song2)
+        controller.panChanged(translation: 140, distance: 278, previous: song0, next: song2)
+        XCTAssertEqual(controller.dragOffset, liveOffset + 140, accuracy: 0.001)
+        controller.panEnded(
+            translation: 140,
+            velocity: 500,
+            distance: 278,
+            song: song1.track,
+            previous: song0,
+            next: song2,
+            reduceMotion: false
+        ) { selected.append($0) }
+
+        XCTAssertEqual(selected, [1, 0])
+        XCTAssertEqual(controller.currentStep, 0)
+        XCTAssertEqual(controller.motion.value, liveOffset + 140 - 278, accuracy: 0.001)
+    }
+
+    func testDifferentArtistSwitchDoesNotPinArtistAcrossSettle() {
+        let controller = TrackSwipeController()
+        let baseDate = Date(timeIntervalSinceReferenceDate: 3_000)
+        controller.nowProvider = { baseDate }
+        controller.feedbackHandler = {}
+        controller.prepareFeedbackHandler = {}
+
+        let song0 = makeEntry(0, artist: "Artist A")
+        let song1 = makeEntry(1, artist: "Artist B")
+        let song2 = makeEntry(2, artist: "Artist C")
+        controller.syncTrack(song: song0.track, queueIndex: song0.index)
+
+        controller.panBegan(translation: -20, distance: 278, previous: nil, next: song1)
+        XCTAssertFalse(controller.isArtistPinned(at: controller.dragOffset, song: song0.track, previous: nil, next: song1))
+        controller.panChanged(translation: -100, distance: 278, previous: nil, next: song1)
+        XCTAssertFalse(controller.isArtistPinned(at: controller.dragOffset, song: song0.track, previous: nil, next: song1))
+
+        var selected: [Int] = []
+        controller.panEnded(
+            translation: -100,
+            velocity: -500,
+            distance: 278,
+            song: song0.track,
+            previous: nil,
+            next: song1,
+            reduceMotion: false
+        ) { selected.append($0) }
+
+        XCTAssertEqual(selected, [1])
+        XCTAssertTrue(controller.isSettling)
+        XCTAssertNil(controller.pinnedArtistDuringTransition)
+        let showingPrevious = controller.currentOffset(at: baseDate.addingTimeInterval(0.05))
+        XCTAssertGreaterThan(showingPrevious, 20)
+        XCTAssertFalse(controller.isArtistPinned(at: showingPrevious, song: song1.track, previous: song0, next: song2))
+        let overshoot = controller.currentOffset(at: baseDate.addingTimeInterval(0.15))
+        XCTAssertLessThan(overshoot, 0)
+        XCTAssertFalse(controller.isArtistPinned(at: overshoot, song: song1.track, previous: song0, next: song2))
+        controller.finishSettling()
+    }
+
     func testUnavailableDirectionAppliesRubberBandAndDoesNotTriggerHaptic() {
         let controller = TrackSwipeController()
         var hapticCount = 0
@@ -355,7 +444,7 @@ import XCTest
         XCTAssertTrue(controller.allowsOppositeNextSlot)
     }
 
-    func testPostCommitDisplayLinkStallAbsorbsInitialHitchAndAnimatesSmoothly() {
+    func testPostCommitMainThreadStallConsumesRealSpringTimeline() {
         let controller = TrackSwipeController()
         var now = Date(timeIntervalSinceReferenceDate: 1000)
         controller.nowProvider = { now }
@@ -380,30 +469,37 @@ import XCTest
         XCTAssertTrue(controller.isSettling)
         XCTAssertEqual(controller.exitingSlot?.track.id, current.track.id)
         XCTAssertEqual(controller.motion.value, 108, accuracy: 0.01)
+        let releaseDate = now
 
-        // Simulate a 90ms synchronous main-thread stall across select + SwiftUI/LNPopup commit
-        // before the first CADisplayLink frame renders.
-        now = now.addingTimeInterval(0.090)
-        controller.stepSpringFrame(at: now, frameDuration: 1.0 / 60.0)
+        // A 90 ms synchronous main-thread stall after touch-up must advance the spring by
+        // the same 90 ms of real time; only the remaining settle may render.
+        now = releaseDate.addingTimeInterval(0.090)
+        controller.stepSpringFrame(at: now)
         XCTAssertTrue(controller.isSettling)
-        let frame1 = controller.motion.value
-        XCTAssertGreaterThan(frame1, 80, "Initial post-commit stall must not skip the majority of the release settle (got \(frame1))")
+        let releaseOffset: CGFloat = 108
+        let expectedFirstFrame = releaseOffset + TrackSwipeController.spring.value(
+            target: -releaseOffset,
+            initialVelocity: -150,
+            time: now.timeIntervalSince(releaseDate)
+        )
+        XCTAssertEqual(controller.motion.value, expectedFirstFrame, accuracy: 0.01)
+        XCTAssertLessThan(controller.motion.value, 20,
+                          "A stalled commit must not shift the release spring back onto the real timeline (got \(controller.motion.value))")
 
-        now = now.addingTimeInterval(1.0 / 60.0)
-        controller.stepSpringFrame(at: now, frameDuration: 1.0 / 60.0)
-        let frame2 = controller.motion.value
-
-        now = now.addingTimeInterval(1.0 / 60.0)
-        controller.stepSpringFrame(at: now, frameDuration: 1.0 / 60.0)
-        let frame3 = controller.motion.value
-
-        XCTAssertLessThan(frame2, frame1)
-        XCTAssertLessThan(frame3, frame2)
-        XCTAssertGreaterThan(frame3, 20)
+        for _ in 0..<2 {
+            now = now.addingTimeInterval(1.0 / 60.0)
+            controller.stepSpringFrame(at: now)
+            let expected = releaseOffset + TrackSwipeController.spring.value(
+                target: -releaseOffset,
+                initialVelocity: -150,
+                time: now.timeIntervalSince(releaseDate)
+            )
+            XCTAssertEqual(controller.motion.value, expected, accuracy: 0.01)
+        }
 
         for _ in 0..<45 where controller.isSettling {
             now = now.addingTimeInterval(1.0 / 60.0)
-            controller.stepSpringFrame(at: now, frameDuration: 1.0 / 60.0)
+            controller.stepSpringFrame(at: now)
         }
         XCTAssertFalse(controller.isSettling)
         XCTAssertNil(controller.exitingSlot)
@@ -432,14 +528,14 @@ import XCTest
 
         let expectedAtTwoFrames = controller.currentOffset(at: now.addingTimeInterval(2.0 / 60.0))
         now = now.addingTimeInterval(1.0 / 60.0)
-        controller.stepSpringFrame(at: now, frameDuration: 1.0 / 60.0)
+        controller.stepSpringFrame(at: now)
         now = now.addingTimeInterval(1.0 / 60.0)
-        controller.stepSpringFrame(at: now, frameDuration: 1.0 / 60.0)
+        controller.stepSpringFrame(at: now)
         XCTAssertEqual(controller.motion.value, expectedAtTwoFrames, accuracy: 0.001)
 
         // A long interruption (e.g. backgrounding) must complete immediately rather than replaying stale motion.
         now = now.addingTimeInterval(1.2)
-        controller.stepSpringFrame(at: now, frameDuration: 1.0 / 60.0)
+        controller.stepSpringFrame(at: now)
         XCTAssertFalse(controller.isSettling)
         XCTAssertEqual(controller.motion.value, 0)
     }

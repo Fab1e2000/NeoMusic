@@ -1858,6 +1858,77 @@ final class LibraryDetailNavigationTests: XCTestCase {
         XCTAssertEqual(page.navigationItem.navigationBarMinimization.safeAreaAdjustment, .disabled)
     }
 
+    func testPlayerNavigationHandoffCollapsesRepeatsWithoutWaitingForClose() {
+        var handoff = PlayerNavigationHandoff()
+        XCTAssertTrue(handoff.begin(.album("first")))
+        XCTAssertFalse(handoff.begin(.album("first")), "The same request during closing must not push twice")
+        XCTAssertTrue(handoff.begin(.artist("other")), "A different destination is a new request")
+        handoff.didFinishClosing()
+        XCTAssertTrue(handoff.begin(.album("first")), "A request after closing starts navigation again")
+        handoff.didBeginPresentation()
+        XCTAssertTrue(handoff.begin(.album("first")), "Reopening after an interrupted close clears the session")
+    }
+
+    func testPlayerRouteNavigatesImmediatelyAndCollapsesRepeatedRequests() async throws {
+        let scene = try await applicationWindowScene()
+        let window = UIWindow(windowScene: scene)
+        defer { window.isHidden = true }
+        let player = PlayerTestFixtures.state(tracks: [PlayerTrack(id: "player-route", title: "Track",
+            artists: "Artist", albumTitle: "Album", coverURL: nil, duration: 60)])
+        var openFromPlayer: ((LibraryRoute) -> Void)?
+        window.rootViewController = UIHostingController(rootView: AppShell(
+            library: { TestRoot() }, detailDestination: { AnyView(TestDetail(route: $0)) },
+            nowPlaying: nil, playlistLibrary: PlaylistLibrary(playlists: []), toasts: LibraryToastCenter(),
+            referencePlayer: player, referenceLibrary: PlayerTestFixtures.library(),
+            makePlayerActions: { open, _ in
+                openFromPlayer = open
+                return PlayerTestFixtures.actions()
+            }, isInitialContentReady: true, isPlayerPresented: true)
+            .environment(account)
+            .environment(\.scenePhase, .active))
+        window.makeKeyAndVisible()
+        try await settle()
+        func findTabs(in controller: UIViewController) -> UITabBarController? {
+            if let tabs = controller as? UITabBarController { return tabs }
+            return controller.children.lazy.compactMap { findTabs(in: $0) }.first
+        }
+        let tabs = try XCTUnwrap(findTabs(in: window.rootViewController!))
+        let nav = try XCTUnwrap(tabs.selectedViewController as? UINavigationController)
+        let bridge = try XCTUnwrap(nav.delegate as? LibraryDetailNavigation)
+        let open = try XCTUnwrap(openFromPlayer)
+        XCTAssertEqual(bridge.depth, 0)
+
+        // The push must be visible before the popup's close completion can run.
+        open(.album("player-route"))
+        XCTAssertEqual(bridge.depth, 1, "Player navigation must not wait for the close transition")
+        open(.album("player-route"))
+        XCTAssertEqual(bridge.depth, 1, "A repeated request while closing must not push the page again")
+
+        try await settle()
+        XCTAssertEqual(bridge.depth, 1)
+        open(.album("player-route"))
+        XCTAssertEqual(bridge.depth, 1, "A destination already on top must not be pushed again")
+        open(.artist("player-artist"))
+        XCTAssertEqual(bridge.depth, 2, "A different destination still navigates")
+    }
+
+    func testIndependentDetailPageReceivesPlaybackIndicatorsStateAndRestoresIt() async throws {
+        let scene = try await applicationWindowScene()
+        let window = UIWindow(windowScene: scene)
+        defer { window.isHidden = true }
+        let probe = PlaybackIndicatorsEnvironmentProbe()
+        let bridge = LibraryDetailNavigation()
+        window.rootViewController = UIHostingController(rootView:
+            PlaybackIndicatorsEnvironmentHost(probe: probe, bridge: bridge))
+        window.makeKeyAndVisible()
+        try await settle()
+        XCTAssertEqual(probe.values.last, false,
+                       "The player's hidden-list state must reach the independently hosted detail page")
+        probe.isPlayerPresented = false
+        try await settle()
+        XCTAssertEqual(probe.values.last, true, "Closing the player must restore list indicators")
+    }
+
     func testMiniPlayerTrackSwipeCommitPreservesSpringReleaseAcrossPopupUpdate() async throws {
         let scene = try await applicationWindowScene()
         let window = UIWindow(windowScene: scene)
@@ -2196,5 +2267,33 @@ private struct TestDetail: View {
             .libraryTitleDisplayMode(.large)
             .librarySearchable(text: $query, prompt: "搜索")
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Menu("更多", systemImage: "ellipsis") { Button("Test") {} } } }
+    }
+}
+
+@MainActor @Observable
+private final class PlaybackIndicatorsEnvironmentProbe {
+    var isPlayerPresented = true
+    var values: [Bool] = []
+}
+
+private struct PlaybackIndicatorsProbeView: View {
+    let probe: PlaybackIndicatorsEnvironmentProbe
+    @Environment(\.songPlaybackIndicatorsActive) private var isActive
+    var body: some View {
+        Color.clear.onChange(of: isActive, initial: true) { _, value in
+            if probe.values.last != value { probe.values.append(value) }
+        }
+    }
+}
+
+/// Mirrors the player popup's environment contract over the real navigation container.
+private struct PlaybackIndicatorsEnvironmentHost: View {
+    let probe: PlaybackIndicatorsEnvironmentProbe
+    let bridge: LibraryDetailNavigation
+    var body: some View {
+        LibraryNavigationContainer(navigation: bridge,
+            root: PlaybackIndicatorsProbeView(probe: probe),
+            destination: { _ in AnyView(EmptyView()) })
+            .environment(\.songPlaybackIndicatorsActive, !probe.isPlayerPresented)
     }
 }

@@ -18,7 +18,6 @@ struct PlayerPopup: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(PlayerState.self) private var player
     @Environment(\.artworkLoadAction) private var loadArtwork
-    @AppStorage(ImmersiveMode.storageKey) private var isImmersive = false
     @State private var isBarPresented = false
     @State private var hasPresentedBar = false
     @State private var artwork: UIImage?
@@ -50,7 +49,6 @@ struct PlayerPopup: ViewModifier {
                                        isBarActive: isBarActive,
                                        toasts: toasts) { isPresented = false }
                         .environment(\.playerVolumeHUDRefreshID, volumeHUDRefreshID)
-                        .statusBarHidden(isImmersive)
                 }
             }
             .popupBarStyle(.floatingCompact)

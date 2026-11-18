@@ -94,14 +94,6 @@ struct HomeFeedIssue: Identifiable, Equatable {
     var retryIssue: (String) async -> Void = { _ in }
     var refresh: () async -> Void = {}
     var play: (String, String) -> Void = { _, _ in }
-
-    var featured: [HomeContentItem] = []
-    var recent: [HomeContentItem] = []
-    var recommendations: [HomeContentItem] = []
     var isGuest = true
-    var featuredError: String?
-    var recommendationsError: String?
     var login: () -> Void = {}
-    var retryFeatured: () -> Void = {}
-    var retryRecommendations: () -> Void = {}
 }

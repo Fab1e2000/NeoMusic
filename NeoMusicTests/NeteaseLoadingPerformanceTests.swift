@@ -849,28 +849,6 @@ import SwiftUI
         network.invalidateAndCancel()
     }
 
-    func testRestoringArtworkIndexDropsMissingFilesAndPreservesPresentFiles() async throws {
-        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let present = URL(string: "https://fixture.test/present")!, missing = URL(string: "https://fixture.test/missing")!
-        try Data([1]).write(to: root.appendingPathComponent("42-present.image"))
-        let snapshot = NeteaseMusicStore.Snapshot(playlists: [], songs: [:], tracks: [:], liked: [], times: [:], lyrics: [:],
-            artwork: [present.absoluteString: "present.image", missing.absoluteString: "missing.image"])
-        try JSONEncoder().encode(snapshot).write(to: root.appendingPathComponent("42.json"))
-        let store = NeteaseMusicStore(directory: root)
-        await store.activate(try session(), refresh: false)
-        XCTAssertEqual(store.cachedArtworkURL(present), root.appendingPathComponent("42-present.image"))
-        XCTAssertNil(store.cachedArtworkURL(missing))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("42.json").path))
-        await store.invalidate()
-        let restored = NeteaseMusicStore(directory: root)
-        await restored.activate(try session(), refresh: false)
-        XCTAssertEqual(restored.cachedArtworkURL(present), root.appendingPathComponent("42-present.image"))
-        XCTAssertNil(restored.cachedArtworkURL(missing))
-        await restored.invalidate()
-    }
-
     func testLargeCatalogAsyncPublicationAndSessionInvalidationGuard() async throws {
         let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

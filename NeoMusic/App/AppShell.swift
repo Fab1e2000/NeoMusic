@@ -209,6 +209,34 @@ enum AppTabOrder {
     }
 }
 
+/// Player links start navigation immediately. This only remembers the request
+/// long enough to collapse repeated taps while the player is closing; it never
+/// queues or delays navigation behind the close transition.
+struct PlayerNavigationHandoff {
+    private var route: LibraryRoute?
+    private var isClosing = false
+
+    /// Returns false only for the same destination requested again in the same
+    /// closing session, so a double tap cannot push the page twice.
+    mutating func begin(_ route: LibraryRoute) -> Bool {
+        if isClosing, self.route == route { return false }
+        self.route = route
+        isClosing = true
+        return true
+    }
+
+    /// Called when the player reports that its close transition finished.
+    mutating func didFinishClosing() {
+        isClosing = false
+        route = nil
+    }
+
+    /// Called when the player is opened again, including after an interrupted close.
+    mutating func didBeginPresentation() {
+        didFinishClosing()
+    }
+}
+
 /// 根标签栏与迷你播放条。显示哪些标签、以及它们的顺序，由账户页里的标签页设置决定。
 struct AppShell<Library: View>: View {
     @ViewBuilder var library: Library
@@ -223,7 +251,7 @@ struct AppShell<Library: View>: View {
     var isInitialContentReady = true
     var searchContent: AnyView? = nil
     var searchDestination: ((LibraryRoute) -> AnyView)? = nil
-    @State private var pendingRoute: LibraryRoute?
+    @State private var playerNavigation = PlayerNavigationHandoff()
     @State var selection = AppTab.library
     @State var libraryPath: [LibraryRoute] = []
     @State var isPlayerPresented = false
@@ -307,13 +335,11 @@ struct AppShell<Library: View>: View {
         .environment(referencePlayer)
         .environment(referenceLibrary)
         .environment(makePlayerActions({ route in
-            if isPlayerPresented {
-                pendingRoute = route
-                isPlayerPresented = false
-            } else {
-                openInCurrentTab(route)
-            }
+            startPlayerNavigation(route)
         }, account.music == nil ? nil : { showsAudioQualitySettings = true }))
+        .onChange(of: isPlayerPresented) { _, presented in
+            if presented { playerNavigation.didBeginPresentation() }
+        }
         .onChange(of: playlistLibrary.pendingAddition != nil) { _, pending in
             if pending { isPlayerPresented = false }
         }
@@ -341,6 +367,14 @@ struct AppShell<Library: View>: View {
     private func sectionBridge(_ tab: AppTab) -> LibraryDetailNavigation {
         tabNavigations.navigation(for: tab)
     }
+    private var currentNavigation: LibraryDetailNavigation {
+        switch selection {
+        case .home: return homeNavigation
+        case .search: return effectiveSearchContent != nil ? searchNavigation : detailNavigation
+        case .library: return detailNavigation
+        case .favorites, .playlists, .albums, .artists, .songs, .playlist: return sectionBridge(selection)
+        }
+    }
     private func openInCurrentTab(_ route: LibraryRoute) {
         if selection == .search, effectiveSearchContent == nil {
             selection = .library
@@ -349,26 +383,17 @@ struct AppShell<Library: View>: View {
         }
         tabNavigations.navigation(for: selection).open(route)
     }
-    private func finishPlayerNavigation() {
+    /// 播放器内跳转在点击当下开始，关闭播放器只负责自身转场和清理。
+    private func startPlayerNavigation(_ route: LibraryRoute) {
+        guard playerNavigation.begin(route) else { return }
+        if currentNavigation.topRoute != route { openInCurrentTab(route) }
         isPlayerPresented = false
-        guard let route = pendingRoute else { return }
-        pendingRoute = nil
-        openInCurrentTab(route)
+    }
+    private func finishPlayerNavigation() {
+        playerNavigation.didFinishClosing()
+        isPlayerPresented = false
     }
 
-}
-
-struct PlaceholderTab: View {
-    let title: LocalizedStringKey
-
-    var body: some View {
-        NavigationStack {
-            ContentUnavailableView(title, systemImage: "hammer", description: Text("本阶段暂未开放。"))
-                .navigationTitle(title)
-                .toolbarTitleDisplayMode(.inlineLarge)
-                .toolbar { AccountToolbar() }
-        }
-    }
 }
 
 /// 整组播放会清除手动加入的队列时的确认。居中提示，只有一句说明。

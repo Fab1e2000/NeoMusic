@@ -418,11 +418,17 @@ final class NeteaseMusicClientTests: XCTestCase, @unchecked Sendable {
     }
 
     @MainActor func testOfflineRestoreRetainsCachedLibraryForItsOwner() async throws {
+        struct SummaryFixture: Encodable, Sendable {
+            let playlists: [NeteaseMusicPlaylist]
+            let liked: Set<Int64>
+            let times: [Int64: Date]
+            let favoritesPreview: NeteasePlaylistDetail?
+        }
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
-        let cached = NeteaseMusicStore.Snapshot(playlists: [.init(id: 4, title: "Cached", creator: "User", creatorID: 1, artworkURL: nil, trackCount: 0, isFavorites: false)], songs: [:], tracks: [:], liked: [8], times: [:], lyrics: [:], artwork: [:])
-        try JSONEncoder().encode(cached).write(to: folder.appendingPathComponent("1.json"))
+        let cached = SummaryFixture(playlists: [.init(id: 4, title: "Cached", creator: "User", creatorID: 1, artworkURL: nil, trackCount: 0, isFavorites: false)],
+                                    liked: [8], times: [:], favoritesPreview: nil)
+        try await NeteasePageCache(directory: folder).save(cached, scope: "1", key: "library")
         let store = NeteaseMusicStore(client: makeClient(["offline"]), directory: folder)
         await store.activate(try .init(profile: .init(userID: 1, nickname: "User", avatarURL: nil), credential: credential()))
         XCTAssertEqual(store.playlists.map(\.id), [4])

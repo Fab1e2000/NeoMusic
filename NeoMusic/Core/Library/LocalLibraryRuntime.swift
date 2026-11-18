@@ -234,8 +234,6 @@ final class LocalLibraryRuntime {
             apply([])
         }
         try Task.checkCancellation()
-        // The one known identity repair must finish before resolving saved references.
-        guard !cachedTracks.contains(where: { $0.id.hasPrefix("ents/音乐/") }) else { return }
         try await restoreStores()
         isInitialLibraryReady = true
         PerformanceDiagnostics.event("LocalContentReady")
@@ -245,13 +243,9 @@ final class LocalLibraryRuntime {
         let reusable = await cache.reusableTracks(cachedTracks, at: store.appending(path: "tracks.json"))
         let result = try await scanner.scan(root: root, previousTracks: reusable)
         try Task.checkCancellation()
-        if !hasRestoredPlayback {
-            try Self.repairLegacyIdentities(cached: cachedTracks, scanned: result.tracks, store: store, defaults: defaults)
-        }
         let failed = Set(result.failures).union(result.tracks.filter { track in
             result.failedDirectoryPaths.contains { path in path.isEmpty || track.id.hasPrefix(path + "/") }
         }.map(\.id))
-        migrateAlbumSelections(from: cachedTracks, to: result.tracks)
         let tracks = try await cache.write(result.tracks, to: store.appending(path: "tracks.json"))
         try Task.checkCancellation()
         failedIDs = failed
@@ -289,71 +283,6 @@ final class LocalLibraryRuntime {
         onLibraryRestored?()
     }
 
-    /// Repairs only the known /var versus /private/var truncation from the first local scanner.
-    /// The old cache remains untouched until all stores succeed, so interrupted repairs are retryable.
-    static func repairLegacyIdentities(cached: [LocalTrack], scanned: [LocalTrack], store: URL,
-                                       defaults: UserDefaults = .standard) throws {
-        let oldCounts = Dictionary(grouping: cached, by: \.id)
-        let newCounts = Dictionary(grouping: scanned, by: \.id)
-        var mapping: [String: String] = [:]
-        for (id, tracks) in newCounts where tracks.count == 1 {
-            let legacy = "ents/音乐/" + id
-            guard oldCounts[legacy]?.count == 1, newCounts[legacy] == nil,
-                  oldCounts[id] == nil else { continue }
-            mapping[legacy] = id
-        }
-        guard !mapping.isEmpty else { return }
-        func repaired(_ ids: [String]) -> [String] { ids.map { mapping[$0] ?? $0 } }
-        // Read and validate both documents before writing either; retain unrelated JSON fields verbatim.
-        var writes: [(URL, Data)] = []
-        for name in ["playlists.json", "playback.json"] {
-            let url = store.appending(path: name)
-            guard FileManager.default.fileExists(atPath: url.path) else { continue }
-            let data = try Data(contentsOf: url)
-            guard var object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                throw CocoaError(.fileReadCorruptFile)
-            }
-            var changed = false
-            if name == "playlists.json" {
-                guard var playlists = object["playlists"] as? [[String: Any]] else { throw CocoaError(.fileReadCorruptFile) }
-                for i in playlists.indices {
-                    guard let ids = playlists[i]["songs"] as? [String] else { throw CocoaError(.fileReadCorruptFile) }
-                    let updated = repaired(ids)
-                    if updated != ids { playlists[i]["songs"] = updated; changed = true }
-                }
-                object["playlists"] = playlists
-            } else {
-                guard let ids = object["ids"] as? [String] else { throw CocoaError(.fileReadCorruptFile) }
-                let updated = repaired(ids)
-                if updated != ids { object["ids"] = updated; changed = true }
-            }
-            if changed { writes.append((url, try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]))) }
-        }
-        for (url, data) in writes { try data.write(to: url, options: .atomic) }
-        for key in ["favoriteSongs", "pinnedSongs", "hiddenSongs"] {
-            guard let ids = defaults.stringArray(forKey: key) else { continue }
-            let updated = repaired(ids)
-            if updated != ids { defaults.set(updated, forKey: key) }
-        }
-    }
-
-    func migrateAlbumSelections(from old: [LocalTrack], to new: [LocalTrack]) {
-        var transaction = Transaction(animation: nil)
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            let oldByID = Dictionary(old.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-            for track in new {
-                guard let directory = track.albumDirectory, let previous = oldByID[track.id], previous.albumDirectory == nil else { continue }
-                let oldID = previous.albumArtist + "\u{001F}" + previous.album
-                let newID = "folder:" + directory
-                if favoriteAlbums.ids.contains(oldID) { favoriteAlbums.insert(newID) }
-                if pinnedAlbums.ids.contains(oldID) { pinnedAlbums.insert(newID) }
-                // Preserve deletion of these exact songs; do not hide unrelated tracks now sharing their folder.
-                if deletedAlbums.ids.contains(oldID) { Self.setFlag(track.id, value: true, key: "hiddenSongs", defaults: defaults) }
-            }
-        }
-    }
-
     private func apply(_ tracks: [LocalTrack]) {
         cachedTracks = tracks
         let favorites = Set(defaults.stringArray(forKey: "favoriteSongs") ?? [])
@@ -384,19 +313,6 @@ actor LocalLibraryTrackCache {
             modified = attributes[.modificationDate] as? Date
         }
     }
-    private struct StartupTrack: Codable {
-        var metadata: LocalTrack
-        let artworkKey: String?
-    }
-    private struct StartupSnapshot: Codable {
-        let version: Int
-        let source: Fingerprint
-        let tracks: [StartupTrack]
-    }
-    private struct SavedColors: Decodable {
-        let version: Int
-        let colors: [String: AlbumArtworkBackdrop?]
-    }
     private var saved: (url: URL, tracks: [LocalTrack])?
     private var backdropPreparer: AlbumArtworkBackdropPreparer?
 
@@ -418,29 +334,6 @@ actor LocalLibraryTrackCache {
         try Task.checkCancellation()
         saved = nil
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-        let directory = url.appendingPathExtension("startup")
-        // Import the existing lightweight cache once, preserving its image files and colors.
-        if let data = try? Data(contentsOf: directory.appending(path: "snapshot.json")),
-           let snapshot = try? JSONDecoder().decode(StartupSnapshot.self, from: data),
-           snapshot.version == 1, snapshot.source == (try Fingerprint(url)) {
-            let colorURL = url.deletingLastPathComponent().appending(path: "artwork-backdrops.json")
-            let savedColors = try? JSONDecoder().decode(SavedColors.self, from: Data(contentsOf: colorURL))
-            let colors = savedColors?.version == AlbumArtworkBackdropPreparer.cacheVersion ? savedColors?.colors ?? [:] : [:]
-            do {
-                let tracks = try snapshot.tracks.map { entry in
-                try Task.checkCancellation()
-                var track = entry.metadata
-                track.artworkKey = entry.artworkKey
-                if let key = entry.artworkKey {
-                    if let color = colors[key] { track.artworkBackdrop = color }
-                    else { track.artworkData = try Data(contentsOf: directory.appending(path: key + ".image")) }
-                }
-                return track
-            }
-                return try await externalizeArtwork(tracks, at: url)
-            } catch is CancellationError { throw CancellationError() }
-            catch { /* The original index still contains artwork if the old sidecar is incomplete. */ }
-        }
         let tracks = try JSONDecoder().decode([LocalTrack].self, from: Data(contentsOf: url))
         saved = (url, tracks)
         return try await externalizeArtwork(tracks, at: url)
@@ -470,8 +363,6 @@ actor LocalLibraryTrackCache {
             try data.write(to: url, options: .atomic)
             saved = (url, normalized)
         }
-        // The metadata file is now authoritative. Retain images still referenced by live views.
-        try? FileManager.default.removeItem(at: url.appendingPathExtension("startup").appending(path: "snapshot.json"))
         return normalized
     }
 

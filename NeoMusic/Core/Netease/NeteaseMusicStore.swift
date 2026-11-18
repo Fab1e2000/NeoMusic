@@ -55,8 +55,6 @@ final class NeteaseMusicStore {
     @ObservationIgnored private var detailTasks: [Int64: Task<Bool, Never>] = [:]
     @ObservationIgnored private var tasks: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var lyricCache: [Int64: NeteaseMusicLyrics] = [:]
-    @ObservationIgnored private var legacyArtworkFiles: [String: String] = [:]
-    @ObservationIgnored private let cacheIO = NeteaseCacheIO()
     @ObservationIgnored private var artworkTasks: [URL: Task<Void, Never>] = [:]
     @ObservationIgnored private var saveTasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var saveIDs: [String: UUID] = [:]
@@ -103,12 +101,8 @@ final class NeteaseMusicStore {
             userID = session.profile.userID; credential = session.credential
             let revision = generation, scope = String(session.profile.userID)
             let summary = try? await pages.load(Summary.self, scope: scope, key: "library")
-            let legacy = summary == nil ? await cacheIO.load(Snapshot.self, from: cacheURL) : nil
-            let files = summary?.legacyArtwork ?? legacy?.artwork ?? [:]
-            let existing = await cacheIO.existingFiles(files.values.map { directory.appendingPathComponent("\(scope)-\($0)") })
             guard revision == generation, !Task.isCancelled else { return }
             restored = true
-            legacyArtworkFiles = files.filter { existing.contains(directory.appendingPathComponent("\(scope)-\($0.value)")) }
             if let summary {
                 playlists = summary.playlists; likedIDs = summary.liked; likedAt = summary.times
                 if let favorites = playlists.first(where: \.isFavorites) {
@@ -119,26 +113,6 @@ final class NeteaseMusicStore {
                     guard revision == generation, !Task.isCancelled else { return }
                     if let preview, preview.playlist.id == favorites.id { apply(firstPage(preview), persist: false) }
                     if summary.favoritesPreview == nil { saveSummary() }
-                }
-            } else if let legacy {
-                playlists = legacy.playlists; likedIDs = legacy.liked; likedAt = legacy.times
-                var importedDetails: [NeteasePlaylistDetail] = []
-                for playlist in legacy.playlists {
-                    guard let ids = legacy.tracks[playlist.id] else { continue }
-                    let resolved = ids.compactMap { legacy.songs[$0] }.filter { !$0.unavailable }
-                    let detail = NeteasePlaylistDetail(playlist: playlist, songs: resolved, addedTimes: legacy.times,
-                        trackIDs: ids, loadedTrackCount: ids.count)
-                    if playlist.isFavorites { apply(firstPage(detail), persist: false) }
-                    importedDetails.append(detail)
-                }
-                let imported = importedDetails
-                let summary = summarySnapshot()
-                let legacyURL = cacheURL
-                _ = try? await run { [pages, cacheIO] _ in
-                    for detail in imported { try await pages.save(detail, scope: scope, key: "playlist:\(detail.playlist.id)") }
-                    for (id, lyrics) in legacy.lyrics { try await pages.save(lyrics, scope: scope, key: "lyrics:\(id)") }
-                    try await pages.save(summary, scope: scope, key: "library")
-                    try await cacheIO.remove(legacyURL)
                 }
             }
             guard generation == revision, !Task.isCancelled else { return }
@@ -164,7 +138,7 @@ final class NeteaseMusicStore {
         for task in pending { await task.value }
         for task in pendingDetails { _ = await task.value }
         tasks.removeAll(); detailTasks.removeAll(); artworkTasks.removeAll(); saveTasks.removeAll(); saveIDs.removeAll()
-        playlists = []; songs = [:]; playlistTracks = [:]; likedIDs = []; likedAt = [:]; lyricCache = [:]; legacyArtworkFiles = [:]
+        playlists = []; songs = [:]; playlistTracks = [:]; likedIDs = []; likedAt = [:]; lyricCache = [:]
         details = [:]; restoredPlaylists = []; detailDates = [:]; failedLoads = [:]; refreshedAt = nil; morePlaylistIDs = []
         isLoading = false; loadingPlaylists = []; playlistErrors = [:]; error = nil; onChange?()
     }
@@ -588,8 +562,7 @@ final class NeteaseMusicStore {
     func cachedArtworkURL(for remote: URL) -> URL? { cachedArtworkURL(remote) }
     func cachedArtworkURL(_ remote: URL) -> URL? {
         guard let userID else { return nil }
-        if let file = artworkCache.cachedURL(for: remote, scope: String(userID)) { return file }
-        return legacyArtworkFiles[remote.absoluteString].map { directory.appendingPathComponent("\(userID)-\($0)") }
+        return artworkCache.cachedURL(for: remote, scope: String(userID))
     }
     func cachedArtworkFile(_ remote: URL) async -> URL? {
         guard restored, let userID, !Task.isCancelled else { return nil }
@@ -612,22 +585,15 @@ final class NeteaseMusicStore {
         return file
     }
 
-    private var cacheURL: URL { directory.appendingPathComponent("\(userID ?? 0).json") }
-    struct Snapshot: Codable, Sendable {
-        let playlists: [NeteaseMusicPlaylist]; let songs: [Int64: NeteaseMusicSong]; let tracks: [Int64: [Int64]]
-        let liked: Set<Int64>; let times: [Int64: Date]; let lyrics: [Int64: NeteaseMusicLyrics]; let artwork: [String: String]?
-    }
     private struct Summary: Codable, Sendable {
         let playlists: [NeteaseMusicPlaylist]
         let liked: Set<Int64>
         let times: [Int64: Date]
-        let legacyArtwork: [String: String]
         let favoritesPreview: NeteasePlaylistDetail?
     }
     private func summarySnapshot() -> Summary {
         let favorites = playlists.first(where: \.isFavorites).flatMap { details[$0.id] }.map(firstPage)
-        return Summary(playlists: playlists, liked: likedIDs, times: likedAt,
-                       legacyArtwork: legacyArtworkFiles, favoritesPreview: favorites)
+        return Summary(playlists: playlists, liked: likedIDs, times: likedAt, favoritesPreview: favorites)
     }
     private func saveSummary() {
         save(summarySnapshot(), key: "library")

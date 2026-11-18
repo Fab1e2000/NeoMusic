@@ -43,10 +43,14 @@ import UIKit
         let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let cache = """
-        {"details":[],"releases":[],"similar":[],"albums":[],"artists":[{"id":7,"name":"Public"}],"collected":[],"artwork":{}}
-        """
-        try Data(cache.utf8).write(to: root.appendingPathComponent("public.json"))
+        struct SubscriptionsFixture: Encodable {
+            let artists: [NeteaseArtistReference]
+            let albums: [NeteaseArtistAlbum]
+            let refreshedAt: [String: Date]
+        }
+        try await NeteasePageCache(directory: root.appendingPathComponent("Pages"))
+            .save(SubscriptionsFixture(artists: [.init(id: 7, name: "Public", artworkURL: nil)], albums: [], refreshedAt: [:]),
+                  scope: "public", key: "subscriptions")
         let store = NeteaseArtistStore(directory: root)
         await store.activate(nil, refresh: false)
         XCTAssertEqual(store.subscribedArtists.map(\.id), [7])
@@ -369,25 +373,6 @@ import UIKit
         await store.invalidate()
     }
 
-    func testLegacySummaryAndRequestedDetailRestoreWithoutTouchingOtherEntities() async throws {
-        let directory = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let data = Data(#"{"artists":[{"id":7,"name":"Legacy"}],"collected":[],"details":[7,{"artist":{"id":7,"name":"Legacy"},"biography":"Saved","songs":[]},99,"Unrelated invalid entity"],"releases":[],"similar":[],"albums":[],"artwork":{}}"#.utf8)
-        let legacyURL = directory.appendingPathComponent("public.json")
-        try data.write(to: legacyURL)
-        let store = try await contentStore(directory: directory)
-        XCTAssertEqual(store.subscribedArtists.map(\.name), ["Legacy"])
-        XCTAssertTrue(store.details.isEmpty)
-        let ready = await store.prepareArtistPlayback(id: 7)
-        XCTAssertTrue(ready)
-        XCTAssertEqual(store.details.keys.sorted(), [7])
-        XCTAssertEqual(store.details[7]?.biography, "Saved")
-        XCTAssertTrue(ArtistContentProtocol.state.withLock { $0.paths.isEmpty })
-        XCTAssertEqual(try Data(contentsOf: legacyURL), data)
-        await store.invalidate()
-    }
-
     func testCachedSongLookupReturnsOnlyRequestedAccountSongsWithoutOpeningRoutes() async throws {
         let directory = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -420,28 +405,6 @@ import UIKit
         cancelled.cancel()
         let cancelledSongs = await cancelled.value
         XCTAssertTrue(cancelledSongs.isEmpty)
-        await store.invalidate()
-    }
-
-    func testCachedSongLookupReadsLegacySongsWithoutHydratingOrChangingSnapshot() async throws {
-        let directory = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let data = Data(#"{"artists":[],"collected":[],"details":[7,{"songs":[{"id":70,"title":"Legacy artist song","artist":"Artist","album":"Album","duration":1,"unavailable":false},{"id":71,"title":"Unrequested","artist":"Artist","album":"Album","duration":1,"unavailable":false}]}],"albums":{"8":{"songs":[{"id":80,"title":"Legacy album song","artist":"Artist","album":"Album","duration":1,"unavailable":false}]}},"artwork":{}}"#.utf8)
-        let legacyURL = directory.appendingPathComponent("public.json")
-        try data.write(to: legacyURL)
-        let store = try await contentStore(directory: directory)
-        var publications = 0
-        store.onChange = { publications += 1 }
-        let songs = await store.restoreCachedSongs(ids: [70, 80, 99])
-        XCTAssertEqual(songs.map(\.id), [70, 80])
-        XCTAssertEqual(songs.map(\.title), ["Legacy artist song", "Legacy album song"])
-        XCTAssertTrue(store.details.isEmpty)
-        XCTAssertTrue(store.albums.isEmpty)
-        XCTAssertTrue(store.cachedSongs.isEmpty)
-        XCTAssertEqual(publications, 0)
-        XCTAssertTrue(ArtistContentProtocol.state.withLock { $0.paths.isEmpty })
-        XCTAssertEqual(try Data(contentsOf: legacyURL), data)
         await store.invalidate()
     }
 

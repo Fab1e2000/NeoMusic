@@ -278,8 +278,6 @@ final class TrackSwipeController {
 
     func finishSettling() {
         stopSpringDrivers()
-        lastSpringSampleDate = nil
-        absorbedHitchDuration = 0
         isSettling = false
         exitingSlot = nil
         pinnedArtistDuringTransition = nil
@@ -345,8 +343,6 @@ final class TrackSwipeController {
         springVelocity = clampedVelocity
         let startDate = nowProvider()
         springStartDate = startDate
-        lastSpringSampleDate = startDate
-        absorbedHitchDuration = 0
         springSettlingDuration = max(
             Self.spring.settlingDuration(target: -offset, initialVelocity: clampedVelocity, epsilon: 0.1),
             0.05
@@ -368,8 +364,6 @@ final class TrackSwipeController {
 
     func cancelMotion() {
         stopSpringDrivers()
-        lastSpringSampleDate = nil
-        absorbedHitchDuration = 0
         isSettling = false
         isDragging = false
         rawDragOffset = 0
@@ -397,9 +391,6 @@ final class TrackSwipeController {
         displayLink = nil
     }
 
-    private var lastSpringSampleDate: Date?
-    private var absorbedHitchDuration: TimeInterval = 0
-
     fileprivate func stepDisplayLink(_ displayLink: CADisplayLink) {
         guard isSettling else {
             displayLink.invalidate()
@@ -407,39 +398,20 @@ final class TrackSwipeController {
             return
         }
         let lookahead = min(max(displayLink.targetTimestamp - CACurrentMediaTime(), 0), 0.05)
-        let frameDuration = max(displayLink.targetTimestamp - displayLink.timestamp, 1.0 / 120.0)
         let sampleDate = nowProvider().addingTimeInterval(lookahead)
-        stepSpringFrame(at: sampleDate, frameDuration: frameDuration)
+        stepSpringFrame(at: sampleDate)
     }
 
-    func stepSpringFrame(at sampleDate: Date, frameDuration: TimeInterval = 1.0 / 60.0) {
+    /// Samples the release spring on the same real timeline as touch-up, so a main-thread
+    /// stall consumes the settle instead of being absorbed and replayed later.
+    func stepSpringFrame(at sampleDate: Date) {
         guard isSettling else { return }
-        let nominalStep = min(max(frameDuration, 1.0 / 120.0), 1.0 / 30.0)
-        let previousSample = lastSpringSampleDate ?? springStartDate
-        let effectiveSample = max(previousSample, sampleDate)
-        let stepDelta = effectiveSample.timeIntervalSince(previousSample)
-        let hitchThreshold = max(nominalStep * 2.2, 0.022)
-        // Synchronous track-switch commits (AVPlayerItem load, NowPlaying sync, SwiftUI/LNPopup
-        // layout) can briefly stall the main thread after touch-up. Absorb that initial commit gap
-        // rather than burning through the spring before the post-switch frames render.
-        let remainingBudget = max(0, 0.5 - absorbedHitchDuration)
-        let maxSingleHitch = max(0.35, springSettlingDuration * 0.85)
-        if stepDelta > hitchThreshold, stepDelta < maxSingleHitch, remainingBudget > 0 {
-            let excess = min(stepDelta - nominalStep, remainingBudget)
-            springStartDate = springStartDate.addingTimeInterval(excess)
-            absorbedHitchDuration += excess
-            let dt = max(0, effectiveSample.timeIntervalSince(springStartDate))
-            let remaining = max(0.05, springSettlingDuration - dt)
-            scheduleSettleTask(after: remaining + 0.05)
-        }
-        lastSpringSampleDate = effectiveSample
-        let dt = max(0, effectiveSample.timeIntervalSince(springStartDate))
+        let dt = max(0, sampleDate.timeIntervalSince(springStartDate))
         if dt >= springSettlingDuration {
             finishSettling()
             return
         }
-        let nextOffset = currentOffset(at: effectiveSample)
-        updateMotionOutput(offset: nextOffset)
+        updateMotionOutput(offset: currentOffset(at: sampleDate))
     }
 
     private func updateMotionOutput(offset: CGFloat) {

@@ -807,14 +807,12 @@ import Synchronization
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let playlist = NeteaseMusicPlaylist(id: 12, title: "Public", creator: "", creatorID: 0, artworkURL: nil, trackCount: 0, isFavorites: false)
-        struct Cache: Encodable {
-            let recommendations: [NeteaseMusicPlaylist]
-            let snapshots: [String: NeteaseDailySnapshot]
-            let details: [Int64: NeteasePlaylistDetail] = [:]
-        }
-        try JSONEncoder().encode(Cache(recommendations: [playlist], snapshots: [:])).write(to: root.appendingPathComponent("public.json"))
+        let pageCache = NeteasePageCache(directory: root)
+        try await pageCache.save([playlist], scope: "public", key: "recommendations")
         let date = "2026-11-01"
-        try JSONEncoder().encode(Cache(recommendations: [], snapshots: [date: .init(date: date, songs: [])])).write(to: root.appendingPathComponent("42.json"))
+        let historyDir = root.appendingPathComponent("DailyHistory/42", isDirectory: true)
+        try FileManager.default.createDirectory(at: historyDir, withIntermediateDirectories: true)
+        try JSONEncoder().encode(NeteaseDailySnapshot(date: date, songs: [])).write(to: historyDir.appendingPathComponent("\(date).json"))
         let store = NeteaseHomeStore(directory: root)
         await store.activate(nil, refresh: false)
         XCTAssertEqual(store.recommendations.map(\.id), [12])
@@ -836,15 +834,13 @@ import Synchronization
         let song = NeteaseMusicSong(id: 9, title: "Song", artist: "Artist", album: "Album", artworkURL: nil, duration: 10)
         let playlist = NeteaseMusicPlaylist(id: 12, title: "List", creator: "", creatorID: 42, artworkURL: nil, trackCount: 1, isFavorites: false)
         let detail = NeteasePlaylistDetail(playlist: playlist, songs: [song], addedTimes: [:])
-        struct Cache: Encodable {
-            let recommendations: [NeteaseMusicPlaylist] = []
-            let snapshots: [String: NeteaseDailySnapshot]
-            let details: [Int64: NeteasePlaylistDetail]
-        }
         let first = NeteaseDailySnapshot(date: "2026-11-03", songs: [song], id: "first")
         let second = NeteaseDailySnapshot(date: first.date, songs: [], id: "second")
-        try JSONEncoder().encode(Cache(snapshots: [first.id: first, second.id: second, first.date: second], details: [12: detail]))
-            .write(to: root.appendingPathComponent("42.json"))
+        let pageCache = NeteasePageCache(directory: root)
+        try await pageCache.save(first, scope: "42", key: "daily:\(first.id)")
+        try await pageCache.save(second, scope: "42", key: "daily:\(second.id)")
+        try await pageCache.save(second, scope: "42", key: "daily:\(first.date)")
+        try await pageCache.save(detail, scope: "42", key: "playlist:12")
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [HomeFailureProtocol.self]
         let store = NeteaseHomeStore(client: NeteaseMusicClient(transport: NeteaseAccountClient(session: URLSession(configuration: config))), directory: root)
@@ -905,43 +901,6 @@ import Synchronization
         await store.activate(nil, refresh: false)
     }
 
-    func testLegacyStartupDefersHistoryMigrationUntilRequested() async throws {
-        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let song = NeteaseMusicSong(id: 9, title: "History", artist: "Artist", album: "Album", artworkURL: nil, duration: 10)
-        let playlist = NeteaseMusicPlaylist(id: 12, title: "Saved", creator: "Creator", creatorID: 42, artworkURL: nil, trackCount: 1, isFavorites: false)
-        let detail = NeteasePlaylistDetail(playlist: playlist, songs: [song], addedTimes: [:])
-        let today = NeteaseDailySnapshot(date: NeteaseHomeStore.day(), songs: [], id: "today")
-        let historical = NeteaseDailySnapshot(date: "2026-10-01", songs: [song], id: "history")
-        struct Cache: Encodable {
-            let recommendations: [NeteaseMusicPlaylist]
-            let snapshots: [String: NeteaseDailySnapshot]
-            let details: [Int64: NeteasePlaylistDetail]
-        }
-        let legacyURL = root.appendingPathComponent("42.json")
-        try JSONEncoder().encode(Cache(recommendations: [playlist], snapshots: [today.date: today, historical.id: historical], details: [12: detail]))
-            .write(to: legacyURL)
-        let store = NeteaseHomeStore(directory: root)
-        await store.activate(try savedSession(), refresh: false)
-        XCTAssertEqual(store.daily?.id, today.id)
-        XCTAssertEqual(store.recommendations, [playlist])
-        XCTAssertTrue(store.cachedSongs.isEmpty)
-        XCTAssertNil(store.cachedDetail(id: 12))
-        XCTAssertNil(store.dailySnapshot(id: historical.id))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: legacyURL.path))
-        let loaded = try await store.restoreCachedDetail(id: 12)
-        XCTAssertEqual(loaded?.songs.map(\.id), [9])
-        XCTAssertNil(store.dailySnapshot(id: historical.id))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: legacyURL.path))
-        let archive = root.appendingPathComponent("DailyHistory/42/history.json")
-        XCTAssertEqual(try JSONDecoder().decode(NeteaseDailySnapshot.self, from: Data(contentsOf: archive)).id, historical.id)
-        let loadedHistory = try await store.loadDailySnapshot(id: historical.id)
-        XCTAssertEqual(loadedHistory?.songs.map(\.id), [9])
-        await store.flush()
-        await store.activate(nil, refresh: false)
-    }
-
     func testCancelledLazyCacheReadDoesNotPublishItsPage() async throws {
         let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -970,13 +929,7 @@ import Synchronization
         let playlist = NeteaseMusicPlaylist(id: 12, title: "Saved", creator: "Creator", creatorID: 42, artworkURL: nil, trackCount: 2, isFavorites: false)
         let pages = NeteasePageCache(directory: root)
         try await pages.save(NeteasePlaylistDetail(playlist: playlist, songs: [song(7), song(70)], addedTimes: [:]), scope: "42", key: "playlist:12")
-        struct Cache: Encodable {
-            let recommendations: [NeteaseMusicPlaylist] = []
-            let snapshots: [String: NeteaseDailySnapshot] = [:]
-            let details: [Int64: NeteasePlaylistDetail]
-        }
-        try JSONEncoder().encode(Cache(details: [13: .init(playlist: playlist, songs: [song(8), song(80)], addedTimes: [:])]))
-            .write(to: root.appendingPathComponent("42.json"))
+        try await pages.save(NeteasePlaylistDetail(playlist: playlist, songs: [song(8), song(80)], addedTimes: [:]), scope: "42", key: "playlist:13")
         let history = root.appendingPathComponent("DailyHistory/42", isDirectory: true)
         try FileManager.default.createDirectory(at: history, withIntermediateDirectories: true)
         try JSONEncoder().encode(NeteaseDailySnapshot(date: "2026-10-01", songs: [song(9), song(90)], id: "old"))
@@ -1219,18 +1172,12 @@ import Synchronization
         defer { try? FileManager.default.removeItem(at: root) }
         let song = NeteaseMusicSong(id: 9, title: "History", artist: "Artist", album: "Album", artworkURL: nil, duration: 10)
         let snapshot = NeteaseDailySnapshot(date: "2026-10-01", songs: [song], id: "historic")
-        struct Cache: Encodable {
-            let recommendations: [NeteaseMusicPlaylist] = []
-            let snapshots: [String: NeteaseDailySnapshot]
-            let details: [Int64: NeteasePlaylistDetail] = [:]
-        }
-        try JSONEncoder().encode(Cache(snapshots: [snapshot.id: snapshot, snapshot.date: snapshot]))
-            .write(to: root.appendingPathComponent("42.json"))
+        let historyDir = root.appendingPathComponent("DailyHistory/42", isDirectory: true)
+        try FileManager.default.createDirectory(at: historyDir, withIntermediateDirectories: true)
+        try JSONEncoder().encode(snapshot).write(to: historyDir.appendingPathComponent("\(snapshot.id).json"))
         let store = NeteaseHomeStore(directory: root)
         await store.activate(try savedSession(), refresh: false)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("42.json").path))
         _ = try await store.loadDailySnapshot(id: snapshot.id)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("42.json").path))
         let cache = NeteasePageCache(directory: root, capacity: 1)
         try await cache.save("another page", scope: "42", key: "other")
         let restored = NeteaseHomeStore(directory: root)

@@ -1,6 +1,13 @@
 // Adapted from MeloX AppleMusicLyricsView (GPL-3.0), commit
 // 1fe5fbab3f554e8529c4847fc54281a472b7b61a. Typography and timing follow
 // the supplied Music references; UIKit owns scrolling and row animations.
+//
+// The lyric list is a UITableView with the scroll view as the same owner:
+// content offset, focus alignment, browsing resume and tap-to-seek all stay on
+// one UIScrollView subclass. Only visible rows (plus a small overscan) hold
+// hosting views, so long songs no longer allocate one row per lyric line.
+// Large jumps hand the leaving visible rows to lightweight snapshots for the
+// duration of their exit spring; the snapshots are never resident cells.
 import SwiftUI
 import UIKit
 
@@ -63,52 +70,127 @@ private struct NativeLyricsScrollContent: UIViewRepresentable {
     let increasedContrast: Bool
     let rowGeometry: LyricsRowGeometry
 
-    func makeUIView(context: Context) -> NativeLyricsScrollView { NativeLyricsScrollView() }
-    func updateUIView(_ view: NativeLyricsScrollView, context: Context) { view.update(self) }
-    static func dismantleUIView(_ view: NativeLyricsScrollView, coordinator: ()) { view.stop() }
+    func makeUIView(context: Context) -> NativeLyricsViewportView { NativeLyricsViewportView() }
+    func updateUIView(_ view: NativeLyricsViewportView, context: Context) { view.lyricsView.update(self) }
+    static func dismantleUIView(_ view: NativeLyricsViewportView, coordinator: ()) { view.lyricsView.stop() }
 }
 
-/// A single scroll owner commits the destination and every row's starting position
-/// together. Independent UIKit springs then reveal the stagger without another scroll animation.
+/// Extends the table past the visible viewport horizontally and vertically.
+/// Horizontal bleed keeps the blur halo inside a hosting surface without
+/// changing the text width; vertical overscan lets rows participating in a
+/// line-change spring stay alive while the owner scrolls.
+final class NativeLyricsViewportView: UIView {
+    let lyricsView = NativeLyricsScrollView(frame: .zero, style: .plain)
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        clipsToBounds = false
+        addSubview(lyricsView)
+    }
+    required init?(coder: NSCoder) { nil }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let width = bounds.width
+        let height = bounds.height
+        guard width > 0, height > 0 else { return }
+        let bleed = NativeLyricsScrollView.horizontalBleed
+        let overscan = NativeLyricsScrollView.viewportOverscan
+        let frame = CGRect(x: -bleed, y: -overscan,
+                           width: width + 2 * bleed, height: height + 2 * overscan)
+        if lyricsView.frame != frame { lyricsView.frame = frame }
+    }
+}
+
+/// A single scroll owner commits the destination and every visible row's
+/// starting position together. Independent UIKit springs then reveal the
+/// stagger without another scroll animation.
 @objc(NeoMusicLyricsScrollView)
-private final class NativeLyricsScrollView: UIScrollView, UIScrollViewDelegate {
+final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableViewDelegate {
+    /// Room for the blur halo on each side; the text keeps the view's width.
+    static let horizontalBleed: CGFloat = 24
+    /// Rows just outside the viewport stay materialized for the line spring.
+    static let viewportOverscan: CGFloat = 160
+
     private let motion = AppleMusicLyricsMotionProfile.iOS26_6
     private var input: NativeLyricsScrollContent?
-    private var rows: [NativeLyricRowView] = []
     private var renderedLines: [PlayerLyricLine] = []
+    private var lineIndices: [Int: Int] = [:]
     private var renderedFontSize: CGFloat = 0
     private var renderedForeground = Color.white
-    private var lastSize = CGSize.zero
+    private var lastVisualSize = CGSize.zero
+    private var visualHeight: CGFloat = 0
+    private var estimatedHeight: CGFloat = 56
     private var focusedIndex: Int?
     private var needsFocus = true
     private var wasActive = false
     private var positioning = false
     private var refreshing = false
-    fileprivate var isRefreshing: Bool { refreshing }
     private var browsing = false
     private var resumeTask: Task<Void, Never>?
     private var visibility = LyricsScrollInterfaceVisibilityTracker()
     private var previousOffset: CGFloat = 0
-    private var animators: [UUID: UIViewPropertyAnimator] = [:]
+    private var animators: [UUID: RowAnimation] = [:]
     private var displayLink: CADisplayLink?
     private let fadeGuide = UIView()
     private var fadeAnimator: UIViewPropertyAnimator?
 
-    override init(frame: CGRect) {
-        super.init(frame: frame)
+    private struct RowAnimation {
+        weak var cell: NativeLyricCell?
+        let animator: UIViewPropertyAnimator
+    }
+
+    private struct CapturedSourceRow {
+        let view: UIView
+        let row: Int
+        let screenFrame: CGRect
+        let transform: CGAffineTransform
+    }
+
+    private final class SnapshotAnimation {
+        let view: UIView
+        let animator: UIViewPropertyAnimator
+
+        init(view: UIView, animator: UIViewPropertyAnimator) {
+            self.view = view
+            self.animator = animator
+        }
+    }
+
+    private var sourceSnapshotAnimations: [UUID: SnapshotAnimation] = [:]
+    private var sourceSnapshotContainer: UIView?
+    /// Lifetime count of handed-off rows; diagnostics for regression coverage.
+    private(set) var sourceSnapshotHandoffCount = 0
+    var sourceSnapshotCount: Int { sourceSnapshotAnimations.count }
+
+    override init(frame: CGRect, style: UITableView.Style) {
+        super.init(frame: frame, style: style)
+        dataSource = self
         delegate = self
         backgroundColor = .clear
         clipsToBounds = false
         showsVerticalScrollIndicator = false
         alwaysBounceVertical = true
         contentInsetAdjustmentBehavior = .never
+        separatorStyle = .none
+        sectionHeaderHeight = 0
+        sectionFooterHeight = 0
+        rowHeight = UITableView.automaticDimension
+        estimatedRowHeight = 56
+        register(NativeLyricCell.self, forCellReuseIdentifier: NativeLyricCell.reuseIdentifier)
         fadeGuide.isUserInteractionEnabled = false
         fadeGuide.frame = CGRect(x: 0, y: 0, width: 1, height: 1)
         addSubview(fadeGuide)
     }
     required init?(coder: NSCoder) { nil }
 
-    func update(_ value: NativeLyricsScrollContent) {
+    private var visibleRows: [NativeLyricCell] {
+        visibleCells.compactMap { $0 as? NativeLyricCell }
+    }
+
+    // MARK: - SwiftUI input
+
+    fileprivate func update(_ value: NativeLyricsScrollContent) {
         let previous = input
         let replaced = renderedLines != value.lyrics.lines
             || renderedFontSize != value.fontSize || renderedForeground != value.foreground
@@ -125,19 +207,15 @@ private final class NativeLyricsScrollView: UIScrollView, UIScrollViewDelegate {
         }
         if replaced {
             stop()
-            for row in rows { row.removeFromSuperview() }
-            rows = value.lyrics.lines.enumerated().map { index, line in
-                let row = NativeLyricRowView(line: line, fontSize: value.fontSize, foreground: value.foreground)
-                row.onTap = { [weak self] in self?.seek(index) }
-                addSubview(row)
-                return row
-            }
+            cancelAllAnimations()
             renderedLines = value.lyrics.lines
             renderedFontSize = value.fontSize
             renderedForeground = value.foreground
-            lastSize = .zero
+            lineIndices = Self.lineIndices(for: renderedLines)
+            lastVisualSize = .zero
             focusedIndex = nil
             needsFocus = true
+            reloadData()
         }
         if value.reducesMotion && previous?.reducesMotion != true { needsFocus = true }
         if !wasActive || replaced { suppressedPreSeekActiveID = nil }
@@ -147,12 +225,17 @@ private final class NativeLyricsScrollView: UIScrollView, UIScrollViewDelegate {
         }
         let next = activeRowIndex(for: value.activeID, updatingSuppression: true)
         let changed = next != focusedIndex
-        let canAnimate = wasActive && !replaced && !value.reducesMotion && lastSize == bounds.size
+        let currentVisualSize = CGSize(
+            width: bounds.width,
+            height: max(bounds.height - 2 * Self.viewportOverscan, 0)
+        )
+        let canAnimate = wasActive && !replaced && !value.reducesMotion
+            && lastVisualSize != .zero && currentVisualSize == lastVisualSize
         let cascades = canAnimate && !needsFocus && !browsing
             && !interfaceChanged && !geometryChanged
             && motion.isForwardLineChange(from: focusedIndex, to: next)
         if bounds.width > 0, bounds.height > 0 {
-            layoutRowsIfNeeded()
+            updateMetricsIfNeeded()
             updateAppearances(activeIndex: next, animated: changed && wasActive && !value.reducesMotion)
             if interfaceChanged || geometryChanged || replaced || needsFocus {
                 updateFade(animated: interfaceChanged && wasActive && !value.reducesMotion)
@@ -169,9 +252,13 @@ private final class NativeLyricsScrollView: UIScrollView, UIScrollViewDelegate {
                 // Avoid restarting an in-flight tap/seek catch-up animation when only the
                 // interface visibility changed and the target scroll offset stays the same.
                 let keepsRunningAnimation = !changed && !needsFocus && !animators.isEmpty
-                    && next.map { abs(targetOffset(for: $0, activeID: rows[$0].line.id) - contentOffset.y) < 0.5 } == true
+                    && next.map {
+                        abs(targetOffset(for: $0, activeID: renderedLines[$0].id)
+                            - contentOffset.y) < 0.5
+                    } == true
                 if !keepsRunningAnimation {
-                    align(to: next, cascade: cascades, animated: animates, spring: spring)
+                    align(to: next, cascade: cascades, animated: animates, spring: spring,
+                          appearanceAnimated: changed && wasActive && !value.reducesMotion)
                 }
             }
         }
@@ -179,12 +266,94 @@ private final class NativeLyricsScrollView: UIScrollView, UIScrollViewDelegate {
         setNeedsLayout()
     }
 
+    private static func lineIndices(for lines: [PlayerLyricLine]) -> [Int: Int] {
+        var indices: [Int: Int] = [:]
+        indices.reserveCapacity(lines.count)
+        for (index, line) in lines.enumerated() where indices[line.id] == nil {
+            indices[line.id] = index
+        }
+        return indices
+    }
+
+    // MARK: - Table data
+
+    func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        renderedLines.count
+    }
+
+    func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = tableView.dequeueReusableCell(
+            withIdentifier: NativeLyricCell.reuseIdentifier, for: indexPath
+        ) as! NativeLyricCell
+        configure(cell, at: indexPath.row)
+        return cell
+    }
+
+    func tableView(_ tableView: UITableView, estimatedHeightForRowAt indexPath: IndexPath) -> CGFloat {
+        guard renderedLines.indices.contains(indexPath.row) else { return estimatedHeight }
+        if let height = input?.rowGeometry.height(for: renderedLines[indexPath.row].id) {
+            return height + motion.lineSpacing
+        }
+        return estimatedHeight
+    }
+
+    func tableView(_ tableView: UITableView, didEndDisplaying cell: UITableViewCell,
+                   forRowAt indexPath: IndexPath) {
+        guard let cell = cell as? NativeLyricCell else { return }
+        cancelAnimations(for: cell)
+        if renderedLines.indices.contains(indexPath.row) {
+            input?.rowGeometry.discardPosition(for: renderedLines[indexPath.row].id)
+        }
+    }
+
+    private func configure(_ cell: NativeLyricCell, at index: Int) {
+        guard let input, renderedLines.indices.contains(index) else { return }
+        let line = renderedLines[index]
+        cell.configure(
+            line: line, fontSize: renderedFontSize, foreground: renderedForeground,
+            spacing: motion.lineSpacing, focused: index == focusedIndex,
+            browsing: browsing, reducesMotion: input.reducesMotion,
+            increasedContrast: input.increasedContrast
+        )
+        cell.appearance.onTap = { [weak self, weak cell] in
+            guard let self, let cell, let indexPath = self.indexPath(for: cell) else { return }
+            self.seek(indexPath.row)
+        }
+        cell.onPrepareForReuse = { [weak self, weak cell] in
+            self?.cancelAnimations(for: cell)
+        }
+        // Overscan rows must not flash outside the viewport before the next
+        // geometry refresh. New cells are always at their final position.
+        let viewportTop = cell.frame.minY - contentOffset.y - Self.viewportOverscan
+        let fade = currentFade()
+        let intersects = viewportTop + textHeight(of: cell) >= fade.topStart - NativeLyricCell.horizontalBleed
+            && viewportTop <= fade.bottomEnd + NativeLyricCell.horizontalBleed
+        cell.setContentHidden(!intersects)
+        if intersects {
+            cell.applyEdgeFade(
+                fade.shifted(by: Self.viewportOverscan),
+                viewportTop: viewportTop + Self.viewportOverscan,
+                in: self, presentation: false
+            )
+        }
+    }
+
+    // MARK: - Layout
+
     override func layoutSubviews() {
         super.layoutSubviews()
         guard let input, input.isActive, !positioning else { return }
-        if lastSize != bounds.size {
+        let visualSize = CGSize(width: bounds.width,
+                                height: max(bounds.height - 2 * Self.viewportOverscan, 0))
+        if visualSize != lastVisualSize {
+            let firstLayout = lastVisualSize == .zero
             freezeRows()
-            layoutRowsIfNeeded()
+            positioning = true
+            lastVisualSize = visualSize
+            updateMetrics()
+            if !firstLayout { reloadData() }
+            layoutIfNeeded()
+            positioning = false
             let activeIndex = activeRowIndex(for: input.activeID, updatingSuppression: false)
             updateAppearances(activeIndex: activeIndex, animated: false)
             updateFade(animated: false)
@@ -193,6 +362,36 @@ private final class NativeLyricsScrollView: UIScrollView, UIScrollViewDelegate {
             align(to: activeRowIndex(for: input.activeID, updatingSuppression: false), cascade: false)
         }
         refreshVisualGeometry()
+        correctSettledFocusIfNeeded()
+    }
+
+    private func updateMetricsIfNeeded() {
+        let visualSize = CGSize(width: bounds.width,
+                                height: max(bounds.height - 2 * Self.viewportOverscan, 0))
+        guard lastVisualSize == .zero else { return }
+        lastVisualSize = visualSize
+        updateMetrics()
+    }
+
+    private func updateMetrics() {
+        visualHeight = max(bounds.height - 2 * Self.viewportOverscan, 0)
+        let footerHeight = max(visualHeight + Self.viewportOverscan, 1)
+        if let footer = tableFooterView, abs(footer.frame.height - footerHeight) < 0.5 {
+            if abs(footer.frame.width - max(bounds.width, 1)) > 0.5 {
+                footer.frame.size.width = max(bounds.width, 1)
+            }
+        } else {
+            let footer = UIView(frame: CGRect(x: 0, y: 0, width: max(bounds.width, 1), height: footerHeight))
+            footer.backgroundColor = .clear
+            tableFooterView = footer
+        }
+        let lineHeight = LyricsFontMetrics.boldLineHeight(size: max(renderedFontSize, 1))
+        let estimate = max(lineHeight + motion.lineSpacing, 1)
+        if abs(estimatedHeight - estimate) > 0.5 {
+            estimatedHeight = estimate
+            estimatedRowHeight = estimate
+        }
+        if fadeGuide.superview == nil { addSubview(fadeGuide) }
     }
 
     private var suppressedPreSeekActiveID: Int?
@@ -205,138 +404,403 @@ private final class NativeLyricsScrollView: UIScrollView, UIScrollViewDelegate {
         if let suppressed = suppressedPreSeekActiveID {
             if activeID != suppressed {
                 if updatingSuppression { suppressedPreSeekActiveID = nil }
-                return rows.firstIndex { $0.line.id == activeID }
+                return activeID.flatMap { lineIndices[$0] }
             }
-            return focusedIndex ?? rows.firstIndex { $0.line.id == activeID }
+            return focusedIndex ?? activeID.flatMap { lineIndices[$0] }
         }
-        return rows.firstIndex { $0.line.id == activeID }
+        return activeID.flatMap { lineIndices[$0] }
     }
 
-    private func targetOffset(for index: Int, activeID: Int? = nil, interfaceHidden: Bool? = nil) -> CGFloat {
-        let topInset = max(focusTop(forActiveID: activeID, interfaceHidden: interfaceHidden), motion.firstLineStartOffset)
-        return max(-topInset, min(rows[index].center.y - rows[index].bounds.height / 2
-                                  - focusTop(forActiveID: activeID, interfaceHidden: interfaceHidden),
-                                  max(contentSize.height - bounds.height, 0)))
+    private func targetOffset(for index: Int, activeID: Int? = nil,
+                              interfaceHidden: Bool? = nil) -> CGFloat {
+        guard renderedLines.indices.contains(index) else { return contentOffset.y }
+        let focus = focusTop(forActiveID: activeID, interfaceHidden: interfaceHidden)
+        let topInset = max(focus, motion.firstLineStartOffset) + Self.viewportOverscan
+        let rowTop = rectForRow(at: IndexPath(row: index, section: 0)).minY
+        return clampedOffset(rowTop - focus - Self.viewportOverscan, topInset: topInset)
+    }
+
+    private func clampedOffset(_ offset: CGFloat, topInset: CGFloat) -> CGFloat {
+        let maxOffset = max(contentSize.height - bounds.height, 0)
+        return max(-topInset, min(offset, maxOffset))
+    }
+
+    /// Far jumps land outside the table's estimated window. Step by the
+    /// heights already measured in the visible window until the destination
+    /// row exists, so the focused row is never replaced by an estimate.
+    private func materializeRow(_ index: Int, focus: CGFloat, topInset: CGFloat,
+                                target: inout CGFloat) -> NativeLyricCell? {
+        var cell = displayedCell(forRow: index)
+        if cell == nil {
+            // The table owns row materialization; ask it to bring the row
+            // into the viewport instead of scrolling an estimate by hand.
+            scrollToRow(at: IndexPath(row: index, section: 0), at: .top, animated: false)
+            setNeedsLayout()
+            layoutIfNeeded()
+            cell = displayedCell(forRow: index)
+            target = contentOffset.y
+        }
+        var attempts = 0
+        while cell == nil, attempts < 6 {
+            guard let (nearRow, nearCell) = nearestVisibleRow(to: index) else { break }
+            let heights = visibleRows.map(\.bounds.height)
+            let average = max(heights.reduce(0, +) / CGFloat(max(heights.count, 1)), 1)
+            let step = CGFloat(index - nearRow) * average
+            let next = clampedOffset(
+                nearCell.frame.minY + step - focus - Self.viewportOverscan,
+                topInset: topInset
+            )
+            attempts += 1
+            guard abs(next - target) > 0.5 else { break }
+            target = next
+            setContentOffset(CGPoint(x: 0, y: target), animated: false)
+            setNeedsLayout()
+            layoutIfNeeded()
+            cell = displayedCell(forRow: index)
+        }
+        return cell
+    }
+
+    private func nearestVisibleRow(to index: Int) -> (row: Int, cell: NativeLyricCell)? {
+        var best: (row: Int, cell: NativeLyricCell)?
+        for cell in visibleRows {
+            guard let row = indexPath(for: cell)?.row else { continue }
+            if best == nil || abs(row - index) < abs(best!.row - index) {
+                best = (row, cell)
+            }
+        }
+        return best
     }
 
     private var focusTop: CGFloat {
         focusTop(forActiveID: input?.activeID)
     }
 
-    private func focusTop(forActiveID activeID: Int?, interfaceHidden: Bool? = nil) -> CGFloat {
+    private func focusTop(forActiveID activeID: Int?, interfaceHidden: Bool? = nil,
+                          rowHeight: CGFloat? = nil) -> CGFloat {
         guard let input else { return 0 }
         let hidden = interfaceHidden ?? input.isInterfaceHidden
-        let bottom = hidden ? bounds.height : max(bounds.height - input.bottomOverlayHeight, 1)
+        let bottom = hidden ? visualHeight : max(visualHeight - input.bottomOverlayHeight, 1)
         let visible = max(bottom - input.topOverlayHeight, 1)
         let lineHeight = LyricsFontMetrics.boldLineHeight(size: input.fontSize)
-        let height = rows.first(where: { $0.line.id == activeID })?.bounds.height ?? lineHeight
+        let height = rowHeight ?? activeRowHeight(for: activeID) ?? lineHeight
         return input.topOverlayHeight + min(max(visible * 0.233 - lineHeight / 2, visible * 0.08),
                                             max(visible * 0.08, visible * 0.84 - height))
     }
 
-    private func layoutRowsIfNeeded() {
-        guard input != nil, lastSize != bounds.size else { return }
-        positioning = true
-        defer { positioning = false }
-        lastSize = bounds.size
-        var y: CGFloat = 0
-        for row in rows {
-            let height = row.height(forWidth: bounds.width)
-            row.bounds = CGRect(x: 0, y: 0, width: bounds.width, height: max(height, 1))
-            row.center = CGPoint(x: bounds.width / 2, y: y + row.bounds.height / 2)
-            row.layoutIfNeeded()
-            y += row.bounds.height + motion.lineSpacing
+    private func activeRowHeight(for activeID: Int?) -> CGFloat? {
+        guard let activeID else { return nil }
+        if let index = lineIndices[activeID], let cell = displayedCell(forRow: index) {
+            return textHeight(of: cell)
         }
-        contentSize = CGSize(width: bounds.width, height: y + bounds.height)
-        needsFocus = true
+        return input?.rowGeometry.height(for: activeID)
+    }
+
+    private func textHeight(of cell: NativeLyricCell) -> CGFloat {
+        max(cell.bounds.height - motion.lineSpacing, 1)
+    }
+
+    private func visibleCell(forRow row: Int) -> NativeLyricCell? {
+        guard renderedLines.indices.contains(row) else { return nil }
+        return cellForRow(at: IndexPath(row: row, section: 0)) as? NativeLyricCell
+    }
+
+    /// `cellForRow` can transiently return a cell the table has already
+    /// detached while self-sizing settles; only displayed cells may drive
+    /// focus corrections or geometry recording.
+    private func displayedCell(forRow row: Int) -> NativeLyricCell? {
+        guard let cell = visibleCell(forRow: row) else { return nil }
+        return visibleRows.contains { $0 === cell } ? cell : nil
     }
 
     private func updateAppearances(activeIndex: Int?, animated: Bool) {
         guard let input else { return }
-        for (index, row) in rows.enumerated() {
-            let appearance = row.appearance
+        for cell in visibleRows {
+            guard let row = indexPath(for: cell)?.row else { continue }
+            let appearance = cell.appearance
             if appearance.animated != animated { appearance.animated = animated }
-            let focused = index == activeIndex
+            let focused = row == activeIndex
             if appearance.focused != focused { appearance.focused = focused }
             if appearance.browsing != browsing { appearance.browsing = browsing }
-            if appearance.reducesMotion != input.reducesMotion { appearance.reducesMotion = input.reducesMotion }
-            if appearance.increasedContrast != input.increasedContrast { appearance.increasedContrast = input.increasedContrast }
+            if appearance.reducesMotion != input.reducesMotion {
+                appearance.reducesMotion = input.reducesMotion
+            }
+            if appearance.increasedContrast != input.increasedContrast {
+                appearance.increasedContrast = input.increasedContrast
+            }
         }
     }
 
     private func align(to index: Int?, cascade: Bool, animated: Bool = false,
-                       spring: LyricPhysicalSpringParameters? = nil, interfaceHidden: Bool? = nil) {
-        guard let index, rows.indices.contains(index), let input else { return }
+                       spring: LyricPhysicalSpringParameters? = nil,
+                       interfaceHidden: Bool? = nil,
+                       appearanceAnimated: Bool = false) {
+        guard let index, renderedLines.indices.contains(index), input != nil else { return }
         freezeRows()
-        let activeID = rows[index].line.id
+        let activeID = renderedLines[index].id
         let oldOffset = contentOffset.y
-        let topInset = max(focusTop(forActiveID: activeID, interfaceHidden: interfaceHidden), motion.firstLineStartOffset)
-        let target = targetOffset(for: index, activeID: activeID, interfaceHidden: interfaceHidden)
-        let delta = target - oldOffset
-        let animates = (cascade || animated)
-            && (cascade || abs(delta) >= 0.5 || rows.contains { $0.transform != .identity })
+        var focus = focusTop(forActiveID: activeID, interfaceHidden: interfaceHidden)
+        var topInset = max(focus, motion.firstLineStartOffset) + Self.viewportOverscan
+        var target = targetOffset(for: index, activeID: activeID, interfaceHidden: interfaceHidden)
+        // Capture the visible source rows before the offset changes. Large
+        // jumps otherwise recycle them before their exit spring can run.
+        let capturesHandoff = input?.reducesMotion != true && (cascade || animated)
+            && abs(target - oldOffset) > Self.viewportOverscan
+        let capturedSourceRows = capturesHandoff ? captureSourceRowsForHandoff() : []
+        focusedIndex = index
+        needsFocus = false
+
         positioning = true
-        UIView.performWithoutAnimation {
+        contentInset.top = topInset
+        setContentOffset(CGPoint(x: 0, y: target), animated: false)
+        setNeedsLayout()
+        layoutIfNeeded()
+
+        // Hosting cells report their final height during layout. Materialize
+        // the destination row (stepping by measured heights when a far jump
+        // lands outside the estimated window), then align once more against
+        // the measured height.
+        if let cell = materializeRow(index, focus: focus, topInset: topInset, target: &target) {
+            let height = textHeight(of: cell)
+            let measuredFocus = focusTop(forActiveID: activeID, interfaceHidden: interfaceHidden,
+                                         rowHeight: height)
+            let measuredTopInset = max(measuredFocus, motion.firstLineStartOffset)
+                + Self.viewportOverscan
+            let desired = cell.frame.minY - measuredFocus - Self.viewportOverscan
+            let clamped = clampedOffset(desired, topInset: measuredTopInset)
+            focus = measuredFocus
+            topInset = measuredTopInset
+            target = clamped
             contentInset.top = topInset
             setContentOffset(CGPoint(x: 0, y: target), animated: false)
-            for row in rows {
-                row.transform = animates ? row.transform.translatedBy(x: 0, y: delta) : .identity
+            setNeedsLayout()
+            layoutIfNeeded()
+        }
+
+        // UITableView materializes the destination window on the next layout pass.
+        // End the positioning lock first so the row animations target the new cells
+        // instead of the old visible window that is already off-screen.
+        positioning = false
+        setNeedsLayout()
+        layoutIfNeeded()
+        target = contentOffset.y
+        positioning = true
+        let delta = target - oldOffset
+        let cells = visibleRows
+        let animates = (cascade || animated)
+            && (cascade || abs(delta) >= 0.5 || cells.contains { $0.transform != .identity })
+        UIView.performWithoutAnimation {
+            for cell in cells {
+                cell.transform = animates ? cell.transform.translatedBy(x: 0, y: delta) : .identity
             }
         }
         positioning = false
-        focusedIndex = index
-        needsFocus = false
-        input.rowGeometry.focus(on: activeID)
-        if animates {
-            let timingSpring = spring ?? motion.lineChangeSpring
-            for (rowIndex, row) in rows.enumerated() {
-                let destination = row.center.y - row.bounds.height / 2 - target
-                let current = destination + row.transform.ty
-                guard max(current, destination) + row.bounds.height > 0,
-                      min(current, destination) < bounds.height else {
-                    row.transform = .identity
-                    continue
-                }
-                pendingStartTransforms[ObjectIdentifier(row)] = row.transform
-                let animator = UIViewPropertyAnimator(duration: motion.lineChangeDuration, timingParameters:
-                    UISpringTimingParameters(mass: timingSpring.mass, stiffness: timingSpring.stiffness,
-                                             damping: timingSpring.damping, initialVelocity: .zero))
-                let id = UUID()
-                animators[id] = animator
-                row.isMoving = true
-                animator.addAnimations { row.transform = .identity }
-                animator.addCompletion { [weak self, weak row] _ in
-                    row?.isMoving = false
-                    self?.animators.removeValue(forKey: id)
-                    self?.refreshVisualGeometry()
-                    self?.stopDisplayLinkIfIdle()
-                }
-                animator.startAnimation(afterDelay: cascade ? motion.lineChangeDelay(rowIndex: rowIndex, activeIndex: index) : 0)
+        input?.rowGeometry.focus(on: activeID)
+        updateAppearances(activeIndex: index, animated: appearanceAnimated)
+        updateVisualGeometry(presentation: animates)
+        guard animates else {
+            setNeedsLayout()
+            return
+        }
+        let timingSpring = spring ?? motion.lineChangeSpring
+        var createdAnimator = false
+        for cell in cells {
+            guard let row = indexPath(for: cell)?.row else {
+                cell.transform = .identity
+                continue
             }
+            // `frame` includes the transform that is being animated, so using it here
+            // double-counts the displacement and makes every far target look off-screen.
+            let destination = cell.center.y - cell.bounds.height / 2 - target
+            let current = destination + cell.transform.ty
+            guard max(current, destination) + cell.bounds.height > 0,
+                  min(current, destination) < visualHeight else {
+                cell.transform = .identity
+                continue
+            }
+            pendingStartTransforms[ObjectIdentifier(cell)] = cell.transform
+            let animator = UIViewPropertyAnimator(duration: motion.lineChangeDuration, timingParameters:
+                UISpringTimingParameters(mass: timingSpring.mass, stiffness: timingSpring.stiffness,
+                                         damping: timingSpring.damping, initialVelocity: .zero))
+            let id = UUID()
+            animators[id] = RowAnimation(cell: cell, animator: animator)
+            createdAnimator = true
+            cell.isMoving = true
+            animator.addAnimations { [weak cell] in cell?.transform = .identity }
+            animator.addCompletion { [weak self, weak cell] _ in
+                cell?.isMoving = false
+                self?.animators.removeValue(forKey: id)
+                self?.refreshVisualGeometry()
+                self?.stopDisplayLinkIfIdle()
+                self?.settleFocusAfterAnimationIfNeeded()
+            }
+            animator.startAnimation(afterDelay: cascade
+                ? motion.lineChangeDelay(rowIndex: row, activeIndex: index) : 0)
+        }
+        if animates, abs(delta) > Self.viewportOverscan {
+            installSourceSnapshots(capturedSourceRows, delta: delta, spring: timingSpring,
+                                   cascade: cascade, activeIndex: index)
+        }
+        if createdAnimator {
             schedulePendingTransformClear()
             startDisplayLink()
         }
-        updateVisualGeometry(presentation: animates)
+        updateVisualGeometry(presentation: createdAnimator)
+        setNeedsLayout()
     }
 
     private func freezeRows() {
+        removeSourceSnapshots()
         let preCommit = pendingStartTransforms
         pendingStartTransforms.removeAll()
         schedulePendingTransformClear()
         guard !animators.isEmpty else { return }
-        let transforms = rows.map {
+        let cells = visibleRows
+        let transforms = cells.map {
             preCommit[ObjectIdentifier($0)]
                 ?? $0.layer.presentation()?.affineTransform()
                 ?? $0.transform
         }
-        for animator in animators.values { animator.stopAnimation(true) }
+        for animation in animators.values { animation.animator.stopAnimation(true) }
         animators.removeAll()
         UIView.performWithoutAnimation {
-            for (row, transform) in zip(rows, transforms) {
-                row.isMoving = false
-                row.transform = transform
+            for (cell, transform) in zip(cells, transforms) {
+                cell.isMoving = false
+                cell.transform = transform
             }
         }
+    }
+
+    private func cancelAnimations(for cell: NativeLyricCell?) {
+        guard let cell else { return }
+        let matching = animators.filter { $0.value.cell === cell }
+        for (id, animation) in matching {
+            animation.animator.stopAnimation(true)
+            animators.removeValue(forKey: id)
+        }
+        pendingStartTransforms.removeValue(forKey: ObjectIdentifier(cell))
+        cell.isMoving = false
+        cell.transform = .identity
+        if animators.isEmpty { stopDisplayLinkIfIdle() }
+    }
+
+    private func cancelAllAnimations() {
+        for animation in animators.values { animation.animator.stopAnimation(true) }
+        animators.removeAll()
+        pendingStartTransforms.removeAll()
+        for cell in visibleRows {
+            cell.isMoving = false
+            cell.transform = .identity
+        }
+        removeSourceSnapshots()
+    }
+
+    // MARK: - Source-row snapshot handoff
+
+    /// Only rows inside the visual viewport are captured; the count is bounded
+    /// by the visible row window.
+    private func captureSourceRowsForHandoff() -> [CapturedSourceRow] {
+        guard let wrapper = superview else { return [] }
+        let visualTop = contentOffset.y + Self.viewportOverscan
+        let visualBottom = visualTop + visualHeight
+        var captured: [CapturedSourceRow] = []
+        for cell in visibleRows {
+            guard let row = indexPath(for: cell)?.row else { continue }
+            guard cell.frame.maxY > visualTop, cell.frame.minY < visualBottom else { continue }
+            guard let snapshot = cell.snapshotView(afterScreenUpdates: false)
+                ?? imageSnapshot(of: cell) else { continue }
+            snapshot.isUserInteractionEnabled = false
+            snapshot.isAccessibilityElement = false
+            captured.append(CapturedSourceRow(
+                view: snapshot,
+                row: row,
+                screenFrame: wrapper.convert(cell.frame, from: self),
+                transform: cell.transform
+            ))
+        }
+        return captured
+    }
+
+    private func imageSnapshot(of view: UIView) -> UIView? {
+        guard view.bounds.width > 0, view.bounds.height > 0 else { return nil }
+        let renderer = UIGraphicsImageRenderer(bounds: view.bounds)
+        let image = renderer.image { _ in
+            view.drawHierarchy(in: view.bounds, afterScreenUpdates: false)
+        }
+        let imageView = UIImageView(image: image)
+        imageView.backgroundColor = .clear
+        imageView.isUserInteractionEnabled = false
+        return imageView
+    }
+
+    private func installSourceSnapshots(_ captured: [CapturedSourceRow], delta: CGFloat,
+                                        spring: LyricPhysicalSpringParameters,
+                                        cascade: Bool, activeIndex: Int) {
+        guard !captured.isEmpty, let wrapper = superview else { return }
+        let destinationRows = Set(visibleRows.compactMap { indexPath(for: $0)?.row })
+        let sourceOnly = captured.filter { !destinationRows.contains($0.row) }
+        guard !sourceOnly.isEmpty else { return }
+        removeSourceSnapshots()
+        let container = UIView(frame: CGRect(
+            x: -Self.horizontalBleed, y: 0,
+            width: bounds.width, height: visualHeight
+        ))
+        container.backgroundColor = .clear
+        container.clipsToBounds = true
+        container.isUserInteractionEnabled = false
+        container.isAccessibilityElement = false
+        container.accessibilityElementsHidden = true
+        let fade = currentFade()
+        let mask = LyricsEdgeMaskLayer()
+        mask.frame = container.bounds
+        mask.startPoint = CGPoint(x: 0.5, y: 0)
+        mask.endPoint = CGPoint(x: 0.5, y: 1)
+        mask.setStops(fade)
+        container.layer.mask = mask
+        wrapper.addSubview(container)
+        sourceSnapshotContainer = container
+
+        let timing = UISpringTimingParameters(
+            mass: spring.mass, stiffness: spring.stiffness,
+            damping: spring.damping, initialVelocity: .zero
+        )
+        for source in sourceOnly {
+            source.view.frame = source.screenFrame.offsetBy(
+                dx: -container.frame.minX, dy: -container.frame.minY
+            )
+            source.view.transform = source.transform
+            container.addSubview(source.view)
+            let animator = UIViewPropertyAnimator(
+                duration: motion.lineChangeDuration, timingParameters: timing
+            )
+            let id = UUID()
+            sourceSnapshotAnimations[id] = SnapshotAnimation(view: source.view, animator: animator)
+            sourceSnapshotHandoffCount += 1
+            animator.addAnimations { [weak view = source.view] in
+                view?.transform = CGAffineTransform(translationX: 0, y: -delta)
+            }
+            animator.addCompletion { [weak self] _ in self?.removeSourceSnapshot(id: id) }
+            animator.startAnimation(afterDelay: cascade
+                ? motion.lineChangeDelay(rowIndex: source.row, activeIndex: activeIndex) : 0)
+        }
+    }
+
+    private func removeSourceSnapshot(id: UUID) {
+        guard let animation = sourceSnapshotAnimations.removeValue(forKey: id) else { return }
+        animation.view.removeFromSuperview()
+        if sourceSnapshotAnimations.isEmpty {
+            sourceSnapshotContainer?.removeFromSuperview()
+            sourceSnapshotContainer = nil
+        }
+    }
+
+    private func removeSourceSnapshots() {
+        let animations = sourceSnapshotAnimations
+        sourceSnapshotAnimations.removeAll()
+        for animation in animations.values { animation.animator.stopAnimation(true) }
+        for animation in animations.values { animation.view.removeFromSuperview() }
+        sourceSnapshotContainer?.removeFromSuperview()
+        sourceSnapshotContainer = nil
     }
 
     /// Keep pre-commit transforms and fade bounds until Core Animation flushes the current transaction.
@@ -377,9 +841,22 @@ private final class NativeLyricsScrollView: UIScrollView, UIScrollViewDelegate {
         )
     }()
 
+    private func currentFade() -> LyricsViewportFade {
+        let bottom = fadeBottom
+        let shownBottom = max(visualHeight - (input?.bottomOverlayHeight ?? 0), 1)
+        return LyricsViewportFade(
+            height: visualHeight,
+            referenceHeight: bottom,
+            shownReferenceHeight: shownBottom,
+            topOverlayHeight: input?.topOverlayHeight ?? 0,
+            isInterfaceHidden: false
+        )
+    }
+
     private func updateFade(animated: Bool) {
         guard let input else { return }
-        let height = input.isInterfaceHidden ? bounds.height : max(bounds.height - input.bottomOverlayHeight, 1)
+        let height = input.isInterfaceHidden ? visualHeight
+            : max(visualHeight - input.bottomOverlayHeight, 1)
         let current = fadeBottom
         fadeAnimator?.stopAnimation(true)
         fadeGuide.bounds.size.height = current
@@ -444,81 +921,173 @@ private final class NativeLyricsScrollView: UIScrollView, UIScrollViewDelegate {
         return fadeGuide.bounds.height
     }
 
-    private func visualMinY(for row: NativeLyricRowView, presentation: Bool) -> CGFloat {
-        if presentation && row.isMoving {
-            if let pending = pendingStartTransforms[ObjectIdentifier(row)] {
-                return row.center.y - row.bounds.height / 2 + pending.ty
+    private func visualMinY(for cell: NativeLyricCell, presentation: Bool) -> CGFloat {
+        if presentation && cell.isMoving {
+            if let pending = pendingStartTransforms[ObjectIdentifier(cell)] {
+                return cell.center.y - cell.bounds.height / 2 + pending.ty
             }
-            if let layerMinY = row.layer.presentation()?.frame.minY {
+            if let layerMinY = cell.layer.presentation()?.frame.minY {
                 return layerMinY
             }
         }
-        return row.frame.minY
+        return cell.frame.minY
     }
 
     private func updateVisualGeometry(presentation: Bool) {
-        guard let input, input.isActive, bounds.height > 0, !positioning, !refreshing else { return }
+        guard let input, input.isActive, visualHeight > 0, !positioning, !refreshing else { return }
         refreshing = true
         defer { refreshing = false }
-        let bottom = fadeBottom
-        let shownBottom = max(bounds.height - input.bottomOverlayHeight, 1)
-        let fade = LyricsViewportFade(
-            height: bounds.height,
-            referenceHeight: bottom,
-            shownReferenceHeight: shownBottom,
-            topOverlayHeight: input.topOverlayHeight,
-            isInterfaceHidden: false
-        )
-        let focusedRow = focusedIndex.flatMap { rows.indices.contains($0) ? rows[$0] : nil }
-        let focusedTop = focusedRow.map { visualMinY(for: $0, presentation: presentation) }
-            ?? (contentOffset.y + focusTop)
+        let fade = currentFade()
+        let cells = visibleRows
+        let focusedCell = focusedIndex.flatMap { displayedCell(forRow: $0) }
+        let focusedTop = focusedCell.map { visualMinY(for: $0, presentation: presentation) }
+            ?? (contentOffset.y + Self.viewportOverscan + focusTop)
         let lineHeight = LyricsFontMetrics.boldLineHeight(size: input.fontSize)
-        for row in rows {
-            let top = visualMinY(for: row, presentation: presentation)
-            let viewportTop = top - contentOffset.y
-            let bleed = NativeLyricRowView.horizontalBleed
-            let intersectsFade = viewportTop + row.bounds.height >= fade.topStart - bleed
+        let tableFade = fade.shifted(by: Self.viewportOverscan)
+        for cell in cells {
+            guard let row = indexPath(for: cell)?.row, renderedLines.indices.contains(row) else { continue }
+            let id = renderedLines[row].id
+            let top = visualMinY(for: cell, presentation: presentation)
+            let viewportTop = top - contentOffset.y - Self.viewportOverscan
+            let bleed = NativeLyricCell.horizontalBleed
+            let height = textHeight(of: cell)
+            let intersectsFade = viewportTop + height >= fade.topStart - bleed
                 && viewportTop <= fade.bottomEnd + bleed
             // Horizontal overflow stays visible; offscreen rows remain hidden vertically.
-            if row.content.isHidden == intersectsFade { row.content.isHidden = !intersectsFade }
+            if cell.isContentHidden == intersectsFade { cell.setContentHidden(!intersectsFade) }
             if intersectsFade {
-                if !row.appearance.focused {
+                if !cell.appearance.focused {
                     let radius = motion.blurRadius(
                         verticalDistance: Double(top - focusedTop), lineHeight: Double(lineHeight)
                     )
-                    if row.appearance.distanceBlurRadius != radius { row.appearance.distanceBlurRadius = radius }
+                    if cell.appearance.distanceBlurRadius != radius {
+                        cell.appearance.distanceBlurRadius = radius
+                    }
                 }
-                input.rowGeometry.record(.init(height: row.bounds.height, top: viewportTop), for: row.line.id)
-                row.applyEdgeFade(fade, viewportTop: viewportTop, in: self, presentation: presentation)
+                input.rowGeometry.record(
+                    .init(height: height, top: viewportTop), for: id
+                )
+                cell.applyEdgeFade(
+                    tableFade, viewportTop: viewportTop + Self.viewportOverscan,
+                    in: self, presentation: presentation
+                )
             } else {
-                input.rowGeometry.discardPosition(for: row.line.id)
+                input.rowGeometry.discardPosition(for: id)
             }
         }
     }
 
-    private func seek(_ index: Int) {
-        guard let input, input.isActive, rows.indices.contains(index) else { return }
+    private func correctSettledFocusIfNeeded() {
+        guard let input, input.isActive, !browsing, animators.isEmpty,
+              let index = focusedIndex, renderedLines.indices.contains(index) else { return }
+        let id = renderedLines[index].id
+        let cell = displayedCell(forRow: index)
+        let height = cell.map(textHeight(of:)) ?? input.rowGeometry.height(for: id)
+        let focus = focusTop(forActiveID: id, rowHeight: height)
+        let topInset = max(focus, motion.firstLineStartOffset) + Self.viewportOverscan
+        let maxOffset = max(contentSize.height - bounds.height, 0)
+        let rowTop: CGFloat
+        if let cell {
+            rowTop = cell.frame.minY
+        } else if let (nearRow, nearCell) = nearestVisibleRow(to: index) {
+            // The table's estimated rect can lag behind a tall self-sized row;
+            // extrapolate from a displayed neighbour's measured position.
+            let heights = visibleRows.map(\.bounds.height)
+            let average = max(heights.reduce(0, +) / CGFloat(max(heights.count, 1)), 1)
+            rowTop = nearCell.frame.minY + CGFloat(index - nearRow) * average
+        } else {
+            rowTop = rectForRow(at: IndexPath(row: index, section: 0)).minY
+        }
+        let desired = rowTop - focus - Self.viewportOverscan
+        let clamped = max(-topInset, min(desired, maxOffset))
+        guard abs(clamped - contentOffset.y) > 0.5 else { return }
+        positioning = true
+        UIView.performWithoutAnimation {
+            contentInset.top = topInset
+            setContentOffset(CGPoint(x: 0, y: clamped), animated: false)
+        }
+        positioning = false
+        input.rowGeometry.focus(on: id)
+        updateVisualGeometry(presentation: false)
+        setNeedsLayout()
+    }
+
+    private func settleFocusAfterAnimationIfNeeded() {
+        guard animators.isEmpty else { return }
+        setNeedsLayout()
+        layoutIfNeeded()
+        correctSettledFocusIfNeeded()
+    }
+
+    // MARK: - Seeking and browsing
+
+    func seek(_ index: Int) {
+        guard let input, input.isActive, renderedLines.indices.contains(index) else { return }
         resumeTask?.cancel()
-        browsing = false
+        // Keep browsing active until the alignment has captured its origin. Releasing
+        // it first lets a same-runloop layout recenter the table on the playing line.
         needsFocus = false
         input.isInterfaceHidden = false
-        input.onSeek(rows[index].line.time)
-        let animates = wasActive && !input.reducesMotion && lastSize == bounds.size
+        input.onSeek(renderedLines[index].time)
+        let animates = wasActive && !input.reducesMotion && lastVisualSize != .zero
         if bounds.width > 0, bounds.height > 0 {
-            let tappedID = rows[index].line.id
-            suppressedPreSeekActiveID = (input.activeID != nil && input.activeID != tappedID) ? input.activeID : nil
-            layoutRowsIfNeeded()
-            updateAppearances(activeIndex: index, animated: animates)
-            align(to: index, cascade: false, animated: animates, spring: motion.forcedLineCatchUpSpring,
-                  interfaceHidden: false)
+            let tappedID = renderedLines[index].id
+            suppressedPreSeekActiveID = (input.activeID != nil && input.activeID != tappedID)
+                ? input.activeID : nil
+            updateFade(animated: animates)
+            align(to: index, cascade: false, animated: animates,
+                  spring: motion.forcedLineCatchUpSpring, interfaceHidden: false,
+                  appearanceAnimated: animates)
+            browsing = false
         } else {
+            browsing = false
             suppressedPreSeekActiveID = nil
             needsFocus = true
             setNeedsLayout()
         }
     }
 
+    /// Same path as a row tap; kept internal for regression coverage.
+    func performSeek(row: Int) {
+        seek(row)
+    }
+
+    var visibleLineIDs: [Int] {
+        visibleRows.compactMap { cell in
+            guard let row = indexPath(for: cell)?.row,
+                  renderedLines.indices.contains(row) else { return nil }
+            return renderedLines[row].id
+        }
+    }
+
+    var renderedLineCount: Int { renderedLines.count }
+
+    /// Visible boundary height and its transition state, exposed for interaction regressions.
+    var interfaceFadeHeight: CGFloat { fadeBottom }
+    var isInterfaceFadeAnimating: Bool { fadeAnimator != nil }
+    var isRowTransitionAnimating: Bool { !animators.isEmpty }
+    /// Current animated viewport position of a row, used to assert the starting edge of a seek.
+    func transitionViewportTop(forRow row: Int) -> CGFloat? {
+        guard let cell = displayedCell(forRow: row) else { return nil }
+        return cell.center.y - cell.bounds.height / 2 + cell.transform.ty
+            - contentOffset.y - Self.viewportOverscan
+    }
+
+    /// Pre-commit transform captured before UIKit replaces the model value with its target.
+    func pendingTransitionViewportTop(forRow row: Int) -> CGFloat? {
+        guard let cell = displayedCell(forRow: row),
+              let transform = pendingStartTransforms[ObjectIdentifier(cell)] else { return nil }
+        return cell.center.y - cell.bounds.height / 2 + transform.ty
+            - contentOffset.y - Self.viewportOverscan
+    }
+
+    /// Font-derived line height used by the focus formula; exposed for tests.
+    var focusLineHeight: CGFloat {
+        LyricsFontMetrics.boldLineHeight(size: input?.fontSize ?? 0)
+    }
+
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+        removeSourceSnapshots()
         suppressedPreSeekActiveID = nil
         browsing = true
         resumeTask?.cancel()
@@ -564,6 +1133,7 @@ private final class NativeLyricsScrollView: UIScrollView, UIScrollViewDelegate {
         resumeTask?.cancel()
         fadePendingStartHeight = nil
         freezeRows()
+        cancelAllAnimations()
         fadeAnimator?.stopAnimation(true)
         fadeAnimator = nil
         displayLink?.invalidate()
@@ -574,8 +1144,10 @@ private final class NativeLyricsScrollView: UIScrollView, UIScrollViewDelegate {
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
         guard let input else { return false }
         let bottom = fadeBottom
+        let visualTop = bounds.minY + Self.viewportOverscan
         return super.point(inside: point, with: event)
-            && point.y >= bounds.minY + input.topOverlayHeight && point.y <= bounds.minY + bottom
+            && point.y >= visualTop + input.topOverlayHeight
+            && point.y <= visualTop + bottom
     }
 }
 
@@ -649,56 +1221,100 @@ nonisolated private struct LyricsFocusBlur: ViewModifier, Animatable {
     }
 }
 
-private final class NativeLyricRowView: UIView {
+private final class NativeLyricCell: UITableViewCell {
+    static let reuseIdentifier = "NativeLyricCell"
     // Keep the blur halo inside the hosting surface even if an internal host clips.
-    static let horizontalBleed: CGFloat = 24
-    let line: PlayerLyricLine
-    let appearance: LyricsRowAppearance
-    let content: UIView
+    static let horizontalBleed = NativeLyricsScrollView.horizontalBleed
+    let appearance = LyricsRowAppearance()
+    var onPrepareForReuse: (() -> Void)?
     var isMoving = false
     private let cachedFadeTargets = NSPointerArray.weakObjects()
     private var needsFadeTargetDiscovery = true
     private var hasActiveEdgeMask = false
-    var onTap: (() -> Void)? {
-        get { appearance.onTap }
-        set { appearance.onTap = newValue }
-    }
+    private var contentShouldBeHidden = false
+    private var lastLayoutHeight: CGFloat = -1
 
-    init(line: PlayerLyricLine, fontSize: CGFloat, foreground: Color) {
-        self.line = line
-        let appearance = LyricsRowAppearance()
-        self.appearance = appearance
-        content = UIHostingConfiguration {
-            LocalLyricsRow(line: line, fontSize: fontSize, foreground: foreground, appearance: appearance) {
-                appearance.onTap?()
-            }
-            .padding(.horizontal, NativeLyricRowView.horizontalBleed)
-        }.margins(.all, 0).minSize(width: 0, height: 0).makeContentView()
-        super.init(frame: .zero)
+    override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
+        super.init(style: style, reuseIdentifier: reuseIdentifier)
+        backgroundColor = .clear
+        contentView.backgroundColor = .clear
         clipsToBounds = false
-        content.clipsToBounds = false
-        addSubview(content)
+        contentView.clipsToBounds = false
+        selectionStyle = .none
+        isAccessibilityElement = false
     }
     required init?(coder: NSCoder) { nil }
-    func height(forWidth width: CGFloat) -> CGFloat {
-        content.systemLayoutSizeFitting(
-            CGSize(width: width + 2 * Self.horizontalBleed, height: UIView.layoutFittingCompressedSize.height),
-            withHorizontalFittingPriority: .required, verticalFittingPriority: .fittingSizeLevel
-        ).height
+
+    var contentHost: UIView? {
+        // iOS 27 installs UIHostingConfiguration's content view directly on
+        // the cell; earlier versions put it in contentView.
+        subviews.first { $0 is any UIContentView }
+            ?? subviews.first { $0 !== contentView }
+            ?? contentView.subviews.first
+    }
+
+    func configure(line: PlayerLyricLine, fontSize: CGFloat, foreground: Color, spacing: CGFloat,
+                   focused: Bool, browsing: Bool, reducesMotion: Bool, increasedContrast: Bool) {
+        appearance.animated = false
+        appearance.focused = focused
+        appearance.browsing = browsing
+        appearance.reducesMotion = reducesMotion
+        appearance.increasedContrast = increasedContrast
+        appearance.distanceBlurRadius = 0
+        needsFadeTargetDiscovery = true
+        lastLayoutHeight = -1
+        let appearance = self.appearance
+        contentConfiguration = UIHostingConfiguration {
+            LocalLyricsRow(
+                line: line, fontSize: fontSize, foreground: foreground,
+                appearance: appearance
+            ) {
+                appearance.onTap?()
+            }
+            .padding(.horizontal, Self.horizontalBleed)
+            .padding(.bottom, spacing)
+        }
+        .margins(.all, 0)
+        .minSize(width: 0, height: 0)
+    }
+
+    override func prepareForReuse() {
+        onPrepareForReuse?()
+        isMoving = false
+        transform = .identity
+        appearance.animated = false
+        appearance.focused = false
+        appearance.browsing = false
+        appearance.reducesMotion = false
+        appearance.increasedContrast = false
+        appearance.distanceBlurRadius = 0
+        appearance.onTap = nil
+        removeEdgeMask(in: layer)
+        hasActiveEdgeMask = false
+        cachedFadeTargets.count = 0
+        needsFadeTargetDiscovery = true
+        setContentHidden(false)
+        super.prepareForReuse()
+    }
+
+    func setContentHidden(_ hidden: Bool) {
+        contentShouldBeHidden = hidden
+        contentHost?.isHidden = hidden
+    }
+
+    var isContentHidden: Bool {
+        contentShouldBeHidden
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        content.frame = bounds.insetBy(dx: -Self.horizontalBleed, dy: 0)
+        contentHost?.isHidden = contentShouldBeHidden
         needsFadeTargetDiscovery = true
-    }
-    override func layoutSublayers(of layer: CALayer) {
-        super.layoutSublayers(of: layer)
-        if layer === self.layer { needsFadeTargetDiscovery = true }
-        // UIKit coalesces row layout changes into the scroll view's next layout pass.
-        // A row must not synchronously refresh every other row's geometry.
-        if let scrollView = superview as? NativeLyricsScrollView, !scrollView.isRefreshing {
-            scrollView.setNeedsLayout()
+        // Hosting sizes settle during layout. Let the owner run one more pass
+        // so focus correction and edge masks see the final row height.
+        if abs(bounds.height - lastLayoutHeight) > 0.5 {
+            lastLayoutHeight = bounds.height
+            (superview as? NativeLyricsScrollView)?.setNeedsLayout()
         }
     }
 
@@ -818,5 +1434,15 @@ nonisolated struct LyricsViewportFade: Equatable, Sendable {
         let bottomFade = overlayShownFade
             + (Self.hiddenBottomFadeHeight - overlayShownFade) * hiddenFraction
         bottomStart = max(topEnd, bottomEnd - bottomFade)
+    }
+
+    /// The table's content coordinates are shifted by its vertical overscan.
+    func shifted(by offset: CGFloat) -> LyricsViewportFade {
+        var shifted = self
+        shifted.topStart += offset
+        shifted.topEnd += offset
+        shifted.bottomStart += offset
+        shifted.bottomEnd += offset
+        return shifted
     }
 }

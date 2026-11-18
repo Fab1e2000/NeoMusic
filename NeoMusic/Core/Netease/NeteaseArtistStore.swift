@@ -27,7 +27,6 @@ final class NeteaseArtistStore {
     @ObservationIgnored private var tasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private let directory: URL
     @ObservationIgnored private var resolvedSongs: [Int64: NeteaseMusicSong] = [:]
-    @ObservationIgnored private var legacyArtwork: [String: URL] = [:]
     @ObservationIgnored private var songSources: [String: [Int64: NeteaseMusicSong]] = [:]
     @ObservationIgnored private var songOwners: [Int64: Set<String>] = [:]
     @ObservationIgnored nonisolated(unsafe) private var artworkObserver: NSObjectProtocol?
@@ -35,10 +34,8 @@ final class NeteaseArtistStore {
     @ObservationIgnored private var refreshedAt: [String: Date] = [:]
     private(set) var isReady = false
     @ObservationIgnored private let artworkCache: NeteaseArtworkCache
-    @ObservationIgnored private let cacheIO = NeteaseCacheIO()
     @ObservationIgnored private let pageCache: NeteasePageCache
     @ObservationIgnored private var artworkTasks: [URL: Task<Void, Never>] = [:]
-    @ObservationIgnored private let legacyReader = ArtistLegacyReader()
     @ObservationIgnored private var restoringPages: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var restoredPages: Set<String> = []
     @ObservationIgnored private var saveTasks: [String: Task<Void, Never>] = [:]
@@ -46,13 +43,28 @@ final class NeteaseArtistStore {
     var cachedSongs: [NeteaseMusicSong] { resolvedSongs.values.sorted { $0.id < $1.id } }
     func restoreCachedSongs(ids: Set<Int64>) async -> [NeteaseMusicSong] {
         guard isReady, !ids.isEmpty, !Task.isCancelled else { return [] }
-        let token = revision, owner = scope, legacyURL = cacheURL
+        let token = revision, owner = scope
         var songs = ids.reduce(into: [Int64: NeteaseMusicSong]()) { $0[$1] = resolvedSongs[$1] }
-        let missing = ids.subtracting(songs.keys)
+        var missing = ids.subtracting(songs.keys)
         if !missing.isEmpty {
-            let restored = await legacyReader.songs(ids: missing, pageCache: pageCache, scope: owner, legacyURL: legacyURL)
+            let artists = (try? await pageCache.entries(ArtistPage.self, scope: owner, prefix: "artist:")) ?? [:]
             guard token == revision, isReady, !Task.isCancelled else { return [] }
-            for song in restored { songs[song.id] = resolvedSongs[song.id] ?? song }
+            for key in artists.keys.sorted() {
+                for song in artists[key]?.detail?.songs ?? [] where missing.remove(song.id) != nil {
+                    songs[song.id] = resolvedSongs[song.id] ?? song
+                }
+                if missing.isEmpty { break }
+            }
+        }
+        if !missing.isEmpty {
+            let albums = (try? await pageCache.entries(AlbumPage.self, scope: owner, prefix: "album:")) ?? [:]
+            guard token == revision, isReady, !Task.isCancelled else { return [] }
+            for key in albums.keys.sorted() {
+                for song in albums[key]?.detail.songs ?? [] where missing.remove(song.id) != nil {
+                    songs[song.id] = resolvedSongs[song.id] ?? song
+                }
+                if missing.isEmpty { break }
+            }
         }
         return ids.sorted().compactMap { resolvedSongs[$0] ?? songs[$0] }
     }
@@ -65,7 +77,6 @@ final class NeteaseArtistStore {
         artworkCache = artworkSession.map { NeteaseArtworkCache(directory: directory.appendingPathComponent("Artwork"), session: $0) } ?? .shared
     }
     private var scope: String { userID.map(String.init) ?? "public" }
-    private var cacheURL: URL { directory.appendingPathComponent("\(scope).json") }
     func activate(_ session: NeteaseSavedSession?, refresh: Bool = true) async {
         guard !Task.isCancelled else { return }
         if !isReady || userID != session?.profile.userID || credential != session?.credential {
@@ -75,19 +86,14 @@ final class NeteaseArtistStore {
             userID = session?.profile.userID; credential = session?.credential
             observeArtworkEvictions(token: token)
             let subscriptions = try? await pageCache.load(Subscriptions.self, scope: scope, key: "subscriptions")
-            let legacy = subscriptions == nil ? await cacheIO.load(LegacySubscriptions.self, from: cacheURL) : nil
             guard token == revision, !Task.isCancelled else { return }
             if let subscriptions {
                 subscribedArtists = subscriptions.artists; subscribedAlbums = subscriptions.albums
                 albumAdditions = subscriptions.albumAdditions ?? AlbumLibraryAdditions(baselineRecorded: true)
                 refreshedAt.merge(subscriptions.refreshedAt) { _, new in new }
-            } else if let legacy {
-                subscribedArtists = legacy.artists; subscribedAlbums = legacy.collected
-                albumAdditions = AlbumLibraryAdditions(baselineRecorded: !subscribedAlbums.isEmpty)
             }
             isReady = true
             publish(.reset)
-            if legacy != nil { save("subscriptions") }
             requestArtwork(subscribedArtists.prefix(6).compactMap(\.artworkURL) + subscribedAlbums.prefix(6).compactMap(\.artworkURL))
         }
         if refresh { await self.refresh() }
@@ -109,7 +115,7 @@ final class NeteaseArtistStore {
         revision = UUID(); credential = nil; userID = nil; isReady = false
         let pending = Array(tasks.values) + Array(artworkTasks.values) + Array(saveTasks.values) + Array(restoringPages.values)
         tasks.removeAll(); artworkTasks.removeAll(); saveTasks.removeAll(); restoringPages.removeAll(); restoredPages.removeAll()
-        resolvedSongs = [:]; songSources = [:]; songOwners = [:]; biographies = [:]; refreshedAt = [:]; legacyArtwork = [:]
+        resolvedSongs = [:]; songSources = [:]; songOwners = [:]; biographies = [:]; refreshedAt = [:]
         details = [:]; releases = [:]; similar = [:]; albums = [:]; subscribedArtists = []; subscribedAlbums = []; albumAdditions = AlbumLibraryAdditions(); errors = [:]
         publish(.reset)
         pending.forEach { $0.cancel() }
@@ -192,7 +198,7 @@ final class NeteaseArtistStore {
         }
     }
     private func restoreArtistPage(id: Int64) async {
-        let key = "artist:\(id)", token = revision, owner = scope, legacyURL = cacheURL
+        let key = "artist:\(id)", token = revision, owner = scope
         guard isReady, !Task.isCancelled, !restoredPages.contains(key) else { return }
         if let task = restoringPages[key] {
             await task.value
@@ -202,15 +208,13 @@ final class NeteaseArtistStore {
         let task = Task { [self] in
             defer { if token == revision { restoringPages[key] = nil } }
             let cached = try? await pageCache.load(ArtistPage.self, scope: owner, key: key)
-            let legacy = cached == nil ? await legacyReader.artist(id: id, from: legacyURL) : nil
             guard token == revision, !Task.isCancelled else { return }
             restoredPages.insert(key)
-            guard let page = cached ?? legacy?.0 else { return }
+            guard let page = cached else { return }
             details[id] = page.detail; releases[id] = page.releases; similar[id] = page.similar
             biographies[id] = page.biography
             refreshedAt.merge(page.refreshedAt) { _, new in new }
             if let detail = page.detail { mergeSongs(detail.songs, source: key) }
-            if let artwork = legacy?.1 { legacyArtwork.merge(artwork) { _, new in new } }
             publish(.artist(id))
             let urls = [page.detail?.artist.artworkURL].compactMap { $0 }
                 + (page.detail?.songs.prefix(NeteaseArtworkPrefetch.artistSongs).compactMap(\.artworkURL) ?? [])
@@ -221,7 +225,7 @@ final class NeteaseArtistStore {
         await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
     }
     private func restoreAlbumPage(id: Int64) async {
-        let key = "album:\(id)", token = revision, owner = scope, legacyURL = cacheURL
+        let key = "album:\(id)", token = revision, owner = scope
         guard isReady, !Task.isCancelled, !restoredPages.contains(key) else { return }
         if let task = restoringPages[key] {
             await task.value
@@ -231,14 +235,12 @@ final class NeteaseArtistStore {
         let task = Task { [self] in
             defer { if token == revision { restoringPages[key] = nil } }
             let cached = try? await pageCache.load(AlbumPage.self, scope: owner, key: key)
-            let legacy = cached == nil ? await legacyReader.album(id: id, from: legacyURL) : nil
             guard token == revision, !Task.isCancelled else { return }
             restoredPages.insert(key)
-            guard let page = cached ?? legacy?.0 else { return }
+            guard let page = cached else { return }
             albums[id] = page.detail
             refreshedAt[key] = page.detail.songs.contains { $0.trackNumber == nil || $0.discNumber == nil } ? nil : page.refreshedAt
             mergeSongs(page.detail.songs, source: key)
-            if let artwork = legacy?.1 { legacyArtwork.merge(artwork) { _, new in new } }
             publish(.album(id))
             requestArtwork([page.detail.album.artworkURL].compactMap { $0 } + page.detail.songs.prefix(NeteaseArtworkPrefetch.detailSongs).compactMap(\.artworkURL))
         }
@@ -393,7 +395,7 @@ final class NeteaseArtistStore {
         try check(token)
         if let error = errors[key] { throw NSError(domain: "NeteaseArtist", code: 1, userInfo: [NSLocalizedDescriptionKey: error]) }
     }
-    func cachedArtworkURL(_ remote: URL) -> URL? { artworkCache.cachedURL(for: remote, scope: scope) ?? legacyArtwork[remote.absoluteString] }
+    func cachedArtworkURL(_ remote: URL) -> URL? { artworkCache.cachedURL(for: remote, scope: scope) }
     func cachedArtworkFile(_ remote: URL) async -> URL? {
         guard isReady, !Task.isCancelled else { return nil }
         if let cached = cachedArtworkURL(remote) { return cached }
@@ -422,10 +424,6 @@ final class NeteaseArtistStore {
                 } catch { }
             }
         }
-    }
-    private struct LegacySubscriptions: Decodable, Sendable {
-        let artists: [NeteaseArtistReference]
-        let collected: [NeteaseArtistAlbum]
     }
     fileprivate struct ArtistPage: Codable, Sendable {
         let detail: NeteaseArtistDetail?
@@ -483,87 +481,5 @@ final class NeteaseArtistStore {
             $0.id == $1.id && $0.title == $1.title && $0.artist == $1.artist && $0.artworkURL == $1.artworkURL
                 && $0.publishTime == $1.publishTime && $0.type == $1.type && $0.trackCount == $1.trackCount
         }
-    }
-}
-
-/// Cache reads keep unopened routes out of the observable store and preserve legacy snapshots.
-private actor ArtistLegacyReader {
-    func songs(ids: Set<Int64>, pageCache: NeteasePageCache, scope: String, legacyURL: URL) async -> [NeteaseMusicSong] {
-        guard !ids.isEmpty, !Task.isCancelled else { return [] }
-        var missing = ids
-        var result: [NeteaseMusicSong] = []
-        let artists = (try? await pageCache.entries(NeteaseArtistStore.ArtistPage.self, scope: scope, prefix: "artist:")) ?? [:]
-        guard !Task.isCancelled else { return [] }
-        for key in artists.keys.sorted() {
-            for song in artists[key]?.detail?.songs ?? [] where missing.remove(song.id) != nil { result.append(song) }
-            if missing.isEmpty { return result }
-        }
-        let albums = (try? await pageCache.entries(NeteaseArtistStore.AlbumPage.self, scope: scope, prefix: "album:")) ?? [:]
-        guard !Task.isCancelled else { return [] }
-        for key in albums.keys.sorted() {
-            for song in albums[key]?.detail.songs ?? [] where missing.remove(song.id) != nil { result.append(song) }
-            if missing.isEmpty { return result }
-        }
-        guard let object = object(at: legacyURL), !Task.isCancelled else { return result }
-        for field in ["details", "albums"] {
-            let values: [Any]
-            if let keyed = object[field] as? [String: Any] { values = keyed.keys.sorted().compactMap { keyed[$0] } }
-            else if let pairs = object[field] as? [Any] { values = stride(from: 1, to: pairs.count, by: 2).map { pairs[$0] } }
-            else { continue }
-            for value in values {
-                guard let songs = (value as? [String: Any])?["songs"] as? [[String: Any]] else { continue }
-                for raw in songs {
-                    guard !Task.isCancelled else { return [] }
-                    guard let id = (raw["id"] as? NSNumber)?.int64Value, missing.contains(id),
-                          let song = decode(NeteaseMusicSong.self, value: raw) else { continue }
-                    missing.remove(id); result.append(song)
-                    if missing.isEmpty { return result }
-                }
-            }
-        }
-        return result
-    }
-    func artist(id: Int64, from url: URL) -> (NeteaseArtistStore.ArtistPage, [String: URL])? {
-        guard let object = object(at: url), !Task.isCancelled else { return nil }
-        let detail = decode(NeteaseArtistDetail.self, value: value(in: object, field: "details", id: id))
-        let releases = decode([NeteaseArtistAlbum].self, value: value(in: object, field: "releases", id: id))
-        let similar = decode([NeteaseArtistReference].self, value: value(in: object, field: "similar", id: id))
-        guard detail != nil || releases != nil || similar != nil else { return nil }
-        let page = NeteaseArtistStore.ArtistPage(detail: detail, biography: detail?.biography, releases: releases, similar: similar, refreshedAt: [:])
-        let urls = [detail?.artist.artworkURL].compactMap { $0 } + (detail?.songs.compactMap(\.artworkURL) ?? [])
-            + (releases?.compactMap(\.artworkURL) ?? []) + (similar?.compactMap(\.artworkURL) ?? [])
-        return (page, artwork(in: object, urls: urls, directory: url.deletingLastPathComponent()))
-    }
-    func album(id: Int64, from url: URL) -> (NeteaseArtistStore.AlbumPage, [String: URL])? {
-        guard let object = object(at: url), !Task.isCancelled,
-              let detail = decode(NeteaseArtistAlbumDetail.self, value: value(in: object, field: "albums", id: id)) else { return nil }
-        let urls = [detail.album.artworkURL].compactMap { $0 } + detail.songs.compactMap(\.artworkURL)
-        return (.init(detail: detail, refreshedAt: nil), artwork(in: object, urls: urls, directory: url.deletingLastPathComponent()))
-    }
-    private func object(at url: URL) -> [String: Any]? {
-        guard !Task.isCancelled, let data = try? Data(contentsOf: url) else { return nil }
-        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-    }
-    private func value(in object: [String: Any], field: String, id: Int64) -> Any? {
-        if let values = object[field] as? [String: Any] { return values[String(id)] }
-        guard let pairs = object[field] as? [Any] else { return nil }
-        for index in stride(from: 0, to: pairs.count - 1, by: 2) where (pairs[index] as? NSNumber)?.int64Value == id {
-            return pairs[index + 1]
-        }
-        return nil
-    }
-    private func decode<Value: Decodable>(_ type: Value.Type, value: Any?) -> Value? {
-        guard let value, let data = try? JSONSerialization.data(withJSONObject: value) else { return nil }
-        return try? JSONDecoder().decode(type, from: data)
-    }
-    private func artwork(in object: [String: Any], urls: [URL], directory: URL) -> [String: URL] {
-        guard let files = object["artwork"] as? [String: String] else { return [:] }
-        var result: [String: URL] = [:]
-        for remote in urls {
-            guard let stored = files[remote.absoluteString], let oldURL = URL(string: stored) else { continue }
-            let file = directory.appendingPathComponent(oldURL.lastPathComponent)
-            if FileManager.default.fileExists(atPath: file.path) { result[remote.absoluteString] = file }
-        }
-        return result
     }
 }

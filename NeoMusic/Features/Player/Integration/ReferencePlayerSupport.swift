@@ -50,10 +50,6 @@ actor PlayerLyricsStoreAdapter {
 
 typealias ReferenceLyricsReader = PlayerLyricsStoreAdapter
 
-enum ImmersiveMode { static let storageKey = "preview.appearance.immersive" }
-
-
-
 extension LyricsDocument {
     static func onlineLyrics(original: String, translation: String) -> Self {
         let base = parse(original), translated = parse(translation)

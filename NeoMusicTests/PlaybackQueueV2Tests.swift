@@ -3,44 +3,6 @@ import SwiftUI
 @testable import NeoMusic
 @testable import FullScreenPlayer
 
-final class PlaybackQueueV2Tests: XCTestCase {
-    func testRepeatedFilesKeepIndependentEntryIdentity() {
-        var state = PlaybackQueueState(ids: ["a", "a", "b"])
-        let original = state.entryIDs!
-        state.removeUpcoming(original[1])
-        XCTAssertEqual(state.ids, ["a", "b"])
-        XCTAssertEqual(state.entryIDs, [original[0], original[2]])
-    }
-    func testShuffleRestoresOriginalOrderAndCurrentEntry() {
-        var state = PlaybackQueueState(ids: ["a", "b", "a", "c"])
-        state.index = 2
-        let entries = state.entryIDs!
-        state.setShuffle(true)
-        XCTAssertEqual(state.entryIDs![state.index], entries[2])
-        state.setShuffle(false)
-        XCTAssertEqual(state.entryIDs, entries)
-        XCTAssertEqual(state.index, 2)
-    }
-    func testLegacyRecordWithoutEntryIDsDecodesAndNormalizes() throws {
-        let data = Data(#"{"ids":["a","a"],"index":99,"elapsed":12,"repeatMode":"all","shuffled":false}"#.utf8)
-        var state = try JSONDecoder().decode(PlaybackQueueState.self, from: data)
-        state.normalize()
-        XCTAssertEqual(state.index, 1)
-        XCTAssertEqual(Set(state.entryIDs!).count, 2)
-        XCTAssertEqual(state.elapsed, 12)
-    }
-    func testUpcomingMovePreservesCurrentAndManualMarker() {
-        var state = PlaybackQueueState(ids: ["a", "b", "c"])
-        state.append("d", next: false)
-        let ids = state.entryIDs!
-        state.moveUpcoming(ids[3], before: ids[1])
-        XCTAssertEqual(state.ids, ["a", "d", "b", "c"])
-        XCTAssertEqual(state.userQueuedIDs, [ids[3]])
-        state.moveUpcoming(ids[0], before: ids[2])
-        XCTAssertEqual(state.ids.first, "a")
-    }
-}
-
 @MainActor
 final class NowPlayingQueueListUpdateTests: XCTestCase {
     private typealias Coordinator = NowPlayingQueueList.Coordinator

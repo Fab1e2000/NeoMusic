@@ -9,11 +9,6 @@
       "destination": "NeoMusic/Features/Player/FullScreenPlayer/Lyrics/AppleMusicLocalLyricsView.swift"
     },
     {
-      "source": "NeoDizzy/Shared/Lyrics/AppleMusicLyricsDynamicSpring.swift",
-      "sha256": "ba45e56408a009e88d293b1adf6cf7c864648e43282bd79c3ce18400f9c371db",
-      "destination": "NeoMusic/Features/Player/FullScreenPlayer/Lyrics/AppleMusicLyricsDynamicSpring.swift"
-    },
-    {
       "source": "NeoDizzy/Shared/Lyrics/AppleMusicLyricsMotionProfile.swift",
       "sha256": "b710bd15a451c162a457822bb16ab3940889a2dba3eb8ae51cbff9f6248a88b0",
       "destination": "NeoMusic/Features/Player/FullScreenPlayer/Lyrics/AppleMusicLyricsMotionProfile.swift"
@@ -192,11 +187,6 @@
       "source": "NeoDizzy/Features/Player/PlayerPopup.swift",
       "sha256": "93e8886b4ba0cc2b2cdc58d05d88e0b9a2808f3ecb879d678a0e2cb5f894e19a",
       "destination": "NeoMusic/Features/Player/Integration/PlayerPopup.swift"
-    },
-    {
-      "source": "NeoDizzy/Core/UI/LoadStateViews.swift",
-      "sha256": "1faca0450db991728d41982b8e904c4a311b4409d065eb5a617b66d87e5e1dea",
-      "destination": "NeoMusic/Features/Player/Integration/ReferenceLoadStateViews.swift"
     },
     {
       "source": "NeoDizzy/Features/Player/MiniPlayerTitlePager.swift",

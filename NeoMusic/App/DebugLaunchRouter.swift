@@ -10,8 +10,7 @@ enum DebugLaunchRouter {
             "-frontendReviewPreview",
             "-searchPreview",
             "-downloadsPreview",
-            "-homeFeedPreview",
-            "-artistPagePreview"
+            "-homeFeedPreview"
         ]
         return directPreviews.contains(where: arguments.contains)
             || homePreviewMode != nil
@@ -30,18 +29,9 @@ enum DebugLaunchRouter {
             DownloadsPreview()
         } else if arguments.contains("-homeFeedPreview") {
             HomeFeedPreview().environment(account)
-        } else if arguments.contains("-artistPagePreview") {
-            ArtistPagePreview()
         } else if let mode = homePreviewMode {
             HomeRecommendationPreview(mode: mode)
                 .environment(account)
-                .task {
-                    if ProcessInfo.processInfo.arguments.contains("-assessmentReadProbe") {
-                        await NeteaseAssessmentReadProbe.run()
-                    } else if ProcessInfo.processInfo.arguments.contains("-homeReadProbe") {
-                        await NeteaseHomeReadProbe.run()
-                    }
-                }
         } else if let page = onlinePreviewPage {
             if page == "quality" {
                 OnlineLibraryPreviewRoot()
@@ -50,25 +40,6 @@ enum DebugLaunchRouter {
             }
         } else if let state = accountPreviewState {
             AccountPreviewRoot(state: state)
-        }
-    }
-
-    static func runArtistReadProbeIfNeeded() async {
-        if ProcessInfo.processInfo.arguments.contains("-artistReadProbe") {
-            await NeteaseArtistReadProbe.run()
-        }
-    }
-
-    static func runPostRestoreReadProbesIfNeeded(account: NeteaseAccount) {
-        let arguments = ProcessInfo.processInfo.arguments
-        if arguments.contains("-searchReadProbe") {
-            Task { await NeteaseSearchReadProbe.run(account: account) }
-        }
-        if arguments.contains("-playbackReadProbe") {
-            Task { await NeteasePlaybackReadProbe.run() }
-        }
-        if arguments.contains("-downloadReadProbe"), let store = account.downloads {
-            Task { await NeteaseDownloadReadProbe.run(store: store) }
         }
     }
 

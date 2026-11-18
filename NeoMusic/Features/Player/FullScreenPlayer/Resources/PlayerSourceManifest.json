@@ -9,11 +9,6 @@
       "destination": "Lyrics/AppleMusicLocalLyricsView.swift"
     },
     {
-      "source": "NeoDizzy/Shared/Lyrics/AppleMusicLyricsDynamicSpring.swift",
-      "sha256": "ba45e56408a009e88d293b1adf6cf7c864648e43282bd79c3ce18400f9c371db",
-      "destination": "Lyrics/AppleMusicLyricsDynamicSpring.swift"
-    },
-    {
       "source": "NeoDizzy/Shared/Lyrics/AppleMusicLyricsMotionProfile.swift",
       "sha256": "b710bd15a451c162a457822bb16ab3940889a2dba3eb8ae51cbff9f6248a88b0",
       "destination": "Lyrics/AppleMusicLyricsMotionProfile.swift"

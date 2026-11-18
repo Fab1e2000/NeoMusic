@@ -43,10 +43,6 @@ final class AppRuntime {
             artists.connect()
             onlineLibrary.connect()
             await onlineLibrary.connectLyrics()
-            #if DEBUG
-            await DebugLaunchRouter.runArtistReadProbeIfNeeded()
-            #endif
-            async let history: Void = home.restore()
             do {
                 let interval = PerformanceDiagnostics.begin("StartupRestore")
                 defer { PerformanceDiagnostics.end("StartupRestore", interval) }
@@ -55,14 +51,11 @@ final class AppRuntime {
                 _ = await (local, online)
                 guard !Task.isCancelled else { return }
                 completeRestoredPlayback()
-                #if DEBUG
-                DebugLaunchRouter.runPostRestoreReadProbesIfNeeded(account: account)
-                #endif
             }
             async let scan: Void = LocalLibrary.runtime.refresh()
             async let validation: Void = restoreRemainingOnlineContent()
             async let artwork: Void = prepareInitialOnlineArtwork()
-            _ = await (scan, validation, history, artwork)
+            _ = await (scan, validation, artwork)
         }
     }
 
@@ -106,7 +99,6 @@ final class AppRuntime {
         if phase == .background {
             LocalLibrary.player.saveQueueForBackground()
             LocalLibrary.playlistLibrary.saveForBackground()
-            home.flushHistoryForBackground()
         }
         if previous == .background, phase != .background {
             Task { await LocalLibrary.runtime.refresh() }

@@ -153,8 +153,14 @@ struct TitleSection<Item>: Identifiable {
     }
 
     static func group(_ items: [Item], by title: (Item) -> String) -> [TitleSection] {
-        let keyed = items.map { item in (sortKey: sortKey(title(item)), item: item) }
-        .sorted { $0.sortKey.localizedStandardCompare($1.sortKey) == .orderedAscending }
+        var keyed: [(sortKey: String, item: Item)] = []
+        keyed.reserveCapacity(items.count)
+        for item in items {
+            // Building pinyin keys is the expensive stage; stop when a newer input superseded it.
+            if Task.isCancelled { return [] }
+            keyed.append((sortKey: sortKey(title(item)), item: item))
+        }
+        keyed.sort { $0.sortKey.localizedStandardCompare($1.sortKey) == .orderedAscending }
         let grouped = Dictionary(grouping: keyed) { entry in
             entry.sortKey.first.map { $0.isASCII && $0.isLetter ? String($0).uppercased() : "#" } ?? "#"
         }

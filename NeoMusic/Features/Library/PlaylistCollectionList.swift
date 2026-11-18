@@ -5,13 +5,17 @@ import UIKit
 /// 行上的放置目标收不到。这里由集合视图统一处理点按、长按菜单与“拖到文件夹上移入”，
 /// 行内容仍由 SwiftUI 渲染。交互对照 Apple Music：长按先出菜单，接着拖动即拿起封面缩略图，
 /// 拖到文件夹上整行高亮，松手移入。
-struct GenericCollectionList<Item: Identifiable & Equatable>: UIViewControllerRepresentable {
+struct GenericCollectionList<Item: Identifiable & Equatable>: UIViewControllerRepresentable where Item.ID == String {
     let items: [Item]
     let menu: (Item) -> UIMenu
     let open: (Item, @escaping () -> UIView?) -> Void
     let moveItem: ((_ id: String, _ folderID: String) -> Void)?
     let shelfItem: (Item) -> LibraryShelfItem
     let route: (Item) -> LibraryRoute
+    /// Rows that only perform an action (for example playing a song) must release the
+    /// system selection as soon as the tap is handled. Navigating rows keep it until
+    /// `PlaylistListController` fades it alongside the push.
+    var deselectsImmediately = false
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -71,16 +75,16 @@ struct GenericCollectionList<Item: Identifiable & Equatable>: UIViewControllerRe
             self.environment = environment
             let previous = itemsByID
             latest = list
-            itemsByID = Dictionary(list.items.map { ($0.id as! String, $0) }, uniquingKeysWith: { first, _ in first })
+            itemsByID = Dictionary(list.items.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
 
             var snapshot = NSDiffableDataSourceSnapshot<Int, String>()
             snapshot.appendSections([0])
-            snapshot.appendItems(list.items.map { $0.id as! String })
+            snapshot.appendItems(list.items.map(\.id))
             let appearanceChanged = configuredColorScheme != environment.colorScheme
                 || configuredDynamicTypeSize != environment.dynamicTypeSize || configuredLocale != environment.locale
             let changed = list.items.filter { item in
-                previous[item.id as! String].map { $0 != item || appearanceChanged } ?? false
-            }.map { $0.id as! String }
+                previous[item.id].map { $0 != item || appearanceChanged } ?? false
+            }.map(\.id)
             snapshot.reconfigureItems(changed)
             if hasApplied, changed.isEmpty, dataSource.snapshot().itemIdentifiers == snapshot.itemIdentifiers { return }
             let needsLayout = configuredDynamicTypeSize != environment.dynamicTypeSize
@@ -125,9 +129,15 @@ struct GenericCollectionList<Item: Identifiable & Equatable>: UIViewControllerRe
         }
 
         func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
+            let deselectsImmediately = latest?.deselectsImmediately == true
+            defer {
+                if deselectsImmediately {
+                    collectionView.deselectItem(at: indexPath, animated: true)
+                }
+            }
             if let item = item(at: indexPath), let latest {
                 latest.open(item) { [weak self] in
-                    guard let self, let path = self.dataSource?.indexPath(for: item.id as! String),
+                    guard let self, let path = self.dataSource?.indexPath(for: item.id),
                           let cell = self.collectionView?.cellForItem(at: path) else { return nil }
                     return cell.libraryArtworkSource()
                 }
@@ -143,7 +153,7 @@ struct GenericCollectionList<Item: Identifiable & Equatable>: UIViewControllerRe
             let traits = collectionView.traitCollection.modifyingTraits {
                 $0.preferredContentSizeCategory = UIContentSizeCategory(environment.dynamicTypeSize)
             }
-            return UIContextMenuConfiguration(identifier: item.id as! String as NSString) {
+            return UIContextMenuConfiguration(identifier: item.id as NSString) {
                 let size = MenuPreviewCard.size(for: shelfItem.previewLines, compatibleWith: traits)
                 let preview = UIHostingController(rootView: MenuPreviewCard(artwork: shelfItem.artwork, lines: shelfItem.previewLines)
                     .libraryHostedAppearance(environment)
@@ -176,7 +186,7 @@ struct GenericCollectionList<Item: Identifiable & Equatable>: UIViewControllerRe
                             at indexPath: IndexPath) -> [UIDragItem] {
             guard let item = item(at: indexPath), let latest else { return [] }
             let shelfItem = latest.shelfItem(item)
-            let dragItem = UIDragItem(itemProvider: NSItemProvider(object: item.id as! String as NSString))
+            let dragItem = UIDragItem(itemProvider: NSItemProvider(object: item.id as NSString))
             dragItem.localObject = item.id
             if let image = Self.thumbnail(for: shelfItem.artwork, scale: collectionView.traitCollection.displayScale) {
                 dragItem.previewProvider = {

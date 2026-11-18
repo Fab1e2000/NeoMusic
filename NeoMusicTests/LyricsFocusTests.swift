@@ -73,18 +73,42 @@ final class LyricsFocusTests: XCTestCase {
         defer { window.isHidden = true }
         try await assertFocus(40, in: state)
         let scrollView = try XCTUnwrap(scrollViews(in: window).first)
-        XCTAssertFalse(scrollView.clipsToBounds)
-        let rows = scrollView.subviews.filter { $0.subviews.first is any UIContentView }
-        XCTAssertEqual(rows.count, state.lyrics.lines.count)
-        for row in rows {
-            let host = try XCTUnwrap(row.subviews.first)
-            XCTAssertFalse(row.clipsToBounds)
-            XCTAssertFalse(host.clipsToBounds)
-            XCTAssertLessThan(host.frame.minX, row.bounds.minX)
-            XCTAssertGreaterThan(host.frame.maxX, row.bounds.maxX)
-            if row.frame.maxY < scrollView.bounds.minY - 24 || row.frame.minY > scrollView.bounds.maxY + 24 {
-                XCTAssertTrue(host.isHidden, "Unclipped rows must not draw outside the vertical viewport")
-            }
+        let table = try XCTUnwrap(scrollView as? NativeLyricsScrollView)
+        XCTAssertFalse(table.clipsToBounds)
+        let cells = table.visibleCells
+        XCTAssertFalse(cells.isEmpty)
+        XCTAssertLessThan(cells.count, state.lyrics.lines.count,
+                          "Only visible rows plus overscan may hold hosting views")
+        XCTAssertLessThan(cells.count, 40)
+
+        let bleed = NativeLyricsScrollView.horizontalBleed
+        XCTAssertEqual(table.frame.minX, -bleed, accuracy: 0.5,
+                       "The row surface must extend past the viewport for blur bleed")
+        let viewportWidth = table.superview?.bounds.width ?? table.bounds.width
+        XCTAssertEqual(table.bounds.width, viewportWidth + 2 * bleed, accuracy: 0.5)
+
+        let overscan = NativeLyricsScrollView.viewportOverscan
+        let visualHeight = table.bounds.height - 2 * overscan
+        let visualTop = table.contentOffset.y + overscan
+        let fade = LyricsViewportFade(
+            height: visualHeight, referenceHeight: visualHeight - 120,
+            shownReferenceHeight: visualHeight - 120, topOverlayHeight: 0,
+            isInterfaceHidden: false
+        )
+        for cell in table.visibleCells {
+            XCTAssertFalse(cell.clipsToBounds)
+            XCTAssertFalse(cell.contentView.clipsToBounds)
+            XCTAssertEqual(cell.bounds.width, table.bounds.width, accuracy: 0.5)
+            let host = try XCTUnwrap(
+                cell.subviews.first { $0 is any UIContentView }
+                    ?? cell.subviews.first { $0 !== cell.contentView }
+            )
+            XCTAssertEqual(host.bounds.width, cell.bounds.width, accuracy: 0.5)
+            let textHeight = cell.bounds.height - AppleMusicLyricsMotionProfile.iOS26_6.lineSpacing
+            XCTAssertEqual(cell.frame.minY - visualTop + textHeight >= fade.topStart - bleed
+                           && cell.frame.minY - visualTop <= fade.bottomEnd + bleed,
+                           !host.isHidden,
+                           "Unclipped rows must not draw outside the vertical viewport")
         }
         let focus = try XCTUnwrap(state.geometry.top(for: 40))
         let wrappedTop = try XCTUnwrap(state.geometry.top(for: 42))
@@ -102,6 +126,7 @@ final class LyricsFocusTests: XCTestCase {
         let window = try await mount(state, size: .large)
         defer { window.isHidden = true }
         let scrollView = try XCTUnwrap(scrollViews(in: window).first)
+        let overscan = NativeLyricsScrollView.viewportOverscan
         // Re-layout before another render commit must retain the current model position.
         scrollView.setNeedsLayout()
         scrollView.layoutIfNeeded()
@@ -121,13 +146,13 @@ final class LyricsFocusTests: XCTestCase {
                     let ownerFrame = scrollView.layer.convert(owner.bounds, from: owner)
                     let frame = scrollView.layer.convert(mask.frame, from: owner)
                     return ownerFrame.intersects(scrollView.bounds)
-                        && abs(frame.minY - scrollView.bounds.minY - state.topOverlayHeight) < 2
-                        && abs(frame.maxY - scrollView.bounds.minY - bottom) < 2
+                        && abs(frame.minY - scrollView.bounds.minY - overscan - state.topOverlayHeight) < 2
+                        && abs(frame.maxY - scrollView.bounds.minY - overscan - bottom) < 2
                 }
             }
             XCTAssertTrue(edgeSettled, "Leaf masks must follow the header and playback boundary")
-            XCTAssertFalse(scrollView.point(inside: CGPoint(x: 20, y: scrollView.bounds.minY + 60), with: nil))
-            XCTAssertEqual(scrollView.point(inside: CGPoint(x: 20, y: scrollView.bounds.minY + 490), with: nil), hidden)
+            XCTAssertFalse(scrollView.point(inside: CGPoint(x: 20, y: scrollView.bounds.minY + overscan + 60), with: nil))
+            XCTAssertEqual(scrollView.point(inside: CGPoint(x: 20, y: scrollView.bounds.minY + overscan + 490), with: nil), hidden)
         }
     }
 
@@ -341,6 +366,202 @@ final class LyricsFocusTests: XCTestCase {
         return heights
     }
 
+    func testFarSeekHandsOffVisibleSourceRowsAndReleasesSnapshots() async throws {
+        let state = LyricsFocusTestState()
+        let window = try await mount(state, size: .large)
+        defer { window.isHidden = true }
+        try await assertFocus(40, in: state)
+        let table = try XCTUnwrap(
+            scrollViews(in: window).compactMap { $0 as? NativeLyricsScrollView }.first
+        )
+        XCTAssertEqual(table.sourceSnapshotCount, 0)
+        let sourceVisible = table.visibleCells.count
+        let handoffsBefore = table.sourceSnapshotHandoffCount
+
+        state.activeID = 62
+        let handedOff = try await waitUntil { table.sourceSnapshotHandoffCount > handoffsBefore }
+        XCTAssertTrue(handedOff, "A far seek must hand off the leaving source rows")
+        XCTAssertLessThanOrEqual(table.sourceSnapshotHandoffCount - handoffsBefore, sourceVisible,
+                                 "Snapshots must stay bounded by the visible source rows")
+        XCTAssertLessThanOrEqual(table.sourceSnapshotCount, sourceVisible)
+
+        try await assertFocus(62, in: state)
+        let released = try await waitUntil { table.sourceSnapshotCount == 0 }
+        XCTAssertTrue(released, "Source snapshots must be released after the spring")
+        XCTAssertLessThan(table.visibleCells.count, 40)
+    }
+
+    func testSeekWhileInterfaceHiddenAnimatesBoundaryInsteadOfSnapping() async throws {
+        let state = LyricsFocusTestState()
+        state.isInterfaceHidden = true
+        let window = try await mount(state, size: .large)
+        defer { window.isHidden = true }
+        try await assertFocus(40, in: state)
+        let table = try XCTUnwrap(
+            scrollViews(in: window).compactMap { $0 as? NativeLyricsScrollView }.first
+        )
+        let hiddenHeight = table.bounds.height - 2 * NativeLyricsScrollView.viewportOverscan
+        XCTAssertEqual(table.interfaceFadeHeight, hiddenHeight, accuracy: 2)
+
+        table.performSeek(row: 62)
+
+        XCTAssertFalse(state.isInterfaceHidden, "Tapping a lyric must reveal the controls")
+        XCTAssertTrue(table.isInterfaceFadeAnimating,
+                      "The visible boundary must animate with the seek instead of jumping immediately")
+        XCTAssertTrue(table.isRowTransitionAnimating,
+                      "The lyric rows themselves must use their UIKit transition, not jump to the destination")
+        XCTAssertGreaterThan(table.sourceSnapshotCount, 0,
+                             "A far seek from the hidden state must hand off the leaving source rows")
+        let rowStillAnimating = try await waitUntil { !table.isRowTransitionAnimating }
+        XCTAssertTrue(rowStillAnimating)
+        let settled = try await waitUntil { !table.isInterfaceFadeAnimating }
+        XCTAssertTrue(settled)
+        XCTAssertEqual(table.interfaceFadeHeight, hiddenHeight - 120, accuracy: 2,
+                       "The settled boundary must account for the revealed controls")
+        try await assertFocus(62, in: state)
+    }
+
+    func testSeekFromBrowsedViewportStartsAtVisibleScrollPosition() async throws {
+        let state = LyricsFocusTestState()
+        let window = try await mount(state, size: .large)
+        defer { window.isHidden = true }
+        try await assertFocus(40, in: state)
+        let table = try XCTUnwrap(
+            scrollViews(in: window).compactMap { $0 as? NativeLyricsScrollView }.first
+        )
+
+        // Move the viewport away from the playing line, as a user does while browsing.
+        table.delegate?.scrollViewWillBeginDragging?(table)
+        table.scrollToRow(at: IndexPath(row: 68, section: 0), at: .top, animated: false)
+        table.layoutIfNeeded()
+        state.isInterfaceHidden = true
+        try await Task.sleep(for: .milliseconds(150))
+        let visualHeight = table.bounds.height - 2 * NativeLyricsScrollView.viewportOverscan
+        let tapped = try XCTUnwrap(table.visibleLineIDs.compactMap { row -> (Int, CGFloat)? in
+            guard let origin = table.transitionViewportTop(forRow: row),
+                  origin >= 0, origin < visualHeight else { return nil }
+            return (row, origin)
+        }.first)
+        let tappedRow = tapped.0
+        let origin = tapped.1
+
+        table.performSeek(row: tappedRow)
+
+        XCTAssertTrue(table.isRowTransitionAnimating)
+        let start = try XCTUnwrap(table.pendingTransitionViewportTop(forRow: tappedRow))
+        XCTAssertEqual(start, origin, accuracy: 2,
+                       "A tap must start from the current browsed viewport, not from the playing line")
+        try await assertFocus(tappedRow, in: state)
+    }
+
+    func testFastTrackReplacementRemovesSourceSnapshots() async throws {
+        let state = LyricsFocusTestState()
+        let window = try await mount(state, size: .large)
+        defer { window.isHidden = true }
+        try await assertFocus(40, in: state)
+        let table = try XCTUnwrap(
+            scrollViews(in: window).compactMap { $0 as? NativeLyricsScrollView }.first
+        )
+        let handoffsBefore = table.sourceSnapshotHandoffCount
+        state.activeID = 62
+        let handedOff = try await waitUntil { table.sourceSnapshotHandoffCount > handoffsBefore }
+        XCTAssertTrue(handedOff)
+        XCTAssertGreaterThan(table.sourceSnapshotCount, 0)
+
+        state.lyrics = LyricsFocusTestState.makeLyrics(count: 80, idOffset: 10_000)
+        state.activeID = 10_040
+        let replaced = try await waitUntil {
+            state.renderedActiveID == 10_040 && table.renderedLineCount == 80
+        }
+        XCTAssertTrue(replaced)
+        XCTAssertEqual(table.sourceSnapshotCount, 0,
+                       "Track replacement must drop the old source snapshots")
+        try await assertFocus(10_040, in: state)
+        XCTAssertTrue(table.visibleLineIDs.allSatisfy { $0 >= 10_000 },
+                      "Old lyric snapshots must not cover the new lyrics")
+        XCTAssertEqual(table.sourceSnapshotCount, 0)
+    }
+
+    func testReduceMotionDoesNotHandOffSourceSnapshots() async throws {
+        let state = LyricsFocusTestState()
+        state.reducesMotion = true
+        let window = try await mount(state, size: .large)
+        defer { window.isHidden = true }
+        try await assertFocus(40, in: state)
+        let table = try XCTUnwrap(
+            scrollViews(in: window).compactMap { $0 as? NativeLyricsScrollView }.first
+        )
+        let handoffsBefore = table.sourceSnapshotHandoffCount
+        state.activeID = 79
+        try await assertFocus(79, in: state)
+        XCTAssertEqual(table.sourceSnapshotHandoffCount, handoffsBefore)
+        XCTAssertEqual(table.sourceSnapshotCount, 0)
+    }
+
+    func testThousandLineLyricsKeepRowMaterializationBounded() async throws {
+        let state = LyricsFocusTestState(lineCount: 1200, activeID: 600)
+        let window = try await mount(state, size: .large)
+        defer { window.isHidden = true }
+        try await assertFocus(600, in: state)
+        let table = try XCTUnwrap(
+            scrollViews(in: window).compactMap { $0 as? NativeLyricsScrollView }.first
+        )
+        XCTAssertEqual(table.renderedLineCount, 1200)
+        XCTAssertTrue(table.visibleLineIDs.contains(600))
+        assertBoundedRows(table, total: 1200)
+
+        // Basic user scrolling: a bounded window follows the offset while browsing.
+        table.delegate?.scrollViewWillBeginDragging?(table)
+        table.setContentOffset(CGPoint(x: 0, y: table.contentOffset.y + 1800), animated: false)
+        table.layoutIfNeeded()
+        XCTAssertGreaterThan(table.contentOffset.y, -table.contentInset.top)
+        assertBoundedRows(table, total: 1200)
+        table.delegate?.scrollViewDidEndDragging?(table, willDecelerate: false)
+
+        // Tap-to-seek uses the same owner path and re-focuses without a full row set.
+        let visibleIDs = table.visibleLineIDs.sorted()
+        guard !visibleIDs.isEmpty else {
+            XCTFail("Scrolling must keep a bounded row window visible")
+            return
+        }
+        let target = visibleIDs[visibleIDs.count / 2]
+        let seeks = state.seekCount
+        table.performSeek(row: target)
+        XCTAssertEqual(state.seekCount, seeks + 1)
+        try await assertFocus(target, in: state)
+        let released = try await waitUntil { table.sourceSnapshotCount == 0 }
+        XCTAssertTrue(released)
+        assertBoundedRows(table, total: 1200)
+
+        // Rapid song replacement must not leave any row from the previous lyrics.
+        for (index, offset) in [10_000, 20_000, 30_000].enumerated() {
+            state.lyrics = LyricsFocusTestState.makeLyrics(count: 1200, idOffset: offset)
+            state.activeID = offset + 600 + index
+        }
+        let replaced = try await waitUntil {
+            state.renderedActiveID == 30_602 && table.renderedLineCount == 1200
+        }
+        XCTAssertTrue(replaced)
+        try await assertFocus(30_602, in: state)
+        XCTAssertTrue(table.visibleLineIDs.allSatisfy { $0 >= 30_000 },
+                      "Visible rows must never contain the previous song's lyrics")
+        XCTAssertEqual(Set(table.visibleLineIDs).count, table.visibleCells.count,
+                       "Each visible cell must carry exactly one current lyric line")
+        XCTAssertEqual(table.sourceSnapshotCount, 0)
+        assertBoundedRows(table, total: 1200)
+    }
+
+    private func assertBoundedRows(_ table: NativeLyricsScrollView, total: Int) {
+        XCTAssertLessThan(table.visibleCells.count, 40,
+                          "Only visible rows plus overscan may be materialized")
+        XCTAssertLessThan(table.visibleCells.count, total / 10,
+                          "Materialized rows must not scale with the lyric count")
+        let residentCells = table.subviews.filter { $0 is UITableViewCell }
+        XCTAssertGreaterThanOrEqual(residentCells.count, table.visibleCells.count)
+        XCTAssertLessThan(residentCells.count, 40,
+                          "No detached cell rows may stay resident")
+    }
+
     private func mount(_ state: LyricsFocusTestState, size: DynamicTypeSize) async throws -> UIWindow {
         let content = LyricsFocusTestContent(state: state)
             .dynamicTypeSize(size)
@@ -355,6 +576,9 @@ final class LyricsFocusTests: XCTestCase {
         host.view.layoutIfNeeded()
         let laidOut = try await waitUntil { state.viewportHeight == 600 }
         XCTAssertTrue(laidOut)
+        if let table = scrollViews(in: host.view).compactMap({ $0 as? NativeLyricsScrollView }).first {
+            state.focusLineHeight = table.focusLineHeight
+        }
         return window
     }
 
@@ -386,7 +610,7 @@ final class LyricsFocusTests: XCTestCase {
 
 @MainActor @Observable
 private final class LyricsFocusTestState {
-    var activeID = 40
+    var activeID: Int
     var isActive = true
     var isInterfaceHidden = false
     var trackIdentity = 0
@@ -397,24 +621,33 @@ private final class LyricsFocusTestState {
     var presentationScale: CGFloat = 1
     var seekCount = 0
     var topOverlayHeight: CGFloat = 0
+    var focusLineHeight: CGFloat = 0
+    var reducesMotion = false
+    var lyrics: PlayerLyrics
 
-    let lyrics: PlayerLyrics = {
-        let lines = (0..<80).map { index in
+    init(lineCount: Int = 80, activeID: Int = 40, idOffset: Int = 0) {
+        self.activeID = activeID
+        self.lyrics = Self.makeLyrics(count: lineCount, idOffset: idOffset)
+    }
+
+    static func makeLyrics(count: Int, idOffset: Int = 0) -> PlayerLyrics {
+        let lines = (0..<count).map { index in
             let text: String
             switch index % 4 {
-            case 0: text = "\(index + 1)"
+            case 0: text = "\(idOffset + index + 1)"
             case 1: text = "旋律\n回声"
             case 2: text = "沿着熟悉的街道继续向前，看远处的光渐渐亮起"
             default: text = "尾声"
             }
-            return PlayerLyricLine(id: index, time: Double(index * 4), text: text)
+            return PlayerLyricLine(id: idOffset + index, time: Double(index * 4), text: text)
         }
         return PlayerLyrics(lines: lines, plainText: lines.map(\.text).joined(separator: "\n"), source: "test")
-    }()
+    }
 
     func expectedTop(forRowHeight height: CGFloat) -> CGFloat {
         let visibleHeight = (isInterfaceHidden ? viewportHeight : viewportHeight - 120) - topOverlayHeight
-        let leadingLineHeight = geometry.height(for: 40) ?? height
+        let leadingLineHeight = focusLineHeight > 0
+            ? focusLineHeight : (geometry.height(for: 40) ?? height)
         return topOverlayHeight + min(max(visibleHeight * 0.233 - leadingLineHeight / 2, visibleHeight * 0.08),
                    max(visibleHeight * 0.08, visibleHeight * 0.84 - height))
     }
@@ -434,6 +667,7 @@ private struct LyricsFocusTestContent: View {
             },
             topOverlayHeight: state.topOverlayHeight, rowGeometry: state.geometry
         )
+        .environment(\._accessibilityReduceMotion, state.reducesMotion)
         .id(state.trackIdentity)
         .scaleEffect(state.presentationScale, anchor: .center)
         .frame(width: 338, height: 600)

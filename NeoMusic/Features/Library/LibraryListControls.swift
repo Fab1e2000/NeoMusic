@@ -47,9 +47,13 @@ final class AsyncListProjection<Input: Equatable, Output> {
         return placeholder(input)
     }
 
-    /// True once `input` hits the synchronous fast path or an initial background projection has committed.
+    /// True only for the current input: it either hits the synchronous fast path or its own
+    /// background projection has committed. A retained snapshot for a previous input stays
+    /// visible through `currentValue`, but must never make the new input look resolved.
     func isResolved(for input: Input, fastPath: (Input) -> Output?) -> Bool {
-        fastPath(input) != nil || committedOutput != nil
+        fastPath(input) != nil
+            || (committedInput == input && committedOutput != nil)
+            || (fallbackInput == input && fallbackOutput != nil)
     }
 
     func computeIfNeeded<Intermediate: Sendable>(
@@ -59,26 +63,32 @@ final class AsyncListProjection<Input: Equatable, Output> {
         finish: (Intermediate) -> Output
     ) async {
         if let fast = fastPath(input) {
-            committedInput = input
-            committedOutput = fast
-            fallbackInput = nil
-            fallbackOutput = nil
+            guard !Task.isCancelled else { return }
+            commit(fast, for: input)
             return
         }
         guard committedInput != input else { return }
         if fallbackInput == input, let fallback = fallbackOutput {
-            committedInput = input
-            committedOutput = fallback
-            fallbackInput = nil
-            fallbackOutput = nil
+            guard !Task.isCancelled else { return }
+            commit(fallback, for: input)
             return
         }
-        let intermediate = await Task.detached(priority: .userInitiated) {
-            background()
-        }.value
-        guard !Task.isCancelled else { return }
+        // The child of a task group inherits cancellation from the `.task(id:)` that owns this
+        // call, unlike `Task.detached`. When the controls change, the superseded filter/sort can
+        // observe `Task.isCancelled` and stop instead of running to completion.
+        let intermediate = await withTaskGroup(of: Intermediate?.self) { group -> Intermediate? in
+            group.addTask { background() }
+            for await value in group { return value }
+            return nil
+        }
+        // A cancelled task must never publish a result for an input the user already replaced.
+        guard let intermediate, !Task.isCancelled else { return }
+        commit(finish(intermediate), for: input)
+    }
+
+    private func commit(_ output: Output, for input: Input) {
         committedInput = input
-        committedOutput = finish(intermediate)
+        committedOutput = output
         fallbackInput = nil
         fallbackOutput = nil
     }
@@ -177,14 +187,20 @@ struct LibrarySortMenu<Sort: Hashable & Sendable>: View {
 
 extension Sequence {
     /// 按字符串排序；中文按拼音，非字母开头的排在最后，与资料库字母分组（“#”在最后）一致。
+    /// A cancelled caller (a superseded background projection) stops building sort keys early;
+    /// its partial result is discarded by `AsyncListProjection`.
     func sorted(byName name: (Element) -> String) -> [Element] {
-        map { element -> (isLetter: Bool, key: String, element: Element) in
+        var keyed: [(isLetter: Bool, key: String, element: Element)] = []
+        keyed.reserveCapacity(underestimatedCount)
+        for element in self {
+            if Task.isCancelled { return [] }
             let key = TitleSection<Element>.sortKey(name(element))
-            return (key.first.map { $0.isASCII && $0.isLetter } ?? false, key, element)
+            keyed.append((key.first.map { $0.isASCII && $0.isLetter } ?? false, key, element))
         }
-        .sorted { lhs, rhs in
-            lhs.isLetter != rhs.isLetter ? lhs.isLetter : lhs.key.localizedStandardCompare(rhs.key) == .orderedAscending
-        }
-        .map(\.element)
+        return keyed
+            .sorted { lhs, rhs in
+                lhs.isLetter != rhs.isLetter ? lhs.isLetter : lhs.key.localizedStandardCompare(rhs.key) == .orderedAscending
+            }
+            .map(\.element)
     }
 }

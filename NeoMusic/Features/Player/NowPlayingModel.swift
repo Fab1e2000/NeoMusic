@@ -16,7 +16,6 @@ final class NowPlayingModel {
     private var applyingState = false
     var isPlaying: Bool
     var elapsed: Double { didSet { if !updatingTime && !applyingState { audio?.seek(to: elapsed); saveQueue(); updateNowPlaying() } } }
-    var volume = 1.0 // Compatibility only; the native volume control adjusts system volume.
     var repeatMode = RepeatMode.all { didSet { if !applyingState { prepareNext() }; updateRemoteCommandAvailability(); saveQueue() } }
     var isShuffled = false { didSet {
         guard !applyingState, oldValue != isShuffled, hasCurrent else { return }
@@ -119,31 +118,6 @@ final class NowPlayingModel {
         if let continuation { replenishQueue?(continuation, false, false) }
     }
 
-    /// 在待播部分内移动；偏移以“当前曲目之后”为起点。
-    func moveUpcoming(from source: Int, to destination: Int) {
-        let base = currentIndex + 1
-        guard queue.indices.contains(base + source), destination >= 0 else { return }
-        let entry = entryIDs.remove(at: base + source)
-        let item = queue.remove(at: base + source)
-        let target = base + min(destination, queue.count - base)
-        queue.insert(item, at: target)
-        entryIDs.insert(entry, at: target)
-        prepareNext()
-        saveQueue()
-    }
-
-    /// Circular queue presentation: every occurrence except the current one, tail then prefix.
-    var wrappedUpcomingEntryIDs: [UUID] {
-        guard hasCurrent else { return [] }
-        return Array(entryIDs.dropFirst(currentIndex + 1)) + Array(entryIDs.prefix(currentIndex))
-    }
-    func moveWrappedUpcoming(from source: Int, to destination: Int) {
-        var upcoming = wrappedUpcomingEntryIDs
-        guard upcoming.indices.contains(source), destination >= 0 else { return }
-        let entry = upcoming.remove(at: source)
-        upcoming.insert(entry, at: min(destination, upcoming.count))
-        applyWrappedOrder(upcoming)
-    }
     func reorderUpcoming(indices: [Int], fromOffsets: IndexSet, toOffset: Int) {
         guard indices.allSatisfy({ queue.indices.contains($0) && $0 != currentIndex }),
               Set(indices).count == indices.count, fromOffsets.allSatisfy({ indices.indices.contains($0) }),
@@ -168,17 +142,6 @@ final class NowPlayingModel {
         queue.remove(at: index)
         if index < currentIndex { currentIndex -= 1 }
         originalOrder.removeAll { $0 == entry }; userQueuedIDs.remove(entry)
-        prepareNext(); saveQueue()
-    }
-    func removeWrappedUpcoming(_ entry: UUID) {
-        guard let index = entryIDs.firstIndex(of: entry) else { return }
-        removeQueueEntry(at: index)
-    }
-    private func applyWrappedOrder(_ upcoming: [UUID]) {
-        guard hasCurrent, upcoming.count == queue.count - 1 else { return }
-        let slots = Array(queue.indices.dropFirst(currentIndex + 1)) + Array(queue.indices.prefix(currentIndex))
-        let songs = Dictionary(uniqueKeysWithValues: zip(entryIDs, queue))
-        for (slot, entry) in zip(slots, upcoming) { entryIDs[slot] = entry; queue[slot] = songs[entry]! }
         prepareNext(); saveQueue()
     }
 

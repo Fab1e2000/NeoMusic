@@ -3,7 +3,6 @@ import Observation
 
 @MainActor @Observable final class HomeMusicIntegration {
     let model = HomeContentModel()
-    let history: PlaybackCollectionHistory
     let detailLibrary = PlaylistLibrary(playlists: [], folders: [])
     var showsLogin = false
     private(set) var cachedSongs: [LibrarySongItem] = []
@@ -45,14 +44,11 @@ import Observation
     init(account: NeteaseAccount, player: NowPlayingModel = LocalLibrary.player) {
         self.account = account
         self.player = player
-        history = PlaybackCollectionHistory(url: URL.applicationSupportDirectory.appendingPathComponent("home-playback-history.json"))
     }
     func connect() {
         guard !connected else { return }
         connected = true
         model.login = { [weak self] in self?.showsLogin = true }
-        model.retryFeatured = { [weak self] in Task { await self?.account.home?.refresh() } }
-        model.retryRecommendations = model.retryFeatured
         model.refresh = { [weak self] in
             guard let self else { return }
             self.model.isLoading = true
@@ -70,8 +66,7 @@ import Observation
         player.replenishQueue = { [weak self] continuation, advance, ended in
             self?.replenishRoaming(continuation: continuation, shouldAdvance: advance, playbackEnded: ended)
         }
-        player.onCollectionPlaybackStarted = { [weak self] reference in
-            self?.history.record(reference)
+        player.onCollectionPlaybackStarted = { reference in
             if reference.kind == .localPlaylist { LocalLibrary.playlistLibrary.markPlayed(reference.id) }
             if reference.kind == .onlinePlaylist, let owner = reference.ownerID {
                 let id = reference.id.hasPrefix("netease-playlist:") ? reference.id : "netease-playlist:\(owner):\(reference.id)"
@@ -99,24 +94,6 @@ import Observation
         observe()
         observeCurrentSong()
         observeRecent()
-    }
-    func restore() async { await history.restore() }
-    func flushHistory() async { await history.flush() }
-    func flushHistoryForBackground() {
-        var identifier = UIBackgroundTaskIdentifier.invalid
-        identifier = UIApplication.shared.beginBackgroundTask(withName: "SavePlaybackHistory") {
-            if identifier != .invalid {
-                UIApplication.shared.endBackgroundTask(identifier)
-                identifier = .invalid
-            }
-        }
-        Task {
-            await history.flush()
-            if identifier != .invalid {
-                UIApplication.shared.endBackgroundTask(identifier)
-                identifier = .invalid
-            }
-        }
     }
 
     private func observe() {
@@ -173,13 +150,11 @@ import Observation
         withObservationTracking {
             _ = LocalLibrary.playlistLibrary.playlists
             _ = LocalLibrary.songLibrary.songs
-            _ = history.recent(for: owner)
         } onChange: { [weak self] in
             Task { @MainActor in self?.observeRecent() }
         }
         if retainReferencedSongs() { publish() }
         refreshRetainedArtwork()
-        updateRecent()
         syncOpenCollectionStates()
     }
     static func playlistArtwork(id: Int64, home: NeteaseHomeStore?) -> Artwork {
@@ -262,18 +237,6 @@ import Observation
         }
 
         if model.isGuest != (currentOwner == nil) { model.isGuest = currentOwner == nil }
-        var featured: [HomeContentItem] = [.init(id: "favorites", title: "喜爱歌曲", subtitle: "你喜欢的音乐，都在这里。", artwork: .favorites, style: .favorites, action: .navigate(.playlist("favorites")))]
-        if let daily = account.home?.daily, let owner, account.home?.userID == account.profile?.userID {
-            featured.append(.init(id: "daily", title: "每日推荐", subtitle: "每天为你挑选的音乐。", artwork: artwork(daily.songs.first?.artworkURL), action: .navigate(.playlist("home:daily:\(owner):\(daily.id)"))))
-        }
-        if model.featured != featured { model.featured = featured }
-        if model.featuredError != account.home?.dailyError { model.featuredError = account.home?.dailyError }
-        if model.recommendationsError != account.home?.recommendationsError { model.recommendationsError = account.home?.recommendationsError }
-        let recommendations: [HomeContentItem] = (account.home?.userID == account.profile?.userID ? account.home?.recommendations ?? [] : []).map {
-            .init(id: String($0.id), title: $0.title, subtitle: $0.creator, artwork: Self.playlistArtwork(id: $0.id, home: account.home), action: .navigate(.playlist("home:playlist:\($0.id)")))
-        }
-        if model.recommendations != recommendations { model.recommendations = recommendations }
-        updateRecent()
         for (id, value) in loaded { updateDetail(id, item: value.0, songs: value.1) }
         retainReferencedSongs()
         let values = account.home?.userID == account.profile?.userID ? account.home?.cachedSongs ?? [] : []
@@ -292,7 +255,6 @@ import Observation
         retainReferencedSongs()
         syncCachedSongs(home.cachedSongs, home: home, preferAsync: home.cachedSongs.count > 120)
         refreshRetainedArtwork(contentChanged: true)
-        updateRecent()
     }
 
     private func syncCachedSongs(_ values: [NeteaseMusicSong], home: NeteaseHomeStore?, preferAsync: Bool) {
@@ -386,47 +348,9 @@ import Observation
         Self.updateRetainedArtwork(in: LocalLibrary.playlistLibrary, home: home, owner: owner)
     }
 
-    private func updateRecent(artworkOnly: Bool = false) {
-        let recent: [HomeContentItem] = history.recent(for: owner).compactMap { reference in
-            let route: LibraryRoute
-            let cover: Artwork
-            switch reference.kind {
-            case .favorites: route = .playlist("favorites"); cover = .favorites
-            case .localAlbum:
-                route = .album(reference.id)
-                guard let item = LocalLibrary.albums.first(where: { $0.id == reference.id }) else { return nil }
-                cover = item.artwork
-            case .localPlaylist:
-                route = .playlist(reference.id)
-                guard let item = LocalLibrary.playlistLibrary.playlist(reference.id) else { return nil }
-                cover = item.artwork
-            case .onlinePlaylist:
-                let id = reference.id.split(separator: ":").last.map(String.init) ?? reference.id
-                route = .playlist("home:playlist:\(id)")
-                cover = Int64(id).map { Self.playlistArtwork(id: $0, home: account.home) } ?? .playlist
-            case .daily:
-                guard let owner = reference.ownerID else { return nil }
-                route = .playlist("home:daily:\(owner):\(reference.id)")
-                cover = artwork(account.home?.dailySnapshot(id: reference.id)?.songs.first?.artworkURL)
-            }
-            return .init(id: "\(reference.kind.rawValue):\(reference.ownerID ?? "local"):\(reference.id)", title: reference.title, subtitle: "", artwork: cover, style: reference.kind == .favorites ? .favorites : .artwork, action: .navigate(route))
-        }
-        if artworkOnly {
-            let covers = Dictionary(uniqueKeysWithValues: recent.map { ($0.id, $0.artwork) })
-            for item in model.recent { if let cover = covers[item.id] { item.$artwork.update(cover) } }
-        } else if model.recent != recent { model.recent = recent }
-    }
-
     private func publishArtwork(_ urls: Set<URL>) {
         guard let home = account.home, home.userID == account.profile?.userID,
               owner == account.profile.map({ String($0.userID) }) else { return }
-        let remoteByID = Dictionary(uniqueKeysWithValues: home.recommendations.map { (String($0.id), home.cachedDetail(id: $0.id)?.displayArtworkURL(ownerID: home.userID)) })
-        for index in model.recommendations.indices {
-            if let remote = remoteByID[model.recommendations[index].id] ?? nil, urls.contains(remote) {
-                let cover = artwork(remote)
-                if model.recommendations[index].artwork != cover { model.recommendations[index].$artwork.update(cover) }
-            }
-        }
         var songs: [String: LibrarySongItem] = [:]
         for remote in urls {
             for value in artworkSongs[remote] ?? [] {
@@ -470,7 +394,6 @@ import Observation
             if let replacement = songs[item.id] { item.publishArtwork(from: replacement) }
         }
         LocalLibrary.songLibrary.updateOnlineArtwork(songs, source: "home")
-        updateRecent(artworkOnly: true)
     }
     /// A retained Home collection keeps its stable library identity when its images arrive later.
     /// With no URL filter, replay cached files when either the Home cache or retained collections restore.

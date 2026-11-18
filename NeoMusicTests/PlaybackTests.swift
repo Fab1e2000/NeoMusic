@@ -46,7 +46,7 @@ final class PlaybackTests: XCTestCase {
         XCTAssertTrue(model.upcoming.isEmpty)
         model.insertNext([song("a")])
         XCTAssertEqual(model.current.id, "a")
-        model.moveUpcoming(from: 10, to: 0)
+        model.reorderUpcoming(indices: [10], fromOffsets: IndexSet(integer: 0), toOffset: 0)
         XCTAssertEqual(model.queue.count, 1)
     }
     func testForwardCapabilityMatchesFiniteAndContinuingQueueActions() {
@@ -162,7 +162,7 @@ final class PlaybackTests: XCTestCase {
         XCTAssertEqual(model.entryIDs, order)
         model.appendLater([song("a")])
         XCTAssertEqual(Set(model.entryIDs).count, 5)
-        model.moveUpcoming(from: 3, to: 0)
+        model.reorderUpcoming(indices: [1, 2, 3, 4], fromOffsets: IndexSet(integer: 3), toOffset: 0)
         XCTAssertEqual(model.queue.map(\.id), ["a", "a", "b", "a", "c"])
     }
 

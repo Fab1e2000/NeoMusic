@@ -24,7 +24,6 @@ struct LibraryAppTabs<Library: View>: UIViewControllerRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(selection: $selection) }
     func makeUIViewController(context: Context) -> UITabBarController {
-        let account = context.environment[NeteaseAccount.self]
         navigation.configure(environment: context.environment, destination: destination)
         let homeBridge = homeNavigation ?? context.coordinator.homeNavigation
         context.coordinator.libraryBridge = navigation
@@ -40,7 +39,7 @@ struct LibraryAppTabs<Library: View>: UIViewControllerRepresentable {
                 searchNavigation.configure(environment: context.environment, destination: searchDestination ?? destination)
                 return searchNavigation.makeNavigationController(root: searchContent, rootTitle: "搜索")
             }
-            return UIHostingController(rootView: PlaceholderTab(title: "搜索").environment(account))
+            return UIHostingController(rootView: EmptyView())
         }
         search.title = "搜索"
         search.preferredPlacement = .pinned

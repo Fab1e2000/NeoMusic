@@ -213,10 +213,6 @@ private struct OptionArtistsPreview: View {
     @State private var query = ""
     @State private var filter = LibraryFilter.all
     private let artists = ["RIM", "KAF", "KOKO", "Isekaijoucho"]
-    private let assets = [
-        "RIM": "ArtistPreviewRIM", "KAF": "ArtistPreview-kaf",
-        "KOKO": "ArtistPreview-koko", "Isekaijoucho": "ArtistPreview-isekaijoucho"
-    ]
 
     private var visibleArtists: [String] {
         artists.filter {
@@ -246,8 +242,9 @@ private struct OptionArtistsPreview: View {
                     OptionCollectionExamples(title: artist)
                 } label: {
                     HStack(spacing: 12) {
-                        Image(assets[artist] ?? "ArtistPreviewRIM").resizable().scaledToFill()
-                            .frame(width: 48, height: 48).clipShape(.circle)
+                        Circle().fill(.quaternary)
+                            .overlay { Image(systemName: "music.microphone").foregroundStyle(.secondary) }
+                            .frame(width: 48, height: 48)
                             .overlay(alignment: .leading) {
                                 FavoriteMark(isFavorite: artist == "RIM", color: .yellow)
                             }

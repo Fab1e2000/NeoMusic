@@ -213,44 +213,6 @@ final class LocalLibraryTrackCacheTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(try Data(contentsOf: url.appendingPathExtension("startup").appendingPathComponent(key + ".image")), tracks()[0].artworkData)
     }
 
-    func testLegacySnapshotImportsColorsAndImageReferencesWithoutReadingImages() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let url = directory.appendingPathComponent("tracks.json")
-        let original = tracks()
-        let source = try JSONEncoder().encode(original)
-        try source.write(to: url)
-        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
-        let modified = try XCTUnwrap(attributes[.modificationDate] as? Date)
-        let artworkDirectory = url.appendingPathExtension("startup")
-        try FileManager.default.createDirectory(at: artworkDirectory, withIntermediateDirectories: true)
-        var entries: [[String: Any]] = []
-        for track in original {
-            var metadata = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(track)) as? [String: Any])
-            metadata.removeValue(forKey: "artworkData")
-            var entry: [String: Any] = ["metadata": metadata]
-            if track.artworkData != nil { entry["artworkKey"] = "shared-cover" }
-            entries.append(entry)
-        }
-        let snapshot: [String: Any] = ["version": 1, "source": ["size": source.count, "modified": modified.timeIntervalSinceReferenceDate], "tracks": entries]
-        try JSONSerialization.data(withJSONObject: snapshot).write(to: artworkDirectory.appendingPathComponent("snapshot.json"))
-        let color = AlbumArtworkBackdrop(red: 0.1, green: 0.2, blue: 0.3)
-        let colors: [String: Any] = ["version": AlbumArtworkBackdropPreparer.cacheVersion, "colors": ["shared-cover": ["red": color.red, "green": color.green, "blue": color.blue]]]
-        try JSONSerialization.data(withJSONObject: colors).write(to: directory.appendingPathComponent("artwork-backdrops.json"))
-        let cache = LocalLibraryTrackCache()
-        let read = try await cache.read(from: url)
-        let restored = try XCTUnwrap(read)
-        XCTAssertEqual(restored.map(\.id), original.map(\.id))
-        XCTAssertEqual(restored[0].artworkBackdrop, color)
-        XCTAssertEqual(restored[0].artworkKey, "shared-cover")
-        XCTAssertTrue(restored.allSatisfy { $0.artworkData == nil })
-        XCTAssertEqual(try Data(contentsOf: url), source, "Reading must leave the previous store intact")
-        try await cache.write(restored, to: url)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: artworkDirectory.appendingPathComponent("snapshot.json").path))
-        XCTAssertLessThan(try Data(contentsOf: url).count, 4_000)
-    }
-
     func testCorruptIndexAndUnwritableArtworkReportFailureWithoutReplacingMetadata() async throws {
         let documents = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: documents) }

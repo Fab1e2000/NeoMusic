@@ -276,14 +276,10 @@ import XCTest
         let item = NeteaseMusicPlaylist(id: 12, title: "Public list", creator: "Creator", creatorID: 42,
                                         artworkURL: nil, trackCount: 1, isFavorites: false)
         let track = NeteaseMusicSong(id: 9, title: "Song", artist: "Artist", album: "Album", artworkURL: nil, duration: 20)
-        struct Cache: Encodable {
-            let recommendations: [NeteaseMusicPlaylist]
-            let snapshots: [String: NeteaseDailySnapshot]
-            let details: [Int64: NeteasePlaylistDetail]
-        }
-        let cache = Cache(recommendations: [item], snapshots: [:],
-                          details: [item.id: .init(playlist: item, songs: [track], addedTimes: [:])])
-        try JSONEncoder().encode(cache).write(to: directory.appendingPathComponent("public.json"))
+        let pageCache = NeteasePageCache(directory: directory)
+        try await pageCache.save([item], scope: "public", key: "recommendations")
+        try await pageCache.save(NeteasePlaylistDetail(playlist: item, songs: [track], addedTimes: [:]),
+                                 scope: "public", key: "playlist:\(item.id)")
         let home = NeteaseHomeStore(directory: directory)
         await home.activate(nil, refresh: false)
         let account = NeteaseAccount(readSession: { nil }, saveSession: { _ in }, deleteSession: {},
@@ -301,14 +297,9 @@ import XCTest
             LocalLibrary.songLibrary.replaceExternalSongs(previousExternal)
         }
         integration.connect()
-        XCTAssertEqual(integration.model.recommendations.map(\.id), [String(item.id)])
-        XCTAssertEqual(integration.model.featured.map(\.id), ["favorites"])
         XCTAssertTrue(integration.cachedSongs.isEmpty)
         let changes = Mutex(0)
         withObservationTracking {
-            _ = integration.model.featured
-            _ = integration.model.recommendations
-            _ = integration.model.recent
             _ = integration.cachedSongs
         } onChange: {
             changes.withLock { $0 += 1 }
@@ -316,31 +307,36 @@ import XCTest
         home.onChange?()
         home.onArtworkChange?([URL(string: "https://example.com/unrelated-cover.jpg")!])
         XCTAssertEqual(changes.withLock { $0 }, 0)
-        XCTAssertEqual(integration.model.recommendations.first?.title, item.title)
         XCTAssertTrue(integration.cachedSongs.isEmpty)
     }
 
     func testRetainedHomePlaylistReceivesLateArtworkWithoutReopeningDetail() async throws {
+        final class RetainedArtworkProtocol: URLProtocol, @unchecked Sendable {
+            override class func canInit(with request: URLRequest) -> Bool { true }
+            override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+            override func startLoading() {
+                let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+                client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+                client?.urlProtocol(self, didLoad: Data([1, 2, 3]))
+                client?.urlProtocolDidFinishLoading(self)
+            }
+            override func stopLoading() {}
+        }
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        let artworkDirectory = directory.appendingPathComponent("42", isDirectory: true)
-        try FileManager.default.createDirectory(at: artworkDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let remote = try XCTUnwrap(URL(string: "https://example.com/retained.jpg"))
-        let file = artworkDirectory.appendingPathComponent("cover")
-        try Data([1, 2, 3]).write(to: file)
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [RetainedArtworkProtocol.self]
+        let artworkCache = NeteaseArtworkCache(directory: directory.appendingPathComponent("Artwork"),
+                                               session: URLSession(configuration: config))
+        let file = try await artworkCache.imageURL(for: remote, scope: "42")
         let playlist = NeteaseMusicPlaylist(id: 12, title: "Home list", creator: "Creator", creatorID: 42,
                                             artworkURL: remote, trackCount: 1, isFavorites: false)
         let track = NeteaseMusicSong(id: 9, title: "Song", artist: "Artist", album: "Album", artworkURL: remote, duration: 20)
-        struct Cache: Encodable {
-            let recommendations: [NeteaseMusicPlaylist] = []
-            let snapshots: [String: NeteaseDailySnapshot] = [:]
-            let details: [Int64: NeteasePlaylistDetail]
-            let artworkFiles: [String: String]
-        }
-        let cache = Cache(details: [12: .init(playlist: playlist, songs: [track], addedTimes: [:])],
-                          artworkFiles: [remote.absoluteString: file.lastPathComponent])
-        try JSONEncoder().encode(cache).write(to: directory.appendingPathComponent("42.json"))
-        let home = NeteaseHomeStore(directory: directory)
+        try await NeteasePageCache(directory: directory)
+            .save(NeteasePlaylistDetail(playlist: playlist, songs: [track], addedTimes: [:]), scope: "42", key: "playlist:12")
+        let home = NeteaseHomeStore(directory: directory, artworkCache: artworkCache)
         let session = NeteaseSavedSession(profile: .init(userID: 42, nickname: "Test", avatarURL: nil), credential: try .init(musicU: "test"))
         await home.activate(session, refresh: false)
         _ = try await home.restoreCachedDetail(id: 12)
@@ -585,9 +581,52 @@ import XCTest
         XCTAssertTrue(projection.isResolved(for: 1, fastPath: { _ in nil }))
         XCTAssertEqual(projection.currentValue(for: 2, fastPath: { _ in nil }, placeholder: { _ in [] }), [1, 2, 3],
                        "Changing controls keeps previous list visible instead of flashing placeholder")
+        XCTAssertFalse(projection.isResolved(for: 2, fastPath: { _ in nil }),
+                       "A retained result for a previous input must never resolve the new input")
 
         XCTAssertTrue(projection.isResolved(for: 0, fastPath: { _ in [0] }))
         XCTAssertEqual(projection.currentValue(for: 0, fastPath: { _ in [0] }, placeholder: { _ in [] }), [0])
+    }
+
+    func testAsyncListProjectionCancelsSupersededWorkAndNeverPublishesStaleInputs() async {
+        let projection = AsyncListProjection<Int, [Int]>()
+        await projection.computeIfNeeded(for: 1, fastPath: { _ in nil }, background: { [1, 2, 3] }, finish: { $0 })
+        XCTAssertTrue(projection.isResolved(for: 1, fastPath: { _ in nil }))
+
+        let started = expectation(description: "background started")
+        let observedCancellation = Mutex(0)
+        let stale = Task {
+            await projection.computeIfNeeded(
+                for: 2,
+                fastPath: { _ in nil },
+                background: {
+                    started.fulfill()
+                    while !Task.isCancelled { Thread.sleep(forTimeInterval: 0.01) }
+                    observedCancellation.withLock { $0 += 1 }
+                    return [20]
+                },
+                finish: { $0 }
+            )
+        }
+        await fulfillment(of: [started], timeout: 2)
+        stale.cancel()
+        await stale.value
+        XCTAssertGreaterThan(observedCancellation.withLock { $0 }, 0,
+                             "A superseded computation must receive cooperative cancellation")
+        XCTAssertEqual(projection.committedOutput, [1, 2, 3], "A cancelled task must not publish its stale result")
+        XCTAssertFalse(projection.isResolved(for: 2, fastPath: { _ in nil }))
+
+        // An empty snapshot for the previous input must not surface as the new input's empty state.
+        await projection.computeIfNeeded(for: 2, fastPath: { _ in nil }, background: { [Int]() }, finish: { $0 })
+        XCTAssertEqual(projection.currentValue(for: 3, fastPath: { _ in nil }, placeholder: { _ in [] }), [],
+                       "The previous (empty) snapshot stays visible while the new input computes")
+        XCTAssertFalse(projection.isResolved(for: 3, fastPath: { _ in nil }),
+                       "The page must not show the empty state before the new input resolves")
+
+        await projection.computeIfNeeded(for: 3, fastPath: { _ in nil }, background: { [30] }, finish: { $0 })
+        XCTAssertTrue(projection.isResolved(for: 3, fastPath: { _ in nil }))
+        XCTAssertFalse(projection.isResolved(for: 2, fastPath: { _ in nil }))
+        XCTAssertEqual(projection.currentValue(for: 3, fastPath: { _ in nil }, placeholder: { _ in [] }), [30])
     }
 
     func testTitleSectionSortKeyASCIIFastPathAndCJKSorting() {
