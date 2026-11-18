@@ -53,7 +53,6 @@ import XCTest
             block("HOMEPAGE_BLOCK_PLAYLIST_RCMD", "为你推荐的歌单", [resource("list", 4)]),
             block("HOMEPAGE_BLOCK_STYLE_RCMD", "根据《Seed》推荐", [song, song]),
             block("HOMEPAGE_BLOCK_STYLE_RCMD", "根据你喜欢的歌曲推荐", [song]),
-            block("NEOMUSIC_LIKED_SONGS", "根据你喜欢的《Fallback》推荐", [song]),
             block("UNKNOWN", "未知内容", [resource("list", 99)])
         ]])
         let feed = try JSONDecoder().decode(NeteaseHomeFeed.self, from: data)

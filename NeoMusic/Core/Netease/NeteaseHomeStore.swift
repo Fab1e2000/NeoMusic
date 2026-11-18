@@ -3,7 +3,7 @@ import Observation
 
 @MainActor @Observable final class NeteaseHomeStore {
     enum RetrySource: String, CaseIterable, Hashable, Sendable {
-        case feed, recommendations, likedRecommendations, charts, followedReleases, newSongs
+        case feed, recommendations, charts, followedReleases, newSongs
     }
 
     private(set) var userID: Int64?
@@ -14,9 +14,7 @@ import Observation
     private(set) var followedReleases: NeteaseHomeFeed.Block?
     private(set) var chartsError: String?
     private(set) var followedReleasesError: String?
-    private(set) var likedRecommendations: NeteaseHomeFeed.Block?
     private(set) var newSongs: NeteaseHomeFeed.Block?
-    private(set) var likedRecommendationsError: String?
     private(set) var newSongsError: String?
     private(set) var refreshingSources: Set<RetrySource> = []
     private(set) var quickActionStates: [NeteaseHomeQuickAction: NeteaseHomeQuickActionState] = [:]
@@ -24,7 +22,7 @@ import Observation
         let playlistFallback = Self.block(code: "NEOMUSIC_RECOMMENDED_PLAYLISTS", title: "推荐歌单", resources: recommendations.map {
             .init(type: "list", id: $0.id, title: $0.title, artist: $0.creator, image: $0.artworkURL?.absoluteString)
         })
-        let candidates = (feed?.blocks ?? []) + [likedRecommendations, playlistFallback, charts, followedReleases, newSongs].compactMap { $0 }
+        let candidates = (feed?.blocks ?? []) + [playlistFallback, charts, followedReleases, newSongs].compactMap { $0 }
         var categories: [NeteaseHomeCategory: NeteaseHomeFeed.Block] = [:]
         for block in candidates where block.hasDisplayableResources {
             guard let category = block.category, categories[category] == nil else { continue }
@@ -48,15 +46,10 @@ import Observation
     @ObservationIgnored private var refreshIsForced = false
     @ObservationIgnored private var sourceTasks: [RetrySource: Task<Void, Never>] = [:]
     @ObservationIgnored private var sourceTaskIDs: [RetrySource: UUID] = [:]
-    @ObservationIgnored private var likedTask: Task<Void, Never>?
-    @ObservationIgnored private var likedTaskID: UUID?
-    @ObservationIgnored private var likedTaskSeedID: Int64?
     @ObservationIgnored private var likedPlaylistID: Int64?
     @ObservationIgnored private var likedSongIDs: Set<Int64> = []
-    @ObservationIgnored private var likedContextReceived = false
     @ObservationIgnored private var likedSeedID: Int64?
     @ObservationIgnored private var likedSongs: [Int64: NeteaseMusicSong] = [:]
-    @ObservationIgnored private var likedCache: LikedCache?
     @ObservationIgnored private var quickActionTasks: [NeteaseHomeQuickAction: Task<NeteaseHomeQuickActionResult, Error>] = [:]
     @ObservationIgnored private var actionSongs: [NeteaseMusicSong] = []
     @ObservationIgnored private var referencedSongs: [Int64: NeteaseMusicSong] = [:]
@@ -67,10 +60,6 @@ import Observation
         let songs: [NeteaseMusicSong]
         let date: Date
         var consumed = false
-    }
-    private struct LikedCache: Codable, Sendable {
-        let seedID: Int64
-        let block: NeteaseHomeFeed.Block
     }
     @ObservationIgnored private var detailTasks: [Int64: Task<NeteasePlaylistDetail, Error>] = [:]
     @ObservationIgnored private var legacyMigration: Task<Cache?, Never>?
@@ -144,11 +133,10 @@ import Observation
             let oldRefresh = refreshTask; refreshTask = nil; refreshID = nil; oldRefresh?.cancel()
             let oldSources = Array(sourceTasks.values); sourceTasks = [:]; sourceTaskIDs = [:]
             oldSources.forEach { $0.cancel() }; refreshingSources = []
-            let oldLiked = likedTask; likedTask = nil; likedTaskID = nil; likedTaskSeedID = nil; oldLiked?.cancel()
             let oldActions = Array(quickActionTasks.values); quickActionTasks = [:]
             oldActions.forEach { $0.cancel() }
             let oldRoaming = roamingTask; roamingTask = nil; oldRoaming?.cancel(); roamingCache = nil
-            quickActionStates = [:]; likedContextReceived = false; likedPlaylistID = nil; likedSongIDs = []; likedSeedID = nil; likedSongs = [:]; likedCache = nil; actionSongs = []; referencedSongs = [:]
+            quickActionStates = [:]; likedPlaylistID = nil; likedSongIDs = []; likedSeedID = nil; likedSongs = [:]; actionSongs = []; referencedSongs = [:]
             let oldDetails = Array(detailTasks.values); detailTasks = [:]
             oldDetails.forEach { $0.cancel() }
             let oldMigration = legacyMigration; legacyMigration = nil; oldMigration?.cancel()
@@ -160,13 +148,12 @@ import Observation
             userID = nil; credential = nil; restored = false
             cache = Cache(); recommendations = []; daily = nil; songCatalog = []; feed = nil; feedError = nil
             charts = nil; followedReleases = nil; chartsError = nil; followedReleasesError = nil
-            likedRecommendations = nil; newSongs = nil; likedRecommendationsError = nil; newSongsError = nil
+            newSongs = nil; newSongsError = nil
             refreshedDetails = [:]; lastRefresh = nil
             recommendationsError = nil; dailyError = nil; onChange?()
             let revision = generation
             await oldRefresh?.value
             for task in oldSources { await task.value }
-            await oldLiked?.value
             for task in oldActions { _ = await task.result }
             _ = await oldRoaming?.result
             for task in oldDetails { _ = await task.result }
@@ -185,11 +172,10 @@ import Observation
             let loadedFollowed = userID == nil ? nil : try? await pageCache.load(NeteaseHomeFeed.Block.self, scope: scope, key: "home-followed")
             guard revision == generation, !Task.isCancelled else { return }
             charts = loadedCharts; followedReleases = loadedFollowed
-            let loadedLiked = userID == nil ? nil : try? await pageCache.load(LikedCache.self, scope: scope, key: "home-liked")
             let loadedNewSongs = try? await pageCache.load(NeteaseHomeFeed.Block.self, scope: scope, key: "home-new-songs")
             let loadedRoaming = userID == nil ? nil : try? await pageCache.load(RoamingCache.self, scope: scope, key: "home-roaming")
             guard revision == generation, !Task.isCancelled else { return }
-            likedCache = loadedLiked; likedRecommendations = loadedLiked?.block; newSongs = loadedNewSongs
+            newSongs = loadedNewSongs
             roamingCache = loadedRoaming
             rebuildSongCatalog()
             recommendations = cache.recommendations
@@ -235,12 +221,11 @@ import Observation
             async let recommendations: Void = refreshSource(.recommendations, credential: credential, revision: revision, force: force)
             async let newSongs: Void = refreshSource(.newSongs, credential: credential, revision: revision, force: force)
             async let covers: Void = refreshQuickActionCovers(force: force)
-            await refreshSource(.likedRecommendations, credential: credential, revision: revision, force: true)
             _ = await (newSongs, recommendations, covers)
             if revision == generation, refreshID == id {
                 refreshTask = nil; refreshID = nil
                 if !Task.isCancelled, recommendationsError == nil, dailyError == nil, feedError == nil,
-                   chartsError == nil, followedReleasesError == nil, likedRecommendationsError == nil, newSongsError == nil { lastRefresh = Date() }
+                   chartsError == nil, followedReleasesError == nil, newSongsError == nil { lastRefresh = Date() }
             }
         }
         refreshTask = task
@@ -278,9 +263,6 @@ import Observation
             switch source {
             case .feed: await refreshFeed(credential: credential, revision: revision, force: force)
             case .recommendations: await refreshRecommendations(credential: credential, revision: revision)
-            case .likedRecommendations:
-                let liked = scheduleLikedRecommendations(force: force)
-                await withTaskCancellationHandler { await liked?.value } onCancel: { liked?.cancel() }
             case .charts: await refreshCharts(credential: credential, revision: revision)
             case .followedReleases: await refreshFollowed(credential: credential, revision: revision)
             case .newSongs: await refreshNewSongs(credential: credential, revision: revision)
@@ -298,62 +280,9 @@ import Observation
         let unavailable = Set(songs.filter(\.unavailable).map(\.id))
         let availableIDs = likedIDs.filter { $0 > 0 && !unavailable.contains($0) }
         let datedSeed = likedAt.filter { availableIDs.contains($0.key) }.max { $0.value < $1.value }?.key
-        let seedID = datedSeed ?? orderedLikedIDs.first(where: { availableIDs.contains($0) })
-            ?? likedSeedID.flatMap { availableIDs.contains($0) ? $0 : nil }
-        let changed = !likedContextReceived || seedID != likedSeedID || likedSongIDs != availableIDs
         likedSongIDs = availableIDs
-        guard changed else { return }
-        likedContextReceived = true; likedSeedID = seedID
-        likedTask?.cancel()
-        if likedCache?.seedID != seedID { likedRecommendations = nil; likedRecommendationsError = nil }
-        _ = scheduleLikedRecommendations(force: false)
-    }
-
-    @discardableResult private func scheduleLikedRecommendations(force: Bool) -> Task<Void, Never>? {
-        guard !Task.isCancelled, let credential, !likedSongIDs.isEmpty else {
-            likedTask?.cancel()
-            if likedContextReceived, likedSongIDs.isEmpty {
-                likedRecommendations = nil; likedCache = nil; likedRecommendationsError = nil
-                removeCachedPage(key: "home-liked"); rebuildSongCatalog(); onChange?()
-            }
-            return nil
-        }
-        guard !(feed?.blocks.contains { $0.category == .likedSongs && $0.hasDisplayableResources } ?? false) else {
-            likedRecommendationsError = nil
-            return nil
-        }
-        let requestedSeed = likedSeedID
-        if let likedTask, !likedTask.isCancelled, likedTaskSeedID == requestedSeed { return likedTask }
-        if !force, likedCache?.seedID == requestedSeed, likedRecommendations != nil { return nil }
-        let previous = likedTask
-        previous?.cancel()
-        let revision = generation, id = UUID()
-        likedTaskID = id; likedTaskSeedID = requestedSeed
-        let task = Task { [self] in
-            await previous?.value
-            defer { if likedTaskID == id { likedTask = nil; likedTaskID = nil; likedTaskSeedID = nil } }
-            do {
-                try Task.checkCancellation()
-                let seed = try await loadLikedSeed(credential: credential)
-                try Task.checkCancellation()
-                guard generation == revision, likedTaskID == id, likedSongIDs.contains(seed.id) else { return }
-                likedSeedID = seed.id; likedSongs[seed.id] = seed; likedTaskSeedID = seed.id
-                let songs = try await client.similarSongs(id: seed.id, credential: credential)
-                try Task.checkCancellation()
-                guard generation == revision, likedSeedID == seed.id, likedTaskID == id else { return }
-                let block = Self.block(code: "NEOMUSIC_LIKED_SONGS", title: "根据你喜欢的《\(seed.title)》推荐",
-                                       resources: songs.filter { $0.id > 0 && !$0.unavailable }.map { .init(song: $0) })
-                let value = LikedCache(seedID: seed.id, block: block)
-                likedCache = value; likedRecommendations = block; likedRecommendationsError = nil
-                save(value, key: "home-liked"); rebuildSongCatalog(); onChange?(); requestDisplayedArtwork()
-            } catch is CancellationError {} catch {
-                if generation == revision, likedTaskID == id, !Task.isCancelled {
-                    likedRecommendationsError = error.localizedDescription; onChange?()
-                }
-            }
-        }
-        likedTask = task
-        return task
+        likedSeedID = datedSeed ?? orderedLikedIDs.first(where: { availableIDs.contains($0) })
+            ?? likedSeedID.flatMap { availableIDs.contains($0) ? $0 : nil }
     }
 
     private func loadLikedSeed(credential: NeteaseCredential) async throws -> NeteaseMusicSong {
@@ -996,18 +925,6 @@ import Observation
             await previous?.value
             guard !Task.isCancelled, self?.generation == revision else { return }
             try? await pageCache.save(value, scope: owner, key: key)
-            if self?.saveIDs[key] == id { self?.saveTasks[key] = nil; self?.saveIDs[key] = nil }
-        }
-    }
-
-    private func removeCachedPage(key: String) {
-        let owner = scope, revision = generation, previous = saveTasks[key], id = UUID()
-        previous?.cancel()
-        saveIDs[key] = id
-        saveTasks[key] = Task { [weak self, pageCache] in
-            await previous?.value
-            guard !Task.isCancelled, self?.generation == revision else { return }
-            try? await pageCache.remove(scope: owner, key: key)
             if self?.saveIDs[key] == id { self?.saveTasks[key] = nil; self?.saveIDs[key] = nil }
         }
     }

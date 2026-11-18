@@ -572,7 +572,6 @@ import Observation
         let sources: [(NeteaseHomeStore.RetrySource, String, String?, String?)] = [
             (.feed, "推荐内容", nil, home.feedError),
             (.recommendations, "推荐歌单", NeteaseHomeCategory.recommendedPlaylists.rawValue, home.recommendationsError),
-            (.likedRecommendations, "喜欢歌曲推荐", NeteaseHomeCategory.likedSongs.rawValue, home.likedRecommendationsError),
             (.charts, "排行榜", NeteaseHomeCategory.charts.rawValue, home.chartsError),
             (.followedReleases, "艺人新动向", NeteaseHomeCategory.followedArtists.rawValue, home.followedReleasesError),
             (.newSongs, "新歌速递", NeteaseHomeCategory.newSongs.rawValue, home.newSongsError)

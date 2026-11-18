@@ -89,7 +89,6 @@ struct NeteaseHomeFeed: Codable, Sendable, Equatable {
         var category: NeteaseHomeCategory? {
             let normalizedTitle = title.filter { !$0.isWhitespace }
             switch blockCode {
-            case "NEOMUSIC_LIKED_SONGS": return .likedSongs
             case "NEOMUSIC_NEW_SONGS": return .newSongs
             case "NEOMUSIC_RECOMMENDED_PLAYLISTS": return .recommendedPlaylists
             default: break

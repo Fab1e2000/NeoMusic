@@ -22,7 +22,6 @@ import Synchronization
         let endpoints: [(NeteaseHomeStore.RetrySource, String)] = [
             (.feed, "/eapi/homepage/block/page"),
             (.recommendations, "/eapi/v1/discovery/recommend/resource"),
-            (.likedRecommendations, "/eapi/v1/discovery/simiSong"),
             (.charts, "/eapi/toplist"),
             (.followedReleases, "/eapi/sub/artist/new/works/song/list"),
             (.newSongs, "/eapi/v1/discovery/new/songs")
@@ -32,15 +31,8 @@ import Synchronization
             defer { try? FileManager.default.removeItem(at: root) }
             let network = try paginationNetwork(count: 1)
             defer { network.invalidateAndCancel() }
-            HomePaginationProtocol.state.withLock { $0.responses["/eapi/v1/discovery/simiSong"] = songResponse([2], key: "songs") }
             let store = NeteaseHomeStore(client: NeteaseMusicClient(transport: NeteaseAccountClient(session: network)), directory: root)
             await store.activate(try savedSession(), refresh: false)
-            if source == .likedRecommendations {
-                let seed = NeteaseMusicSong(id: 1, title: "Seed", artist: "Artist", album: "Album", artworkURL: nil, duration: 1)
-                store.updateLikedSongs(playlistID: 12, songs: [seed], likedAt: [1: Date()], likedIDs: [1])
-                await store.retry(.likedRecommendations)
-                HomePaginationProtocol.state.withLock { $0.paths = [] }
-            }
             await store.retry(source)
             XCTAssertEqual(HomePaginationProtocol.state.withLock { $0.paths }, [path], source.rawValue)
             XCTAssertTrue(store.refreshingSources.isEmpty)
@@ -385,51 +377,37 @@ import Synchronization
         XCTAssertEqual(HomePaginationProtocol.count("/eapi/v1/discovery/recommend/resource"), 0)
     }
 
-    func testLikedSeedWithoutDatesReadsRealPlaylistOrder() async throws {
+    func testHeartModeSeedWithoutDatesReadsRealPlaylistOrder() async throws {
         let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let network = try paginationNetwork(count: 3)
         defer { network.invalidateAndCancel() }
-        HomePaginationProtocol.state.withLock { $0.responses["/eapi/v1/discovery/simiSong"] = songResponse([2], key: "songs") }
+        HomePaginationProtocol.state.withLock { $0.responses["/eapi/playmode/intelligence/list"] = songResponse([2], key: "data") }
         let store = NeteaseHomeStore(client: NeteaseMusicClient(transport: NeteaseAccountClient(session: network)), directory: root)
         await store.activate(try savedSession(), refresh: false)
         store.updateLikedSongs(playlistID: 12, songs: [], likedAt: [:], likedIDs: [1, 2, 3])
-        await store.refresh()
-        XCTAssertEqual(store.likedRecommendations?.title, "根据你喜欢的《Song 1》推荐")
+        guard case .songs(let values) = try await store.performQuickAction(.heartMode) else {
+            return XCTFail("Heart mode should return a song batch")
+        }
+        XCTAssertEqual(values.map(\.id), [2])
         XCTAssertEqual(HomePaginationProtocol.count("/eapi/v6/playlist/detail"), 1)
+        XCTAssertEqual(HomePaginationProtocol.count("/eapi/playmode/intelligence/list"), 1)
     }
 
-    func testLikedSeedChangeRefreshesAccurateFallbackAndCacheRemainsAccountScoped() async throws {
+    func testHomeFeedNeverBuildsLocalLikedRecommendationSections() async throws {
         let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
-        let network = try paginationNetwork(count: 3)
+        let network = try paginationNetwork(count: 2)
         defer { network.invalidateAndCancel() }
-        let path = "/eapi/v1/discovery/simiSong"
         HomePaginationProtocol.state.withLock {
-            $0.responses[path] = songResponse([3], key: "songs")
-            $0.responses["/eapi/v1/discovery/new/songs"] = songResponse([2], key: "data")
+            $0.responses["/eapi/homepage/block/page"] = feedResponse("HOMEPAGE_BLOCK_MGC_PLAYLIST", id: 88)
         }
         let store = NeteaseHomeStore(client: NeteaseMusicClient(transport: NeteaseAccountClient(session: network)), directory: root)
         await store.activate(try savedSession(), refresh: false)
         store.updateLikedSongs(playlistID: 12, songs: [], likedAt: [1: Date()], likedIDs: [1])
         await store.refresh()
-        XCTAssertEqual(store.likedRecommendations?.title, "根据你喜欢的《Song 1》推荐")
-        XCTAssertEqual(store.displayFeedBlocks.compactMap(\.category), [.likedSongs, .newSongs])
-        XCTAssertEqual(store.newSongs?.title, "新歌速递")
-        let seed = NeteaseMusicSong(id: 2, title: "Second Seed", artist: "Artist", album: "Album", artworkURL: nil, duration: 1)
-        store.updateLikedSongs(playlistID: 12, songs: [seed], likedAt: [1: .distantPast, 2: Date()], likedIDs: [1, 2])
-        XCTAssertNil(store.likedRecommendations)
-        await store.refresh()
-        XCTAssertEqual(store.likedRecommendations?.title, "根据你喜欢的《Second Seed》推荐")
-        await store.flush()
-        let restored = NeteaseHomeStore(directory: root)
-        await restored.activate(try savedSession(), refresh: false)
-        XCTAssertEqual(restored.likedRecommendations?.title, store.likedRecommendations?.title)
-        restored.updateLikedSongs(playlistID: 12, songs: [], likedAt: [:], likedIDs: [])
-        XCTAssertNil(restored.likedRecommendations)
-        await store.activate(try savedSession(99), refresh: false)
-        XCTAssertNil(store.likedRecommendations)
-        XCTAssertNil(store.newSongs)
+        XCTAssertEqual(HomePaginationProtocol.count("/eapi/v1/discovery/simiSong"), 0)
+        XCTAssertFalse(store.displayFeedBlocks.contains { $0.category == .likedSongs })
     }
 
     func testQuickActionsReturnRealDestinationsAndOrderedSongBatches() async throws {
