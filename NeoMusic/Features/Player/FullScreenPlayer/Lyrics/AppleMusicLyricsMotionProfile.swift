@@ -64,8 +64,8 @@ nonisolated struct AppleMusicLyricsMotionProfile: Equatable, Sendable {
         transliterationBackgroundVocalsFontCoefficient: 0.27,
         cascadeDelay: 0.05,
         deselectedScale: 0.98,
-        nonFocusedBlurRadius: 2.5,
-        maximumNonFocusedBlurRadius: 5.5,
+        nonFocusedBlurRadius: 2.0,
+        maximumNonFocusedBlurRadius: 4.25,
         selectedTextOpacity: 1,
         selectedUpcomingTextOpacity: 0.35,
         deselectedTextOpacity: 0.175,
@@ -114,6 +114,18 @@ nonisolated struct AppleMusicLyricsMotionProfile: Equatable, Sendable {
 
     func lineChangeDelay(rowIndex: Int, activeIndex: Int) -> TimeInterval {
         Double(max(rowIndex - activeIndex + 1, 0)) * cascadeDelay
+    }
+
+    /// Paragraph-index blur progression using the same smoothstep falloff:
+    /// upcoming rows ease from `nonFocusedBlurRadius` to `maximumNonFocusedBlurRadius`
+    /// independent of active row wrapping, while past rows blur one step sooner.
+    func blurRadius(rowOffset: Int) -> Double {
+        if rowOffset == 0 { return 0 }
+        let step = rowOffset < 0 ? Double(-rowOffset) : Double(rowOffset - 1)
+        let far = min(max(step / 2, 0), 1)
+        let farCurve = far * far * (3 - 2 * far)
+        return nonFocusedBlurRadius
+            + (maximumNonFocusedBlurRadius - nonFocusedBlurRadius) * farCurve
     }
 
     /// Distance between the leading lines, normalized for the displayed font size.

@@ -960,8 +960,11 @@ __attribute__((objc_direct_members))
 	
 	LNPopupInteractionStyle resolvedStyle = _LNPopupResolveInteractionStyleFromInteractionStyle(_containerController.popupInteractionStyle, _popupControllerPublicState, nullptr);
 	_neo_sawGestureBegan = YES;
-	self.popupContentView.applyScreenCorners = YES;
-	[self.popupContentView layoutIfNeeded];
+	if(_popupControllerInternalState != LNPopupPresentationStateOpen)
+	{
+		self.popupContentView.applyScreenCorners = YES;
+		[self.popupContentView layoutIfNeeded];
+	}
 	
 	if(resolvedStyle == LNPopupInteractionStyleNone)
 	{
@@ -1232,6 +1235,10 @@ __attribute__((objc_direct_members))
 		if(shouldFinishReturn)
 		{
 			[self openPopupAnimated:YES completion:nil];
+		}
+		else if(_runningPopupAnimation == nil)
+		{
+			self.popupContentView.applyScreenCorners = NO;
 		}
 	}
 	else
@@ -2153,9 +2160,16 @@ static void __LNPopupControllerDeeplyEnumerateSubviewsUsingBlock(UIView* view, v
 			}
 		}];
 	}
-	else if(completionBlock != nil)
+	else
 	{
-		completionBlock();
+		if(_runningPopupAnimation == nil)
+		{
+			self.popupContentView.applyScreenCorners = NO;
+		}
+		if(completionBlock != nil)
+		{
+			completionBlock();
+		}
 	}
 }
 

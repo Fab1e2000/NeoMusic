@@ -55,15 +55,21 @@ final class LyricsFocusTests: XCTestCase {
         let lineHeight = 40.0
         let stride = lineHeight + motion.lineSpacing
         XCTAssertEqual(motion.blurRadius(verticalDistance: 0, lineHeight: lineHeight), 0)
-        XCTAssertEqual(motion.blurRadius(verticalDistance: stride, lineHeight: lineHeight), 2.5)
-        XCTAssertEqual(motion.blurRadius(verticalDistance: 2 * stride, lineHeight: lineHeight), 4)
-        XCTAssertEqual(motion.blurRadius(verticalDistance: 3 * stride, lineHeight: lineHeight), 5.5)
-        XCTAssertEqual(motion.blurRadius(verticalDistance: 20 * stride, lineHeight: lineHeight), 5.5)
+        XCTAssertEqual(motion.blurRadius(verticalDistance: stride, lineHeight: lineHeight), 2.0)
+        XCTAssertEqual(motion.blurRadius(verticalDistance: 2 * stride, lineHeight: lineHeight), 3.125)
+        XCTAssertEqual(motion.blurRadius(verticalDistance: 3 * stride, lineHeight: lineHeight), 4.25)
+        XCTAssertEqual(motion.blurRadius(verticalDistance: 20 * stride, lineHeight: lineHeight), 4.25)
         for distance in [0.5 * stride, stride, 1.5 * stride, 2 * stride, 2.5 * stride] {
             let radius = motion.blurRadius(verticalDistance: distance, lineHeight: lineHeight)
             XCTAssertEqual(radius, motion.blurRadius(verticalDistance: -distance, lineHeight: lineHeight))
             XCTAssertGreaterThan(motion.blurRadius(verticalDistance: distance + 0.5, lineHeight: lineHeight), radius)
         }
+        XCTAssertEqual(motion.blurRadius(rowOffset: 0), 0)
+        XCTAssertEqual(motion.blurRadius(rowOffset: 1), 2.0, accuracy: 0.001)
+        XCTAssertEqual(motion.blurRadius(rowOffset: 2), 3.125, accuracy: 0.001)
+        XCTAssertEqual(motion.blurRadius(rowOffset: 3), 4.25, accuracy: 0.001)
+        XCTAssertEqual(motion.blurRadius(rowOffset: -1), 3.125, accuracy: 0.001)
+        XCTAssertEqual(motion.blurRadius(rowOffset: -2), 4.25, accuracy: 0.001)
         XCTAssertLessThan(motion.focusBlurTransitionDuration, motion.lineChangeDuration)
     }
 
@@ -154,6 +160,8 @@ final class LyricsFocusTests: XCTestCase {
             try await assertFocus(40, in: state)
             let top = try XCTUnwrap(state.geometry.top(for: 40))
             let height = try XCTUnwrap(state.geometry.height(for: 40))
+            XCTAssertEqual(top, initialTop, accuracy: 2,
+                           "Active lyric position must stay consistent across hidden and shown states")
             XCTAssertGreaterThan(top, state.topOverlayHeight)
             XCTAssertLessThan(top + height, hidden ? 600 : 480)
             let bottom: CGFloat = hidden ? 600 : 480
@@ -209,6 +217,68 @@ final class LyricsFocusTests: XCTestCase {
             state.renderedActiveID == 44 && rows.contains { !($0.layer.animationKeys() ?? []).isEmpty }
         }
         XCTAssertTrue(animating, "Non-adjacent line jump must drive UIKit row spring animations")
+        try await assertFocus(44, in: state)
+    }
+
+    func testForwardCascadeKeepsBottomRowStartingOffsetsAndDistanceBlur() async throws {
+        let state = LyricsFocusTestState()
+        state.isInterfaceHidden = true
+        let window = try await mount(state, size: .large)
+        defer { window.isHidden = true }
+        try await assertFocus(40, in: state)
+        let table = try XCTUnwrap(
+            scrollViews(in: window).compactMap { $0 as? NativeLyricsScrollView }.first
+        )
+        let visualHeight = table.bounds.height - 2 * NativeLyricsScrollView.viewportOverscan
+        let bottomRow = try XCTUnwrap(table.visibleLineIDs.sorted().last { row in
+            guard let top = table.presentationViewportTop(forRow: row) else { return false }
+            return top > visualHeight - 160 && top < visualHeight
+        })
+        let beforeBottomTop = try XCTUnwrap(table.presentationViewportTop(forRow: bottomRow))
+        let beforeNextNextBlur = try XCTUnwrap(table.rowDistanceBlurRadius(forRow: 42))
+        XCTAssertGreaterThan(beforeNextNextBlur, 2.5)
+
+        state.activeID = 41
+        let started = try await waitUntil { state.renderedActiveID == 41 }
+        XCTAssertTrue(started)
+
+        var minNextNextBlur = Double.greatestFiniteMagnitude
+        var minBottomGap = CGFloat.greatestFiniteMagnitude
+        for step in 0..<12 {
+            if let blur = table.rowDistanceBlurRadius(forRow: 42) {
+                minNextNextBlur = min(minNextNextBlur, blur)
+            }
+            if let bottomTop = table.presentationViewportTop(forRow: bottomRow),
+               let prevTop = table.presentationViewportTop(forRow: bottomRow - 1) {
+                minBottomGap = min(minBottomGap, bottomTop - prevTop)
+            }
+            if step == 0, let startBottomTop = table.presentationViewportTop(forRow: bottomRow) {
+                XCTAssertEqual(startBottomTop, beforeBottomTop, accuracy: 8,
+                               "Bottom row must start its cascade from its pre-advance position")
+            }
+            try await Task.sleep(for: .milliseconds(16))
+        }
+        XCTAssertGreaterThan(minNextNextBlur, 1.5,
+                             "Row i+2 must not dip toward zero blur during forward cascade")
+        XCTAssertGreaterThan(minBottomGap, 20,
+                             "Bottom row must not overlap the row above it during cascade")
+        try await assertFocus(41, in: state)
+
+        // Single-line active target (row 43 -> 44, where 43 & 44 are 1 line): row 45 must stay blurred.
+        state.activeID = 43
+        try await assertFocus(43, in: state)
+        state.activeID = 44
+        let started44 = try await waitUntil { state.renderedActiveID == 44 }
+        XCTAssertTrue(started44)
+        var minSingleLineNextNextBlur = Double.greatestFiniteMagnitude
+        for _ in 0..<15 {
+            if let blur = table.rowDistanceBlurRadius(forRow: 45) {
+                minSingleLineNextNextBlur = min(minSingleLineNextNextBlur, blur)
+            }
+            try await Task.sleep(for: .milliseconds(16))
+        }
+        XCTAssertGreaterThan(minSingleLineNextNextBlur, 1.9,
+                             "Row i+2 after a single-line row must not drop toward zero blur during forward cascade")
         try await assertFocus(44, in: state)
     }
 
@@ -286,33 +356,35 @@ final class LyricsFocusTests: XCTestCase {
         XCTAssertEqual(motion.pageSelector.hiddenOffset, 98)
 
         let shown = LyricsViewportFade(
-            height: 753,
-            referenceHeight: 473,
-            shownReferenceHeight: 473,
-            topOverlayHeight: 102,
+            height: 793,
+            referenceHeight: 476,
+            shownReferenceHeight: 476,
+            topOverlayHeight: 69.25,
             isInterfaceHidden: false
         )
-        XCTAssertEqual(shown.bottomEnd, 473, accuracy: 0.5)
+        XCTAssertEqual(shown.topStart, 69.25, accuracy: 0.5)
+        XCTAssertEqual(shown.topEnd - shown.topStart, LyricsViewportFade.topFadeHeight, accuracy: 0.5)
+        XCTAssertEqual(shown.bottomEnd, 476, accuracy: 0.5)
         XCTAssertEqual(shown.bottomEnd - shown.bottomStart, 160, accuracy: 0.5)
 
         let midpoint = LyricsViewportFade(
-            height: 753,
-            referenceHeight: 613,
-            shownReferenceHeight: 473,
-            topOverlayHeight: 102,
+            height: 793,
+            referenceHeight: 634.5,
+            shownReferenceHeight: 476,
+            topOverlayHeight: 69.25,
             isInterfaceHidden: false
         )
-        XCTAssertEqual(midpoint.bottomEnd - midpoint.bottomStart, 108, accuracy: 0.5)
+        XCTAssertEqual(midpoint.bottomEnd - midpoint.bottomStart, 167.5, accuracy: 0.5)
 
         let hidden = LyricsViewportFade(
-            height: 753,
-            referenceHeight: 753,
-            shownReferenceHeight: 473,
-            topOverlayHeight: 102,
+            height: 793,
+            referenceHeight: 793,
+            shownReferenceHeight: 476,
+            topOverlayHeight: 69.25,
             isInterfaceHidden: true
         )
-        XCTAssertEqual(hidden.bottomEnd, 753, accuracy: 0.5)
-        XCTAssertEqual(hidden.bottomEnd - hidden.bottomStart, 56, accuracy: 0.5)
+        XCTAssertEqual(hidden.bottomEnd, 793, accuracy: 0.5)
+        XCTAssertEqual(hidden.bottomEnd - hidden.bottomStart, 175, accuracy: 0.5)
     }
 
     func testPagePresentationMaskClipsImmediatelyDuringPageSwitches() async throws {
@@ -437,6 +509,34 @@ final class LyricsFocusTests: XCTestCase {
         try await assertFocus(62, in: state)
     }
 
+    func testFirstSeekWhileInterfaceHiddenLandsAtExpectedTopWithoutInterruptingSpring() async throws {
+        let state = LyricsFocusTestState()
+        state.isInterfaceHidden = true
+        let window = try await mount(state, size: .large)
+        defer { window.isHidden = true }
+        try await assertFocus(40, in: state)
+        let table = try XCTUnwrap(
+            scrollViews(in: window).compactMap { $0 as? NativeLyricsScrollView }.first
+        )
+        let targetRow = 62
+        let startingOffset = table.contentOffset.y
+
+        table.performSeek(row: targetRow)
+        let lockedTargetOffset = table.contentOffset.y
+        XCTAssertNotEqual(lockedTargetOffset, startingOffset, accuracy: 10)
+
+        // Allow SwiftUI to propagate isInterfaceHidden = false and player.seek -> activeID = 62.
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(table.contentOffset.y, lockedTargetOffset, accuracy: 1,
+                       "Interface reveal during a seek must not re-run alignment or jump the target offset")
+
+        let rowSettled = try await waitUntil { !table.isRowTransitionAnimating }
+        XCTAssertTrue(rowSettled)
+        XCTAssertEqual(table.contentOffset.y, lockedTargetOffset, accuracy: 2,
+                       "First seek must converge to the exact destination before animating instead of snapping after settling")
+        try await assertFocus(targetRow, in: state)
+    }
+
     func testSeekFromBrowsedViewportStartsAtVisibleScrollPosition() async throws {
         let state = LyricsFocusTestState()
         let window = try await mount(state, size: .large)
@@ -467,6 +567,48 @@ final class LyricsFocusTests: XCTestCase {
         let start = try XCTUnwrap(table.pendingTransitionViewportTop(forRow: tappedRow))
         XCTAssertEqual(start, origin, accuracy: 2,
                        "A tap must start from the current browsed viewport, not from the playing line")
+        try await assertFocus(tappedRow, in: state)
+    }
+
+    func testSeekAfterBrowsingWithControlsAlreadyRevealedRestoresBlurImmediately() async throws {
+        var interactionEvents: [Bool] = []
+        let state = LyricsFocusTestState()
+        state.isInterfaceHidden = true
+        state.onUserInteractionChange = { interactionEvents.append($0) }
+        let window = try await mount(state, size: .large)
+        defer { window.isHidden = true }
+        try await assertFocus(40, in: state)
+        let table = try XCTUnwrap(
+            scrollViews(in: window).compactMap { $0 as? NativeLyricsScrollView }.first
+        )
+
+        table.delegate?.scrollViewWillBeginDragging?(table)
+        table.scrollToRow(at: IndexPath(row: 68, section: 0), at: .top, animated: false)
+        table.layoutIfNeeded()
+        XCTAssertEqual(table.isRowBrowsingAppearanceActive(forRow: 69), true)
+        XCTAssertEqual(interactionEvents, [true])
+
+        // Deceleration keeps interaction active until scrollViewDidEndDecelerating.
+        table.delegate?.scrollViewDidEndDragging?(table, willDecelerate: true)
+        XCTAssertEqual(interactionEvents, [true])
+
+        // Scrolling back up reveals controls before tapping a lyric to exit browsing.
+        state.isInterfaceHidden = false
+        try await Task.sleep(for: .milliseconds(150))
+        let tappedRow = try XCTUnwrap(table.visibleLineIDs.first { row in
+            guard let top = table.transitionViewportTop(forRow: row) else { return false }
+            return top >= 100 && top < 350
+        })
+
+        table.performSeek(row: tappedRow)
+        state.activeID = tappedRow
+
+        XCTAssertEqual(interactionEvents, [true, false],
+                       "Exiting browsing via seek during deceleration must balance interaction end")
+        XCTAssertEqual(table.isRowBrowsingAppearanceActive(forRow: tappedRow + 1), false,
+                       "Seek must clear row browsing state before updating appearances even when controls are already visible")
+        XCTAssertGreaterThan(try XCTUnwrap(table.rowDistanceBlurRadius(forRow: tappedRow + 1)), 1.5,
+                             "Non-active rows must restore distance blur immediately after exiting free browsing")
         try await assertFocus(tappedRow, in: state)
     }
 
@@ -684,6 +826,7 @@ private final class LyricsFocusTestState {
     var focusLineHeight: CGFloat = 0
     var reducesMotion = false
     var showsTranslation = false
+    var onUserInteractionChange: ((Bool) -> Void)? = nil
     var lyrics: PlayerLyrics
 
     init(lineCount: Int = 80, activeID: Int = 40, idOffset: Int = 0) {
@@ -706,10 +849,13 @@ private final class LyricsFocusTestState {
     }
 
     func expectedTop(forRowHeight height: CGFloat) -> CGFloat {
-        let visibleHeight = (isInterfaceHidden ? viewportHeight : viewportHeight - 120) - topOverlayHeight
+        let effectiveHeight = max(viewportHeight - topOverlayHeight, 1)
+        let visibleHeight = (viewportHeight - 120) - topOverlayHeight
         let leadingLineHeight = focusLineHeight > 0
             ? focusLineHeight : (geometry.height(for: 40) ?? height)
-        return topOverlayHeight + min(max(visibleHeight * 0.233 - leadingLineHeight / 2, visibleHeight * 0.08),
+        let preferredOffset = effectiveHeight * (AppleMusicLyricsMotionProfile.iOS26_6.selectedLineTopRelativePercent / 100)
+            - leadingLineHeight / 2
+        return topOverlayHeight + min(max(preferredOffset, visibleHeight * 0.08),
                    max(visibleHeight * 0.08, visibleHeight * 0.84 - height))
     }
 }
@@ -727,6 +873,7 @@ private struct LyricsFocusTestContent: View {
                 state.activeID = state.lyrics.activeLine(at: $0) ?? 0
             },
             topOverlayHeight: state.topOverlayHeight, showsTranslation: state.showsTranslation,
+            onUserInteractionChange: state.onUserInteractionChange,
             rowGeometry: state.geometry
         )
         .environment(\._accessibilityReduceMotion, state.reducesMotion)

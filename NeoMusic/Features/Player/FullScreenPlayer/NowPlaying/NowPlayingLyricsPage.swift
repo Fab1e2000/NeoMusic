@@ -38,6 +38,7 @@ struct NowPlayingLyricsPage: View {
     let usesArtworkTransition: Bool
     let showsSongHeader: Bool
     let showsTranslation: Bool
+    let bottomOverlayExtension: CGFloat
     let onInterfaceInteraction: (() -> Void)?
     let onInterfaceVisibilityChange: ((Bool) -> Void)?
     let onUserInteractionChange: ((Bool) -> Void)?
@@ -53,6 +54,7 @@ struct NowPlayingLyricsPage: View {
         usesArtworkTransition: Bool = true,
         showsSongHeader: Bool = true,
         showsTranslation: Bool = false,
+        bottomOverlayExtension: CGFloat = 0,
         onInterfaceInteraction: (() -> Void)? = nil,
         onInterfaceVisibilityChange: ((Bool) -> Void)? = nil,
         onUserInteractionChange: ((Bool) -> Void)? = nil
@@ -67,6 +69,7 @@ struct NowPlayingLyricsPage: View {
         self.usesArtworkTransition = usesArtworkTransition
         self.showsSongHeader = showsSongHeader
         self.showsTranslation = showsTranslation
+        self.bottomOverlayExtension = bottomOverlayExtension
         self.onInterfaceInteraction = onInterfaceInteraction
         self.onInterfaceVisibilityChange = onInterfaceVisibilityChange
         self.onUserInteractionChange = onUserInteractionChange
@@ -173,7 +176,8 @@ struct NowPlayingLyricsPage: View {
     private var appleMusicBottomOverlayHeight: CGFloat {
         switch presentation {
         case .portrait:
-            max(0, layout.contentSize.height - 3 - layout.contentY(557)) + controlsOverflow
+            max(0, layout.contentSize.height - 3 - layout.contentY(557))
+                + bottomOverlayExtension + controlsOverflow
         case .landscape:
             50
         }

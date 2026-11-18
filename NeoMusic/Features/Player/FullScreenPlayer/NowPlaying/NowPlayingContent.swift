@@ -63,7 +63,8 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
                 )
                 // iPhone 只支持竖屏（见 project.yml 的 UISupportedInterfaceOrientations），不保留横屏布局。
                 if let song = player.currentTrack {
-                    portraitContent(for: song, layout: layout)
+                    portraitContent(for: song, layout: layout,
+                                    lyricsBottomExtension: geometry.safeAreaInsets.bottom + 3)
                 } else {
                     ContentUnavailableView("当前没有播放歌曲", systemImage: "music.note").foregroundStyle(.white)
                 }
@@ -113,11 +114,12 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
         if let onDismiss { onDismiss() } else { dismiss() }
     }
 
-    private func portraitContent(for song: PlayerTrack, layout: ReferenceNowPlayingLayout) -> some View {
+    private func portraitContent(for song: PlayerTrack, layout: ReferenceNowPlayingLayout,
+                                 lyricsBottomExtension: CGFloat) -> some View {
         VStack(spacing: 0) {
             dismissalHandle(layout: layout)
 
-            pageContent(for: song)
+            pageContent(for: song, lyricsBottomExtension: lyricsBottomExtension)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .overlay(alignment: .bottom) {
                     portraitPlayerControlsLayer(for: song)
@@ -243,7 +245,7 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
         }
     }
 
-    private func pageContent(for song: PlayerTrack) -> some View {
+    private func pageContent(for song: PlayerTrack, lyricsBottomExtension: CGFloat) -> some View {
         ZStack(alignment: .top) {
             transientArtworkPageContent(for: song)
                 .frame(
@@ -256,7 +258,7 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
 
             residentQueuePage(for: song)
 
-            residentAppleMusicLyricsPage(for: song)
+            residentAppleMusicLyricsPage(for: song, bottomExtension: lyricsBottomExtension)
 
             QueueLinkedSongHeader(
                 song: song,
@@ -378,12 +380,13 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
         .environment(\.playerVisualsActive, visualsActive && (isVisible || pageChange?.source == .queue))
     }
 
-    private func portraitLyricsPage(for song: PlayerTrack) -> some View {
+    private func portraitLyricsPage(for song: PlayerTrack, bottomExtension: CGFloat) -> some View {
         NowPlayingLyricsPage(
             song: song, lyrics: lyricsContent.lyrics, errorMessage: lyricsContent.error,
             isActive: visualsActive && page == .lyrics, isInterfaceHidden: hidesLyricsControls,
             artworkNamespace: pageArtworkNamespace, showsSongHeader: false,
             showsTranslation: true,
+            bottomOverlayExtension: bottomExtension,
             onInterfaceVisibilityChange: setAppleMusicLyricsControlsVisible,
         onUserInteractionChange: { active in
             if active { lyricsControlTouchBegan() } else { lyricsControlTouchEnded() }
@@ -394,9 +397,9 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
         }
     }
 
-    private func residentAppleMusicLyricsPage(for song: PlayerTrack) -> some View {
+    private func residentAppleMusicLyricsPage(for song: PlayerTrack, bottomExtension: CGFloat) -> some View {
         let isVisible = page == .lyrics
-        return portraitLyricsPage(for: song)
+        return portraitLyricsPage(for: song, bottomExtension: bottomExtension)
             .id(song.id)
             .padding(.horizontal, portraitHorizontalPadding)
             .modifier(NowPlayingPagePresentation(
@@ -405,6 +408,7 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
                 clipsAboveControls: !isVisible || (!hidesLyricsControls && pageChange != nil)
             ))
             .padding(.horizontal, -portraitHorizontalPadding)
+            .padding(.bottom, -bottomExtension)
             .allowsHitTesting(isVisible)
             .accessibilityHidden(!isVisible)
     }

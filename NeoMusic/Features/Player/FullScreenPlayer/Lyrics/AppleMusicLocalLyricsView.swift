@@ -154,6 +154,7 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
     private var positioning = false
     private var refreshing = false
     private var browsing = false
+    private var reportsUserInteraction = false
     private var resumeTask: Task<Void, Never>?
     private var visibility = LyricsScrollInterfaceVisibilityTracker()
     private var previousOffset: CGFloat = 0
@@ -161,6 +162,7 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
     private var displayLink: CADisplayLink?
     private let fadeGuide = UIView()
     private var fadeAnimator: UIViewPropertyAnimator?
+    private var fadeTargetHeight: CGFloat?
 
     private struct RowAnimation {
         weak var cell: NativeLyricCell?
@@ -263,6 +265,8 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
         }
         let next = activeRowIndex(for: value.activeID, updatingSuppression: true)
         let changed = next != focusedIndex
+        let exitedBrowsing = !browsing && visibleRows.contains { $0.appearance.browsing }
+        let appearanceAnimated = (changed || exitedBrowsing) && wasActive && !value.reducesMotion
         let currentVisualSize = CGSize(
             width: bounds.width,
             height: max(bounds.height - 2 * Self.viewportOverscan, 0)
@@ -274,30 +278,19 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
             && motion.isForwardLineChange(from: focusedIndex, to: next)
         if bounds.width > 0, bounds.height > 0 {
             updateMetricsIfNeeded()
-            updateAppearances(activeIndex: next, animated: changed && wasActive && !value.reducesMotion)
+            updateAppearances(activeIndex: next, animated: appearanceAnimated)
             if interfaceChanged || geometryChanged || replaced || needsFocus {
                 updateFade(animated: interfaceChanged && wasActive && !value.reducesMotion)
             }
-            if !browsing && (changed || needsFocus || interfaceChanged || geometryChanged) {
-                let animates = canAnimate && (focusedIndex != nil || interfaceChanged || geometryChanged)
+            if !browsing && (changed || needsFocus || geometryChanged) {
+                let animates = canAnimate && (focusedIndex != nil || geometryChanged)
                 let spring: LyricPhysicalSpringParameters = if cascades || geometryChanged {
                     motion.lineChangeSpring
-                } else if interfaceChanged && !changed {
-                    Self.interfaceSyncSpring
                 } else {
                     motion.forcedLineCatchUpSpring
                 }
-                // Avoid restarting an in-flight tap/seek catch-up animation when only the
-                // interface visibility changed and the target scroll offset stays the same.
-                let keepsRunningAnimation = !changed && !needsFocus && !animators.isEmpty
-                    && next.map {
-                        abs(targetOffset(for: $0, activeID: renderedLines[$0].id)
-                            - contentOffset.y) < 0.5
-                    } == true
-                if !keepsRunningAnimation {
-                    align(to: next, cascade: cascades, animated: animates, spring: spring,
-                          appearanceAnimated: changed && wasActive && !value.reducesMotion)
-                }
+                align(to: next, cascade: cascades, animated: animates, spring: spring,
+                      appearanceAnimated: appearanceAnimated)
             }
         }
         wasActive = true
@@ -586,13 +579,14 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
     private func focusTop(forActiveID activeID: Int?, interfaceHidden: Bool? = nil,
                           rowHeight: CGFloat? = nil) -> CGFloat {
         guard let input else { return 0 }
-        let hidden = interfaceHidden ?? input.isInterfaceHidden
-        let bottom = hidden ? visualHeight : max(visualHeight - input.bottomOverlayHeight, 1)
-        let visible = max(bottom - input.topOverlayHeight, 1)
+        let effectiveHeight = max(visualHeight - input.topOverlayHeight, 1)
+        let bottom = max(visualHeight - input.bottomOverlayHeight, 1)
+        let shownVisible = max(bottom - input.topOverlayHeight, 1)
         let lineHeight = LyricsFontMetrics.boldLineHeight(size: input.fontSize)
         let height = rowHeight ?? activeRowHeight(for: activeID) ?? lineHeight
-        return input.topOverlayHeight + min(max(visible * 0.233 - lineHeight / 2, visible * 0.08),
-                                            max(visible * 0.08, visible * 0.84 - height))
+        let preferredOffset = effectiveHeight * (motion.selectedLineTopRelativePercent / 100) - lineHeight / 2
+        return input.topOverlayHeight + min(max(preferredOffset, shownVisible * 0.08),
+                                            max(shownVisible * 0.08, shownVisible * 0.84 - height))
     }
 
     private func activeRowHeight(for activeID: Int?) -> CGFloat? {
@@ -641,14 +635,15 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
     private func align(to index: Int?, cascade: Bool, animated: Bool = false,
                        spring: LyricPhysicalSpringParameters? = nil,
                        interfaceHidden: Bool? = nil,
-                       appearanceAnimated: Bool = false) {
+                       appearanceAnimated: Bool = false,
+                       endsBrowsing: Bool = false) {
         guard let index, renderedLines.indices.contains(index), input != nil else { return }
         freezeRows()
         let activeID = renderedLines[index].id
         let oldOffset = contentOffset.y
-        var focus = focusTop(forActiveID: activeID, interfaceHidden: interfaceHidden)
-        var topInset = max(focus, motion.firstLineStartOffset) + Self.viewportOverscan
-        var target = targetOffset(for: index, activeID: activeID, interfaceHidden: interfaceHidden)
+        var focus: CGFloat = focusTop(forActiveID: activeID, interfaceHidden: interfaceHidden)
+        var topInset: CGFloat = max(focus, motion.firstLineStartOffset) + Self.viewportOverscan
+        var target: CGFloat = targetOffset(for: index, activeID: activeID, interfaceHidden: interfaceHidden)
         // Capture the visible source rows before the offset changes. Large
         // jumps otherwise recycle them before their exit spring can run.
         let capturesHandoff = input?.reducesMotion != true && (cascade || animated)
@@ -666,23 +661,12 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
 
         // Hosting cells report their final height during layout. Materialize
         // the destination row (stepping by measured heights when a far jump
-        // lands outside the estimated window), then align once more against
-        // the measured height.
+        // lands outside the estimated window), then converge against measured
+        // heights so newly self-sized surrounding rows do not leave the first
+        // jump off-target.
         if let cell = materializeRow(index, focus: focus, topInset: topInset, target: &target) {
-            let height = textHeight(of: cell)
-            let measuredFocus = focusTop(forActiveID: activeID, interfaceHidden: interfaceHidden,
-                                         rowHeight: height)
-            let measuredTopInset = max(measuredFocus, motion.firstLineStartOffset)
-                + Self.viewportOverscan
-            let desired = cell.frame.minY - measuredFocus - Self.viewportOverscan
-            let clamped = clampedOffset(desired, topInset: measuredTopInset)
-            focus = measuredFocus
-            topInset = measuredTopInset
-            target = clamped
-            contentInset.top = topInset
-            setContentOffset(CGPoint(x: 0, y: target), animated: false)
-            setNeedsLayout()
-            layoutIfNeeded()
+            convergeMeasuredTarget(for: cell, activeID: activeID, interfaceHidden: interfaceHidden,
+                                   focus: &focus, topInset: &topInset, target: &target)
         }
 
         // UITableView materializes the destination window on the next layout pass.
@@ -691,6 +675,11 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
         positioning = false
         setNeedsLayout()
         layoutIfNeeded()
+        if let cell = displayedCell(forRow: index) {
+            positioning = true
+            convergeMeasuredTarget(for: cell, activeID: activeID, interfaceHidden: interfaceHidden,
+                                   focus: &focus, topInset: &topInset, target: &target)
+        }
         target = contentOffset.y
         positioning = true
         let delta = target - oldOffset
@@ -703,6 +692,7 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
             }
         }
         positioning = false
+        if endsBrowsing { browsing = false }
         input?.rowGeometry.focus(on: activeID)
         updateAppearances(activeIndex: index, animated: appearanceAnimated)
         updateVisualGeometry(presentation: animates)
@@ -719,10 +709,10 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
             }
             // `frame` includes the transform that is being animated, so using it here
             // double-counts the displacement and makes every far target look off-screen.
-            let destination = cell.center.y - cell.bounds.height / 2 - target
+            let destination = cell.center.y - cell.bounds.height / 2 - target - Self.viewportOverscan
             let current = destination + cell.transform.ty
-            guard max(current, destination) + cell.bounds.height > 0,
-                  min(current, destination) < visualHeight else {
+            guard max(current, destination) + cell.bounds.height > -NativeLyricCell.horizontalBleed,
+                  min(current, destination) < visualHeight + NativeLyricCell.horizontalBleed else {
                 cell.transform = .identity
                 continue
             }
@@ -755,6 +745,30 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
         }
         updateVisualGeometry(presentation: createdAnimator)
         setNeedsLayout()
+    }
+
+    private func convergeMeasuredTarget(for cell: NativeLyricCell, activeID: Int,
+                                        interfaceHidden: Bool?, focus: inout CGFloat,
+                                        topInset: inout CGFloat, target: inout CGFloat) {
+        for _ in 0..<4 {
+            let height = textHeight(of: cell)
+            let measuredFocus = focusTop(forActiveID: activeID, interfaceHidden: interfaceHidden,
+                                         rowHeight: height)
+            let measuredTopInset = max(measuredFocus, motion.firstLineStartOffset)
+                + Self.viewportOverscan
+            let desired = cell.frame.minY - measuredFocus - Self.viewportOverscan
+            let clamped = clampedOffset(desired, topInset: measuredTopInset)
+            let insetDelta = abs(measuredTopInset - contentInset.top)
+            let offsetDelta = abs(clamped - contentOffset.y)
+            focus = measuredFocus
+            topInset = measuredTopInset
+            target = clamped
+            guard insetDelta > 0.5 || offsetDelta > 0.5 else { break }
+            contentInset.top = topInset
+            setContentOffset(CGPoint(x: 0, y: target), animated: false)
+            setNeedsLayout()
+            layoutIfNeeded()
+        }
     }
 
     private func freezeRows() {
@@ -963,16 +977,21 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
         )
     }
 
-    private func updateFade(animated: Bool) {
+    private func updateFade(animated: Bool, interfaceHidden: Bool? = nil) {
         guard let input else { return }
-        let height = input.isInterfaceHidden ? visualHeight
+        let hidden = interfaceHidden ?? input.isInterfaceHidden
+        let height = hidden ? visualHeight
             : max(visualHeight - input.bottomOverlayHeight, 1)
+        if animated, fadeAnimator != nil, let fadeTargetHeight, abs(fadeTargetHeight - height) < 0.5 {
+            return
+        }
         let current = fadeBottom
         fadeAnimator?.stopAnimation(true)
         fadeGuide.bounds.size.height = current
         if animated, abs(current - height) >= 0.5 {
+            fadeTargetHeight = height
             fadePendingStartHeight = current
-            let spring = Spring.smooth(duration: input.isInterfaceHidden ? 0.22 : 0.28)
+            let spring = Spring.smooth(duration: hidden ? 0.22 : 0.28)
             let timing = UISpringTimingParameters(
                 mass: spring.mass,
                 stiffness: spring.stiffness,
@@ -986,6 +1005,7 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
             fadeAnimator = animator
             animator.addCompletion { [weak self] _ in
                 self?.fadeAnimator = nil
+                self?.fadeTargetHeight = nil
                 self?.fadePendingStartHeight = nil
                 self?.refreshVisualGeometry()
                 self?.stopDisplayLinkIfIdle()
@@ -995,6 +1015,7 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
             startDisplayLink()
         } else {
             fadeAnimator = nil
+            fadeTargetHeight = nil
             fadePendingStartHeight = nil
             schedulePendingTransformClear()
             fadeGuide.bounds.size.height = height
@@ -1049,9 +1070,6 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
         defer { refreshing = false }
         let fade = currentFade()
         let cells = visibleRows
-        let focusedCell = focusedIndex.flatMap { displayedCell(forRow: $0) }
-        let focusedTop = focusedCell.map { visualMinY(for: $0, presentation: presentation) }
-            ?? (contentOffset.y + Self.viewportOverscan + focusTop)
         let lineHeight = LyricsFontMetrics.boldLineHeight(size: input.fontSize)
         let tableFade = fade.shifted(by: Self.viewportOverscan)
         for cell in cells {
@@ -1067,9 +1085,14 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
             if cell.isContentHidden == intersectsFade { cell.setContentHidden(!intersectsFade) }
             if intersectsFade {
                 if !cell.appearance.focused {
-                    let radius = motion.blurRadius(
-                        verticalDistance: Double(top - focusedTop), lineHeight: Double(lineHeight)
-                    )
+                    let radius = if let focusedIndex {
+                        motion.blurRadius(rowOffset: row - focusedIndex)
+                    } else {
+                        motion.blurRadius(
+                            verticalDistance: Double(top - (contentOffset.y + Self.viewportOverscan + focusTop)),
+                            lineHeight: Double(lineHeight)
+                        )
+                    }
                     if cell.appearance.distanceBlurRadius != radius {
                         cell.appearance.distanceBlurRadius = radius
                     }
@@ -1135,8 +1158,11 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
     func seek(_ index: Int) {
         guard let input, input.isActive, renderedLines.indices.contains(index) else { return }
         resumeTask?.cancel()
-        // Keep browsing active until the alignment has captured its origin. Releasing
-        // it first lets a same-runloop layout recenter the table on the playing line.
+        visibility.end()
+        endUserInteractionIfNeeded()
+        // Keep browsing active until the alignment has captured its origin and
+        // finished layout convergence. Release it right before updating row
+        // appearances so non-active blur and opacity immediately restore.
         needsFocus = false
         input.isInterfaceHidden = false
         input.onSeek(renderedLines[index].time)
@@ -1145,11 +1171,10 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
             let tappedID = renderedLines[index].id
             suppressedPreSeekActiveID = (input.activeID != nil && input.activeID != tappedID)
                 ? input.activeID : nil
-            updateFade(animated: animates)
+            updateFade(animated: animates, interfaceHidden: false)
             align(to: index, cascade: false, animated: animates,
                   spring: motion.forcedLineCatchUpSpring, interfaceHidden: false,
-                  appearanceAnimated: animates)
-            browsing = false
+                  appearanceAnimated: animates, endsBrowsing: true)
         } else {
             browsing = false
             suppressedPreSeekActiveID = nil
@@ -1192,6 +1217,20 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
             - contentOffset.y - Self.viewportOverscan
     }
 
+    func rowDistanceBlurRadius(forRow row: Int) -> Double? {
+        displayedCell(forRow: row)?.appearance.distanceBlurRadius
+    }
+
+    func isRowBrowsingAppearanceActive(forRow row: Int) -> Bool? {
+        displayedCell(forRow: row)?.appearance.browsing
+    }
+
+    func presentationViewportTop(forRow row: Int) -> CGFloat? {
+        guard let cell = displayedCell(forRow: row) else { return nil }
+        return visualMinY(for: cell, presentation: !animators.isEmpty)
+            - contentOffset.y - Self.viewportOverscan
+    }
+
     /// Font-derived line height used by the focus formula; exposed for tests.
     var focusLineHeight: CGFloat {
         LyricsFontMetrics.boldLineHeight(size: input?.fontSize ?? 0)
@@ -1202,7 +1241,10 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
         suppressedPreSeekActiveID = nil
         browsing = true
         resumeTask?.cancel()
-        onUserInteractionChange?(true)
+        if !reportsUserInteraction {
+            reportsUserInteraction = true
+            onUserInteractionChange?(true)
+        }
         visibility.begin(isInterfaceVisible: !(input?.isInterfaceHidden ?? false))
         previousOffset = contentOffset.y
         updateAppearances(activeIndex: focusedIndex, animated: true)
@@ -1219,15 +1261,21 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
         setNeedsLayout()
     }
     func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
-        onUserInteractionChange?(false)
         if !decelerate {
+            endUserInteractionIfNeeded()
             stopDisplayLinkIfIdle()
             resumeFollowing()
         }
     }
     func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+        endUserInteractionIfNeeded()
         stopDisplayLinkIfIdle()
         resumeFollowing()
+    }
+    private func endUserInteractionIfNeeded() {
+        guard reportsUserInteraction else { return }
+        reportsUserInteraction = false
+        onUserInteractionChange?(false)
     }
     private func resumeFollowing() {
         visibility.end()
@@ -1244,7 +1292,9 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
     }
     func stop() {
         resumeTask?.cancel()
+        endUserInteractionIfNeeded()
         fadePendingStartHeight = nil
+        fadeTargetHeight = nil
         freezeRows()
         cancelAllAnimations()
         fadeAnimator?.stopAnimation(true)
@@ -1316,7 +1366,7 @@ private struct LocalLyricsRow: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .foregroundStyle(foreground.opacity(opacity))
             .modifier(LyricsFocusBlur(radius: radius, amount: appearance.focused ? 0 : 1))
-            .blendMode(foreground == .white && !appearance.focused ? .plusLighter : .normal)
+            .blendMode(foreground == .white ? .plusLighter : .normal)
             .background {
                 RoundedRectangle(cornerRadius: backgroundCornerRadius, style: .continuous)
                     .fill(foreground.opacity(progress * 0.12))
@@ -1328,18 +1378,22 @@ private struct LocalLyricsRow: View {
         .scaleEffect(appearance.focused ? 1 : motion.deselectedScale, anchor: .topLeading)
         .animation(animation, value: appearance.focused)
         .animation(animation, value: opacity)
+        .animation(animation, value: radius)
         .accessibilityAddTraits(appearance.focused ? .isSelected : [])
     }
 }
 
 /// Animate focus independently so per-frame distance updates retain the 120ms focus curve.
 nonisolated private struct LyricsFocusBlur: ViewModifier, Animatable {
-    let radius: Double
+    var radius: Double
     var amount: Double
 
-    var animatableData: Double {
-        get { amount }
-        set { amount = newValue }
+    var animatableData: AnimatablePair<Double, Double> {
+        get { AnimatablePair(radius, amount) }
+        set {
+            radius = newValue.first
+            amount = newValue.second
+        }
     }
 
     func body(content: Content) -> some View {
@@ -1535,8 +1589,10 @@ private final class LyricsEdgeMaskLayer: CAGradientLayer {
 }
 
 nonisolated struct LyricsViewportFade: Equatable, Sendable {
+    static let topFadeHeight: CGFloat = 68
     static let shownBottomFadeHeight: CGFloat = 160
-    static let hiddenBottomFadeHeight: CGFloat = 56
+    static let hiddenBottomFadeHeight: CGFloat = 175
+    private static let minimumShownBottomFadeHeight: CGFloat = 56
 
     var topStart: CGFloat = 0
     var topEnd: CGFloat = 0
@@ -1552,11 +1608,11 @@ nonisolated struct LyricsViewportFade: Equatable, Sendable {
     ) {
         bottomEnd = isInterfaceHidden ? height : referenceHeight
         topStart = min(topOverlayHeight, bottomEnd)
-        topEnd = min(topStart + NowPlayingQueueList.topFadeHeight, bottomEnd)
+        topEnd = min(topStart + Self.topFadeHeight, bottomEnd)
         let shownBottom = shownReferenceHeight ?? referenceHeight
         let overlayShownFade = min(
             Self.shownBottomFadeHeight,
-            max(Self.hiddenBottomFadeHeight, max(shownBottom - topEnd, 0) * 0.48)
+            max(Self.minimumShownBottomFadeHeight, max(shownBottom - topEnd, 0) * 0.48)
         )
         let span = height - shownBottom
         let hiddenFraction: CGFloat = span > 0.5
