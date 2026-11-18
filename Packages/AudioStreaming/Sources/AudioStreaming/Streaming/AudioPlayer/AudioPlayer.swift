@@ -125,6 +125,8 @@ open class AudioPlayer {
 
     /// An `AVAudioFormat` object for the canonical audio stream
     private var outputAudioFormat: AVAudioFormat = .init(commonFormat: .pcmFormatFloat32, sampleRate: 44100.0, channels: 2, interleaved: true)!
+    public var renderAudioFormat: AVAudioFormat { outputAudioFormat }
+    private let usesExternalRenderOutput: Bool
 
     /// Keeps track of the player's state before being paused.
     private var stateBeforePaused: InternalState = .initial
@@ -154,7 +156,10 @@ open class AudioPlayer {
 
     var entriesQueue: PlayerQueueEntries
 
-    public init(configuration: AudioPlayerConfiguration = .default, outputFormat: AVAudioFormat? = nil) {
+    public init(configuration: AudioPlayerConfiguration = .default,
+                outputFormat: AVAudioFormat? = nil,
+                externalRenderOutput: Bool = false) {
+        self.usesExternalRenderOutput = externalRenderOutput
         if let outputFormat { self.outputAudioFormat = outputFormat }
         self.configuration = configuration.normalizeValues()
         let engine = AVAudioEngine()
@@ -531,9 +536,15 @@ open class AudioPlayer {
         }
     }
 
+    public func renderExternal(inNumberFrames: UInt32, ioData: UnsafeMutablePointer<AudioBufferList>) -> OSStatus {
+        var flags = AudioUnitRenderActionFlags()
+        return playerRenderProcessor.render(inNumberFrames: inNumberFrames, ioData: ioData, flags: &flags)
+    }
+
     /// Creates and configures an `AVAudioUnit` with an output configuration
     /// and assigns it to the `player` variable.
     private func configPlayerNode() {
+        guard !usesExternalRenderOutput else { return }
         AVAudioUnit.createAudioUnit(with: UnitDescriptions.output) { [weak self] result in
             guard let self = self else { return }
             switch result {
@@ -633,7 +644,9 @@ open class AudioPlayer {
         guard isEngineRunning else { return }
         audioEngine.reset()
         audioEngine.pause()
-        player.auAudioUnit.stopHardware()
+        if !usesExternalRenderOutput {
+            player.auAudioUnit.stopHardware()
+        }
         Logger.debug("engine paused ⏸", category: .generic)
     }
 
@@ -642,7 +655,9 @@ open class AudioPlayer {
     /// - parameter reason: A value of `AudioPlayerStopReason` indicating the reason the engine stopped.
     private func stopEngine(reason: AudioPlayerStopReason) {
         audioEngine.stop()
-        player.auAudioUnit.stopHardware()
+        if !usesExternalRenderOutput {
+            player.auAudioUnit.stopHardware()
+        }
         rendererContext.resetBuffers()
         playerContext.setInternalState(to: .stopped)
         playerContext.stopReason.write { $0 = reason }
@@ -658,8 +673,10 @@ open class AudioPlayer {
         }
         do {
             try startEngineIfNeeded()
-            try player.auAudioUnit.allocateRenderResources()
-            try player.auAudioUnit.startHardware()
+            if !usesExternalRenderOutput {
+                try player.auAudioUnit.allocateRenderResources()
+                try player.auAudioUnit.startHardware()
+            }
         } catch {
             stopEngine(reason: .error)
             raiseUnexpected(error: .audioSystemError(.playerStartError))

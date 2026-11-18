@@ -8,8 +8,9 @@ import Observation
     private(set) var elapsed: Double = 0
     private(set) var duration: Double = 0
     private(set) var error: String?
-    @ObservationIgnored private var player = StreamingPlaybackDeck()
-    @ObservationIgnored private var incoming = StreamingPlaybackDeck()
+    @ObservationIgnored private let graph = SharedAudioGraph()
+    @ObservationIgnored private var player: StreamingPlaybackDeck
+    @ObservationIgnored private var incoming: StreamingPlaybackDeck
     @ObservationIgnored private var clock: Task<Void, Never>?
     @ObservationIgnored private var notifications: [NSObjectProtocol] = []
     @ObservationIgnored private let activateSession: @Sendable () async throws -> Bool
@@ -21,8 +22,9 @@ import Observation
     @ObservationIgnored private var resumeAfterInterruption = false
     @ObservationIgnored private var interrupted = false
     @ObservationIgnored private var fadeStart: Double?
-    var crossfadeEnabled = false { didSet { if !crossfadeEnabled { cancelFade() } } }
+    var crossfadeEnabled = false { didSet { if !crossfadeEnabled { cancelFade() } else { cancelGapless() } } }
     private(set) var isCrossfading = false
+    @ObservationIgnored private var isGaplessArmed = false
     @ObservationIgnored var onAdvanced: (() -> Void)?
     @ObservationIgnored var onFinished: (() -> Void)?
     @ObservationIgnored var onStateChange: (() -> Void)?
@@ -31,6 +33,8 @@ import Observation
 
     init(activateSession: @escaping @Sendable () async throws -> Bool = LocalPlaybackEngine.activateAudioSession) {
         self.activateSession = activateSession
+        self.player = StreamingPlaybackDeck(graph: graph)
+        self.incoming = StreamingPlaybackDeck(graph: graph)
         bindPlayer()
         clock = Task { [weak self] in
             while !Task.isCancelled {
@@ -73,8 +77,14 @@ import Observation
         }
         player.onEnded = { [weak self, weak observed] in
             guard let self, self.player === observed else { return }
-            if self.isCrossfading, !self.incoming.isLoading { self.promoteIncoming(); self.onAdvanced?() }
-            else if !self.advancePrepared() { self.pause(); self.onFinished?() }
+            if self.isCrossfading, !self.incoming.isLoading {
+                self.promoteIncoming(); self.onAdvanced?()
+            } else if self.isGaplessArmed, !self.incoming.isLoading {
+                self.incoming.play(atHostTime: nil)
+                self.promoteIncoming(); self.onAdvanced?()
+            } else if !self.advancePrepared() {
+                self.pause(); self.onFinished?()
+            }
         }
     }
     private func readCurrentTime() {
@@ -86,6 +96,7 @@ import Observation
         let previousDuration = duration
         readCurrentTime()
         updateFade()
+        updateGapless()
         if previousDuration != duration {
             onStateChange?()
         } else if abs(previousElapsed - elapsed) > 0.0001 {
@@ -106,15 +117,32 @@ import Observation
     }
     func prepareNext(url: URL?) {
         cancelFade()
+        cancelGapless()
         preparedURL = url
         incoming.clear()
-        if let url, url.isFileURL, FileManager.default.fileExists(atPath: url.path) { incoming.load(url: url) }
+        if let url, !url.isFileURL || FileManager.default.fileExists(atPath: url.path) { incoming.load(url: url) }
     }
     private func cancelFade() {
         incoming.pause()
         if isCrossfading { incoming.seek(to: 0) }
         player.volume = 1; incoming.volume = 0
         fadeStart = nil; isCrossfading = false
+    }
+    private func cancelGapless() {
+        guard isGaplessArmed else { return }
+        incoming.pause()
+        incoming.seek(to: 0)
+        isGaplessArmed = false
+    }
+    private func updateGapless() {
+        guard !crossfadeEnabled, !isGaplessArmed, isPlaying, !isLoading,
+              duration > 0, duration - elapsed <= 1.5,
+              let url = preparedURL, !url.isFileURL || FileManager.default.fileExists(atPath: url.path),
+              !incoming.isLoading, incoming.itemID != nil,
+              let endHostTime = player.exactEndHostTime() else { return }
+        isGaplessArmed = true
+        incoming.volume = 1
+        incoming.play(atHostTime: endHostTime)
     }
     private func updateFade() {
         guard crossfadeEnabled, isPlaying, !isLoading, duration > 3,
@@ -130,15 +158,15 @@ import Observation
     }
     private func promoteIncoming() {
         player.clear()
-        player = incoming; incoming = StreamingPlaybackDeck()
-        player.volume = 1; preparedURL = nil; fadeStart = nil; isCrossfading = false
+        player = incoming; incoming = StreamingPlaybackDeck(graph: graph)
+        player.volume = 1; preparedURL = nil; fadeStart = nil; isCrossfading = false; isGaplessArmed = false
         generation += 1
         elapsed = 0; duration = 0
         bindPlayer(); readCurrentTime(); isLoading = player.isLoading
         if let failure = player.error { error = failure.localizedDescription; pause() }
     }
     @discardableResult func advancePrepared() -> Bool {
-        guard let url = preparedURL, url.isFileURL, FileManager.default.fileExists(atPath: url.path) else { return false }
+        guard let url = preparedURL, !url.isFileURL || FileManager.default.fileExists(atPath: url.path) else { return false }
         let continuing = playRequested
         cancelActivation()
         promoteIncoming()
@@ -148,21 +176,21 @@ import Observation
     }
     func seek(to seconds: Double, source: SeekSource = .interaction) {
         guard seconds.isFinite, player.itemID != nil else { return }
-        cancelFade(); elapsed = max(0, seconds); isLoading = true
+        cancelFade(); cancelGapless(); elapsed = max(0, seconds); isLoading = true
         player.seek(to: elapsed)
         onStateChange?()
     }
     func replaceResource(url: URL, shouldResume: @MainActor () -> Bool) async throws {
         try Task.checkCancellation()
         let token = generation
-        let candidate = StreamingPlaybackDeck()
+        let candidate = StreamingPlaybackDeck(graph: graph)
         candidate.load(url: url)
         do { try await candidate.waitUntilReady() }
         catch { candidate.clear(); throw error }
         guard token == generation, !Task.isCancelled else { candidate.clear(); throw CancellationError() }
         player.pause()
         let position = player.currentPlaybackTime ?? elapsed
-        cancelActivation(); cancelFade(); player.clear()
+        cancelActivation(); cancelFade(); cancelGapless(); player.clear()
         generation += 1
         player = candidate; bindPlayer(); elapsed = position
         player.seek(to: position); isLoading = true
@@ -234,7 +262,8 @@ import Observation
         resumeAfterInterruption = false
         playRequested = false
         cancelActivation()
-        player.pause(); incoming.pause(); isPlaying = false
+        cancelGapless()
+        player.pause(); incoming.pause(); graph.pause(); isPlaying = false
         readCurrentTime()
         onStateChange?()
     }
@@ -244,7 +273,8 @@ import Observation
             interrupted = true
             playRequested = false
             cancelActivation()
-            player.pause(); incoming.pause(); isPlaying = false
+            cancelGapless()
+            player.pause(); incoming.pause(); graph.pause(); isPlaying = false
             readCurrentTime()
             onStateChange?()
         } else {
@@ -261,8 +291,8 @@ import Observation
     func stop() {
         generation += 1
         interrupted = false
-        pause(); player.clear(); incoming.clear(); preparedURL = nil
-        fadeStart = nil; isCrossfading = false; isLoading = false
+        pause(); player.clear(); incoming.clear(); graph.stop(); preparedURL = nil
+        fadeStart = nil; isCrossfading = false; isGaplessArmed = false; isLoading = false
         elapsed = 0; duration = 0; error = nil
     }
     func shutdown() {

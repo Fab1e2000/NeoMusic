@@ -6,8 +6,7 @@
     var onEnded: (() -> Void)?
 
     private let file: AVAudioFile
-    private let analyzer: AudioSpectrumAnalyzer
-    private let engine = AVAudioEngine()
+    private let graph: SharedAudioGraph
     private let playerNode = AVAudioPlayerNode()
     private let sampleRate: Double
     private let totalFrames: AVAudioFramePosition
@@ -46,23 +45,15 @@
         return Double(anchoredFrame) / sampleRate
     }
 
-    init(file: AVAudioFile, analyzer: AudioSpectrumAnalyzer, volume: Float, initialPosition: Double) {
+    init(file: AVAudioFile, graph: SharedAudioGraph, volume: Float, initialPosition: Double) {
         self.file = file
-        self.analyzer = analyzer
+        self.graph = graph
         self.volume = volume
         self.sampleRate = max(1, file.processingFormat.sampleRate)
         self.totalFrames = file.length
 
-        engine.attach(playerNode)
-        engine.connect(playerNode, to: engine.mainMixerNode, format: file.processingFormat)
+        graph.attach(playerNode, format: file.processingFormat)
         playerNode.volume = volume
-        playerNode.installTap(
-            onBus: 0,
-            bufferSize: 1024,
-            format: file.processingFormat,
-            block: Self.makeTapBlock(analyzer: analyzer)
-        )
-        engine.prepare()
 
         let clamped = Self.clampedSeconds(initialPosition, duration: Double(totalFrames) / sampleRate)
         anchoredFrame = AVAudioFramePosition((clamped * sampleRate).rounded())
@@ -70,14 +61,28 @@
         scheduleFrom(frame: anchoredFrame, startPlaying: false)
     }
 
-    func play() {
+    func play(atHostTime hostTime: UInt64? = nil) {
         wantsPlayback = true
         pausedTime = nil
         if finished {
-            scheduleFrom(frame: 0, startPlaying: true)
+            scheduleFrom(frame: 0, startPlaying: true, atHostTime: hostTime)
             return
         }
-        startEngineAndNodeIfNeeded()
+        startEngineAndNodeIfNeeded(atHostTime: hostTime)
+    }
+
+    func exactEndHostTime() -> UInt64? {
+        guard isPlayingState, sampleRate > 0,
+              let nodeTime = playerNode.lastRenderTime,
+              nodeTime.isSampleTimeValid,
+              nodeTime.isHostTimeValid,
+              let playerTime = playerNode.playerTime(forNodeTime: nodeTime),
+              playerTime.sampleTime >= 0
+        else { return nil }
+        let playedFrames = anchoredFrame + playerTime.sampleTime
+        let remainingFrames = max(0, totalFrames - playedFrames)
+        let remainingSeconds = Double(remainingFrames) / sampleRate
+        return nodeTime.hostTime + AVAudioTime.hostTime(forSeconds: remainingSeconds)
     }
 
     func pause() {
@@ -101,12 +106,10 @@
         wantsPlayback = false
         isPlayingState = false
         playerNode.stop()
-        engine.stop()
-        playerNode.removeTap(onBus: 0)
-        engine.reset()
+        graph.detach(playerNode)
     }
 
-    private func scheduleFrom(frame: AVAudioFramePosition, startPlaying: Bool) {
+    private func scheduleFrom(frame: AVAudioFramePosition, startPlaying: Bool, atHostTime hostTime: UInt64? = nil) {
         scheduleGeneration &+= 1
         let generation = scheduleGeneration
         playerNode.stop()
@@ -138,22 +141,24 @@
         )
 
         if startPlaying {
-            startEngineAndNodeIfNeeded()
+            startEngineAndNodeIfNeeded(atHostTime: hostTime)
         } else {
             isPlayingState = false
         }
     }
 
-    private func startEngineAndNodeIfNeeded() {
-        if !engine.isRunning {
-            do {
-                try engine.start()
-            } catch {
-                isPlayingState = false
-                return
-            }
+    private func startEngineAndNodeIfNeeded(atHostTime hostTime: UInt64? = nil) {
+        do {
+            try graph.startIfNeeded()
+        } catch {
+            isPlayingState = false
+            return
         }
-        playerNode.play()
+        if let hostTime {
+            playerNode.play(at: AVAudioTime(hostTime: hostTime))
+        } else {
+            playerNode.play()
+        }
         isPlayingState = true
     }
 
@@ -164,10 +169,6 @@
         finished = true
         pausedTime = duration
         onEnded?()
-    }
-
-    nonisolated private static func makeTapBlock(analyzer: AudioSpectrumAnalyzer) -> AVAudioNodeTapBlock {
-        { buffer, _ in analyzer.consume(buffer) }
     }
 
     nonisolated private static func makeCompletionHandler(
