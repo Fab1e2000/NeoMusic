@@ -1,4 +1,5 @@
 import XCTest
+@testable import FullScreenPlayer
 @testable import NeoMusic
 
 final class LocalLyricsTests: XCTestCase, @unchecked Sendable {
@@ -27,6 +28,24 @@ final class LocalLyricsTests: XCTestCase, @unchecked Sendable {
     func testPlainAndEmpty() {
         XCTAssertEqual(LyricsDocument.parse("one\ntwo").plainText, "one\ntwo")
         XCTAssertTrue(LyricsDocument.parse("[ar:Artist]\n ").isEmpty)
+    }
+
+    func testStoredTranslationStaysSeparateFromTheOriginalLine() {
+        let stored = LyricsDocument.storedText(
+            original: "[00:01.00]Original",
+            translation: "[00:01.00]译文"
+        )
+        let decoded = LyricsDocument.decodeStored(stored)
+        XCTAssertEqual(decoded.lines.map(\.text), ["Original"])
+        XCTAssertEqual(decoded.lines.map(\.translation), ["译文"])
+        XCTAssertEqual(LyricsDocument.decodeStored("[00:01.00]Original").lines.map(\.translation), [""])
+        let profile = AppleMusicLyricsTypographyProfile.iOS26_6
+        XCTAssertEqual(profile.primaryFontSize, 34)
+        XCTAssertEqual(profile.translationFontSize, 20)
+        XCTAssertEqual(profile.translationOpacity, 0.55)
+        XCTAssertEqual(profile.translationTopSpacing, 6)
+        XCTAssertEqual(AppleMusicLyricsMotionProfile.iOS26_6.supplementalTextShowSpring.stiffness, 150)
+        XCTAssertEqual(AppleMusicLyricsMotionProfile.iOS26_6.supplementalTextHideSpring.stiffness, 130)
     }
 
     func testImportOverridesSidecarAndFailedImportPreservesPrevious() async throws {

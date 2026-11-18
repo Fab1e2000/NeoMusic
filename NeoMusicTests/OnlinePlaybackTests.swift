@@ -217,7 +217,8 @@ final class OnlinePlaybackTests: XCTestCase {
                                                translation: "[offset:-500]\n[00:01.50]译文")
         XCTAssertEqual(value.lines.count, 1)
         XCTAssertEqual(value.lines.first?.time, 2)
-        XCTAssertEqual(value.lines.first?.text, "Original\n译文")
+        XCTAssertEqual(value.lines.first?.text, "Original")
+        XCTAssertEqual(value.lines.first?.translation, "译文")
     }
 
     func testLateResolutionAfterLogoutCannotStartAudio() async {

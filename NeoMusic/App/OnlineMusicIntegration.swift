@@ -204,7 +204,7 @@ final class OnlineLibraryIntegration {
         await LocalLibrary.referenceLibrary.reader.configureRemoteLyrics { [weak music, weak downloads] id in
             if let parts = OnlineSongIdentity.parse(id), let file = downloads?.lyricsURL(songID: parts.song),
                let lyrics = try? String(contentsOf: file, encoding: .utf8) {
-                return LyricsDocument.parse(lyrics)
+                return LyricsDocument.decodeStored(lyrics)
             }
             guard let music, let parts = OnlineSongIdentity.parse(id), music.userID == parts.owner else {
                 throw NeteaseAccountError.authenticationRequired

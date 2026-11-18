@@ -18,6 +18,7 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
     @State private var pageChange: NowPlayingPageChange?
     @State private var showsLyricsControls = true
     @State private var appleMusicControlsActivityGeneration = 0
+    @State private var lyricsControlTouchCount = 0
     @State private var isQueueSongHeaderHidden = false
     @State private var queueHeaderOffset = QueueHeaderOffset()
     @State private var geometryState: NowPlayingGeometry
@@ -96,6 +97,10 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
             if !active { finishPageChange() }
         }
         .onChange(of: page) { _, _ in showsLyricsControls = true }
+        .onChange(of: accessibilityVoiceOverEnabled) { _, enabled in
+            if enabled, page == .lyrics { showsLyricsControls = true }
+        }
+        .task(id: lyricsControlsIdleKey) { await hideLyricsControlsAfterIdle() }
         .onChange(of: player.currentTrack == nil) { _, empty in if empty { closePlayer() } }
         .onDisappear { finishPageChange() }
         .fileImporter(isPresented: $importingLyrics, allowedContentTypes: [.data, .plainText]) { result in
@@ -129,6 +134,9 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
             portraitPlayerControls(for: song)
                 .modifier(LyricsControlSurfaceHitShield(isActive: page == .lyrics))
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { controlsHeight = $0 }
+                .background {
+                    LyricsControlsIdleTouchMonitor(onBegan: lyricsControlTouchBegan, onEnded: lyricsControlTouchEnded)
+                }
                 .allowsHitTesting(!hidesLyricsControls)
                 .accessibilityHidden(hidesLyricsControls)
 
@@ -205,7 +213,7 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
         page == .lyrics
     }
 
-    private var hasLyricsTranslations: Bool { false }
+    private var hasLyricsTranslations: Bool { lyricsContent.lyrics?.hasTranslation == true }
     private var hasLyricsRomanizations: Bool { false }
 
     private var usesExpandedAppleMusicLyricsLayout: Bool {
@@ -375,7 +383,11 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
             song: song, lyrics: lyricsContent.lyrics, errorMessage: lyricsContent.error,
             isActive: visualsActive && page == .lyrics, isInterfaceHidden: hidesLyricsControls,
             artworkNamespace: pageArtworkNamespace, showsSongHeader: false,
-            onInterfaceVisibilityChange: setAppleMusicLyricsControlsVisible
+            showsTranslation: true,
+            onInterfaceVisibilityChange: setAppleMusicLyricsControlsVisible,
+        onUserInteractionChange: { active in
+            if active { lyricsControlTouchBegan() } else { lyricsControlTouchEnded() }
+        }
         )
         .accessibilityAction(named: lyricsInterfaceAccessibilityActionName) {
             handleLyricsInterfaceInteraction()
@@ -407,6 +419,44 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
 
     private func handleLyricsInterfaceInteraction() {
         registerAppleMusicControlsActivity()
+    }
+
+    private var lyricsControlsIdleKey: LyricsControlsIdleKey {
+        LyricsControlsIdleKey(
+            page: page,
+            controlsVisible: showsLyricsControls,
+            active: visualsActive,
+            voiceOver: accessibilityVoiceOverEnabled,
+            touching: lyricsControlTouchCount > 0,
+            transitioning: pageChange != nil,
+            generation: appleMusicControlsActivityGeneration
+        )
+    }
+
+    private func hideLyricsControlsAfterIdle() async {
+        guard LyricsControlsIdle.shouldScheduleHide(
+            onLyricsPage: page == .lyrics,
+            controlsVisible: showsLyricsControls,
+            voiceOver: accessibilityVoiceOverEnabled,
+            playerActive: visualsActive,
+            touching: lyricsControlTouchCount > 0,
+            transitioning: pageChange != nil
+        ) else { return }
+        do { try await Task.sleep(for: LyricsControlsIdle.duration) } catch { return }
+        guard !Task.isCancelled else { return }
+        setAppleMusicLyricsControlsVisible(false)
+    }
+
+    private func lyricsControlTouchBegan() {
+        guard page == .lyrics else { return }
+        lyricsControlTouchCount += 1
+        appleMusicControlsActivityGeneration &+= 1
+    }
+
+    private func lyricsControlTouchEnded() {
+        guard page == .lyrics else { return }
+        lyricsControlTouchCount = max(0, lyricsControlTouchCount - 1)
+        appleMusicControlsActivityGeneration &+= 1
     }
 
     private func registerAppleMusicControlsActivity() {
@@ -453,6 +503,112 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
         appleMusicControlsActivityGeneration &+= 1
     }
 
+}
+
+enum LyricsControlsIdle {
+    static let duration: Duration = .seconds(3)
+
+    static func shouldScheduleHide(onLyricsPage: Bool, controlsVisible: Bool, voiceOver: Bool,
+                                    playerActive: Bool, touching: Bool, transitioning: Bool) -> Bool {
+        onLyricsPage && controlsVisible && playerActive && !voiceOver && !touching && !transitioning
+    }
+}
+
+private struct LyricsControlsIdleKey: Equatable {
+    let page: NowPlayingPage
+    let controlsVisible: Bool
+    let active: Bool
+    let voiceOver: Bool
+    let touching: Bool
+    let transitioning: Bool
+    let generation: Int
+}
+
+/// Observes touches on the player without taking them from buttons, sliders, or lyric rows.
+private struct LyricsControlsIdleTouchMonitor: UIViewRepresentable {
+    var onBegan: () -> Void
+    var onEnded: () -> Void
+
+    func makeUIView(context: Context) -> IdleTouchAnchor {
+        let view = IdleTouchAnchor()
+        view.onBegan = onBegan
+        view.onEnded = onEnded
+        return view
+    }
+
+    func updateUIView(_ uiView: IdleTouchAnchor, context: Context) {
+        uiView.onBegan = onBegan
+        uiView.onEnded = onEnded
+    }
+
+    final class IdleTouchAnchor: UIView, UIGestureRecognizerDelegate {
+        var onBegan: (() -> Void)?
+        var onEnded: (() -> Void)?
+        private var recognizer: IdleTouchRecognizer?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            if window == nil {
+                if let recognizer { recognizer.view?.removeGestureRecognizer(recognizer) }
+                recognizer = nil
+                return
+            }
+            attachIfNeeded()
+        }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            attachIfNeeded()
+        }
+
+        private func attachIfNeeded() {
+            guard recognizer == nil, window != nil else { return }
+            var host: UIView = self
+            while let parent = host.superview, parent !== window {
+                if parent.bounds.height > host.bounds.height + 80 { break }
+                host = parent
+            }
+            guard host !== self else { return }
+            let recognizer = IdleTouchRecognizer()
+            recognizer.cancelsTouchesInView = false
+            recognizer.delaysTouchesBegan = false
+            recognizer.delaysTouchesEnded = false
+            recognizer.delegate = self
+            recognizer.onBegan = { [weak self] in self?.onBegan?() }
+            recognizer.onEnded = { [weak self] in self?.onEnded?() }
+            host.addGestureRecognizer(recognizer)
+            self.recognizer = recognizer
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+    }
+
+    final class IdleTouchRecognizer: UIGestureRecognizer {
+        var onBegan: (() -> Void)?
+        var onEnded: (() -> Void)?
+
+        override func canPrevent(_ preventedGestureRecognizer: UIGestureRecognizer) -> Bool { false }
+        override func canBePrevented(by preventingGestureRecognizer: UIGestureRecognizer) -> Bool { false }
+
+        override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+            super.touchesBegan(touches, with: event)
+            onBegan?()
+            state = .began
+        }
+
+        override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+            super.touchesEnded(touches, with: event)
+            onEnded?()
+            state = .ended
+        }
+
+        override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+            super.touchesCancelled(touches, with: event)
+            onEnded?()
+            state = .cancelled
+        }
+    }
 }
 
 /// Keeps taps that miss a button on the lyrics control surface, instead of the lyric row behind it.

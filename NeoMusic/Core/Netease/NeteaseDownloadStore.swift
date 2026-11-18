@@ -454,7 +454,7 @@ final class NeteaseDownloadStore {
 
     private func optionalLyrics(_ id: Int64, credential: NeteaseCredential) async -> String? {
         guard let lyrics = try? await client.lyrics(id: id, credential: credential), !lyrics.original.isEmpty else { return nil }
-        return lyrics.translation.isEmpty ? lyrics.original : lyrics.original + "\n" + lyrics.translation
+        return LyricsDocument.storedText(original: lyrics.original, translation: lyrics.translation)
     }
     private func optionalArtwork(_ url: URL?) async -> Data? {
         guard let url, let (data, response) = try? await URLSession.shared.data(from: url),

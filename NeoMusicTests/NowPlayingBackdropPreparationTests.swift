@@ -157,14 +157,16 @@ final class NowPlayingBackdropPreparationTests: XCTestCase {
         XCTAssertEqual(view.layer.contentsScale, 1.0)
         XCTAssertTrue(view.hasActiveDisplayLink)
         XCTAssertTrue(try XCTUnwrap(view.layer as? CAMetalLayer).framebufferOnly)
-        XCTAssertEqual(view.currentPreferredFrameRateRange?.preferred, 120)
+        XCTAssertEqual(view.currentPreferredFrameRateRange?.preferred, 10)
+        XCTAssertEqual(view.currentPreferredFrameRateRange?.minimum, 10)
+        XCTAssertEqual(view.currentPreferredFrameRateRange?.maximum, 10)
 
         view.update(source: source, isPlaying: true, reduceMotion: false, isTransitioning: true)
-        XCTAssertEqual(view.currentPreferredFrameRateRange?.preferred, 120)
-        XCTAssertEqual(view.currentPreferredFrameRateRange?.maximum, 120)
+        XCTAssertEqual(view.currentPreferredFrameRateRange?.preferred, 10)
+        XCTAssertEqual(view.currentPreferredFrameRateRange?.maximum, 10)
 
         view.update(source: source, isPlaying: true, reduceMotion: false, isTransitioning: false)
-        XCTAssertEqual(view.currentPreferredFrameRateRange?.preferred, 120)
+        XCTAssertEqual(view.currentPreferredFrameRateRange?.preferred, 10)
 
         // A retained fullscreen player must stop immediately when collapsed or inactive,
         // even while music plays or a track crossfade is pending.

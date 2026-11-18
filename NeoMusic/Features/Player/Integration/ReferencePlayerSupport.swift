@@ -58,7 +58,8 @@ extension LyricsDocument {
         let lines = base.lines.map { line in
             let additional = translations[line.time, default: []].map(\.text)
                 .filter { !$0.isEmpty && $0 != line.text }
-            return LyricsLine(id: line.id, time: line.time, text: ([line.text] + additional).joined(separator: "\n"))
+            return LyricsLine(id: line.id, time: line.time, text: line.text,
+                               translation: additional.joined(separator: "\n"))
         }
         return Self(lines: lines, plainText: lines.map(\.text).joined(separator: "\n"), source: "网易云音乐")
     }
@@ -66,7 +67,8 @@ extension LyricsDocument {
 
 extension LyricsDocument {
     var playerLyrics: PlayerLyrics {
-        PlayerLyrics(lines: lines.map { PlayerLyricLine(id: $0.id, time: $0.time, text: $0.text) },
-                     plainText: plainText, source: source)
+        PlayerLyrics(lines: lines.map {
+            PlayerLyricLine(id: $0.id, time: $0.time, text: $0.text, translation: $0.translation)
+        }, plainText: plainText, source: source)
     }
 }

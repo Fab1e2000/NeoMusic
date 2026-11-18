@@ -67,6 +67,22 @@ final class LyricsFocusTests: XCTestCase {
         XCTAssertLessThan(motion.focusBlurTransitionDuration, motion.lineChangeDuration)
     }
 
+    func testLyricsControlsHideAfterThreeIdleSecondsOnlyWhileWatching() {
+        XCTAssertEqual(LyricsControlsIdle.duration, .seconds(3))
+        XCTAssertTrue(LyricsControlsIdle.shouldScheduleHide(
+            onLyricsPage: true, controlsVisible: true, voiceOver: false,
+            playerActive: true, touching: false, transitioning: false))
+        XCTAssertFalse(LyricsControlsIdle.shouldScheduleHide(
+            onLyricsPage: true, controlsVisible: true, voiceOver: true,
+            playerActive: true, touching: false, transitioning: false))
+        XCTAssertFalse(LyricsControlsIdle.shouldScheduleHide(
+            onLyricsPage: true, controlsVisible: true, voiceOver: false,
+            playerActive: true, touching: true, transitioning: false))
+        XCTAssertFalse(LyricsControlsIdle.shouldScheduleHide(
+            onLyricsPage: false, controlsVisible: true, voiceOver: false,
+            playerActive: true, touching: false, transitioning: false))
+    }
+
     func testLyricsHostingKeepsHorizontalBlurOverflowAndWrappedDistance() async throws {
         let state = LyricsFocusTestState()
         let window = try await mount(state, size: .large)
@@ -562,6 +578,50 @@ final class LyricsFocusTests: XCTestCase {
                           "No detached cell rows may stay resident")
     }
 
+    func testTranslationRevealGrowsTheRowAndKeepsTheFocusedLine() async throws {
+        let state = LyricsFocusTestState(lineCount: 6, activeID: 2)
+        state.lyrics = PlayerLyrics(lines: (0..<6).map { index in
+            PlayerLyricLine(id: index, time: Double(index), text: "Line \(index)",
+                             translation: index == 1 || index == 2 ? "译文\(index)" : "")
+        }, plainText: "", source: "test")
+        let window = try await mount(state, size: .large)
+        defer { window.isHidden = true }
+        try await assertFocus(2, in: state)
+        let table = try XCTUnwrap(scrollViews(in: window).compactMap { $0 as? NativeLyricsScrollView }.first)
+        let cell = try XCTUnwrap(table.cellForRow(at: IndexPath(row: 2, section: 0)))
+        let beforeHeight = cell.bounds.height
+        let beforeTop = cell.convert(cell.bounds, to: window).minY
+
+        state.showsTranslation = true
+        let grew = try await waitUntil {
+            guard let row = table.cellForRow(at: IndexPath(row: 2, section: 0)) else { return false }
+            return row.bounds.height > beforeHeight + 12
+        }
+        XCTAssertTrue(grew)
+        let shown = try XCTUnwrap(table.cellForRow(at: IndexPath(row: 2, section: 0)))
+        XCTAssertEqual(shown.convert(shown.bounds, to: window).minY, beforeTop, accuracy: 8)
+        XCTAssertTrue(accessibilityLabels(in: shown).contains { $0.contains("译文2") })
+
+        state.showsTranslation = false
+        let shrank = try await waitUntil {
+            guard let row = table.cellForRow(at: IndexPath(row: 2, section: 0)) else { return false }
+            return row.bounds.height < beforeHeight + 4
+        }
+        XCTAssertTrue(shrank)
+        XCTAssertFalse(accessibilityLabels(in: table).contains { $0.contains("译文2") })
+    }
+
+    private func accessibilityLabels(in view: UIView) -> [String] {
+        var labels: [String] = []
+        if let label = view.accessibilityLabel, !label.isEmpty { labels.append(label) }
+        for element in view.accessibilityElements ?? [] {
+            guard let object = element as? NSObject, let label = object.accessibilityLabel, !label.isEmpty else { continue }
+            labels.append(label)
+        }
+        for subview in view.subviews { labels.append(contentsOf: accessibilityLabels(in: subview)) }
+        return labels
+    }
+
     private func mount(_ state: LyricsFocusTestState, size: DynamicTypeSize) async throws -> UIWindow {
         let content = LyricsFocusTestContent(state: state)
             .dynamicTypeSize(size)
@@ -623,6 +683,7 @@ private final class LyricsFocusTestState {
     var topOverlayHeight: CGFloat = 0
     var focusLineHeight: CGFloat = 0
     var reducesMotion = false
+    var showsTranslation = false
     var lyrics: PlayerLyrics
 
     init(lineCount: Int = 80, activeID: Int = 40, idOffset: Int = 0) {
@@ -665,7 +726,8 @@ private struct LyricsFocusTestContent: View {
                 state.seekCount += 1
                 state.activeID = state.lyrics.activeLine(at: $0) ?? 0
             },
-            topOverlayHeight: state.topOverlayHeight, rowGeometry: state.geometry
+            topOverlayHeight: state.topOverlayHeight, showsTranslation: state.showsTranslation,
+            rowGeometry: state.geometry
         )
         .environment(\._accessibilityReduceMotion, state.reducesMotion)
         .id(state.trackIdentity)

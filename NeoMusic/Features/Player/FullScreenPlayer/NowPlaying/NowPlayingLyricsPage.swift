@@ -37,8 +37,10 @@ struct NowPlayingLyricsPage: View {
     let artworkNamespace: Namespace.ID
     let usesArtworkTransition: Bool
     let showsSongHeader: Bool
+    let showsTranslation: Bool
     let onInterfaceInteraction: (() -> Void)?
     let onInterfaceVisibilityChange: ((Bool) -> Void)?
+    let onUserInteractionChange: ((Bool) -> Void)?
 
     init(
         song: PlayerTrack,
@@ -50,8 +52,10 @@ struct NowPlayingLyricsPage: View {
         artworkNamespace: Namespace.ID,
         usesArtworkTransition: Bool = true,
         showsSongHeader: Bool = true,
+        showsTranslation: Bool = false,
         onInterfaceInteraction: (() -> Void)? = nil,
-        onInterfaceVisibilityChange: ((Bool) -> Void)? = nil
+        onInterfaceVisibilityChange: ((Bool) -> Void)? = nil,
+        onUserInteractionChange: ((Bool) -> Void)? = nil
     ) {
         self.song = song
         self.lyrics = lyrics
@@ -62,8 +66,10 @@ struct NowPlayingLyricsPage: View {
         self.artworkNamespace = artworkNamespace
         self.usesArtworkTransition = usesArtworkTransition
         self.showsSongHeader = showsSongHeader
+        self.showsTranslation = showsTranslation
         self.onInterfaceInteraction = onInterfaceInteraction
         self.onInterfaceVisibilityChange = onInterfaceVisibilityChange
+        self.onUserInteractionChange = onUserInteractionChange
     }
 
     var body: some View {
@@ -113,7 +119,9 @@ struct NowPlayingLyricsPage: View {
                         bottomOverlayHeight: appleMusicBottomOverlayHeight, isActive: isActive,
                         isInterfaceHidden: Binding(get: { isInterfaceHidden }, set: { onInterfaceVisibilityChange?(!$0) }),
                         onSeek: { player.seek(to: $0) },
-                        topOverlayHeight: sharedSongHeaderInset - lyricsContentSpacing
+                        topOverlayHeight: sharedSongHeaderInset - lyricsContentSpacing,
+                        showsTranslation: showsTranslation,
+                        onUserInteractionChange: onUserInteractionChange
                     )
                 } else {
                     ScrollView {

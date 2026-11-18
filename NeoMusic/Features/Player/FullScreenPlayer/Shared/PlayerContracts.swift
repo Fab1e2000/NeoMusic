@@ -56,7 +56,13 @@ public struct PlayerLyricLine: Identifiable, Equatable, Sendable {
     public let id: Int
     public let time: TimeInterval
     public let text: String
-    public init(id: Int, time: TimeInterval, text: String) { self.id = id; self.time = time; self.text = text }
+    public let translation: String
+    public init(id: Int, time: TimeInterval, text: String, translation: String = "") {
+        self.id = id
+        self.time = time
+        self.text = text
+        self.translation = translation
+    }
 }
 
 /// Display-ready lyrics. Parsing, translation and storage belong to the host.
@@ -69,6 +75,7 @@ public struct PlayerLyrics: Equatable, Sendable {
     }
     public var isEmpty: Bool { lines.isEmpty && plainText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     public var isTimed: Bool { !lines.isEmpty }
+    public var hasTranslation: Bool { lines.contains { !$0.translation.isEmpty } }
     public func activeLine(at time: TimeInterval) -> Int? { lines.last { $0.time <= time }?.id }
 }
 

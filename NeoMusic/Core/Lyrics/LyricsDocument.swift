@@ -4,6 +4,7 @@ struct LyricsLine: Identifiable, Equatable, Sendable {
     let id: Int
     let time: TimeInterval
     let text: String
+    var translation: String = ""
 }
 
 struct LyricsDocument: Equatable, Sendable {
@@ -52,5 +53,20 @@ struct LyricsDocument: Equatable, Sendable {
             LyricsLine(id: index, time: max(0, entry.element.time - offsetSeconds), text: entry.element.text)
         }
         return Self(lines: lines, plainText: lines.isEmpty ? plain.joined(separator: "\n") : lines.map(\.text).joined(separator: "\n"))
+    }
+
+    /// Separates an original LRC document from its translation inside one stored file.
+    static let storedTranslationMarker = "[neomusic:translation]"
+
+    static func storedText(original: String, translation: String) -> String {
+        let translation = translation.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !translation.isEmpty else { return original }
+        return original + "\n" + storedTranslationMarker + "\n" + translation
+    }
+
+    static func decodeStored(_ text: String) -> Self {
+        let marker = "\n" + storedTranslationMarker + "\n"
+        guard let range = text.range(of: marker) else { return parse(text) }
+        return onlineLyrics(original: String(text[..<range.lowerBound]), translation: String(text[range.upperBound...]))
     }
 }

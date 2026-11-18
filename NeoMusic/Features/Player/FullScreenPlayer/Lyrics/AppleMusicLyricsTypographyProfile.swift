@@ -9,8 +9,19 @@ import Foundation
 /// stays close to `.largeTitle` instead of exposing that source value verbatim.
 nonisolated struct AppleMusicLyricsTypographyProfile: Equatable, Sendable {
     let primaryFontSize: Double
+    /// Translation size measured from the Music lyrics recording: the Chinese
+    /// line's advance matches a 20 pt system font, while the original stays
+    /// on the bold primary size above.
+    let translationFontSize: Double
+    /// White translation over the player background, relative to the line's focus opacity.
+    let translationOpacity: Double
+    /// Space between the original line box and the translation line box.
+    let translationTopSpacing: Double
 
     static let iOS26_6 = Self(
-        primaryFontSize: 34
+        primaryFontSize: 34,
+        translationFontSize: 20,
+        translationOpacity: 0.55,
+        translationTopSpacing: 6
     )
 }

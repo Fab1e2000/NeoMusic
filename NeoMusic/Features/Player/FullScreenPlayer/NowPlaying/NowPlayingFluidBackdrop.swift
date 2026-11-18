@@ -867,7 +867,9 @@ final class NowPlayingFluidBackdropView: UIView {
             link.add(to: .main, forMode: .common)
             displayLink = link
         }
-        displayLink?.preferredFrameRateRange = CAFrameRateRange(minimum: 120, maximum: 120, preferred: 120)
+        // Keep the ambient warp at 10 Hz for the whole time it is moving,
+        // including playback and page changes, so the display is not pinned at 120 Hz.
+        displayLink?.preferredFrameRateRange = CAFrameRateRange(minimum: 10, maximum: 10, preferred: 10)
         displayLink?.isPaused = false
     }
 

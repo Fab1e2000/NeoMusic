@@ -21,16 +21,21 @@ struct AppleMusicLocalLyricsView: View {
     let onSeek: (Double) -> Void
     var fixedFontSize: CGFloat? = nil
     var foreground: Color = .white
+    var showsTranslation: Bool = false
+    var onUserInteractionChange: ((Bool) -> Void)? = nil
 
     @Environment(\.accessibilityReduceMotion) private var reducesMotion
     @Environment(\.colorSchemeContrast) private var contrast
     @ScaledMetric private var scaledFontSize = AppleMusicLyricsTypographyProfile.iOS26_6.primaryFontSize
+    @ScaledMetric private var scaledTranslationFontSize = AppleMusicLyricsTypographyProfile.iOS26_6.translationFontSize
     @State private var rowGeometry: LyricsRowGeometry
 
     init(lyrics: PlayerLyrics, activeID: Int?, bottomOverlayHeight: CGFloat,
          isActive: Bool, isInterfaceHidden: Binding<Bool>, onSeek: @escaping (Double) -> Void,
          topOverlayHeight: CGFloat = 0, fixedFontSize: CGFloat? = nil,
-         foreground: Color = .white, rowGeometry: LyricsRowGeometry = LyricsRowGeometry()) {
+         foreground: Color = .white, showsTranslation: Bool = false,
+         onUserInteractionChange: ((Bool) -> Void)? = nil,
+         rowGeometry: LyricsRowGeometry = LyricsRowGeometry()) {
         self.lyrics = lyrics
         self.activeID = activeID
         self.bottomOverlayHeight = bottomOverlayHeight
@@ -40,7 +45,17 @@ struct AppleMusicLocalLyricsView: View {
         self.onSeek = onSeek
         self.fixedFontSize = fixedFontSize
         self.foreground = foreground
+        self.showsTranslation = showsTranslation
+        self.onUserInteractionChange = onUserInteractionChange
         _rowGeometry = State(initialValue: rowGeometry)
+    }
+
+    private var translationFontSize: CGFloat {
+        if let fixedFontSize {
+            let profile = AppleMusicLyricsTypographyProfile.iOS26_6
+            return fixedFontSize * profile.translationFontSize / profile.primaryFontSize
+        }
+        return scaledTranslationFontSize
     }
 
     var body: some View {
@@ -48,7 +63,9 @@ struct AppleMusicLocalLyricsView: View {
             lyrics: lyrics, activeID: activeID, bottomOverlayHeight: bottomOverlayHeight,
             topOverlayHeight: topOverlayHeight, isActive: isActive,
             isInterfaceHidden: $isInterfaceHidden, onSeek: onSeek,
-            fontSize: fixedFontSize ?? scaledFontSize, foreground: foreground,
+            fontSize: fixedFontSize ?? scaledFontSize, translationFontSize: translationFontSize,
+            showsTranslation: showsTranslation, onUserInteractionChange: onUserInteractionChange,
+            foreground: foreground,
             reducesMotion: reducesMotion, increasedContrast: contrast == .increased,
             rowGeometry: rowGeometry
         )
@@ -65,6 +82,9 @@ private struct NativeLyricsScrollContent: UIViewRepresentable {
     @Binding var isInterfaceHidden: Bool
     let onSeek: (Double) -> Void
     let fontSize: CGFloat
+    let translationFontSize: CGFloat
+    let showsTranslation: Bool
+    let onUserInteractionChange: ((Bool) -> Void)?
     let foreground: Color
     let reducesMotion: Bool
     let increasedContrast: Bool
@@ -117,7 +137,14 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
     private var renderedLines: [PlayerLyricLine] = []
     private var lineIndices: [Int: Int] = [:]
     private var renderedFontSize: CGFloat = 0
+    private var renderedTranslationFontSize: CGFloat = 0
+    private var renderedShowsTranslation = false
+    private var hasAppliedLyricsInput = false
     private var renderedForeground = Color.white
+    private var translationAnimator: UIViewPropertyAnimator?
+    /// Holds the focused line at the position left by the translation spring until the next line change.
+    private var holdsTranslationAnchor = false
+    var onUserInteractionChange: ((Bool) -> Void)?
     private var lastVisualSize = CGSize.zero
     private var visualHeight: CGFloat = 0
     private var estimatedHeight: CGFloat = 56
@@ -193,11 +220,16 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
     fileprivate func update(_ value: NativeLyricsScrollContent) {
         let previous = input
         let replaced = renderedLines != value.lyrics.lines
-            || renderedFontSize != value.fontSize || renderedForeground != value.foreground
+            || renderedFontSize != value.fontSize
+            || renderedTranslationFontSize != value.translationFontSize
+            || renderedForeground != value.foreground
         let interfaceChanged = previous?.isInterfaceHidden != value.isInterfaceHidden
         let geometryChanged = previous?.topOverlayHeight != value.topOverlayHeight
             || previous?.bottomOverlayHeight != value.bottomOverlayHeight
+        let translationChanged = hasAppliedLyricsInput && !replaced
+            && renderedShowsTranslation != value.showsTranslation
         input = value
+        onUserInteractionChange = value.onUserInteractionChange
         isScrollEnabled = value.isActive
         isUserInteractionEnabled = value.isActive
         if !value.isActive {
@@ -210,13 +242,19 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
             cancelAllAnimations()
             renderedLines = value.lyrics.lines
             renderedFontSize = value.fontSize
+            renderedTranslationFontSize = value.translationFontSize
+            renderedShowsTranslation = value.showsTranslation
             renderedForeground = value.foreground
             lineIndices = Self.lineIndices(for: renderedLines)
             lastVisualSize = .zero
             focusedIndex = nil
+            holdsTranslationAnchor = false
             needsFocus = true
             reloadData()
+        } else if translationChanged {
+            revealTranslations(value.showsTranslation, animated: !value.reducesMotion && wasActive)
         }
+        hasAppliedLyricsInput = true
         if value.reducesMotion && previous?.reducesMotion != true { needsFocus = true }
         if !wasActive || replaced { suppressedPreSeekActiveID = nil }
         if !wasActive {
@@ -310,10 +348,12 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
         guard let input, renderedLines.indices.contains(index) else { return }
         let line = renderedLines[index]
         cell.configure(
-            line: line, fontSize: renderedFontSize, foreground: renderedForeground,
+            line: line, fontSize: renderedFontSize, translationFontSize: renderedTranslationFontSize,
+            showsTranslation: renderedShowsTranslation, foreground: renderedForeground,
             spacing: motion.lineSpacing, focused: index == focusedIndex,
             browsing: browsing, reducesMotion: input.reducesMotion,
-            increasedContrast: input.increasedContrast
+            increasedContrast: input.increasedContrast,
+            preservesMotion: translationAnimator != nil
         )
         cell.appearance.onTap = { [weak self, weak cell] in
             guard let self, let cell, let indexPath = self.indexPath(for: cell) else { return }
@@ -336,6 +376,73 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
                 in: self, presentation: false
             )
         }
+    }
+
+    /// Expands or collapses translations with the Music supplemental-text spring.
+    /// The focused row stays on screen; rows below move with the table's height animation.
+    private func revealTranslations(_ showsTranslation: Bool, animated: Bool) {
+        let anchor = translationAnchorRow()
+        let before = anchor.flatMap { rectForRow(at: IndexPath(row: $0, section: 0)).minY }
+        renderedShowsTranslation = showsTranslation
+        holdsTranslationAnchor = anchor != nil
+        guard animated else {
+            UIView.performWithoutAnimation {
+                reconfigureVisibleTranslations()
+                layoutIfNeeded()
+                holdTranslationAnchor(anchor, before: before)
+            }
+            return
+        }
+        let spring = showsTranslation
+            ? motion.supplementalTextShowSpring
+            : motion.supplementalTextHideSpring
+        let timing = UISpringTimingParameters(
+            mass: CGFloat(spring.mass),
+            stiffness: CGFloat(spring.stiffness),
+            damping: CGFloat(spring.damping),
+            initialVelocity: .zero
+        )
+        translationAnimator?.stopAnimation(false)
+        let animator = UIViewPropertyAnimator(duration: 0.5, timingParameters: timing)
+        translationAnimator = animator
+        animator.addAnimations { [weak self] in
+            guard let self else { return }
+            self.reconfigureVisibleTranslations()
+            self.layoutIfNeeded()
+            self.holdTranslationAnchor(anchor, before: before)
+        }
+        animator.addCompletion { [weak self] _ in
+            guard let self, self.translationAnimator === animator else { return }
+            self.translationAnimator = nil
+            for cell in self.visibleRows { cell.clipsToBounds = false }
+            self.updateVisualGeometry(presentation: false)
+        }
+        animator.startAnimation()
+    }
+
+    private func translationAnchorRow() -> Int? {
+        if !browsing, let focusedIndex { return focusedIndex }
+        return visibleRows.compactMap { indexPath(for: $0)?.row }.min()
+    }
+
+    private func reconfigureVisibleTranslations() {
+        performBatchUpdates {
+            for cell in self.visibleRows {
+                guard let row = self.indexPath(for: cell)?.row else { continue }
+                self.configure(cell, at: row)
+                cell.clipsToBounds = self.translationAnimator != nil
+                cell.setNeedsLayout()
+                cell.layoutIfNeeded()
+            }
+        }
+    }
+
+    private func holdTranslationAnchor(_ anchor: Int?, before: CGFloat?) {
+        guard let anchor, let before else { return }
+        let after = rectForRow(at: IndexPath(row: anchor, section: 0)).minY
+        let delta = after - before
+        guard abs(delta) > 0.5 else { return }
+        contentOffset.y += delta
     }
 
     // MARK: - Layout
@@ -547,6 +654,7 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
         let capturesHandoff = input?.reducesMotion != true && (cascade || animated)
             && abs(target - oldOffset) > Self.viewportOverscan
         let capturedSourceRows = capturesHandoff ? captureSourceRowsForHandoff() : []
+        if focusedIndex != index { holdsTranslationAnchor = false }
         focusedIndex = index
         needsFocus = false
 
@@ -685,6 +793,8 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
     }
 
     private func cancelAllAnimations() {
+        translationAnimator?.stopAnimation(true)
+        translationAnimator = nil
         for animation in animators.values { animation.animator.stopAnimation(true) }
         animators.removeAll()
         pendingStartTransforms.removeAll()
@@ -978,7 +1088,8 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
     }
 
     private func correctSettledFocusIfNeeded() {
-        guard let input, input.isActive, !browsing, animators.isEmpty,
+        guard let input, input.isActive, !browsing, animators.isEmpty, translationAnimator == nil,
+              !holdsTranslationAnchor,
               let index = focusedIndex, renderedLines.indices.contains(index) else { return }
         let id = renderedLines[index].id
         let cell = displayedCell(forRow: index)
@@ -1091,6 +1202,7 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
         suppressedPreSeekActiveID = nil
         browsing = true
         resumeTask?.cancel()
+        onUserInteractionChange?(true)
         visibility.begin(isInterfaceVisible: !(input?.isInterfaceHidden ?? false))
         previousOffset = contentOffset.y
         updateAppearances(activeIndex: focusedIndex, animated: true)
@@ -1107,6 +1219,7 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
         setNeedsLayout()
     }
     func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+        onUserInteractionChange?(false)
         if !decelerate {
             stopDisplayLinkIfIdle()
             resumeFollowing()
@@ -1165,10 +1278,13 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
 private struct LocalLyricsRow: View {
     let line: PlayerLyricLine
     let fontSize: CGFloat
+    let translationFontSize: CGFloat
+    let showsTranslation: Bool
     let foreground: Color
     let appearance: LyricsRowAppearance
     let onTap: () -> Void
     private let motion = AppleMusicLyricsMotionProfile.iOS26_6
+    private let typography = AppleMusicLyricsTypographyProfile.iOS26_6
 
     var body: some View {
         let radius = appearance.browsing || appearance.reducesMotion || appearance.increasedContrast
@@ -1183,21 +1299,31 @@ private struct LocalLyricsRow: View {
         let backgroundHorizontalOutset = min(14, fontSize * 0.42)
         let backgroundVerticalOutset = min(14, fontSize * 0.42)
         let backgroundCornerRadius = min(16, fontSize * 0.47)
+        let translation = showsTranslation ? line.translation.trimmingCharacters(in: .whitespacesAndNewlines) : ""
         LyricPressInteraction(isSelected: false, allowsLongPress: false, onTap: onTap, onLongPress: {}) { progress in
-            Text(line.text.isEmpty ? "♪" : line.text)
-                .font(.system(size: fontSize, weight: .bold))
-                .multilineTextAlignment(.leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .foregroundStyle(foreground.opacity(opacity))
-                .modifier(LyricsFocusBlur(radius: radius, amount: appearance.focused ? 0 : 1))
-                .blendMode(foreground == .white && !appearance.focused ? .plusLighter : .normal)
-                .background {
-                    RoundedRectangle(cornerRadius: backgroundCornerRadius, style: .continuous)
-                        .fill(foreground.opacity(progress * 0.12))
-                        .blendMode(foreground == .white ? .plusLighter : .normal)
-                        .padding(.horizontal, -backgroundHorizontalOutset)
-                        .padding(.vertical, -backgroundVerticalOutset)
+            VStack(alignment: .leading, spacing: 0) {
+                Text(line.text.isEmpty ? "♪" : line.text)
+                    .font(.system(size: fontSize, weight: .bold))
+                if !translation.isEmpty {
+                    Text(translation)
+                        .font(.system(size: translationFontSize, weight: .medium))
+                        .opacity(typography.translationOpacity)
+                        .padding(.top, typography.translationTopSpacing)
+                        .accessibilityIdentifier("lyric.translation")
                 }
+            }
+            .multilineTextAlignment(.leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .foregroundStyle(foreground.opacity(opacity))
+            .modifier(LyricsFocusBlur(radius: radius, amount: appearance.focused ? 0 : 1))
+            .blendMode(foreground == .white && !appearance.focused ? .plusLighter : .normal)
+            .background {
+                RoundedRectangle(cornerRadius: backgroundCornerRadius, style: .continuous)
+                    .fill(foreground.opacity(progress * 0.12))
+                    .blendMode(foreground == .white ? .plusLighter : .normal)
+                    .padding(.horizontal, -backgroundHorizontalOutset)
+                    .padding(.vertical, -backgroundVerticalOutset)
+            }
         }
         .scaleEffect(appearance.focused ? 1 : motion.deselectedScale, anchor: .topLeading)
         .animation(animation, value: appearance.focused)
@@ -1253,20 +1379,25 @@ private final class NativeLyricCell: UITableViewCell {
             ?? contentView.subviews.first
     }
 
-    func configure(line: PlayerLyricLine, fontSize: CGFloat, foreground: Color, spacing: CGFloat,
-                   focused: Bool, browsing: Bool, reducesMotion: Bool, increasedContrast: Bool) {
-        appearance.animated = false
+    func configure(line: PlayerLyricLine, fontSize: CGFloat, translationFontSize: CGFloat,
+                   showsTranslation: Bool, foreground: Color, spacing: CGFloat,
+                   focused: Bool, browsing: Bool, reducesMotion: Bool, increasedContrast: Bool,
+                   preservesMotion: Bool = false) {
+        if !preservesMotion {
+            appearance.animated = false
+            appearance.distanceBlurRadius = 0
+        }
         appearance.focused = focused
         appearance.browsing = browsing
         appearance.reducesMotion = reducesMotion
         appearance.increasedContrast = increasedContrast
-        appearance.distanceBlurRadius = 0
         needsFadeTargetDiscovery = true
         lastLayoutHeight = -1
         let appearance = self.appearance
         contentConfiguration = UIHostingConfiguration {
             LocalLyricsRow(
-                line: line, fontSize: fontSize, foreground: foreground,
+                line: line, fontSize: fontSize, translationFontSize: translationFontSize,
+                showsTranslation: showsTranslation, foreground: foreground,
                 appearance: appearance
             ) {
                 appearance.onTap?()

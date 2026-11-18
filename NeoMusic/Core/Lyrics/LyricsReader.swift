@@ -35,7 +35,7 @@ actor LyricsReader {
         }
         let asset = AVURLAsset(url: canonicalAudio)
         if let text = try? await asset.load(.lyrics), !text.isEmpty {
-            var result = LyricsDocument.parse(text)
+            var result = LyricsDocument.decodeStored(text)
             result.source = "内嵌歌词"
             return result
         }
@@ -45,7 +45,7 @@ actor LyricsReader {
                 let key = (item.identifier?.rawValue ?? String(describing: item.key)).lowercased()
                 guard ["lyrics", "uslt", "©lyr", "%a9lyr"].contains(where: key.contains) else { continue }
                 if let text = try? await item.load(.stringValue), !text.isEmpty {
-                    var result = LyricsDocument.parse(text)
+                    var result = LyricsDocument.decodeStored(text)
                     result.source = "内嵌歌词"
                     return result
                 }
@@ -75,6 +75,6 @@ actor LyricsReader {
         let data = try Data(contentsOf: url)
         guard data.count <= 1_048_576 else { throw Failure.invalidFile }
         guard let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .utf16) else { throw Failure.invalidFile }
-        return LyricsDocument.parse(text)
+        return LyricsDocument.decodeStored(text)
     }
 }
