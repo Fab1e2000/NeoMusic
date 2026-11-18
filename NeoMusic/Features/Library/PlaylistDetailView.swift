@@ -47,6 +47,7 @@ struct PlaylistDetailView: View {
     @State private var showsDestinations = false
     @State private var playbackTask: Task<Void, Never>?
     @State private var actionFeedback = 0
+    @State private var collectFeedback = 0
 
     private var playlist: LibraryPlaylistItem? { library.playlist(playlistID) }
     private var backgroundArtwork: Artwork {
@@ -346,6 +347,7 @@ struct PlaylistDetailView: View {
                 HStack(spacing: 14) {
                     Button {
                         guard !tracks.isEmpty else { return }
+                        actionFeedback &+= 1
                         collectionActions.play(.playlist(playlistID), true)
                     } label: {
                         Label("随机播放", systemImage: "shuffle")
@@ -355,6 +357,7 @@ struct PlaylistDetailView: View {
                     .disabled(tracks.isEmpty)
                     Button {
                         guard !tracks.isEmpty else { return }
+                        actionFeedback &+= 1
                         collectionActions.play(.playlist(playlistID), false)
                     } label: {
                         HStack(spacing: 5) {
@@ -370,7 +373,7 @@ struct PlaylistDetailView: View {
                     .disabled(tracks.isEmpty)
                     if playlist.offersCollection {
                         Button {
-                            actionFeedback &+= 1
+                            collectFeedback &+= 1
                             externalActions?.collect?()
                         } label: {
                             Image(systemName: "plus")
@@ -382,6 +385,7 @@ struct PlaylistDetailView: View {
                     }
                 }
                 .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.6), trigger: actionFeedback)
+                .sensoryFeedback(.success, trigger: collectFeedback)
                 .padding(.top, 15)
                 if !playlist.offersCollection { CollectionDownloadSummary(route: .playlist(playlistID)) }
             }
@@ -433,12 +437,18 @@ struct PlaylistDetailView: View {
         let route = LibraryRoute.playlist(playlistID)
         let state = downloads?.collectionState(of: route)
         if state?.isActive == true {
-            Button("停止下载", systemImage: "stop.circle.fill") { collectionActions.stopDownload(route) }
+            Button("停止下载", systemImage: "stop.circle.fill") {
+                LibraryHaptics.impact()
+                collectionActions.stopDownload(route)
+            }
         } else if state?.isComplete == true {
             Button("已下载", systemImage: "checkmark.circle.fill") {}.disabled(true)
         } else {
-            Button((state?.failedCount ?? 0) > 0 ? "重试下载" : "下载", systemImage: "arrow.down.circle.fill") { collectionActions.download(route) }
-                .disabled(!collectionActions.canDownload(route))
+            Button((state?.failedCount ?? 0) > 0 ? "重试下载" : "下载", systemImage: "arrow.down.circle.fill") {
+                LibraryHaptics.impact()
+                collectionActions.download(route)
+            }
+            .disabled(!collectionActions.canDownload(route))
         }
     }
 
@@ -446,17 +456,14 @@ struct PlaylistDetailView: View {
         collectionDownloadMenuAction()
         if let toggleFavorite = actions.toggleFavorite {
             Button(playlist.isFavorite ? "撤销喜爱" : "喜爱", systemImage: playlist.isFavorite ? "star.slash.fill" : "star.fill") {
-                LibraryHaptics.impact()
-                let removing = playlist.isFavorite
+                LibraryHaptics.success()
                 toggleFavorite()
-                collectionActions.notify(removing ? .unfavorited : .favorited)
             }
         }
         if let togglePin = actions.togglePin {
             Button(playlist.isPinned ? "取消置顶播放列表" : "置顶播放列表", systemImage: playlist.isPinned ? "pin.slash" : "pin") {
-                let removing = playlist.isPinned
+                LibraryHaptics.success()
                 togglePin()
-                collectionActions.notify(removing ? .unpinned : .pinned)
             }
         }
         Button("添加到播放列表", systemImage: "text.badge.plus", action: actions.addSongs).disabled(tracks.isEmpty)
@@ -485,7 +492,7 @@ struct PlaylistDetailView: View {
         ControlGroup {
             collectionDownloadMenuAction()
             Button(playlist.isFavorite ? "撤销" : "喜爱", systemImage: playlist.isFavorite ? "star.slash.fill" : "star.fill") {
-                LibraryHaptics.impact()
+                LibraryHaptics.success()
                 let removing = playlist.isFavorite
                 library.toggleFavorite(playlistID)
                 collectionActions.notify(removing ? .unfavorited : .favorited)
@@ -494,6 +501,7 @@ struct PlaylistDetailView: View {
         }
         Section {
             Button(playlist.isPinned ? "取消置顶播放列表" : "置顶播放列表", systemImage: playlist.isPinned ? "pin.slash" : "pin") {
+                LibraryHaptics.success()
                 let removing = playlist.isPinned
                 library.togglePin(playlistID)
                 collectionActions.notify(removing ? .unpinned : .pinned)

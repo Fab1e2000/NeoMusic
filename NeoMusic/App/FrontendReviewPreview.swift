@@ -283,7 +283,7 @@ private struct FrontendLibraryReviewPreview: View {
             Button("还原演示状态") { collected = false; retried = false; publishDownloadState() }
             Spacer()
         }.padding(20).foregroundStyle(.white).background(Color(white: 0.12))
-            .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.6), trigger: releaseFeedback)
+            .sensoryFeedback(.success, trigger: releaseFeedback)
     }
 
     private var actions: CollectionMenuActions {

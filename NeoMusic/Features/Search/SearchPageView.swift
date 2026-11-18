@@ -22,40 +22,43 @@ struct SearchPageView: View {
 
     private var browse: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 28) {
-                ForEach(MusicSearchCategorySection.sections(for: model.categories)) { section in
+            LazyVStack(alignment: .leading, spacing: 24) {
+                if !model.history.isEmpty {
                     VStack(alignment: .leading, spacing: 12) {
-                        if let title = section.title {
-                            Text(title).font(.title3.bold()).accessibilityAddTraits(.isHeader)
+                        HStack {
+                            Text("最近搜索").font(.title3.bold()).accessibilityAddTraits(.isHeader)
+                            Spacer()
+                            Button {
+                                model.onRemoveHistory?(nil)
+                            } label: {
+                                Image(systemName: "trash")
+                                    .font(.body)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("清除最近搜索")
                         }
-                        LazyVGrid(columns: categoryColumns, spacing: 12) {
-                            ForEach(section.items) { item in
+                        SearchFlowLayout(horizontalSpacing: 10, verticalSpacing: 10) {
+                            ForEach(model.history, id: \.self) { value in
                                 Button {
-                                    model.onCategory?(item.id)
-                                    openRoute(.playlistFolder("search-category:" + item.id))
+                                    model.submit(value)
                                 } label: {
-                                    SearchCategoryCard(item: item)
+                                    SearchTagChip(title: value)
                                 }
                                 .buttonStyle(.plain)
-                                .accessibilityHint("打开\(item.title)歌单")
                             }
                         }
                     }
-                    .accessibilityIdentifier("search.categories.\(section.id)")
+                    .accessibilityIdentifier("search.browse.history")
                 }
             }
             .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 24)
-            if let error = model.error, !model.categories.isEmpty {
-                SearchInlineError(message: error) { model.onRetry?() }.padding(.horizontal, 20)
+        }
+        .overlay {
+            if model.history.isEmpty {
+                ContentUnavailableView { Text("无最近搜索") } description: { Text("最近搜索内容将在此处显示。") }
             }
         }
-        .overlay { if model.categories.isEmpty { availability } }
-        .refreshable { await model.onRefresh?() }
-    }
-
-    private var categoryColumns: [GridItem] {
-        if dynamicTypeSize.isAccessibilitySize { return [GridItem(.flexible())] }
-        return [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
     }
 
     private var recent: some View {
@@ -233,18 +236,61 @@ extension SearchResultList: @MainActor Equatable {
     }
 }
 
-private struct SearchCategoryCard: View {
-    let item: MusicSearchCategory
-    private var palette: SearchCategoryColor { SearchCategoryColor.palette[item.colorIndex % SearchCategoryColor.palette.count] }
+private struct SearchTagChip: View {
+    let title: String
 
     var body: some View {
-        palette.background.aspectRatio(1.78, contentMode: .fit)
-            .overlay { SearchCategorySymbol(category: item.title) }
-            .overlay(alignment: .bottomLeading) {
-                Text(item.title).font(.headline).foregroundStyle(palette.foreground).lineLimit(2).padding(12)
+        Text(title)
+            .font(.subheadline)
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(Color(.secondarySystemFill), in: Capsule())
+            .lineLimit(1)
+    }
+}
+
+private struct SearchFlowLayout: Layout {
+    var horizontalSpacing: CGFloat = 8
+    var verticalSpacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .infinity
+        var currentX: CGFloat = 0
+        var currentY: CGFloat = 0
+        var rowHeight: CGFloat = 0
+        var totalWidth: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if currentX > 0 && currentX + size.width > maxWidth {
+                currentX = 0
+                currentY += rowHeight + verticalSpacing
+                rowHeight = 0
             }
-            .clipShape(.rect(cornerRadius: 14))
-            .accessibilityElement(children: .ignore).accessibilityLabel(item.title)
+            currentX += size.width + horizontalSpacing
+            totalWidth = max(totalWidth, currentX - horizontalSpacing)
+            rowHeight = max(rowHeight, size.height)
+        }
+        return CGSize(width: proposal.width ?? totalWidth, height: currentY + rowHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var currentX = bounds.minX
+        var currentY = bounds.minY
+        var rowHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if currentX > bounds.minX && currentX + size.width > bounds.maxX {
+                currentX = bounds.minX
+                currentY += rowHeight + verticalSpacing
+                rowHeight = 0
+            }
+            subview.place(at: CGPoint(x: currentX, y: currentY), proposal: ProposedViewSize(size))
+            currentX += size.width + horizontalSpacing
+            rowHeight = max(rowHeight, size.height)
+        }
     }
 }
 

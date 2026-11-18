@@ -1,7 +1,19 @@
 import FullScreenPlayer
 import SwiftUI
 
-/// 本地资料库与现有页面的装配入口。
+@MainActor
+struct CollectionDownloadHandling {
+    var download: ((LibraryRoute) -> Bool)?
+    var remove: ((LibraryRoute) -> Bool)?
+    var downloadedState: ((LibraryRoute) -> Bool?)?
+    var canDownload: ((LibraryRoute) -> Bool)?
+    var canRemoveDownload: ((LibraryRoute) -> Bool)?
+    var stop: ((LibraryRoute) -> Void)?
+}
+
+typealias AppLibrary = LocalLibrary
+
+/// 应用级资料库、播放与现有页面的装配入口。
 @MainActor
 enum LocalLibrary {
     static let runtime = LocalLibraryRuntime(
@@ -51,12 +63,31 @@ enum LocalLibrary {
     static let deletedAlbums = LibrarySelectionSet(ids: [], key: "deletedAlbums")
     static let downloads = LibraryDownloads()
     static let toasts = LibraryToastCenter()
-    static var collectionDownloadAction: ((LibraryRoute) -> Bool)?
-    static var collectionRemovalAction: ((LibraryRoute) -> Bool)?
-    static var collectionDownloadedState: ((LibraryRoute) -> Bool?)?
-    static var collectionCanDownload: ((LibraryRoute) -> Bool)?
-    static var collectionCanRemoveDownload: ((LibraryRoute) -> Bool)?
-    static var collectionStopDownload: ((LibraryRoute) -> Void)?
+    static var collectionDownloads = CollectionDownloadHandling()
+    static var collectionDownloadAction: ((LibraryRoute) -> Bool)? {
+        get { collectionDownloads.download }
+        set { collectionDownloads.download = newValue }
+    }
+    static var collectionRemovalAction: ((LibraryRoute) -> Bool)? {
+        get { collectionDownloads.remove }
+        set { collectionDownloads.remove = newValue }
+    }
+    static var collectionDownloadedState: ((LibraryRoute) -> Bool?)? {
+        get { collectionDownloads.downloadedState }
+        set { collectionDownloads.downloadedState = newValue }
+    }
+    static var collectionCanDownload: ((LibraryRoute) -> Bool)? {
+        get { collectionDownloads.canDownload }
+        set { collectionDownloads.canDownload = newValue }
+    }
+    static var collectionCanRemoveDownload: ((LibraryRoute) -> Bool)? {
+        get { collectionDownloads.canRemoveDownload }
+        set { collectionDownloads.canRemoveDownload = newValue }
+    }
+    static var collectionStopDownload: ((LibraryRoute) -> Void)? {
+        get { collectionDownloads.stop }
+        set { collectionDownloads.stop = newValue }
+    }
     static var prepareSongForLibraryAction: ((LibrarySongItem) -> LibrarySongItem?)?
     private static func albumSongs(_ id: String) -> [LibrarySongItem] {
         guard !deletedAlbums.ids.contains(id) else { return [] }
@@ -180,7 +211,7 @@ enum LocalLibrary {
     static let player = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false, elapsed: 0)
 
     static let referencePlayer = PlayerState(model: player)
-    static let referenceLibrary = ReferenceLibrary(reader: ReferenceLyricsReader(
+    static let referenceLibrary = PlayerLyricsController(reader: PlayerLyricsStoreAdapter(
         storageDirectory: URL.applicationSupportDirectory.appending(path: "Lyrics", directoryHint: .isDirectory),
         root: runtime.root,
         resolveAudioURL: { id in
@@ -222,7 +253,7 @@ enum LocalLibrary {
                 guard let song = song(id: id) else { return }
                 if let ref = song.artistReferences.first(where: { $0.name == name }) { openRoute(.artist(ref.id)) }
                 else if song.isNeteaseCatalogSong || catalog.downloadedOnlineSongID?(id) != nil { catalog.openSongArtist?(id, name, openRoute) }
-            }, feedback: { LibraryHaptics.impact() }, notify: { toasts.show(LibraryToast($0)) }, audioQuality: { id in
+            }, feedback: { LibraryHaptics.success() }, notify: { toasts.show(LibraryToast($0)) }, audioQuality: { id in
                 guard player.hasCurrent, player.current.id == id else { return nil }
                 if !player.current.isOnline {
                     return PlayerAudioQuality.localFile(runtime.root.appending(path: id))
@@ -449,12 +480,12 @@ enum LocalLibrary {
     }
 
     static func playAlbums(_ ids: [String], shuffled: Bool) {
-        if ids.contains(where: { $0.hasPrefix("catalog:") }) {
+        if ids.contains(where: CatalogRouteIdentity.isCatalogID) {
             Task {
                 do {
                     var songs: [LibrarySongItem] = []
                     for id in ids {
-                        if id.hasPrefix("catalog:"), let load = catalog.loadAlbumSongs { songs += try await load(id) }
+                        if CatalogRouteIdentity.isCatalogID(id), let load = catalog.loadAlbumSongs { songs += try await load(id) }
                         else { songs += albumDetail(id)?.songs ?? [] }
                     }
                     player.requestPlay(songs, from: "专辑", shuffled: shuffled)
@@ -468,7 +499,7 @@ enum LocalLibrary {
 
     @ViewBuilder fileprivate static func destination(_ route: LibraryRoute) -> some View {
         switch route {
-        case .category(.downloaded): DownloadedMockView(albums: downloadedAlbumItems.map(withPinState))
+        case .category(.downloaded): DownloadedLibraryView(albums: downloadedAlbumItems.map(withPinState))
         case .downloadedCategory(.songs): SongsListView(songs: songs.filter { downloads.state(of: $0.id) == .downloaded }, playAll: playSongs)
         case .downloadedCategory(.albums): AlbumsGridView(albums: downloadedAlbumItems.map(withPinState), playAll: playAlbums)
         case .downloadedCategory(.artists):
@@ -486,7 +517,7 @@ enum LocalLibrary {
         case .playlist(let id):
             if id == "favorites" { LocalFavoritesDetail() }
             else { PlaylistDetailView(playlistID: id, library: playlistLibrary, songs: [], availableSongs: { allSongs }, recentlyPlayedSongs: recentPlaybackFixture) }
-        case .artist, .artistSection: EmptyView()
+        case .artist, .artistSection, .searchCategory: EmptyView()
         }
     }
 
@@ -500,7 +531,7 @@ enum LocalLibrary {
     private static var launchPath: [LibraryRoute] {
         #if DEBUG
         let args = ProcessInfo.processInfo.arguments
-        if let index = args.firstIndex(of: "-catalogArtist"), args.indices.contains(index + 1), Int64(args[index + 1]) != nil { return [.artist("catalog:artist:" + args[index + 1])] }
+        if let index = args.firstIndex(of: "-catalogArtist"), args.indices.contains(index + 1), Int64(args[index + 1]) != nil { return [.artist(CatalogRouteIdentity.artistID(args[index + 1]))] }
         #endif
         guard let page = launchPage else { return [] }
         let pages: [String: [LibraryRoute]] = [
@@ -533,9 +564,6 @@ struct LocalLibraryHome: View {
                         songForMenu: LocalLibrary.songForMenu)
             .safeAreaInset(edge: .bottom) {
                 if let status = LocalLibrary.runtime.status { LibraryStatusMessage(message: status) }
-                if let error = LocalLibrary.player.errorMessage {
-                    LibraryStatusMessage(message: error, title: "播放状态", isError: true)
-                }
                 if let error = LocalLibrary.playlistLibrary.persistenceError {
                     LibraryStatusMessage(message: error, title: "保存状态", isError: true)
                 }

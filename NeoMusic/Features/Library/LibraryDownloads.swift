@@ -119,7 +119,7 @@ final class LibraryDownloads {
         let songs = pendingRemoval
         pendingRemoval = []
         guard !songs.isEmpty else { return }
-        LibraryHaptics.impact()
+        LibraryHaptics.lightImpact()
         remove(songs)
     }
 }

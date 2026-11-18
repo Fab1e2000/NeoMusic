@@ -58,34 +58,36 @@ final class DownloadMusicIntegration {
         LocalLibrary.prepareSongForLibraryAction = { [weak self] song in
             guard let self, let id = self.songID(song.id), store.records[id] != nil else { return song }
             guard let owner = self.account.music?.userID, let record = store.records[id] else { self.requestLogin?(); return nil }
-            return self.song(record, id: "netease:\(owner):\(id)")
+            return self.song(record, id: OnlineSongIdentity.format(owner: owner, song: id))
         }
-        LocalLibrary.collectionDownloadAction = { [weak self] route in self?.download(route) ?? false }
-        LocalLibrary.collectionCanDownload = { [weak self] route in
-            self?.collectionKey(route) != nil || self?.localPlaylistIDs(route)?.isEmpty == false
-        }
-        LocalLibrary.collectionCanRemoveDownload = { [weak self] route in
-            guard let ids = self?.removalIDs(route) else { return false }
-            return ids.contains { store.resource(songID: $0) != nil }
-        }
-        LocalLibrary.collectionStopDownload = { [weak self] route in
-            guard let self else { return }
-            if let key = self.collectionKey(route) { Task { await store.stopCollection(key: key) } }
-            else if let ids = self.localPlaylistIDs(route) { Task { await store.stop(songIDs: ids) } }
-        }
-        LocalLibrary.collectionRemovalAction = { [weak self] route in
-            guard let self, let ids = self.removalIDs(route) else { return false }
-            LocalLibrary.downloads.requestRemoval(ids.compactMap { store.records[$0].map { self.song($0, id: $0.relativePath) } })
-            return true
-        }
-        LocalLibrary.collectionDownloadedState = { [weak self] route in
-            guard let self else { return nil }
-            guard let ids = self.collectionIDs(route), !ids.isEmpty else {
-                if case .album(let id) = route, !id.hasPrefix("catalog:") { return nil }
-                return self.collectionKey(route) == nil ? nil : false
+        LocalLibrary.collectionDownloads = CollectionDownloadHandling(
+            download: { [weak self] route in self?.download(route) ?? false },
+            remove: { [weak self] route in
+                guard let self, let ids = self.removalIDs(route) else { return false }
+                LocalLibrary.downloads.requestRemoval(ids.compactMap { store.records[$0].map { self.song($0, id: $0.relativePath) } })
+                return true
+            },
+            downloadedState: { [weak self] route in
+                guard let self else { return nil }
+                guard let ids = self.collectionIDs(route), !ids.isEmpty else {
+                    if case .album(let id) = route, !CatalogRouteIdentity.isCatalogID(id) { return nil }
+                    return self.collectionKey(route) == nil ? nil : false
+                }
+                return ids.allSatisfy { store.resource(songID: $0) != nil }
+            },
+            canDownload: { [weak self] route in
+                self?.collectionKey(route) != nil || self?.localPlaylistIDs(route)?.isEmpty == false
+            },
+            canRemoveDownload: { [weak self] route in
+                guard let ids = self?.removalIDs(route) else { return false }
+                return ids.contains { store.resource(songID: $0) != nil }
+            },
+            stop: { [weak self] route in
+                guard let self else { return }
+                if let key = self.collectionKey(route) { Task { await store.stopCollection(key: key) } }
+                else if let ids = self.localPlaylistIDs(route) { Task { await store.stop(songIDs: ids) } }
             }
-            return ids.allSatisfy { store.resource(songID: $0) != nil }
-        }
+        )
         let facade = LocalLibrary.downloads
         facade.downloadAction = { [weak self] songs in
             guard let self else { return }
@@ -332,14 +334,11 @@ final class DownloadMusicIntegration {
 
     private func songID(_ id: String) -> Int64? {
         if let value = byPath[id] { return value }
-        let parts = id.split(separator: ":")
-        guard parts.count == 3, parts[0] == "netease" else { return nil }
-        return Int64(parts[2])
+        return OnlineSongIdentity.parseOwnerAndSong(id)?.songID
     }
 
     private static func albumID(_ id: String) -> Int64? {
-        let prefix = "catalog:album:"
-        return id.hasPrefix(prefix) ? Int64(id.dropFirst(prefix.count)) : nil
+        CatalogRouteIdentity.parseAlbumID(id)
     }
 
     private func collectionKey(_ route: LibraryRoute) -> String? {
@@ -347,8 +346,9 @@ final class DownloadMusicIntegration {
         case .album(let id):
             if let value = Self.albumID(id) { return "album:\(value)" }
         case .playlist(let id):
-            if id == "favorites", let value = account.music?.playlists.first(where: \.isFavorites)?.id { return "playlist:\(value)" }
-            if id.hasPrefix("netease-playlist:") || id.hasPrefix("downloaded:playlist:") || id.hasPrefix("home:playlist:"), let value = id.split(separator: ":").last.flatMap({ Int64($0) }) { return "playlist:\(value)" }
+            let identity = PlaylistRouteIdentity(id)
+            if identity == .favorites, let value = account.music?.playlists.first(where: \.isFavorites)?.id { return "playlist:\(value)" }
+            if let value = identity.onlinePlaylistNumber { return "playlist:\(value)" }
         default: break
         }
         return nil

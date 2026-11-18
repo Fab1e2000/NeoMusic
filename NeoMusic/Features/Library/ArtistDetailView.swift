@@ -87,7 +87,7 @@ struct ArtistDetailView: View {
                             .accessibilityLabel("将\(latest.title)加入资料库")
                         }
                     }.padding(12).padding(.trailing, 8).background(.white.opacity(0.13), in: .rect(cornerRadius: 26)).overlay(RoundedRectangle(cornerRadius: 26).strokeBorder(.white.opacity(0.17), lineWidth: 0.7)).padding(.horizontal, 20).padding(.top, 24)
-                        .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.6), trigger: releaseFeedback)
+                        .sensoryFeedback(.success, trigger: releaseFeedback)
                 }
                 if !detail.songs.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
@@ -148,7 +148,7 @@ struct ArtistDetailView: View {
         return navigationPreview
     }
     private func favorite() {
-        LibraryHaptics.impact()
+        LibraryHaptics.success()
         if let toggleFavorite {
             toggleFavorite()
         } else {

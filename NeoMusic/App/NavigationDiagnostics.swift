@@ -339,6 +339,7 @@ extension LibraryRoute {
         case .category(let category): "category.\(category)"
         case .downloadedCategory(let category): "downloaded.\(category)"
         case .playlistFolder: "playlistFolder"
+        case .searchCategory: "searchCategory"
         }
     }
 }

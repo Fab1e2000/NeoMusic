@@ -683,4 +683,46 @@ import XCTest
         .init(id: "netease:42:\(id)", title: "Song \(id)", artist: "Artist", album: "Album",
               albumArtist: "Artist", trackNumber: id, artwork: .missing)
     }
+
+    func testTypedIdentitiesAndDeferredArtworkKeysRoundTripAndRejectMalformedInputs() throws {
+        XCTAssertEqual(OnlineSongIdentity.format(owner: 42, song: 99), "netease:42:99")
+        XCTAssertEqual(OnlineSongIdentity.parse("netease:42:99")?.owner, 42)
+        XCTAssertEqual(OnlineSongIdentity.parse("netease:42:99")?.song, 99)
+        XCTAssertNil(OnlineSongIdentity.parse("netease:search-guest:99"))
+        XCTAssertEqual(OnlineSongIdentity.parseOwnerAndSong("netease:search-guest:99")?.ownerID, "search-guest")
+        XCTAssertEqual(OnlineSongIdentity.parseOwnerAndSong("netease:search-guest:99")?.songID, 99)
+        XCTAssertNil(OnlineSongIdentity.parseOwnerAndSong("local/song.flac"))
+
+        XCTAssertEqual(PlaylistRouteIdentity("favorites"), .favorites)
+        XCTAssertEqual(PlaylistRouteIdentity("netease-playlist:42:100"), .account(ownerID: "42", playlistID: 100))
+        XCTAssertEqual(PlaylistRouteIdentity("home:playlist:100"), .homePlaylist(playlistID: 100))
+        XCTAssertEqual(PlaylistRouteIdentity("home:daily:42:2026-11-18"), .daily(ownerID: "42", date: "2026-11-18"))
+        XCTAssertEqual(PlaylistRouteIdentity("downloaded:playlist:100"), .downloaded(playlistID: 100))
+        XCTAssertEqual(PlaylistRouteIdentity("my-local-list"), .local(id: "my-local-list"))
+        XCTAssertEqual(PlaylistRouteIdentity("home:playlist:100").onlinePlaylistNumber, 100)
+        XCTAssertTrue(PlaylistRouteIdentity("home:daily:42:2026-11-18").isHomeRoute)
+        XCTAssertFalse(PlaylistRouteIdentity("netease-playlist:42:100").isHomeRoute)
+
+        XCTAssertEqual(CatalogRouteIdentity("catalog:artist:7"), .artist(7))
+        XCTAssertEqual(CatalogRouteIdentity("catalog:album:8"), .album(8))
+        XCTAssertNil(CatalogRouteIdentity("local-album"))
+
+        let session = UUID()
+        let url = try XCTUnwrap(URL(string: "https://p1.music.126.net/cover.jpg?param=200y200"))
+        let artworkKey = DeferredArtworkKey(domain: .home, session: session, url: url)
+        let parsedKey = try XCTUnwrap(DeferredArtworkKey(rawValue: artworkKey.rawValue))
+        XCTAssertTrue(parsedKey.matches(domain: .home, session: session))
+        XCTAssertEqual(parsedKey.remoteURL, url)
+
+        let playlistKey = DeferredArtworkKey(domain: .homePlaylist, session: session, playlistID: 88)
+        let parsedPlaylistKey = try XCTUnwrap(DeferredArtworkKey(rawValue: playlistKey.rawValue))
+        XCTAssertTrue(parsedPlaylistKey.matches(domain: .homePlaylist, session: session))
+        XCTAssertEqual(parsedPlaylistKey.playlistID, 88)
+
+        let registry = AppTabNavigationRegistry()
+        let playlistBridge = registry.navigation(for: .playlist("p1"))
+        XCTAssertTrue(registry.bridge(for: "p1") === playlistBridge)
+        registry.prunePlaylists(keeping: [])
+        XCTAssertNil(registry.items["p1"])
+    }
 }

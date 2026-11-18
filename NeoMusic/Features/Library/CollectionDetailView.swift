@@ -352,6 +352,7 @@ private struct CollectionActions: View {
     @Environment(\.dynamicTypeSize) private var textSize
     @Environment(\.collectionPagePalette) private var palette
     @State private var actionFeedback = 0
+    @State private var collectFeedback = 0
 
     private var canPlay: Bool { detail.route != nil && !detail.songs.isEmpty }
 
@@ -360,11 +361,13 @@ private struct CollectionActions: View {
         HStack(spacing: 14) {
             circleButton("随机播放", systemImage: "shuffle") {
                 guard canPlay, let route = detail.route else { return }
+                actionFeedback &+= 1
                 actions.play(route, true)
             }
             .disabled(!canPlay)
             Button {
                 guard canPlay, let route = detail.route else { return }
+                actionFeedback &+= 1
                 actions.play(route, false)
             } label: {
                 // 实测 Apple Music：三角约 14×15pt，与文字间距约 7pt。
@@ -393,6 +396,7 @@ private struct CollectionActions: View {
             }
         }
         .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.6), trigger: actionFeedback)
+        .sensoryFeedback(.success, trigger: collectFeedback)
         if let route = detail.route { CollectionDownloadSummary(route: route) }
         }
     }
@@ -400,7 +404,7 @@ private struct CollectionActions: View {
     private var albumCollectionButton: some View {
         Button {
             guard !detail.isFavorite, let route = detail.route else { return }
-            actionFeedback &+= 1
+            collectFeedback &+= 1
             actions.toggleFavorite(route)
         } label: {
             Image(systemName: detail.isFavorite ? "arrow.down" : "plus")

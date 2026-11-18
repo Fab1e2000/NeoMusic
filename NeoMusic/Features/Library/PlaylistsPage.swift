@@ -592,7 +592,7 @@ private struct PlaylistDeletionConfirmation: ViewModifier {
             presenting: library.pendingDeletion
         ) { playlist in
             Button("删除播放列表", role: .destructive) {
-                LibraryHaptics.impact()
+                LibraryHaptics.mediumImpact()
                 withAnimation { library.deletePlaylist(playlist.id) }
             }
             Button("取消", role: .cancel) {}

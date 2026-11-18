@@ -140,6 +140,8 @@ final class SongLibrary {
             }
         }
     }
+    /// Explicit alias distinguishing scanned local files (`localSongs`) from `onlineSongs` and `allSongs`.
+    var localSongs: [LibrarySongItem] { songs }
     private(set) var albumIndex = LocalAlbumIndex(songs: [])
     @ObservationIgnored private var onlineSongsByID: [String: LibrarySongItem] = [:]
     private(set) var onlineSongs: [LibrarySongItem] = [] {
@@ -333,8 +335,7 @@ final class SongLibrary {
 
     func setFavorite(_ id: String, _ value: Bool) {
         if let song = song(id: id), downloadedFavoriteAction?(song, value) == true { return }
-        let parts = id.split(separator: ":")
-        if parts.count == 3, parts[0] == "netease" {
+        if OnlineSongIdentity.parse(id) != nil {
             if song(id: id)?.isFavorite != value { onlineFavoriteAction?(id, value) }
             return
         }

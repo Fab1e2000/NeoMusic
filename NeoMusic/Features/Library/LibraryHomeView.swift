@@ -28,6 +28,7 @@ enum LibraryRoute: Hashable {
     case artistSection(String, ArtistSection)
     case playlist(String)
     case playlistFolder(String)
+    case searchCategory(String)
 }
 
 /// 资料库首页：置顶、分类入口与最近添加。布局对照 Apple Music。
@@ -403,8 +404,8 @@ private struct RecentSongCard: View {
     }
 }
 
-/// 已下载效果稿：示例数据与真实下载状态无关。
-struct DownloadedMockView: View {
+/// 已下载资料库首页：展示已下载分类入口与最近下载专辑。
+struct DownloadedLibraryView: View {
     let albums: [LibraryShelfItem]
     private let columns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
 
@@ -445,3 +446,5 @@ struct DownloadedMockView: View {
         .libraryTitleDisplayMode(.inline)
     }
 }
+
+typealias DownloadedMockView = DownloadedLibraryView

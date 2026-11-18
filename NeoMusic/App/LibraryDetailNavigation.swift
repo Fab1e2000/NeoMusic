@@ -44,32 +44,25 @@ final class LibraryDetailNavigation: NSObject, UINavigationControllerDelegate {
         if case .artist = route { chrome.setColorScheme(.dark) }
         page.updateEnvironment = { [weak self, weak page] environment in
             guard let page else { return }
-            page.rootView = AnyView(LibraryNavigationPreviewScope(content: content, preview: preview,
-                                                               account: environment[NeteaseAccount.self])
-            // Transfer app dependencies, not the parent hosting tree's transient
-            // navigation/toolbar/interaction environment into a new page root.
-            .environment(environment[NeteaseAccount.self])
-            .environment(\.collectionMenuActions, environment.collectionMenuActions)
-            .environment(\.songMenuActions, environment.songMenuActions)
-            .environment(\.songRowPlayback, environment.songRowPlayback)
-            .environment(\.libraryDownloads, environment.libraryDownloads)
-            .environment(\.artworkLoadAction, environment.artworkLoadAction)
-            .environment(\.colorScheme, environment.colorScheme)
-            .environment(\.locale, environment.locale)
-            .environment(\.dynamicTypeSize, environment.dynamicTypeSize)
-            .environment(\.libraryNavigationChrome, chrome)
-            .environment(\.libraryRouteDestination, LibraryRouteDestination(makePage: self?.destination))
-            .environment(\.libraryZoomNamespace, nil)
-            .environment(\.nativeArtworkSurfaceEnabled, true)
-            .environment(\.openLibraryRoute, OpenLibraryRouteAction(
-                handler: { [weak self] in self?.open($0) },
-                sourceHandler: { [weak self] in self?.open($0, source: $1) },
-                sourceProviderHandler: { [weak self] in self?.open($0, sourceProvider: $1) },
-                previewSourceHandler: { [weak self] in self?.open($0, sourceProvider: $2, preview: $1) }))
-            .environment(\.closeLibraryDetail, CloseLibraryDetailAction { [weak page] in
-                guard let page, let nav = page.navigationController, nav.topViewController === page else { return }
-                nav.popViewController(animated: true)
-            }))
+            page.rootView = AnyView(
+                LibraryNavigationPreviewScope(content: content, preview: preview,
+                                              account: environment[NeteaseAccount.self])
+                    .modifier(LibraryHostedPageEnvironment(
+                        sourceEnvironment: environment,
+                        chrome: chrome,
+                        destination: self?.destination,
+                        openAction: OpenLibraryRouteAction(
+                            handler: { [weak self] in self?.open($0) },
+                            sourceHandler: { [weak self] in self?.open($0, source: $1) },
+                            sourceProviderHandler: { [weak self] in self?.open($0, sourceProvider: $1) },
+                            previewSourceHandler: { [weak self] in self?.open($0, sourceProvider: $2, preview: $1) }
+                        ),
+                        closeAction: CloseLibraryDetailAction { [weak page] in
+                            guard let page, let nav = page.navigationController, nav.topViewController === page else { return }
+                            nav.popViewController(animated: true)
+                        }
+                    ))
+            )
         }
         page.updateEnvironment?(environment)
         if let preview, preview.route == route,
@@ -134,6 +127,34 @@ private struct LibraryNavigationPreviewScope: View {
     var body: some View {
         content.environment(\.libraryNavigationPreview,
             preview?.ownerID == nil || preview?.ownerID == account?.profile.map({ String($0.userID) }) ? preview : nil)
+    }
+}
+
+/// Transfers application-level dependencies and navigation actions into an independently hosted UIKit page root.
+private struct LibraryHostedPageEnvironment: ViewModifier {
+    let sourceEnvironment: EnvironmentValues
+    let chrome: LibraryNavigationChrome
+    let destination: ((LibraryRoute) -> AnyView)?
+    let openAction: OpenLibraryRouteAction
+    let closeAction: CloseLibraryDetailAction
+
+    func body(content: Content) -> some View {
+        content
+            .environment(sourceEnvironment[NeteaseAccount.self])
+            .environment(\.collectionMenuActions, sourceEnvironment.collectionMenuActions)
+            .environment(\.songMenuActions, sourceEnvironment.songMenuActions)
+            .environment(\.songRowPlayback, sourceEnvironment.songRowPlayback)
+            .environment(\.libraryDownloads, sourceEnvironment.libraryDownloads)
+            .environment(\.artworkLoadAction, sourceEnvironment.artworkLoadAction)
+            .environment(\.colorScheme, sourceEnvironment.colorScheme)
+            .environment(\.locale, sourceEnvironment.locale)
+            .environment(\.dynamicTypeSize, sourceEnvironment.dynamicTypeSize)
+            .environment(\.libraryNavigationChrome, chrome)
+            .environment(\.libraryRouteDestination, LibraryRouteDestination(makePage: destination))
+            .environment(\.libraryZoomNamespace, nil)
+            .environment(\.nativeArtworkSurfaceEnabled, true)
+            .environment(\.openLibraryRoute, openAction)
+            .environment(\.closeLibraryDetail, closeAction)
     }
 }
 
@@ -228,7 +249,7 @@ extension LibraryRoute {
         case .category(let value): category = value
         case .downloadedCategory(.downloaded): return nil // No destination for this route.
         case .downloadedCategory(let value): category = value
-        case .album, .artist, .artistSection, .playlist, .playlistFolder: return nil
+        case .album, .artist, .artistSection, .playlist, .playlistFolder, .searchCategory: return nil
         }
         switch category {
         case .playlists: return ("播放列表", .large)
@@ -337,6 +358,7 @@ final class LibraryNavigationChrome: NSObject, UISearchResultsUpdating, UISearch
         search.searchBar.delegate = self
         if search.searchBar.scopeButtonTitles != nil { search.searchBar.scopeButtonTitles = nil }
         controller?.navigationItem.preferredSearchBarPlacement = .stacked
+        controller?.navigationItem.hidesSearchBarWhenScrolling = false
     }
     func activateSearchPageIfNeeded() {
         guard hasAppeared, searchPage?.isSearching == true, search?.isActive == false else { return }

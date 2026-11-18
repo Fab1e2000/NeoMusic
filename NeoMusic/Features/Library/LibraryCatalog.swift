@@ -13,7 +13,7 @@ import Observation
     @ObservationIgnored var downloadedOnlineSongID: ((String) -> Int64?)?
     func handles(_ route: LibraryRoute) -> Bool {
         switch route {
-        case .artist(let id), .album(let id), .artistSection(let id, _): id.hasPrefix("catalog:")
+        case .artist(let id), .album(let id), .artistSection(let id, _): CatalogRouteIdentity.isCatalogID(id)
         default: false
         }
     }

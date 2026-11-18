@@ -6,10 +6,10 @@ import FullScreenPlayer
 }
 
 /// NeoMusic's composition boundary; all reusable presentation lives in FullScreenPlayer.
-struct ReferenceNowPlayingView: View {
+struct PlayerNowPlayingHostView: View {
     @Environment(PlayerState.self) private var player
     @Environment(PlayerActions.self) private var actions
-    @Environment(ReferenceLibrary.self) private var library
+    @Environment(PlayerLyricsController.self) private var library
     @Environment(\.artworkLoadAction) private var loadArtwork
     var initialPage: NowPlayingPage = .artwork
     var onDismiss: (() -> Void)? = nil
@@ -48,3 +48,5 @@ struct ReferenceNowPlayingView: View {
             }
     }
 }
+
+typealias ReferenceNowPlayingView = PlayerNowPlayingHostView

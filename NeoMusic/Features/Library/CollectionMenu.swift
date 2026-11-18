@@ -171,17 +171,23 @@ struct CollectionMenuActions {
     @MainActor private func downloadItem(_ route: LibraryRoute) -> LibraryMenuItem {
         let summary = downloads?.collectionState(of: route)
         if summary?.isActive == true {
-            return LibraryMenuItem(title: "停止下载", systemImage: "stop.circle.fill") { stopDownload(route) }
+            return LibraryMenuItem(title: "停止下载", systemImage: "stop.circle.fill") {
+                LibraryHaptics.impact()
+                stopDownload(route)
+            }
         }
         if summary?.isComplete == true {
             return LibraryMenuItem(title: "已下载", systemImage: "checkmark.circle.fill", isDisabled: true)
         }
         let failed = (summary?.failedCount ?? 0) > 0
-        return LibraryMenuItem(title: failed ? "重试下载" : "下载", systemImage: failed ? "arrow.clockwise" : "arrow.down.circle.fill", isDisabled: !canDownload(route)) { download(route) }
+        return LibraryMenuItem(title: failed ? "重试下载" : "下载", systemImage: failed ? "arrow.clockwise" : "arrow.down.circle.fill", isDisabled: !canDownload(route)) {
+            LibraryHaptics.impact()
+            download(route)
+        }
     }
 
     private func toggleFavoriteAndNotify(_ item: LibraryShelfItem, _ route: LibraryRoute) {
-        LibraryHaptics.impact()
+        LibraryHaptics.success()
         toggleFavorite(route)
         if !item.id.hasPrefix("catalog:") { notify(item.isFavorite ? .unfavorited : .favorited) }
     }
@@ -213,6 +219,7 @@ struct CollectionMenuActions {
         let kind = isPlaylist ? "播放列表" : "专辑"
         return LibraryMenuItem(title: (item.isPinned ? "取消置顶" : "置顶") + kind,
                                systemImage: item.isPinned ? "pin.slash" : "pin") {
+            LibraryHaptics.success()
             // 资料库首页的置顶区据此以动画增删卡片。
             withAnimation(.smooth(duration: 0.35)) { togglePin(route) }
             notify(item.isPinned ? .unpinned : .pinned)
@@ -350,7 +357,10 @@ struct CollectionCardLink<Label: View>: View {
                                    drag: drag, drop: drop)
                 .padding(-8)
                 .alert("", isPresented: $isConfirmingDeletion) {
-                    Button("从资料库删除", role: .destructive) { withAnimation { actions.delete(route) } }
+                    Button("从资料库删除", role: .destructive) {
+                        LibraryHaptics.mediumImpact()
+                        withAnimation { actions.delete(route) }
+                    }
                     Button("取消", role: .cancel) {}
                 } message: {
                     Text(route.deletionMessage)
@@ -476,7 +486,7 @@ struct SongMenuActions {
                     notify(.unfavorited)
                 }
             } else {
-                LibraryHaptics.impact()
+                LibraryHaptics.success()
                 toggleFavorite(song)
                 notify(.favorited)
             }
@@ -569,7 +579,7 @@ struct OnlineSongTrailingSwipeButtons: View {
             switch edge {
             case .like:
                 Button("喜欢", systemImage: "heart.fill") {
-                    LibraryHaptics.impact()
+                    LibraryHaptics.success()
                     songActions.toggleFavorite(song)
                     songActions.notify(.favorited)
                 }

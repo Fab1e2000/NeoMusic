@@ -16,19 +16,25 @@ struct LibraryRouteLink<Label: View>: View {
     @Environment(\.nativeArtworkSurfaceEnabled) private var nativeArtwork
     @Environment(\.artworkLoadAction) private var loadArtwork
     var body: some View {
-        if let makePage = destination.makePage {
-            NavigationLink {
-                LibraryLinkedPage(content: makePage(value), route: value)
-                    .environment(\.openLibraryRoute, openRoute)
-                    .environment(\.libraryRouteDestination, destination)
-                    .environment(\.collectionMenuActions, collectionActions)
-                    .environment(\.songMenuActions, songActions)
-                    .environment(\.songRowPlayback, playback)
-                    .environment(\.libraryDownloads, downloads)
-                    .environment(\.nativeArtworkSurfaceEnabled, nativeArtwork)
-                    .environment(\.artworkLoadAction, loadArtwork)
-                    .modifier(LibraryNavigationPreviewModifier(preview: preview))
-            } label: { label }
+        if destination.makePage != nil {
+            Button {
+                if let preview {
+                    openRoute(value, preview: preview, sourceProvider: { nil })
+                } else {
+                    openRoute(value)
+                }
+            } label: {
+                HStack {
+                    label
+                    Spacer(minLength: 8)
+                    Image(systemName: "chevron.forward")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                        .accessibilityHidden(true)
+                }
+                .foregroundStyle(.primary)
+                .contentShape(Rectangle())
+            }
         } else { NavigationLink(value: value) { label } }
     }
 }

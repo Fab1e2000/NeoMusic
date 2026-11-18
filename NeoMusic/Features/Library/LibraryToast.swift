@@ -155,8 +155,19 @@ private struct LibraryToastFeedback: ViewModifier {
         content.sensoryFeedback(.success, trigger: center.current?.id) { _, new in
             guard new != nil else { return false }
             switch center.current?.toast {
-            case .favorited, .unfavorited, .error: return false
-            default: return true
+            case .favorited, .unfavorited, .pinned, .unpinned, .playingNext, .addedToQueue, .error:
+                return false
+            default:
+                return true
+            }
+        }
+        .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.6), trigger: center.current?.id) { _, new in
+            guard new != nil else { return false }
+            switch center.current?.toast {
+            case .playingNext, .addedToQueue:
+                return true
+            default:
+                return false
             }
         }
         .sensoryFeedback(.error, trigger: center.current?.id) { _, new in
@@ -178,15 +189,47 @@ private struct LibraryToastFeedback: ViewModifier {
     }
 }
 
-/// 与播放、下载按钮相同的轻触感。可从菜单操作直接调用。
-/// 常驻一个发生器并在触发后立即预热：几秒内的连续轻点（如连点喜欢）延迟更低。
+/// 资料库操作共用的系统触感发生器。
+/// 常驻发生器并在触发后立即预热，保证连续操作响应低延迟。
 enum LibraryHaptics {
-    @MainActor private static let generator = UIImpactFeedbackGenerator(style: .soft)
+    @MainActor private static let softGenerator = UIImpactFeedbackGenerator(style: .soft)
+    @MainActor private static let lightGenerator = UIImpactFeedbackGenerator(style: .light)
+    @MainActor private static let mediumGenerator = UIImpactFeedbackGenerator(style: .medium)
+    @MainActor private static let notificationGenerator = UINotificationFeedbackGenerator()
+
+    /// 柔型冲击（0.6）：用于直接播放按钮、开始/停止/重试下载、插播与添加到队列。
     static func impact() {
-        let play: @MainActor () -> Void = {
-            generator.impactOccurred(intensity: 0.6)
-            generator.prepare()
+        runOnMain {
+            softGenerator.impactOccurred(intensity: 0.6)
+            softGenerator.prepare()
         }
+    }
+
+    /// 轻型冲击（Light Impact）：用于确认从喜欢歌曲/歌单移除单曲、确认移除本机下载文件。
+    static func lightImpact() {
+        runOnMain {
+            lightGenerator.impactOccurred()
+            lightGenerator.prepare()
+        }
+    }
+
+    /// 中型冲击（Medium Impact）：用于确认从资料库删除整个播放列表或专辑。
+    static func mediumImpact() {
+        runOnMain {
+            mediumGenerator.impactOccurred()
+            mediumGenerator.prepare()
+        }
+    }
+
+    /// 成功通知（Success）：用于喜爱/取消喜爱、收藏加号、置顶/取消置顶。
+    static func success() {
+        runOnMain {
+            notificationGenerator.notificationOccurred(.success)
+            notificationGenerator.prepare()
+        }
+    }
+
+    private static func runOnMain(_ play: @escaping @MainActor () -> Void) {
         if Thread.isMainThread {
             MainActor.assumeIsolated(play)
         } else {

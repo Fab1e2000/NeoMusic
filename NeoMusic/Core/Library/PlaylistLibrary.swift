@@ -248,9 +248,8 @@ final class PlaylistLibrary {
             }
             _ = transformContents(matching: { !oldOnline.contains($0) && newOnlineContents[$0] == nil }) { song in
                 if let offline = offlineSong?(song.id) { return offline }
-                guard song.id.hasPrefix("netease:") else { return song }
-                let owner = song.id.split(separator: ":").dropFirst().first.map(String.init)
-                return owner == ownerID ? song : LibrarySongItem.unavailable(song.id)
+                guard song.isOnline else { return song }
+                return song.onlineOwnerID == ownerID ? song : LibrarySongItem.unavailable(song.id)
             }
             publishDownloadedPlaylists(onto: updatedPlaylists)
             if placement != updatedPlacement { placement = updatedPlacement }
@@ -344,7 +343,7 @@ final class PlaylistLibrary {
         }
         let result = transformContents(includingReadOnly: !excludingReadOnly) { song in
             if let offline = offlineSong?(song.id) { return offline }
-            guard song.id.hasPrefix("netease:") else { return song }
+            guard song.isOnline else { return song }
             guard song.onlineOwnerID == restoredOnlineOwnerID else { return LibrarySongItem.unavailable(song.id) }
             return lookup[song.id] ?? song
         }

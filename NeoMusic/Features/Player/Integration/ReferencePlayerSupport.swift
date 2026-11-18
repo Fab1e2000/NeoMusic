@@ -3,10 +3,10 @@ import SwiftUI
 import Observation
 
 
-@MainActor @Observable final class ReferenceLibrary {
+@MainActor @Observable final class PlayerLyricsController {
     var contentRevision = 0
-    let reader: ReferenceLyricsReader
-    init(reader: ReferenceLyricsReader) { self.reader = reader }
+    let reader: PlayerLyricsStoreAdapter
+    init(reader: PlayerLyricsStoreAdapter) { self.reader = reader }
     @ObservationIgnored private var cachedSource: PlayerLyricsSource?
     var source: PlayerLyricsSource {
         if let cachedSource { return cachedSource }
@@ -21,8 +21,10 @@ import Observation
     }
 }
 
+typealias ReferenceLibrary = PlayerLyricsController
+
 /// Adapts the local lyrics store to the player presentation.
-actor ReferenceLyricsReader {
+actor PlayerLyricsStoreAdapter {
     private let reader: LyricsReader
     private let root: URL
     private var remoteLyrics: (@MainActor @Sendable (String) async throws -> LyricsDocument)?
@@ -33,7 +35,7 @@ actor ReferenceLyricsReader {
     }
     func load(trackID: String) async throws -> LyricsDocument {
         try Task.checkCancellation()
-        if trackID.hasPrefix("netease:"), let remoteLyrics {
+        if OnlineSongIdentity.parseOwnerAndSong(trackID) != nil, let remoteLyrics {
             let result = try await remoteLyrics(trackID)
             try Task.checkCancellation()
             return result
@@ -45,6 +47,8 @@ actor ReferenceLyricsReader {
         try await reader.importFile(url, songID: trackID)
     }
 }
+
+typealias ReferenceLyricsReader = PlayerLyricsStoreAdapter
 
 enum ImmersiveMode { static let storageKey = "preview.appearance.immersive" }
 

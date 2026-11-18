@@ -70,6 +70,28 @@ NeoMusic 的 [接入层](../NeoMusic/Features/Player/Integration) 将 `NowPlayin
 
 `Resources/HomeAssets.xcassets` 保留实验主页图标和封面样本，供既有隔离预览使用。样本来自用户提供截图的裁切，作品版权归原权利人。正式内容封面使用真实资源，电台和心情图案由 SwiftUI 绘制。
 
+## 触控反馈（Haptics）规范
+
+全应用触控反馈遵循 [Apple HIG — Playing haptics](https://developer.apple.com/cn/design/human-interface-guidelines/playing-haptics) 的预设模式语义、全局一致性及克制使用原则。统一通过高层 API（`LibraryHaptics` 预热发生器或 SwiftUI `.sensoryFeedback`）触发，自动遵循系统「触感反馈」开关且不干扰音频播放。
+
+### 触感类型与场景映射表
+
+| 触感类型 | 系统 API / 统一入口 | 适用交互与业务场景 |
+| --- | --- | --- |
+| **成功 (Success)** | `LibraryHaptics.success()` / `.sensoryFeedback(.success)` | 1. **喜爱与取消喜爱**：曲目、专辑、歌单、艺人的喜爱切换（含菜单、左滑爱心、艺人页星标、播放器星标取消喜欢）<br>2. **收藏入库**：专辑、网易云歌单、艺人最新发行的圆形「`+`」收藏按钮<br>3. **置顶切换**：歌单或专辑的「置顶 / 取消置顶」<br>4. **加入歌单完成**：选单收起后弹出「已添加 N 首歌曲」Toast |
+| **错误 (Error)** | `.sensoryFeedback(.error)` | 操作失败、未登录拦截或加载异常弹出红色感叹号 `LibraryToast.error` 时 |
+| **柔型冲击 (Soft 0.6)** | `LibraryHaptics.impact()` / `.sensoryFeedback(.impact(flexibility: .soft, intensity: 0.6))` | 1. **直接播放主入口**：主页三张直接播放卡（心动模式、私人漫游、相似歌曲），以及专辑／歌单详情页顶部的「播放」「随机播放」大按钮<br>2. **队列编排提示**：「插播（下个播放）」「添加到队列（最后播放）」Toast 弹出时<br>3. **下载控制**：详情页下载按钮、详情右上角菜单、卡片长按菜单、曲目行状态圈及左滑的「下载 / 停止下载 / 重试下载」 |
+| **轻型冲击 (Light)** | `LibraryHaptics.lightImpact()` / `UIImpactFeedbackGenerator(style: .light)` | 1. **轻量移除确认**：居中弹窗确认「从喜欢歌曲移除」或「从播放列表移除」单曲；系统弹窗确认「移除下载」本机文件<br>2. **播放器队列停靠**：全屏队列列表(`NowPlayingQueueList`)滚动经过或吸附到顶部两个停靠锚点（头部完整露出／刚好收起） |
+| **中型冲击 (Medium)** | `LibraryHaptics.mediumImpact()` | **整单／整辑删除确认**：系统弹窗确认「从资料库删除」整个播放列表或专辑 |
+| **选择 (Selection)** | `ReferenceTrackSwipeFeedback.selection()` (`UISelectionFeedbackGenerator`) | **横向滑动切歌**：全屏封面或迷你播放条横向拖动跨过切歌阈值（38%），回退至 22% 内重新武装 |
+| **无额外触感 (None)** | 仅依赖视觉动画或系统原生控件自带触感 | 普通点击歌曲行播放、推页/Zoom 导航卡片、全屏/迷你常规播放控制按钮、进度条与音量条按住缩放及甩滑 |
+
+### 开发与维护约束
+
+- **禁止双重触发**：已在按钮或菜单点击瞬间直接触发 `LibraryHaptics` 的操作（如喜爱、取消喜爱、置顶、取消置顶），在 `LibraryToastFeedback` 中必须排除对应的 Toast 震动，确保一次操作只产生一次触感。
+- **确认后再触发破坏性触感**：涉及二次确认弹窗的操作（移除喜欢歌曲、从歌单移除曲目、移除本机下载、删除整个歌单/专辑），触感只在用户点击弹窗的最终确认按钮时触发，弹出确认框前不额外触发。
+- **发生器预热**：手势驱动或高频点按的触感（切歌拖动、队列滚动停靠、`LibraryHaptics` 静态发生器）需在手势开始或触发后调用 `prepare()`，降低 Taptic Engine 唤醒延迟。
+
 ## 图标与资源
 
 正式图标源为 [NeoMusicIcon.icon](../NeoMusic/Resources/AppIcons/NeoMusicIcon.icon)，使用已确认的 F6 黑色方案。默认外观四层采用黑色填充，以不透明度形成灰阶；深色反白、Mono 使用白色遮罩供系统着色，这组差分也已获确认。白底、圆角、玻璃与阴影由 Icon Composer 管理，形状和层次在各外观下保持一致。工程中的 App Icon 名称为 `NeoMusicIcon`。

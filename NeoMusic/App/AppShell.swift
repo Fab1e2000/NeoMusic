@@ -88,17 +88,61 @@ enum AppTab: Hashable, Identifiable, RawRepresentable {
     static let reorderable: [AppTab] = [.home, .library, .favorites, .playlists, .albums, .artists, .songs]
 }
 
-/// 标签栏上的普通歌单。页面由同一套导航持有，避免重复创建。
+/// 统一管理各标签页（固定标签与自定义歌单标签）的 `LibraryDetailNavigation` 实例，避免重复创建与逐个枚举。
 @MainActor
-final class PlaylistTabBridges {
-    var items: [String: LibraryDetailNavigation] = [:]
-    func bridge(for id: String) -> LibraryDetailNavigation {
-        if let existing = items[id] { return existing }
+final class AppTabNavigationRegistry {
+    private(set) var tabNavigations: [AppTab: LibraryDetailNavigation] = {
+        var map: [AppTab: LibraryDetailNavigation] = [:]
+        for tab in [AppTab.home, .library, .search, .favorites, .playlists, .albums, .artists, .songs] {
+            map[tab] = LibraryDetailNavigation()
+        }
+        return map
+    }()
+
+    var items: [String: LibraryDetailNavigation] {
+        get {
+            var result: [String: LibraryDetailNavigation] = [:]
+            for (tab, nav) in tabNavigations {
+                if case .playlist(let id) = tab { result[id] = nav }
+            }
+            return result
+        }
+        set {
+            tabNavigations = tabNavigations.filter {
+                if case .playlist = $0.key { return false }
+                return true
+            }
+            for (id, nav) in newValue {
+                tabNavigations[.playlist(id)] = nav
+            }
+        }
+    }
+
+    func navigation(for tab: AppTab) -> LibraryDetailNavigation {
+        if let existing = tabNavigations[tab] { return existing }
         let created = LibraryDetailNavigation()
-        items[id] = created
+        tabNavigations[tab] = created
         return created
     }
+
+    func bridge(for id: String) -> LibraryDetailNavigation {
+        navigation(for: .playlist(id))
+    }
+
+    func colorScheme(for tab: AppTab) -> ColorScheme? {
+        tabNavigations[tab]?.colorScheme
+    }
+
+    func prunePlaylists(keeping liveIDs: Set<String>) {
+        for key in tabNavigations.keys {
+            if case .playlist(let id) = key, !liveIDs.contains(id) {
+                tabNavigations[key] = nil
+            }
+        }
+    }
 }
+
+typealias PlaylistTabBridges = AppTabNavigationRegistry
 
 struct AppTabPlaylist: Equatable, Identifiable {
     let id: String
@@ -184,15 +228,7 @@ struct AppShell<Library: View>: View {
     @State var libraryPath: [LibraryRoute] = []
     @State var isPlayerPresented = false
     @State private var showsAudioQualitySettings = false
-    @State private var detailNavigation = LibraryDetailNavigation()
-    @State private var homeNavigation = LibraryDetailNavigation()
-    @State private var searchNavigation = LibraryDetailNavigation()
-    @State private var favoritesNavigation = LibraryDetailNavigation()
-    @State private var playlistsNavigation = LibraryDetailNavigation()
-    @State private var albumsNavigation = LibraryDetailNavigation()
-    @State private var artistsNavigation = LibraryDetailNavigation()
-    @State private var songsNavigation = LibraryDetailNavigation()
-    @State private var playlistBridges = PlaylistTabBridges()
+    @State private var tabNavigations = AppTabNavigationRegistry()
     @State private var emptyHome = HomeContentModel()
     @Environment(\.homeMusicIntegration) private var home
     @Environment(\.artistMusicIntegration) private var artists
@@ -200,6 +236,9 @@ struct AppShell<Library: View>: View {
     @Environment(NeteaseAccount.self) private var account
     @AppStorage(AppTabOrder.storageKey) private var rawTabOrder = AppTabOrder.defaultRaw
     @AppStorage(AppTabOrder.hiddenKey) private var rawHiddenTabs: String?
+    private var detailNavigation: LibraryDetailNavigation { tabNavigations.navigation(for: .library) }
+    private var homeNavigation: LibraryDetailNavigation { tabNavigations.navigation(for: .home) }
+    private var searchNavigation: LibraryDetailNavigation { tabNavigations.navigation(for: .search) }
     private var playlistTabItems: [AppTabPlaylist] {
         playlistLibrary.playlists.compactMap { item in
             guard !item.isSystem, !item.isDownloadedSnapshot, !item.id.isEmpty, !item.id.contains(",") else { return nil }
@@ -210,17 +249,7 @@ struct AppShell<Library: View>: View {
         AppTabOrder.displayed(order: rawTabOrder, hidden: rawHiddenTabs, playlists: playlistTabItems.map(\.id))
     }
     private var chromeColorScheme: ColorScheme? {
-        switch selection {
-        case .home: homeNavigation.colorScheme
-        case .library: detailNavigation.colorScheme
-        case .search: searchNavigation.colorScheme
-        case .favorites: favoritesNavigation.colorScheme
-        case .playlists: playlistsNavigation.colorScheme
-        case .albums: albumsNavigation.colorScheme
-        case .artists: artistsNavigation.colorScheme
-        case .songs: songsNavigation.colorScheme
-        case .playlist(let id): playlistBridges.items[id]?.colorScheme
-        }
+        tabNavigations.colorScheme(for: selection)
     }
 
     var body: some View {
@@ -234,8 +263,7 @@ struct AppShell<Library: View>: View {
             searchNavigation: searchNavigation, searchContent: effectiveSearchContent, searchDestination: searchDestination ?? searchDetail,
             sectionNavigation: sectionBridge, playlistTabs: playlistTabItems)
         .onChange(of: playlistTabItems.map(\.id)) { _, ids in
-            let live = Set(ids)
-            for id in playlistBridges.items.keys where !live.contains(id) { playlistBridges.items[id] = nil }
+            tabNavigations.prunePlaylists(keeping: Set(ids))
         }
         .ignoresSafeArea()
         .sheet(isPresented: Binding(get: { home?.showsLogin == true }, set: { home?.showsLogin = $0 }),
@@ -274,7 +302,8 @@ struct AppShell<Library: View>: View {
         .moveToFolderSheet(playlistLibrary)
         .modifier(ClearQueueConfirmation(player: nowPlaying))
         .modifier(PlayerPopup(isPresented: $isPlayerPresented, isSuppressed: !isInitialContentReady,
-                              onClose: finishPlayerNavigation, barColorScheme: chromeColorScheme))
+                              onClose: finishPlayerNavigation, barColorScheme: chromeColorScheme,
+                              toasts: toasts))
         .environment(referencePlayer)
         .environment(referenceLibrary)
         .environment(makePlayerActions({ route in
@@ -301,33 +330,24 @@ struct AppShell<Library: View>: View {
         return AnyView(SearchPageView(model: search.model).environment(\.songMenuActions, search.songActions).libraryToasts(toasts))
     }
     private func searchDetail(_ route: LibraryRoute) -> AnyView {
+        if case .searchCategory(let category) = route, let search {
+            return AnyView(SearchCategoryPage(model: search.model, category: category).libraryToasts(toasts))
+        }
         if case .playlistFolder(let key) = route, key.hasPrefix("search-category:"), let search {
             return AnyView(SearchCategoryPage(model: search.model, category: String(key.dropFirst("search-category:".count))).libraryToasts(toasts))
         }
         return AnyView((artists?.destination(route) ?? home?.destination(for: route) ?? detailDestination(route)).libraryToasts(toasts))
     }
     private func sectionBridge(_ tab: AppTab) -> LibraryDetailNavigation {
-        switch tab {
-        case .favorites: favoritesNavigation
-        case .playlists: playlistsNavigation
-        case .albums: albumsNavigation
-        case .artists: artistsNavigation
-        case .songs: songsNavigation
-        case .playlist(let id): playlistBridges.bridge(for: id)
-        case .home: homeNavigation
-        case .search: searchNavigation
-        case .library: detailNavigation
-        }
+        tabNavigations.navigation(for: tab)
     }
     private func openInCurrentTab(_ route: LibraryRoute) {
-        switch selection {
-        case .home: homeNavigation.open(route)
-        case .search:
-            if effectiveSearchContent != nil { searchNavigation.open(route) }
-            else { selection = .library; detailNavigation.open(route) }
-        case .library: detailNavigation.open(route)
-        case .favorites, .playlists, .albums, .artists, .songs, .playlist: sectionBridge(selection).open(route)
+        if selection == .search, effectiveSearchContent == nil {
+            selection = .library
+            detailNavigation.open(route)
+            return
         }
+        tabNavigations.navigation(for: selection).open(route)
     }
     private func finishPlayerNavigation() {
         isPlayerPresented = false

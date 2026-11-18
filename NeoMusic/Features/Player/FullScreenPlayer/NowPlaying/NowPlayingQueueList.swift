@@ -619,7 +619,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
         }
 
         private var previousOffset: CGFloat?
-        private let snapFeedback = UIImpactFeedbackGenerator(style: .soft)
+        private let snapFeedback = UIImpactFeedbackGenerator(style: .light)
 
         /// 滚到两个停靠位置之一（头部完整露出、头部刚好滚出去）就振一下，
         /// 吸附、惯性经过、手指往上推过去都算；离开后再回来才会再振。

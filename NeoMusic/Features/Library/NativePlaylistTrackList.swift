@@ -117,7 +117,7 @@ enum CollectionTrackUI {
         case .like:
             let like = UIContextualAction(style: .normal, title: nil) { _, _, done in
                 done(true)
-                LibraryHaptics.impact()
+                LibraryHaptics.success()
                 songActions.toggleFavorite(song)
                 notify(.favorited)
             }

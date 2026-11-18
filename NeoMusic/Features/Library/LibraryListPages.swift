@@ -3,7 +3,7 @@ import SwiftUI
 /// 资料库里的一首歌。
 struct LibrarySongItem: Identifiable, Equatable {
     let id: String
-    var albumID: String { onlineAlbumID.map { "catalog:album:" + String($0) } ?? albumDirectory.map { "folder:" + $0 } ?? (albumArtist + "\u{001F}" + album) }
+    var albumID: String { onlineAlbumID.map(CatalogRouteIdentity.albumID) ?? albumDirectory.map { "folder:" + $0 } ?? (albumArtist + "\u{001F}" + album) }
     let title: String
     let artist: String
     let album: String
@@ -64,12 +64,10 @@ struct LibrarySongItem: Identifiable, Equatable {
     }
 
     var onlineOwnerID: String? {
-        let parts = id.split(separator: ":")
-        return parts.count == 3 && parts[0] == "netease" ? String(parts[1]) : nil
+        OnlineSongIdentity.parseOwnerAndSong(id)?.ownerID
     }
     var onlineSongID: Int64? {
-        guard onlineOwnerID != nil else { return nil }
-        return id.split(separator: ":").last.flatMap { Int64($0) }
+        OnlineSongIdentity.parseOwnerAndSong(id)?.songID
     }
     var isOnline: Bool { onlineOwnerID != nil }
     /// Whether this item represents a track from the NetEase catalog (online, guest catalog, or downloaded).

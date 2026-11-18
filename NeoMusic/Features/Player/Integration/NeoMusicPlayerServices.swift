@@ -4,7 +4,7 @@ import Nuke
 import FullScreenPlayer
 
 @MainActor enum NeoMusicPlayerServices {
-    static func make(actions: PlayerActions, library: ReferenceLibrary,
+    static func make(actions: PlayerActions, library: PlayerLyricsController,
                      prepareArtwork: @escaping (String) -> Void = { _ in }) -> PlayerServices {
         PlayerServices(actions: actions, lyrics: library.source,
                        artwork: artwork(prepare: prepareArtwork), diagnostics: diagnostics)

@@ -198,11 +198,13 @@ private struct LibraryAuditDestination: View {
         case .category(.artists), .downloadedCategory(.artists):
             ArtistsListView(artists: fixture.artists)
         case .category(.downloaded), .downloadedCategory(.downloaded):
-            DownloadedMockView(albums: fixture.albums)
+            DownloadedLibraryView(albums: fixture.albums)
         case .artist(let id):
             ArtistDetailView(detail: fixture.artistDetail(id), playSong: { fixture.recordPlay($0) })
         case .artistSection(let id, let section):
             ArtistSectionView(detail: fixture.artistDetail(id), section: section, playSong: { fixture.recordPlay($0) })
+        case .searchCategory:
+            EmptyView()
         }
     }
 }

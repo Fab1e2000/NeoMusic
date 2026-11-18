@@ -11,6 +11,7 @@ struct PlayerPopup: ViewModifier {
     let isSuppressed: Bool
     let onClose: () -> Void
     var barColorScheme: ColorScheme? = nil
+    var toasts: LibraryToastCenter? = nil
 
     @Environment(\.accessibilityReduceMotion) private var reducesMotion
     @Environment(\.scenePhase) private var scenePhase
@@ -46,7 +47,8 @@ struct PlayerPopup: ViewModifier {
                     PlayerPopupContent(barImage: barImage,
                                        barColorScheme: barColorScheme ?? colorScheme,
                                        isActive: isPresented && scenePhase == .active,
-                                       isBarActive: isBarActive) { isPresented = false }
+                                       isBarActive: isBarActive,
+                                       toasts: toasts) { isPresented = false }
                         .environment(\.playerVolumeHUDRefreshID, volumeHUDRefreshID)
                         .statusBarHidden(isImmersive)
                 }
@@ -145,13 +147,15 @@ private struct PlayerPopupContent: View {
     let barColorScheme: ColorScheme
     let isActive: Bool
     let isBarActive: Bool
+    var toasts: LibraryToastCenter? = nil
     let onDismiss: () -> Void
     @Environment(PlayerState.self) private var player
 
     var body: some View {
         Group {
             if let track = player.currentTrack {
-                ReferenceNowPlayingView(onDismiss: onDismiss, isActive: isActive)
+                PlayerNowPlayingHostView(onDismiss: onDismiss, isActive: isActive)
+                    .modifier(OptionalPlayerToastModifier(toasts: isActive ? toasts : nil))
                     .onChange(of: isActive, initial: true) { _, active in
                         PerformanceDiagnostics.restoration("popup.content active=\(active) titleEmpty=\(track.title.isEmpty) cover=\(track.coverURL != nil)")
                     }
@@ -173,6 +177,17 @@ private struct PlayerPopupContent: View {
                         })
                     }
             }
+        }
+    }
+}
+
+private struct OptionalPlayerToastModifier: ViewModifier {
+    let toasts: LibraryToastCenter?
+    @ViewBuilder func body(content: Content) -> some View {
+        if let toasts {
+            content.libraryToasts(toasts)
+        } else {
+            content
         }
     }
 }

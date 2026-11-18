@@ -268,26 +268,28 @@ import Observation
     private func artwork(_ remote: URL?) -> Artwork {
         guard let remote, let store else { return .missing }
         if let file = store.cachedArtworkURL(remote) { return .file(file) }
-        return .deferred(id: "artists:\(store.sessionRevision.uuidString):\(remote.absoluteString)", placeholder: .missing)
+        return .deferred(id: DeferredArtworkKey(domain: .artists, session: store.sessionRevision, url: remote).rawValue, placeholder: .missing)
     }
     func requestArtwork(for id: String) {
-        guard let store, store.userID == owner else { return }
-        let prefix = "artists:\(store.sessionRevision.uuidString):"
-        guard id.hasPrefix(prefix), let url = URL(string: String(id.dropFirst(prefix.count))) else { return }
+        guard let store, store.userID == owner,
+              let key = DeferredArtworkKey(rawValue: id),
+              key.matches(domain: .artists, session: store.sessionRevision),
+              let url = key.remoteURL else { return }
         store.requestArtwork([url])
     }
     func cachedArtworkFile(for id: String) async -> URL? {
         guard let store, store.userID == owner, !Task.isCancelled else { return nil }
         let revision = store.sessionRevision, owner = store.userID
-        let prefix = "artists:\(revision.uuidString):"
-        guard id.hasPrefix(prefix), let url = URL(string: String(id.dropFirst(prefix.count))) else { return nil }
+        guard let key = DeferredArtworkKey(rawValue: id),
+              key.matches(domain: .artists, session: revision),
+              let url = key.remoteURL else { return nil }
         let file = await store.cachedArtworkFile(url)
         guard revision == store.sessionRevision, store.userID == owner,
               self.owner == owner, !Task.isCancelled else { return nil }
         return file
     }
     private func artistItem(_ value: NeteaseArtistReference) -> LibraryArtistItem {
-        .init(id: "catalog:artist:\(value.id)", name: value.name, artwork: artwork(value.artworkURL), isFavorite: subscribedArtistIDs.contains(value.id))
+        .init(id: CatalogRouteIdentity.artistID(value.id), name: value.name, artwork: artwork(value.artworkURL), isFavorite: subscribedArtistIDs.contains(value.id))
     }
     private func albumItem(_ value: NeteaseArtistAlbum) -> LibraryShelfItem {
         let cover = artwork(value.artworkURL)
@@ -295,14 +297,22 @@ import Observation
         let retained: AlbumArtworkBackdrop?
         if case .file(let url) = cover, backdropSources[value.id] == url { retained = backdrops[value.id] }
         else { retained = nil }
-        return .init(id: "catalog:album:\(value.id)", title: value.title, subtitle: value.artist, artwork: cover, route: .album("catalog:album:\(value.id)"), isFavorite: subscribedAlbumIDs.contains(value.id), addedOrder: store?.albumAddedDate(value.id).map { Int($0.timeIntervalSince1970) } ?? 0, year: value.publishTime.map { Calendar.current.component(.year, from: $0) }, sourceOwnerID: owner.map(String.init), albumBackdrop: prepared ?? retained)
+        let albumRouteID = CatalogRouteIdentity.albumID(value.id)
+        return .init(id: albumRouteID, title: value.title, subtitle: value.artist, artwork: cover, route: .album(albumRouteID), isFavorite: subscribedAlbumIDs.contains(value.id), addedOrder: store?.albumAddedDate(value.id).map { Int($0.timeIntervalSince1970) } ?? 0, year: value.publishTime.map { Calendar.current.component(.year, from: $0) }, sourceOwnerID: owner.map(String.init), albumBackdrop: prepared ?? retained)
     }
     private func releaseItem(_ value: NeteaseArtistAlbum) -> LibraryShelfItem {
         var item = albumItem(value); item.subtitle = item.year.map { "\($0)年" }; return item
     }
     private func songItem(_ value: NeteaseMusicSong) -> LibrarySongItem {
         let url = value.artworkURL.flatMap { store?.cachedArtworkURL($0) }
-        return .init(id: owner.map { "netease:\($0):\(value.id)" } ?? "catalog-guest:\(value.id)", title: value.title, artist: value.artist, album: value.album, albumArtist: value.artist, trackNumber: value.trackNumber ?? 0, artwork: artwork(value.artworkURL), discNumber: value.discNumber ?? 1, artworkURL: url, duration: Int(value.duration), isFavorite: account.music?.likedIDs.contains(value.id) == true, favoriteAddedAt: account.music?.likedAt[value.id], unavailabilityReason: value.unavailable ? "暂无完整音源" : nil, onlineAlbumID: value.albumID, artistReferences: (value.artists ?? []).map { .init(id: "catalog:artist:\($0.id)", name: $0.name) })
+        return OnlineSongProjector.makeSong(
+            value,
+            id: OnlineSongIdentity.format(ownerID: owner.map(String.init), guestPrefix: "catalog-guest", song: value.id),
+            artwork: artwork(value.artworkURL),
+            artworkURL: url,
+            isFavorite: account.music?.likedIDs.contains(value.id) == true,
+            favoriteAddedAt: account.music?.likedAt[value.id]
+        )
     }
     func artistDetail(_ id: Int64) -> ArtistDetail? { state("artist:\(id)").artist }
     private func makeArtistDetail(_ id: Int64) -> ArtistDetail? {
@@ -436,7 +446,8 @@ import Observation
     }
     static func number(_ route: LibraryRoute) -> Int64? {
         switch route {
-        case .artist(let id), .artistSection(let id, _), .album(let id): Int64(id.split(separator: ":").last ?? "")
+        case .artist(let id), .artistSection(let id, _), .album(let id):
+            CatalogRouteIdentity(id)?.itemID ?? Int64(id.split(separator: ":").last ?? "")
         default: nil
         }
     }

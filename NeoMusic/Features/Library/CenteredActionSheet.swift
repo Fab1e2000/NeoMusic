@@ -23,21 +23,21 @@ enum CenteredActionSheet {
         DispatchQueue.main.async { topController?.present(alert, animated: true) }
     }
 
-    /// 从喜欢歌曲移除。确认后才执行，并给出触感。
+    /// 从喜欢歌曲移除。确认后才执行，并给出轻型冲击触感。
     static func confirmRemoveFromLiked(_ perform: @escaping () -> Void) {
         present(message: "确定要从喜欢歌曲中移除这首歌吗？", actions: [
             .init(title: "从喜欢歌曲移除", isDestructive: true) {
-                LibraryHaptics.impact()
+                LibraryHaptics.lightImpact()
                 perform()
             }
         ])
     }
 
-    /// 从自己的播放列表移除。确认后才执行，并给出触感。
+    /// 从自己的播放列表移除。确认后才执行，并给出轻型冲击触感。
     static func confirmRemoveFromPlaylist(_ perform: @escaping () -> Void) {
         present(message: "确定要从该播放列表中移除这首歌吗？", actions: [
             .init(title: "移除", isDestructive: true) {
-                LibraryHaptics.impact()
+                LibraryHaptics.lightImpact()
                 perform()
             }
         ])

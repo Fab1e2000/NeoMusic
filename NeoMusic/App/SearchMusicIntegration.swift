@@ -267,13 +267,15 @@ final class SearchMusicIntegration {
         let cover = resource.kind == .playlist ? HomeMusicIntegration.playlistArtwork(id: resource.resourceID, home: account.home) : artwork(resource.artworkURL, id: resource.id)
         var song: LibrarySongItem?
         if let value = resource.song {
-            let id = "netease:\(account.profile.map { String($0.userID) } ?? "search-guest"):\(value.id)"
-            song = LibrarySongItem(id: id, title: value.title, artist: value.artist, album: value.album,
-                albumArtist: value.artist, trackNumber: value.trackNumber ?? 0, artwork: cover, discNumber: value.discNumber ?? 1,
-                artworkURL: value.artworkURL.flatMap { store?.cachedArtwork($0) }, duration: Int(value.duration),
-                isFavorite: account.music?.likedIDs.contains(value.id) == true, favoriteAddedAt: account.music?.likedAt[value.id],
-                unavailabilityReason: value.unavailable ? "暂无完整音源" : nil, onlineAlbumID: value.albumID,
-                artistReferences: (value.artists ?? []).map { .init(id: "catalog:artist:\($0.id)", name: $0.name) })
+            let id = OnlineSongIdentity.format(ownerID: account.profile.map { String($0.userID) } ?? "search-guest", song: value.id)
+            song = OnlineSongProjector.makeSong(
+                value,
+                id: id,
+                artwork: cover,
+                artworkURL: value.artworkURL.flatMap { store?.cachedArtwork($0) },
+                isFavorite: account.music?.likedIDs.contains(value.id) == true,
+                favoriteAddedAt: account.music?.likedAt[value.id]
+            )
             if retainingPreviousArtwork {
                 song = song?.retainingArtwork(from: publishedSongs[id] ?? LocalLibrary.songLibrary.song(id: id))
             }
@@ -283,9 +285,9 @@ final class SearchMusicIntegration {
         }
         let route: LibraryRoute?
         switch resource.kind {
-        case .album: route = .album("catalog:album:\(resource.resourceID)")
-        case .artist: route = .artist("catalog:artist:\(resource.resourceID)")
-        case .playlist: route = .playlist("home:playlist:\(resource.resourceID)")
+        case .album: route = .album(CatalogRouteIdentity.albumID(resource.resourceID))
+        case .artist: route = .artist(CatalogRouteIdentity.artistID(resource.resourceID))
+        case .playlist: route = .playlist(PlaylistRouteIdentity.homePlaylistID(resource.resourceID))
         default: route = nil
         }
         return .init(id: resource.id, kind: kind, title: resource.title, subtitle: resource.subtitle,
@@ -294,7 +296,7 @@ final class SearchMusicIntegration {
 
     private func artwork(_ remote: URL?, id: String) -> Artwork {
         guard let remote else { return .missing }
-        let key = "search-artwork:\(sessionID?.uuidString ?? "guest"):\(id)"
+        let key = DeferredArtworkKey(domain: .search, session: sessionID?.uuidString ?? "guest", payload: id).rawValue
         artworkURLs[key] = remote
         if let file = store?.cachedArtwork(remote) { return .file(file) }
         return .deferred(id: key, placeholder: .missing)
