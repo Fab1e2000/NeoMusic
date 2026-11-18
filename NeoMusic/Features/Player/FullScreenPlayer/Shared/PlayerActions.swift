@@ -188,6 +188,7 @@ struct FavoriteButton: View {
             Button { actions.toggleFavorite(track) } label: {
                 Image(systemName: liked ? "star.fill" : "star")
                     .resizable().scaledToFit()
+                    .fontWeight(.medium)
                     .frame(width: 22.5, height: 22.5)
                     .offset(x: -0.333, y: -1)
                     .nowPlayingPrimary()

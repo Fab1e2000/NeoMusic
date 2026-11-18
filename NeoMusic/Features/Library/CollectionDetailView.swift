@@ -98,14 +98,15 @@ struct CollectionDetailView: View {
         return usesFavoritesBackground ? Artwork.favoritesBackground : Color(.systemBackground)
     }
 
-    private var resolvedSecondaryColor: Color {
-        Color.secondaryContentColor(on: pageBackground, colorScheme: albumColorScheme ?? colorScheme)
+    private var palette: CollectionPagePalette {
+        CollectionPagePalette(
+            background: UIColor(pageBackground),
+            isDark: (albumColorScheme ?? colorScheme) == .dark
+        )
     }
 
-    /// Translucent system separators blend with the artwork-derived page color.
-    /// Use the same appearance as text and controls, rather than the device setting alone.
-    private var pageSeparatorTint: Color {
-        ((albumColorScheme ?? colorScheme) == .dark ? Color.white : Color.black).opacity(0.18)
+    private var resolvedSecondaryColor: Color {
+        palette.secondaryColor
     }
 
     var body: some View {
@@ -114,6 +115,7 @@ struct CollectionDetailView: View {
         }
         .background(pageBackground)
         .environment(\.colorScheme, albumColorScheme ?? colorScheme)
+        .environment(\.collectionPagePalette, palette)
         .toolbarColorScheme(albumColorScheme, for: .navigationBar)
         .onChange(of: albumBackdrop, initial: true) { _, backdrop in
             if detail.kind == .album { navigationChrome?.setAlbumBackdrop(backdrop) }
@@ -197,7 +199,6 @@ struct CollectionDetailView: View {
             rowCornerRadius: 6,
             headerSeparatorInset: 20,
             lastSongSeparatorLeading: 20,
-            usePageBlendSecondaryColors: false,
             swipeMode: .standard(animateFavoriteRemoval: detail.route == .playlist("favorites")),
             scrollDistance: isFavorites ? favoritesScrollDistance : nil,
             onPlaySong: { _, index in songActions.play(shownSongs, index, detail.title) },
@@ -269,7 +270,7 @@ struct CollectionDetailView: View {
                 // 实测 Apple Music：年份约 11pt 粗体。
                 Text(caption)
                     .font(.caption2.weight(.bold))
-                    .foregroundStyle(detail.kind == .album ? .primary : .secondary)
+                    .foregroundStyle(resolvedSecondaryColor)
                     .padding(.top, 5 - 2.0 / 3)
             }
         }
@@ -349,6 +350,7 @@ private struct CollectionActions: View {
     @Environment(\.collectionMenuActions) private var actions
     @Environment(\.libraryDownloads) private var downloads
     @Environment(\.dynamicTypeSize) private var textSize
+    @Environment(\.collectionPagePalette) private var palette
     @State private var actionFeedback = 0
 
     private var canPlay: Bool { detail.route != nil && !detail.songs.isEmpty }
@@ -371,7 +373,7 @@ private struct CollectionActions: View {
                     Text("播放")
                 }
                 .font(.headline)
-                .foregroundStyle(albumBackground ?? Color(.systemBackground))
+                .foregroundStyle(palette?.playForeground ?? albumBackground ?? Color(.systemBackground))
                 .padding(.vertical, textSize.isAccessibilitySize ? 10 : 0)
                 .frame(width: 160)
                 .frame(minHeight: 48)
@@ -403,12 +405,8 @@ private struct CollectionActions: View {
         } label: {
             Image(systemName: detail.isFavorite ? "arrow.down" : "plus")
                 .contentTransition(.symbolEffect(.replace))
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(.primary)
-                .frame(width: 48, height: 48)
-                .background(Color.primary.opacity(0.08), in: .circle)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(CollectionCircleButtonStyle())
         .accessibilityLabel("收藏专辑")
         .accessibilityIdentifier("album-collection-action")
     }
@@ -417,11 +415,7 @@ private struct CollectionActions: View {
                               action: @escaping () -> Void) -> some View {
         Button(title, systemImage: systemImage, action: action)
             .labelStyle(.iconOnly)
-            .font(.system(size: 17, weight: .semibold))
-            .foregroundStyle(.primary)
-            .frame(width: 48, height: 48)
-            .background(Color.primary.opacity(0.08), in: .circle)
-            .buttonStyle(.plain)
+            .buttonStyle(CollectionCircleButtonStyle())
     }
 }
 
@@ -473,15 +467,6 @@ struct DownloadProgressRing: View {
                 .frame(width: 10, height: 10)
         }
         .frame(width: 27, height: 27)
-    }
-}
-
-extension Color {
-    /// 底色较暗时，页面文字与控件改用浅色。
-    var prefersLightContent: Bool {
-        let resolved = resolve(in: EnvironmentValues())
-        let luminance = 0.299 * resolved.red + 0.587 * resolved.green + 0.114 * resolved.blue
-        return luminance < 0.55
     }
 }
 
@@ -595,6 +580,13 @@ private final class AlbumSongsController: UICollectionViewController {
     private var environment = EnvironmentValues()
     private var songsByID: [String: LibrarySongItem] = [:]
     private var source: UICollectionViewDiffableDataSource<Int, Item>!
+    private var listConfiguration: UICollectionLayoutListConfiguration?
+    private var currentPalette: CollectionPagePalette {
+        CollectionPagePalette(
+            background: model?.pageColor ?? .systemBackground,
+            isDark: model?.scheme == .dark
+        )
+    }
     // The album header shares its hosting environment with its controls.
     private let headerHost = UIHostingController(rootView: AnyView(EmptyView()))
 
@@ -618,9 +610,7 @@ private final class AlbumSongsController: UICollectionViewController {
         headerHost.didMove(toParent: self)
         var configuration = UICollectionLayoutListConfiguration(appearance: .plain)
         configuration.backgroundColor = .clear
-        configuration.separatorConfiguration.color = UIColor { traits in
-            (traits.userInterfaceStyle == .dark ? UIColor.white : .black).withAlphaComponent(0.18)
-        }
+        configuration.separatorConfiguration.color = currentPalette.separator
         configuration.itemSeparatorHandler = { [weak self] path, separator in
             guard let self, let item = source?.itemIdentifier(for: path) else { return separator }
             var result = separator
@@ -640,6 +630,7 @@ private final class AlbumSongsController: UICollectionViewController {
         }
         configuration.leadingSwipeActionsConfigurationProvider = { [weak self] path in self?.leadingActions(at: path) }
         configuration.trailingSwipeActionsConfigurationProvider = { [weak self] path in self?.trailingActions(at: path) }
+        self.listConfiguration = configuration
         collectionView.setCollectionViewLayout(UICollectionViewCompositionalLayout.list(using: configuration), animated: false)
         source = UICollectionViewDiffableDataSource<Int, Item>(collectionView: collectionView) { [weak self] collection, path, item in
             guard let self else { return nil }
@@ -679,6 +670,7 @@ private final class AlbumSongsController: UICollectionViewController {
             .environment(\.libraryDownloads, environment.libraryDownloads)
             .environment(\.songRowPlayback, environment.songRowPlayback)
             .environment(\.colorScheme, model?.scheme ?? environment.colorScheme)
+            .environment(\.collectionPagePalette, environment.collectionPagePalette)
             .environment(\.locale, environment.locale)
             .environment(\.dynamicTypeSize, environment.dynamicTypeSize)
             .environment(\.scenePhase, environment.scenePhase)
@@ -712,6 +704,11 @@ private final class AlbumSongsController: UICollectionViewController {
         }
         if collectionView.backgroundColor != model.pageColor {
             collectionView.backgroundColor = model.pageColor
+        }
+        if (backgroundChanged || schemeChanged), var configuration = listConfiguration {
+            configuration.separatorConfiguration.color = currentPalette.separator
+            listConfiguration = configuration
+            collectionView.setCollectionViewLayout(UICollectionViewCompositionalLayout.list(using: configuration), animated: false)
         }
         headerHost.rootView = AnyView(hosted(model.header))
 
@@ -766,6 +763,7 @@ private final class AlbumSongsController: UICollectionViewController {
     private func configure(_ cell: AlbumSelectionCell, id: String) {
         guard let song = songsByID[id] else { return }
         let secondary = albumSecondaryColor
+        cell.palette = currentPalette
         cell.more.tintColor = secondary
         cell.contentConfiguration = UIHostingConfiguration {
             hosted(NativeAlbumRowContent(song: song, secondary: Color(secondary)))
@@ -855,6 +853,9 @@ private struct NativeAlbumRowContent: View {
 
 final class AlbumSelectionCell: UICollectionViewListCell {
     let more = UIButton(type: .system)
+    var palette: CollectionPagePalette? {
+        didSet { if oldValue != palette { setNeedsUpdateConfiguration() } }
+    }
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .clear
@@ -873,6 +874,6 @@ final class AlbumSelectionCell: UICollectionViewListCell {
         super.updateConfiguration(using: state)
         // Match the approved D prototype: UIKit owns highlighting and swipe geometry.
         // A translucent fill preserves the overlap instead of preblending the page color.
-        backgroundConfiguration = CollectionTrackUI.translucentCellBackground(for: self, state: state, traitCollection: traitCollection)
+        backgroundConfiguration = CollectionTrackUI.translucentCellBackground(for: self, state: state, traitCollection: traitCollection, palette: palette)
     }
 }

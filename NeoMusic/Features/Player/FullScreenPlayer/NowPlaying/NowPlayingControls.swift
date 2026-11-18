@@ -1121,9 +1121,10 @@ struct NowPlayingPageSelector: View {
                             Image(systemName: systemImage)
                                 .resizable()
                                 .symbolVariant(.fill)
+                                .fontWeight(.medium)
                                 .scaledToFit()
-                                .frame(width: destination == .queue ? 20.67 : 22.5,
-                                       height: destination == .queue ? 15.33 : 23.5)
+                                .frame(width: destination == .queue ? 20 : 21,
+                                       height: destination == .queue ? 15 : 21.5)
                                 .blendMode(.destinationOut)
                         }
                         .compositingGroup()
@@ -1133,9 +1134,10 @@ struct NowPlayingPageSelector: View {
                         Image(systemName: systemImage)
                             .resizable()
                             .symbolVariant(.none)
+                            .fontWeight(.medium)
                             .scaledToFit()
-                            .frame(width: destination == .queue ? 20.67 : 22.5,
-                                   height: destination == .queue ? 15.33 : 23.5)
+                            .frame(width: destination == .queue ? 20 : 21,
+                                   height: destination == .queue ? 15 : 21.5)
                             .frame(width: 44, height: 44)
                             .nowPlayingPlusLighter(NowPlayingVisualHierarchy.bottomButtonUnselectedOpacity)
                     }
@@ -1144,15 +1146,15 @@ struct NowPlayingPageSelector: View {
 
                 if let badgeSystemImage {
                     Image(systemName: badgeSystemImage)
-                        .font(.system(size: 7, weight: .bold))
+                        .font(.system(size: 9, weight: .bold))
                         .nowPlayingPlusLighter(0.85)
-                        .frame(width: 20, height: 20)
+                        .frame(width: 17, height: 17)
                         .background {
                             Circle()
                                 .fill(.white.opacity(NowPlayingVisualHierarchy.repeatBadgeOpacity))
                                 .blendMode(.plusLighter)
                         }
-                        .offset(x: 8, y: -5)
+                        .offset(x: 1, y: 1)
                         .accessibilityHidden(true)
                 }
             }

@@ -1,33 +1,11 @@
 import SwiftUI
 import UIKit
 
-/// Matches the ±128 channel offset measured in Apple Music playlist subtitles.
-/// Apply at the text leaf so the blend uses the actual row background.
-struct PlaylistSecondaryText: ViewModifier {
-    @Environment(\.colorScheme) private var colorScheme
-
-    func body(content: Content) -> some View {
-        content
-            .foregroundStyle(Color(white: 0.5))
-            .blendMode(colorScheme == .dark ? .plusLighter : .plusDarker)
-    }
-}
-
 extension Color {
     /// Computes the solid ±128 channel-offset secondary color on top of `background`
     /// for controls (such as SwiftUI `Menu`) whose isolated rendering layer breaks `.blendMode`.
     static func secondaryContentColor(on background: Color, colorScheme: ColorScheme) -> Color {
-        let traits = UITraitCollection(userInterfaceStyle: colorScheme == .dark ? .dark : .light)
-        let resolved = UIColor(background).resolvedColor(with: traits)
-        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
-        resolved.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
-        let offset: CGFloat = colorScheme == .dark ? 0.5 : -0.5
-        return Color(uiColor: UIColor(
-            red: min(1, max(0, red + offset)),
-            green: min(1, max(0, green + offset)),
-            blue: min(1, max(0, blue + offset)),
-            alpha: 1
-        ))
+        CollectionPagePalette(background: UIColor(background), isDark: colorScheme == .dark).secondaryColor
     }
 }
 
@@ -35,7 +13,6 @@ struct SongRowAppearance {
     var titleFont: Font = .callout
     var subtitleFont: Font = .footnote
     var subtitleColor: Color = .secondary
-    var subtitleUsesPlaylistBlend = false
     var titleSubtitleSpacing: CGFloat = 2
     var titleLineLimit: Int? = 1
     var subtitleLineLimit: Int? = 1
@@ -44,7 +21,6 @@ struct SongRowAppearance {
     var moreTrailingPadding: CGFloat = -7
     var favoriteMarkColor: Color = .secondary
     var favoriteMarkOffset: CGFloat = -14.5
-    var favoriteMarkUsesPlaylistBlend = false
     var downloadStatusStyle: AnyShapeStyle? = nil
     var minHeight: CGFloat = 56
     var usesPlainButtonStyle = false
@@ -129,24 +105,15 @@ struct SharedSongRow<Leading: View>: View {
     }
 
     @ViewBuilder private var favoriteMark: some View {
-        let mark = FavoriteMark(
+        FavoriteMark(
             isFavorite: song.isFavorite,
             color: appearance.favoriteMarkColor,
             leadingOffset: appearance.favoriteMarkOffset
         )
-        if appearance.favoriteMarkUsesPlaylistBlend {
-            mark.modifier(PlaylistSecondaryText())
-        } else {
-            mark
-        }
     }
 
     @ViewBuilder private func subtitleView(_ text: String) -> some View {
-        if appearance.subtitleUsesPlaylistBlend && song.unavailabilityReason == nil {
-            Text(text).modifier(PlaylistSecondaryText())
-        } else {
-            Text(text).foregroundStyle(appearance.subtitleColor)
-        }
+        Text(text).foregroundStyle(appearance.subtitleColor)
     }
 
     @ViewBuilder private func playButton<Content: View>(@ViewBuilder label: () -> Content) -> some View {

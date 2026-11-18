@@ -22,30 +22,25 @@ enum CollectionTrackUI {
     /// Computes the solid ±0.5 channel-offset equivalent of SwiftUI `.plusLighter`/`.plusDarker`
     /// on top of an opaque background color, avoiding per-row GPU offscreen blend passes.
     static func solidSecondaryColor(on background: UIColor, isDark: Bool, traitCollection: UITraitCollection) -> UIColor {
-        let traits = traitCollection.modifyingTraits { $0.userInterfaceStyle = isDark ? .dark : .light }
-        let resolved = background.resolvedColor(with: traits)
-        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
-        guard resolved.getRed(&red, green: &green, blue: &blue, alpha: &alpha) else {
-            return .secondaryLabel
-        }
-        let offset: CGFloat = isDark ? 0.5 : -0.5
-        return UIColor(red: min(1, max(0, red + offset)),
-                       green: min(1, max(0, green + offset)),
-                       blue: min(1, max(0, blue + offset)),
-                       alpha: 1)
+        CollectionPagePalette(background: background, isDark: isDark).secondary
     }
 
     static func translucentCellBackground(for cell: UICollectionViewListCell,
                                           state: UICellConfigurationState,
-                                          traitCollection: UITraitCollection) -> UIBackgroundConfiguration {
+                                          traitCollection: UITraitCollection,
+                                          palette: CollectionPagePalette? = nil) -> UIBackgroundConfiguration {
         var background = cell.defaultBackgroundConfiguration().updated(for: state)
         let isDark = traitCollection.userInterfaceStyle == .dark
         let overlay: UIColor = isDark ? .white : .black
         if state.isSwiped {
             background.backgroundColor = overlay.withAlphaComponent(0.06)
-        } else if state.isSelected {
-            let selectionOverlay: UIColor = isDark ? .black : .white
-            background.backgroundColor = selectionOverlay.withAlphaComponent(isDark ? 0.10 : 0.06)
+        } else if state.isHighlighted || state.isSelected {
+            if let palette {
+                background.backgroundColor = palette.highlight
+            } else {
+                let selectionOverlay: UIColor = isDark ? .black : .white
+                background.backgroundColor = selectionOverlay.withAlphaComponent(isDark ? 0.10 : 0.06)
+            }
         } else {
             background.backgroundColor = .clear
         }
@@ -193,7 +188,6 @@ struct NativePlaylistTrackList: UIViewControllerRepresentable {
     var rowCornerRadius: CGFloat = 5
     var headerSeparatorInset: CGFloat = 0
     var lastSongSeparatorLeading: CGFloat = 20
-    var usePageBlendSecondaryColors: Bool = true
     var swipeMode: NativePlaylistSwipeMode = .standard(animateFavoriteRemoval: false)
     var scrollDistance: PlaylistScrollDistance? = nil
     let onPlaySong: (LibrarySongItem, Int) -> Void
@@ -251,9 +245,7 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
 
         var configuration = UICollectionLayoutListConfiguration(appearance: .plain)
         configuration.backgroundColor = .clear
-        configuration.separatorConfiguration.color = UIColor { traits in
-            (traits.userInterfaceStyle == .dark ? UIColor.white : .black).withAlphaComponent(0.18)
-        }
+        configuration.separatorConfiguration.color = currentPalette.separator
         configuration.itemSeparatorHandler = { [weak self] path, separator in
             guard let self, let item = source?.itemIdentifier(for: path) else { return separator }
             var result = separator
@@ -273,11 +265,11 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
                 let leading: CGFloat = (isLastSong && model?.showsAddMusicRow == false)
                     ? (model?.lastSongSeparatorLeading ?? 20)
                     : 80
-                result.bottomSeparatorInsets = .init(top: 0, leading: leading, bottom: 0, trailing: 0)
+                result.bottomSeparatorInsets = .init(top: 0, leading: leading, bottom: 0, trailing: 20)
             case .addMusic:
                 result.topSeparatorVisibility = .automatic
                 result.bottomSeparatorVisibility = .automatic
-                result.bottomSeparatorInsets = .init(top: 0, leading: 20, bottom: 0, trailing: 0)
+                result.bottomSeparatorInsets = .init(top: 0, leading: 20, bottom: 0, trailing: 20)
             }
             return result
         }
@@ -299,6 +291,7 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
                 notify: environment.collectionMenuActions.notify
             )
         }
+        self.listConfiguration = configuration
         collectionView.setCollectionViewLayout(UICollectionViewCompositionalLayout.list(using: configuration), animated: false)
 
         source = UICollectionViewDiffableDataSource<Int, Item>(collectionView: collectionView) { [weak self] collection, path, item in
@@ -411,6 +404,11 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
 
         overrideUserInterfaceStyle = model.scheme == .dark ? .dark : .light
         collectionView.backgroundColor = model.pageColor
+        if (backgroundChanged || schemeChanged), var configuration = listConfiguration {
+            configuration.separatorConfiguration.color = currentPalette.separator
+            listConfiguration = configuration
+            collectionView.setCollectionViewLayout(UICollectionViewCompositionalLayout.list(using: configuration), animated: false)
+        }
         headerHost.rootView = AnyView(hosted(model.header))
         bannerHost.rootView = model.banner.map { AnyView(hosted($0)) } ?? AnyView(EmptyView())
 
@@ -466,31 +464,30 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
         if environmentChanged || isNewAppearance { observePlayback() }
     }
 
-    private func secondaryColor() -> UIColor {
-        guard let model else { return .secondaryLabel }
-        return CollectionTrackUI.solidSecondaryColor(
-            on: model.pageColor,
-            isDark: model.scheme == .dark,
-            traitCollection: traitCollection
+    private var listConfiguration: UICollectionLayoutListConfiguration?
+
+    private var currentPalette: CollectionPagePalette {
+        CollectionPagePalette(
+            background: model?.pageColor ?? .systemBackground,
+            isDark: model?.scheme == .dark
         )
+    }
+
+    private func secondaryColor() -> UIColor {
+        currentPalette.secondary
     }
 
     private func configureSongCell(_ cell: PlaylistTrackCell, id: String) {
         guard let song = songsByID[id], let model else { return }
         let secondary = secondaryColor()
-        let isDark = model.scheme == .dark
-        let subtitleColor = model.usePageBlendSecondaryColors ? secondary : .secondaryLabel
-        let favoriteColor = model.usePageBlendSecondaryColors ? secondary : .secondaryLabel
-        let downloadColor = model.usePageBlendSecondaryColors
-            ? secondary
-            : (isDark ? UIColor.white : UIColor.black).withAlphaComponent(0.26)
         let isCurrent = observedSongID == id
+        cell.palette = currentPalette
         cell.configure(
             song: song,
             cornerRadius: model.rowCornerRadius,
-            subtitleColor: subtitleColor,
-            favoriteColor: favoriteColor,
-            downloadColor: downloadColor,
+            subtitleColor: secondary,
+            favoriteColor: secondary,
+            downloadColor: secondary,
             moreColor: secondary,
             isCurrent: isCurrent,
             isPlayingActive: isCurrent && observedActive,
@@ -882,9 +879,13 @@ private final class PlaylistTrackCell: UICollectionViewListCell {
         }
     }
 
+    var palette: CollectionPagePalette? {
+        didSet { if oldValue != palette { setNeedsUpdateConfiguration() } }
+    }
+
     override func updateConfiguration(using state: UICellConfigurationState) {
         super.updateConfiguration(using: state)
-        backgroundConfiguration = CollectionTrackUI.translucentCellBackground(for: self, state: state, traitCollection: traitCollection)
+        backgroundConfiguration = CollectionTrackUI.translucentCellBackground(for: self, state: state, traitCollection: traitCollection, palette: palette)
     }
 
     private func observeArtwork(retainingImage: Bool) {
@@ -1226,8 +1227,12 @@ private final class PlaylistAddMusicCell: UICollectionViewListCell {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    var palette: CollectionPagePalette? {
+        didSet { if oldValue != palette { setNeedsUpdateConfiguration() } }
+    }
+
     override func updateConfiguration(using state: UICellConfigurationState) {
         super.updateConfiguration(using: state)
-        backgroundConfiguration = CollectionTrackUI.translucentCellBackground(for: self, state: state, traitCollection: traitCollection)
+        backgroundConfiguration = CollectionTrackUI.translucentCellBackground(for: self, state: state, traitCollection: traitCollection, palette: palette)
     }
 }

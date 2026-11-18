@@ -148,6 +148,7 @@ struct CollectionDownloadButton: View {
     var compact = false
     @Environment(\.libraryDownloads) private var downloads
     @Environment(\.collectionMenuActions) private var actions
+    @Environment(\.collectionPagePalette) private var palette
     @State private var feedback = 0
     @State private var downloadedHere = false
 
@@ -164,7 +165,7 @@ struct CollectionDownloadButton: View {
                 else { Image(systemName: failed ? "arrow.clockwise" : "arrow.down").font(.system(size: compact ? 20 : 17, weight: .semibold)) }
             }
             .frame(width: compact ? 32 : 48, height: compact ? 32 : 48)
-            .background(Color.primary.opacity(compact ? 0.2 : 0.08), in: .circle)
+            .background(compact ? Color.primary.opacity(0.2) : (palette?.controlFill ?? Color.primary.opacity(0.08)), in: .circle)
             .frame(width: compact ? 44 : 48, height: compact ? 44 : 48)
             .contentShape(.rect)
         Group {

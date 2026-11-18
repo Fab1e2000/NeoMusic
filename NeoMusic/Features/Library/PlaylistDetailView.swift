@@ -63,8 +63,15 @@ struct PlaylistDetailView: View {
     }
     private var pageBackground: Color { preparedBackdrop?.color ?? Color(.systemBackground) }
 
+    private var palette: CollectionPagePalette {
+        CollectionPagePalette(
+            background: UIColor(pageBackground),
+            isDark: (preparedBackdrop?.colorScheme ?? colorScheme) == .dark
+        )
+    }
+
     private var resolvedSecondaryColor: Color {
-        Color.secondaryContentColor(on: pageBackground, colorScheme: preparedBackdrop?.colorScheme ?? colorScheme)
+        palette.secondaryColor
     }
     private var tracks: [LibrarySongItem] { library.songs(in: playlistID) }
     private var displayed: Projection {
@@ -261,9 +268,8 @@ struct PlaylistDetailView: View {
             pageColor: UIColor(pageBackground),
             scheme: scheme,
             rowCornerRadius: 5,
-            headerSeparatorInset: 0,
-            lastSongSeparatorLeading: hasQuery ? 20 : 80,
-            usePageBlendSecondaryColors: true,
+            headerSeparatorInset: 20,
+            lastSongSeparatorLeading: 20,
             swipeMode: playlist.isReadOnly
                 ? .standard(animateFavoriteRemoval: false)
                 : .editablePlaylist(remove: { song in withAnimation { library.removeSong(song.id, from: playlistID) } }),
@@ -289,6 +295,7 @@ struct PlaylistDetailView: View {
         .ignoresSafeArea(.container, edges: .vertical)
         .background(pageBackground)
         .environment(\.colorScheme, scheme)
+        .environment(\.collectionPagePalette, palette)
         .toolbarColorScheme(preparedBackdrop?.colorScheme, for: .navigationBar)
         .libraryTitleDisplayMode(.inline)
         .modifier(PlaylistRootChrome(isRoot: chrome?.isRoot == true))
@@ -340,7 +347,11 @@ struct PlaylistDetailView: View {
                     Button {
                         guard !tracks.isEmpty else { return }
                         collectionActions.play(.playlist(playlistID), true)
-                    } label: { actionCircle("随机播放", image: "shuffle") }
+                    } label: {
+                        Label("随机播放", systemImage: "shuffle")
+                            .labelStyle(.iconOnly)
+                    }
+                    .buttonStyle(CollectionCircleButtonStyle())
                     .disabled(tracks.isEmpty)
                     Button {
                         guard !tracks.isEmpty else { return }
@@ -351,10 +362,11 @@ struct PlaylistDetailView: View {
                             Text("播放")
                         }
                             .font(.headline)
-                            .foregroundStyle(Color(.systemBackground))
+                            .foregroundStyle(palette.playForeground)
                             .frame(width: 160, height: 48)
                             .background(Color.primary, in: .capsule)
                     }
+                    .buttonStyle(.plain)
                     .disabled(tracks.isEmpty)
                     if playlist.offersCollection {
                         Button {
@@ -362,17 +374,13 @@ struct PlaylistDetailView: View {
                             externalActions?.collect?()
                         } label: {
                             Image(systemName: "plus")
-                                .font(.system(size: 17, weight: .semibold))
-                                .foregroundStyle(.primary)
-                                .frame(width: 48, height: 48)
-                                .background(Color.primary.opacity(0.08), in: .circle)
                         }
+                        .buttonStyle(CollectionCircleButtonStyle())
                         .accessibilityLabel("收藏歌单")
                     } else {
                         CollectionDownloadButton(route: .playlist(playlistID), songs: tracks)
                     }
                 }
-                .buttonStyle(.plain)
                 .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.6), trigger: actionFeedback)
                 .padding(.top, 15)
                 if !playlist.offersCollection { CollectionDownloadSummary(route: .playlist(playlistID)) }
@@ -386,29 +394,20 @@ struct PlaylistDetailView: View {
             $0.route == .playlist(playlistID) && $0.ownerID == playlist.sourceOwnerID ? $0 : nil
         }
         if case .playlist = playlist.artwork, preview == nil {
-            // 同尺寸 AM 截图：798px 封面内音符宽约311px；详情占位底色为中性灰。
             RoundedRectangle(cornerRadius: 10)
-                .fill(Color(red: 229 / 255, green: 229 / 255, blue: 230 / 255))
+                .fill(Color(.systemGray5))
                 .overlay {
                     Image(systemName: "music.note.list")
                         .font(.system(size: 266 * 0.391))
-                        .foregroundStyle(Color(red: 176 / 255, green: 176 / 255, blue: 179 / 255))
+                        .foregroundStyle(Color(.systemGray2))
                 }
-                .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(.primary.opacity(0.074), lineWidth: 1 / displayScale) }
+                .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(Color(.separator), lineWidth: 1 / displayScale) }
                 .accessibilityHidden(true)
         } else {
             ArtworkView(artwork: playlist.artwork == .playlist ? preview?.artwork ?? playlist.artwork : playlist.artwork,
                         contentID: preview?.contentID ?? "\(playlist.sourceOwnerID ?? "local"):\(playlistID)",
                         previewArtwork: preview?.artwork, cornerRadius: 10)
         }
-    }
-
-    private func actionCircle(_ title: String, image: String) -> some View {
-        Label(title, systemImage: image)
-            .labelStyle(.iconOnly)
-            .font(.system(size: 19, weight: .medium))
-            .frame(width: 48, height: 48)
-            .background(Color(.tertiarySystemFill), in: .circle)
     }
 
     private func playVisibleSong(_ songID: String, title: String) {

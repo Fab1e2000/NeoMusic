@@ -10,7 +10,7 @@ struct ReferenceAirPlayButton: View {
 
     var body: some View {
         ReferenceAirPlayRoutePicker(opacity: route.symbol == nil ? opacity : 0)
-            .scaleEffect(1.27)
+            .scaleEffect(1.12)
             .overlay {
                 if let symbol = route.symbol {
                     Image(systemName: symbol)

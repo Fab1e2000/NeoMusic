@@ -12,10 +12,14 @@ struct AlbumArtworkBackdrop: Codable, Equatable, Sendable {
     var uiColor: UIColor { UIColor(red: red, green: green, blue: blue, alpha: 1) }
     private static let imageContext = CIContext()
     var colorScheme: ColorScheme {
-        let luminance = 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
-        let whiteContrast = 1.05 / (luminance + 0.05)
-        let blackContrast = (luminance + 0.05) / 0.05
-        return whiteContrast >= blackContrast ? .dark : .light
+        let r = linear(red)
+        let g = linear(green)
+        let b = linear(blue)
+        let l = 0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b
+        let m = 0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b
+        let s = 0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b
+        let okL = 0.2104542553 * cbrt(l) + 0.7936177850 * cbrt(m) - 0.0040720468 * cbrt(s)
+        return okL <= 0.65 ? .dark : .light
     }
 
     private func linear(_ channel: Double) -> Double {
