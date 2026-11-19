@@ -220,6 +220,49 @@ final class LyricsFocusTests: XCTestCase {
         try await assertFocus(44, in: state)
     }
 
+    func testRapidConsecutiveForwardChangesKeepTheCommittedViewport() async throws {
+        let state = LyricsFocusTestState()
+        let window = try await mount(state, size: .large)
+        defer { window.isHidden = true }
+        try await assertFocus(40, in: state)
+        let table = try XCTUnwrap(
+            scrollViews(in: window).compactMap { $0 as? NativeLyricsScrollView }.first
+        )
+
+        state.activeID = 41
+        let firstApplied = try await waitUntil { state.renderedActiveID == 41 }
+        XCTAssertTrue(firstApplied)
+        try await Task.sleep(for: .milliseconds(120))
+        XCTAssertTrue(table.isRowTransitionAnimating,
+                      "The first line spring must still be running for this regression")
+
+        state.activeID = 42
+        let secondApplied = try await waitUntil { state.renderedActiveID == 42 }
+        XCTAssertTrue(secondApplied)
+        let committedOffset = table.contentOffset.y
+
+        let visualHeight = table.bounds.height - 2 * NativeLyricsScrollView.viewportOverscan
+        var minimumGap = CGFloat.greatestFiniteMagnitude
+        for _ in 0..<25 {
+            let tops = table.visibleLineIDs.compactMap { row -> (row: Int, top: CGFloat, height: CGFloat)? in
+                guard let top = table.presentationViewportTop(forRow: row),
+                      let height = table.cellForRow(at: IndexPath(row: row, section: 0))?.bounds.height,
+                      top + height > 0, top < visualHeight else { return nil }
+                return (row, top, height)
+            }.sorted { $0.row < $1.row }
+            for (upper, lower) in zip(tops, tops.dropFirst()) where lower.row == upper.row + 1 {
+                minimumGap = min(minimumGap, lower.top - (upper.top + upper.height))
+            }
+            try await Task.sleep(for: .milliseconds(16))
+        }
+
+        try await assertFocus(42, in: state)
+        XCTAssertEqual(committedOffset, table.contentOffset.y, accuracy: 2,
+                       "A line change must commit its final offset immediately; the viewport must not shift again after the spring settles")
+        XCTAssertGreaterThan(minimumGap, -4,
+                             "Rows must not be drawn on top of each other during a rapid line change")
+    }
+
     func testForwardCascadeKeepsBottomRowStartingOffsetsAndDistanceBlur() async throws {
         let state = LyricsFocusTestState()
         state.isInterfaceHidden = true

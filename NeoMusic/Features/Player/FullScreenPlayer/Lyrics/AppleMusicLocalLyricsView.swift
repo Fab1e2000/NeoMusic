@@ -441,7 +441,24 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
     // MARK: - Layout
 
     override func layoutSubviews() {
+        // Rows carry a line-change translation while the table lays out. UIKit
+        // assigns `frame` through the active transform, which would rewrite the
+        // row's center and commit overlapping row positions; lay out without the
+        // translation and put it back afterwards.
+        let residentCells = subviews.compactMap { $0 as? NativeLyricCell }
+        let rowTransforms = residentCells.map(\.transform)
+        UIView.performWithoutAnimation {
+            for cell in residentCells where cell.transform != .identity {
+                cell.transform = .identity
+            }
+        }
         super.layoutSubviews()
+        UIView.performWithoutAnimation {
+            for (cell, transform) in zip(residentCells, rowTransforms)
+            where cell.transform != transform {
+                cell.transform = transform
+            }
+        }
         guard let input, input.isActive, !positioning else { return }
         let visualSize = CGSize(width: bounds.width,
                                 height: max(bounds.height - 2 * Self.viewportOverscan, 0))
@@ -547,7 +564,7 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
             let average = max(heights.reduce(0, +) / CGFloat(max(heights.count, 1)), 1)
             let step = CGFloat(index - nearRow) * average
             let next = clampedOffset(
-                nearCell.frame.minY + step - focus - Self.viewportOverscan,
+                modelTop(of: nearCell) + step - focus - Self.viewportOverscan,
                 topInset: topInset
             )
             attempts += 1
@@ -599,6 +616,17 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
 
     private func textHeight(of cell: NativeLyricCell) -> CGFloat {
         max(cell.bounds.height - motion.lineSpacing, 1)
+    }
+
+    /// `frame` includes an in-flight line-change spring; the row's committed
+    /// layout position is center minus half its bounds.
+    private func modelTop(of cell: UIView) -> CGFloat {
+        cell.center.y - cell.bounds.height / 2
+    }
+
+    private func modelFrame(of cell: UIView) -> CGRect {
+        CGRect(x: cell.center.x - cell.bounds.width / 2, y: modelTop(of: cell),
+               width: cell.bounds.width, height: cell.bounds.height)
     }
 
     private func visibleCell(forRow row: Int) -> NativeLyricCell? {
@@ -756,7 +784,7 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
                                          rowHeight: height)
             let measuredTopInset = max(measuredFocus, motion.firstLineStartOffset)
                 + Self.viewportOverscan
-            let desired = cell.frame.minY - measuredFocus - Self.viewportOverscan
+            let desired = modelTop(of: cell) - measuredFocus - Self.viewportOverscan
             let clamped = clampedOffset(desired, topInset: measuredTopInset)
             let insetDelta = abs(measuredTopInset - contentInset.top)
             let offsetDelta = abs(clamped - contentOffset.y)
@@ -830,7 +858,8 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
         var captured: [CapturedSourceRow] = []
         for cell in visibleRows {
             guard let row = indexPath(for: cell)?.row else { continue }
-            guard cell.frame.maxY > visualTop, cell.frame.minY < visualBottom else { continue }
+            let modelFrame = modelFrame(of: cell)
+            guard modelFrame.maxY > visualTop, modelFrame.minY < visualBottom else { continue }
             guard let snapshot = cell.snapshotView(afterScreenUpdates: false)
                 ?? imageSnapshot(of: cell) else { continue }
             snapshot.isUserInteractionEnabled = false
@@ -838,7 +867,7 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
             captured.append(CapturedSourceRow(
                 view: snapshot,
                 row: row,
-                screenFrame: wrapper.convert(cell.frame, from: self),
+                screenFrame: wrapper.convert(modelFrame, from: self),
                 transform: cell.transform
             ))
         }
@@ -1122,13 +1151,13 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
         let maxOffset = max(contentSize.height - bounds.height, 0)
         let rowTop: CGFloat
         if let cell {
-            rowTop = cell.frame.minY
+            rowTop = modelTop(of: cell)
         } else if let (nearRow, nearCell) = nearestVisibleRow(to: index) {
             // The table's estimated rect can lag behind a tall self-sized row;
             // extrapolate from a displayed neighbour's measured position.
             let heights = visibleRows.map(\.bounds.height)
             let average = max(heights.reduce(0, +) / CGFloat(max(heights.count, 1)), 1)
-            rowTop = nearCell.frame.minY + CGFloat(index - nearRow) * average
+            rowTop = modelTop(of: nearCell) + CGFloat(index - nearRow) * average
         } else {
             rowTop = rectForRow(at: IndexPath(row: index, section: 0)).minY
         }
