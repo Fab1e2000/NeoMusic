@@ -7,6 +7,7 @@ struct LyricPressInteraction<Content: View>: View {
     let isSelected: Bool
     let allowsTap: Bool
     let allowsLongPress: Bool
+    let scaleAnchor: UnitPoint
     let onTap: () -> Void
     let onLongPress: () -> Void
     private let content: (Double) -> Content
@@ -17,6 +18,7 @@ struct LyricPressInteraction<Content: View>: View {
         isSelected: Bool,
         allowsTap: Bool = true,
         allowsLongPress: Bool = true,
+        scaleAnchor: UnitPoint = .center,
         onTap: @escaping () -> Void,
         onLongPress: @escaping () -> Void,
         @ViewBuilder content: @escaping (Double) -> Content
@@ -24,6 +26,7 @@ struct LyricPressInteraction<Content: View>: View {
         self.isSelected = isSelected
         self.allowsTap = allowsTap
         self.allowsLongPress = allowsLongPress
+        self.scaleAnchor = scaleAnchor
         self.onTap = onTap
         self.onLongPress = onLongPress
         self.content = content
@@ -39,7 +42,8 @@ struct LyricPressInteraction<Content: View>: View {
         .buttonStyle(
             LyricPressButtonStyle(
                 isSelected: isSelected,
-                reducesMotion: accessibilityReduceMotion
+                reducesMotion: accessibilityReduceMotion,
+                scaleAnchor: scaleAnchor
             )
         )
         .simultaneousGesture(
@@ -83,13 +87,15 @@ private struct LyricPressLabel<Content: View>: View {
 private struct LyricPressButtonStyle: ButtonStyle {
     let isSelected: Bool
     let reducesMotion: Bool
+    let scaleAnchor: UnitPoint
 
     func makeBody(configuration: Configuration) -> some View {
         LyricPressButtonStyleBody(
             label: configuration.label,
             isPressed: configuration.isPressed,
             isSelected: isSelected,
-            reducesMotion: reducesMotion
+            reducesMotion: reducesMotion,
+            scaleAnchor: scaleAnchor
         )
     }
 }
@@ -99,6 +105,7 @@ private struct LyricPressButtonStyleBody<Label: View>: View {
     let isPressed: Bool
     let isSelected: Bool
     let reducesMotion: Bool
+    let scaleAnchor: UnitPoint
 
     @State private var scale: CGFloat = 1
     @State private var backgroundProgress = 0.0
@@ -109,7 +116,7 @@ private struct LyricPressButtonStyleBody<Label: View>: View {
                 \.lyricPressBackgroundProgress,
                 isSelected ? 1 : backgroundProgress
             )
-            .scaleEffect(scale, anchor: .center)
+            .scaleEffect(scale, anchor: scaleAnchor)
             .onAppear {
                 updatePressedState(isPressed, animated: false)
             }

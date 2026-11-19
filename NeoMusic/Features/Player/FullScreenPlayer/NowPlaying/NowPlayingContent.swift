@@ -58,10 +58,9 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
             let layout = ReferenceNowPlayingLayout(contentSize: geometry.size)
             ZStack {
                 // 背景自己在铺满安全区之后上报位置，背景副本才能和它完全重合。
-                NowPlayingArtworkBackdrop(
+                PlaybackLinkedBackdrop(
                     artworkURL: player.currentTrack?.coverURL,
                     trackID: player.currentTrack?.id,
-                    isPlaying: player.isPlaying,
                     onFrameChange: { geometryState.backdropFrame = $0 }
                 )
                 // iPhone 只支持竖屏（见 project.yml 的 UISupportedInterfaceOrientations），不保留横屏布局。
@@ -137,7 +136,11 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
                 .modifier(LyricsControlSurfaceHitShield(isActive: page == .lyrics))
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { controlsHeight = $0 }
                 .background {
-                    LyricsControlsIdleTouchMonitor(onBegan: lyricsControlTouchBegan, onEnded: lyricsControlTouchEnded)
+                    LyricsControlsIdleTouchMonitor(
+                        isActive: page == .lyrics,
+                        onBegan: lyricsControlTouchBegan,
+                        onEnded: lyricsControlTouchEnded
+                    )
                 }
                 .allowsHitTesting(!hidesLyricsControls)
                 .accessibilityHidden(hidesLyricsControls)
@@ -232,10 +235,16 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
         }
         .frame(maxWidth: .infinity)
         .frame(height: 22, alignment: .top)
-        .contentShape(.rect)
-        .onTapGesture {
-            closePlayer()
+        .overlay(alignment: .top) {
+            Color.clear
+                .frame(maxWidth: .infinity)
+                .frame(height: 44)
+                .contentShape(.rect)
+                .onTapGesture {
+                    closePlayer()
+                }
         }
+        .zIndex(1)
         .accessibilityElement()
         .accessibilityLabel("收起播放器")
         .accessibilityHint("返回上一页")
@@ -387,10 +396,11 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
             artworkNamespace: pageArtworkNamespace, showsSongHeader: false,
             showsTranslation: true,
             bottomOverlayExtension: bottomExtension,
+            onInterfaceInteraction: handleLyricsInterfaceInteraction,
             onInterfaceVisibilityChange: setAppleMusicLyricsControlsVisible,
-        onUserInteractionChange: { active in
-            if active { lyricsControlTouchBegan() } else { lyricsControlTouchEnded() }
-        }
+            onUserInteractionChange: { active in
+                if active { lyricsControlTouchBegan() } else { lyricsControlTouchEnded() }
+            }
         )
         .accessibilityAction(named: lyricsInterfaceAccessibilityActionName) {
             handleLyricsInterfaceInteraction()
@@ -530,22 +540,29 @@ private struct LyricsControlsIdleKey: Equatable {
 
 /// Observes touches on the player without taking them from buttons, sliders, or lyric rows.
 private struct LyricsControlsIdleTouchMonitor: UIViewRepresentable {
+    var isActive: Bool
     var onBegan: () -> Void
     var onEnded: () -> Void
 
     func makeUIView(context: Context) -> IdleTouchAnchor {
         let view = IdleTouchAnchor()
+        view.isUserInteractionEnabled = false
+        view.isMonitoringEnabled = isActive
         view.onBegan = onBegan
         view.onEnded = onEnded
         return view
     }
 
     func updateUIView(_ uiView: IdleTouchAnchor, context: Context) {
+        uiView.isMonitoringEnabled = isActive
         uiView.onBegan = onBegan
         uiView.onEnded = onEnded
     }
 
     final class IdleTouchAnchor: UIView, UIGestureRecognizerDelegate {
+        var isMonitoringEnabled = false {
+            didSet { recognizer?.isEnabled = isMonitoringEnabled }
+        }
         var onBegan: (() -> Void)?
         var onEnded: (() -> Void)?
         private var recognizer: IdleTouchRecognizer?
@@ -574,6 +591,7 @@ private struct LyricsControlsIdleTouchMonitor: UIViewRepresentable {
             }
             guard host !== self else { return }
             let recognizer = IdleTouchRecognizer()
+            recognizer.isEnabled = isMonitoringEnabled
             recognizer.cancelsTouchesInView = false
             recognizer.delaysTouchesBegan = false
             recognizer.delaysTouchesEnded = false
@@ -669,6 +687,24 @@ private struct QueueSongHeaderScrollPresentation: ViewModifier {
     }
 }
 
+/// Keep `player.isPlaying` observation inside the backdrop so toggling playback
+/// does not invalidate `NowPlayingContent` (including resident lyrics/queue pages).
+private struct PlaybackLinkedBackdrop: View {
+    @Environment(PlayerState.self) private var player
+    let artworkURL: URL?
+    let trackID: String?
+    let onFrameChange: (CGRect) -> Void
+
+    var body: some View {
+        NowPlayingArtworkBackdrop(
+            artworkURL: artworkURL,
+            trackID: trackID,
+            isPlaying: player.isPlaying,
+            onFrameChange: onFrameChange
+        )
+    }
+}
+
 private struct QueueLinkedArtwork<ArtworkTransition: ViewModifier>: View {
     @Environment(PlayerState.self) private var player
     let song: PlayerTrack
@@ -679,10 +715,12 @@ private struct QueueLinkedArtwork<ArtworkTransition: ViewModifier>: View {
 
     let artworkTransition: ArtworkTransition
     private var expanded: Bool { player.isPlaying }
+    private var playbackScale: CGFloat {
+        page == .artwork && !expanded ? NowPlayingArtworkPage.pausedArtworkScale : 1
+    }
     private var frame: CGRect {
         if page == .artwork {
-            let inset = expanded ? 0 : artworkPageFrame.width * (1 - NowPlayingArtworkPage.pausedArtworkScale) / 2
-            return artworkPageFrame.insetBy(dx: inset, dy: inset)
+            return artworkPageFrame
         }
         return CGRect(
             x: 0,
@@ -701,11 +739,12 @@ private struct QueueLinkedArtwork<ArtworkTransition: ViewModifier>: View {
                     decodeSize: artworkPageFrame.width > 0 ? artworkPageFrame.size : nil
                 )
                     .frame(width: frame.width, height: frame.height)
-                    .modifier(artworkTransition)
-                    .modifier(QueueArtworkScrollPosition(page: page, offset: offset, frame: frame))
+                    .scaleEffect(playbackScale)
                     .animation(reducesMotion ? nil : .interpolatingSpring(
                         mass: 1, stiffness: expanded ? 180 : 153, damping: expanded ? 16.4 : 22.8
                     ), value: expanded)
+                    .modifier(artworkTransition)
+                    .modifier(QueueArtworkScrollPosition(page: page, offset: offset, frame: frame))
                     .allowsHitTesting(false)
             }
         }

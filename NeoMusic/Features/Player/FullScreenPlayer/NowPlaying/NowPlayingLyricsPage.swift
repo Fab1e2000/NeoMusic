@@ -22,7 +22,7 @@ struct NowPlayingLyricsPage: View {
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @Environment(\.nowPlayingLayout) private var layout
     @Environment(\.nowPlayingControlsOverflow) private var controlsOverflow
-    @ScaledMetric(relativeTo: .title) private var plainLyricsFontSize = 36
+    @ScaledMetric(relativeTo: .title) private var plainLyricsFontSize = AppleMusicLyricsTypographyProfile.iOS26_6.primaryFontSize
     @ScaledMetric(relativeTo: .title) private var plainLyricsLineSpacing = 14
 
     let song: PlayerTrack
@@ -124,19 +124,11 @@ struct NowPlayingLyricsPage: View {
                         onSeek: { player.seek(to: $0) },
                         topOverlayHeight: sharedSongHeaderInset - lyricsContentSpacing,
                         showsTranslation: showsTranslation,
+                        onInterfaceInteraction: onInterfaceInteraction,
                         onUserInteractionChange: onUserInteractionChange
                     )
                 } else {
-                    ScrollView {
-                        Text(lyrics.plainText)
-                            .font(.system(size: plainLyricsFontSize, weight: .bold))
-                            .lineSpacing(plainLyricsLineSpacing)
-                            .nowPlayingPrimary()
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .textSelection(.enabled)
-                    }
-                    .padding(.top, sharedSongHeaderInset)
-                    .padding(.bottom, isInterfaceHidden ? 0 : appleMusicBottomOverlayHeight)
+                    plainLyricsContent(lyrics.plainText)
                 }
             } else {
                 Group {
@@ -171,6 +163,64 @@ struct NowPlayingLyricsPage: View {
 
     private var showsLoadingFeedback: Bool {
         isActive && loadingFeedback.visibleTrackID == song.id
+    }
+
+    @ViewBuilder
+    private func plainLyricsContent(_ plainText: String) -> some View {
+        let topOverlay = max(0, sharedSongHeaderInset - lyricsContentSpacing)
+        let bottomInset = isInterfaceHidden ? CGFloat(24) : appleMusicBottomOverlayHeight
+        ScrollView {
+            Text(plainText)
+                .font(.system(size: plainLyricsFontSize, weight: .bold))
+                .lineSpacing(plainLyricsLineSpacing)
+                .nowPlayingPrimary()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
+        }
+        .scrollIndicators(.hidden)
+        .contentMargins(.top, sharedSongHeaderInset, for: .scrollContent)
+        .contentMargins(.bottom, bottomInset, for: .scrollContent)
+        .animation(
+            NowPlayingInterfaceTransition.interfaceAnimation(
+                isVisible: !isInterfaceHidden,
+                reducesMotion: accessibilityReduceMotion
+            ),
+            value: isInterfaceHidden
+        )
+        .mask {
+            GeometryReader { proxy in
+                let height = max(proxy.size.height, 1)
+                let fade = LyricsViewportFade(
+                    height: height,
+                    referenceHeight: max(height - appleMusicBottomOverlayHeight, 1),
+                    shownReferenceHeight: max(height - appleMusicBottomOverlayHeight, 1),
+                    topOverlayHeight: topOverlay,
+                    isInterfaceHidden: isInterfaceHidden
+                )
+                let topStart = min(max(fade.topStart / height, 0), 1)
+                let topEnd = min(max(fade.topEnd / height, topStart), 1)
+                let bottomStart = min(max(fade.bottomStart / height, topEnd), 1)
+                let bottomEnd = min(max(fade.bottomEnd / height, bottomStart), 1)
+                LinearGradient(
+                    stops: [
+                        .init(color: .clear, location: 0),
+                        .init(color: .clear, location: topStart),
+                        .init(color: .black, location: topEnd),
+                        .init(color: .black, location: bottomStart),
+                        .init(color: .clear, location: bottomEnd),
+                        .init(color: .clear, location: 1)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            }
+        }
+        .contentShape(.rect)
+        .onTapGesture {
+            if isInterfaceHidden {
+                onInterfaceInteraction?()
+            }
+        }
     }
 
     private var appleMusicBottomOverlayHeight: CGFloat {
@@ -236,7 +286,8 @@ private struct LyricLineObserver: View {
 
     private var line: Int? {
         guard isActive, let lyrics else { return fallback }
-        return lyrics.activeLine(at: player.progress)
+        let headstart = player.isPlaying ? AppleMusicLyricsMotionProfile.iOS26_6.animationHeadstart : 0
+        return lyrics.activeLine(at: player.progress + headstart)
     }
 
     var body: some View {

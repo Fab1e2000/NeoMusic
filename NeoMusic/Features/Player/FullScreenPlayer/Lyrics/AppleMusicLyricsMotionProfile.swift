@@ -72,11 +72,11 @@ nonisolated struct AppleMusicLyricsMotionProfile: Equatable, Sendable {
         increasedContrastSelectedTextOpacity: 1,
         increasedContrastSelectedUpcomingTextOpacity: 0.85,
         increasedContrastDeselectedTextOpacity: 0.4,
-        focusBlurTransitionDuration: 0.12,
-        focusBlurTransitionControlPoint1X: 0.33,
-        focusBlurTransitionControlPoint1Y: 0,
-        focusBlurTransitionControlPoint2X: 0.2,
-        focusBlurTransitionControlPoint2Y: 0.1,
+        focusBlurTransitionDuration: 0.26,
+        focusBlurTransitionControlPoint1X: 0.25,
+        focusBlurTransitionControlPoint1Y: 0.1,
+        focusBlurTransitionControlPoint2X: 0.25,
+        focusBlurTransitionControlPoint2Y: 1.0,
         animationHeadstart: 0.1,
         emphasisScaleRange: 1...1.14,
         lineFinishProgressAnimationDuration: 0.25,
@@ -113,7 +113,7 @@ nonisolated struct AppleMusicLyricsMotionProfile: Equatable, Sendable {
     }
 
     func lineChangeDelay(rowIndex: Int, activeIndex: Int) -> TimeInterval {
-        Double(max(rowIndex - activeIndex + 1, 0)) * cascadeDelay
+        Double(max(rowIndex - activeIndex, 0)) * cascadeDelay
     }
 
     /// Paragraph-index blur progression using the same smoothstep falloff:

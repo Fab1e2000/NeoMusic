@@ -49,7 +49,7 @@ final class LyricsFocusTests: XCTestCase {
             XCTAssertFalse(motion.isForwardLineChange(from: 40, to: next))
         }
         XCTAssertFalse(motion.isForwardLineChange(from: nil, to: 0))
-        for (row, delay) in [(40, 0.0), (41, 0.05), (42, 0.10), (43, 0.15), (44, 0.20)] {
+        for (row, delay) in [(40, 0.0), (41, 0.0), (42, 0.05), (43, 0.10), (44, 0.15)] {
             XCTAssertEqual(motion.lineChangeDelay(rowIndex: row, activeIndex: 41), delay, accuracy: 0.0001)
         }
         let lineHeight = 40.0
@@ -218,6 +218,102 @@ final class LyricsFocusTests: XCTestCase {
         }
         XCTAssertTrue(animating, "Non-adjacent line jump must drive UIKit row spring animations")
         try await assertFocus(44, in: state)
+    }
+
+    func testDraggingInterruptsRunningRowSpringAndClearsTransforms() async throws {
+        let state = LyricsFocusTestState()
+        let window = try await mount(state, size: .large)
+        defer { window.isHidden = true }
+        try await assertFocus(40, in: state)
+        let table = try XCTUnwrap(
+            scrollViews(in: window).compactMap { $0 as? NativeLyricsScrollView }.first
+        )
+
+        state.activeID = 41
+        let started = try await waitUntil { state.renderedActiveID == 41 && table.isRowTransitionAnimating }
+        XCTAssertTrue(started)
+
+        table.delegate?.scrollViewWillBeginDragging?(table)
+
+        XCTAssertTrue(table.isScrollEnabled, "Active lyrics table must keep native scrolling enabled")
+        XCTAssertFalse(table.panGestureRecognizer.delegate?.gestureRecognizer?(table.panGestureRecognizer, shouldReceive: UITouch()) == false,
+                       "Scroll view pan gesture must never be blocked by a custom gesture delegate")
+        XCTAssertFalse(table.isRowTransitionAnimating,
+                       "Starting a user drag must immediately stop active row spring animations")
+        for cell in table.visibleCells {
+            XCTAssertEqual(cell.transform, .identity,
+                           "Visible rows must have identity transforms once handed over to user dragging")
+        }
+    }
+
+    func testBrowseRevealControlsAndIdleResumeDoesNotHang() async throws {
+        let state = LyricsFocusTestState()
+        state.isInterfaceHidden = true
+        let window = try await mount(state, size: .large)
+        defer { window.isHidden = true }
+        try await assertFocus(40, in: state)
+        let table = try XCTUnwrap(
+            scrollViews(in: window).compactMap { $0 as? NativeLyricsScrollView }.first
+        )
+
+        // 1. User drags lyrics (exits blur -> browsing = true)
+        table.delegate?.scrollViewWillBeginDragging?(table)
+        // 2. Scroll up to reveal bottom controls
+        table.setContentOffset(CGPoint(x: 0, y: table.contentOffset.y - 140), animated: false)
+        table.delegate?.scrollViewDidScroll?(table)
+        state.isInterfaceHidden = false
+        table.delegate?.scrollViewDidEndDragging?(table, willDecelerate: false)
+
+        // 3. Wait ~3s so resumeFollowing and idle interface hide collide
+        try await Task.sleep(for: .milliseconds(2950))
+        state.isInterfaceHidden = true
+        try await Task.sleep(for: .milliseconds(600))
+        try await assertFocus(40, in: state)
+    }
+
+    func testFullScreenPlayerBrowseRevealControlsAndIdleDoesNotHang() async throws {
+        let playback = HangReproPlaybackSource()
+        let player = PlayerState(source: playback)
+        let lyrics = LyricsFocusTestState.makeLyrics(count: 80)
+        let services = PlayerServices(
+            actions: PlayerActions(isFavorite: { _ in false }, toggleFavorite: { _ in },
+                                   addToPlaylist: { _ in }, openAlbum: { _ in }, openArtist: { _ in }),
+            lyrics: PlayerLyricsSource(load: { _ in lyrics }),
+            artwork: PlayerArtworkProvider(cached: { _ in nil }, load: { _ in throw URLError(.fileDoesNotExist) })
+        )
+        let host = UIHostingController(
+            rootView: FullScreenPlayerView(player: player, services: services, initialPage: .lyrics)
+                .environment(\.scenePhase, .active)
+        )
+        let scene = try await applicationWindowScene()
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        window.rootViewController = host
+        window.isHidden = false
+        defer { window.isHidden = true }
+        host.view.layoutIfNeeded()
+
+        let foundTable = try await waitUntil {
+            !self.scrollViews(in: window).compactMap { $0 as? NativeLyricsScrollView }.isEmpty
+        }
+        XCTAssertTrue(foundTable)
+        let table = try XCTUnwrap(scrollViews(in: window).compactMap { $0 as? NativeLyricsScrollView }.first)
+
+        // Wait until lyrics load and settle, and controls auto-hide after 3s
+        try await Task.sleep(for: .milliseconds(3400))
+
+        // Drag lyrics to clear blur and scroll up to reveal bottom controls
+        table.delegate?.scrollViewWillBeginDragging?(table)
+        table.setContentOffset(CGPoint(x: 0, y: table.contentOffset.y - 160), animated: false)
+        table.delegate?.scrollViewDidScroll?(table)
+        table.delegate?.scrollViewDidEndDragging?(table, willDecelerate: false)
+
+        // Sit idle for 4 seconds while playback ticks every 200ms
+        for _ in 0..<20 {
+            playback.progress += 0.2
+            try await Task.sleep(for: .milliseconds(200))
+        }
+        XCTAssertTrue(table.isScrollEnabled)
     }
 
     func testRapidConsecutiveForwardChangesKeepTheCommittedViewport() async throws {
@@ -962,4 +1058,44 @@ private struct PresentationMaskTestContent: View {
         )
         .environment(\.nowPlayingLayout, layout)
     }
+}
+
+@MainActor @Observable
+private final class HangReproPlaybackSource: PlayerPlaybackSource {
+    let tracks: [PlayerTrack] = [
+        PlayerTrack(id: "repro", title: "Test Song", artists: "Artist", albumTitle: "Album", coverURL: nil, duration: 320)
+    ]
+    var currentTrack: PlayerTrack? { tracks.first }
+    let currentQueueIndex = 0
+    var isPlaying = true
+    let isLoading = false
+    let issue: String? = nil
+    let duration: Double = 320
+    var progress: Double = 160
+    let isCrossfadeEnabled = false
+    let isShuffled = false
+    let repeatMode: PlayerRepeatMode = .off
+    let canPlayNext = false
+    let canPlayPrevious = false
+    let canAutomaticallyContinue = false
+    let isAutomaticContinuationEnabled = false
+    let automaticContinuationDescription = ""
+    let previousInOrder: PlayerAdjacentTrack? = nil
+    let nextInOrder: PlayerAdjacentTrack? = nil
+    let upcoming: [PlayerAdjacentTrack] = []
+    let upcomingQueueVersion = PlayerQueueVersion(revision: 1, index: 0, repeatMode: .off)
+    let upcomingQueueEntries: [PlayerQueueEntry] = []
+    func togglePlayback() { isPlaying.toggle() }
+    func seek(to value: Double) { progress = value }
+    func next() {}
+    func previous() {}
+    func skip(toQueueIndex index: Int) {}
+    func playFromQueue(at index: Int) {}
+    func enqueue(_ track: PlayerTrack, next: Bool) {}
+    func toggleShuffle() {}
+    func cycleRepeatMode() {}
+    func toggleCrossfade() {}
+    func toggleAutomaticContinuation() {}
+    func moveUpcomingQueueItems(fromOffsets source: IndexSet, toOffset destination: Int) {}
+    func removeFromQueue(at index: Int) {}
 }

@@ -38,7 +38,7 @@ struct NowPlayingPagePresentation: ViewModifier {
         } else {
             direct ? .easeInOut(duration: 0.18)
                 : (page == .queue ? .easeInOut(duration: 0.17)
-                                  : .linear(duration: 0.01).delay(0.4))
+                                  : .easeOut(duration: 0.22))
         }
         GeometryReader { proxy in
             let anchor = UnitPoint(x: 0.5, y: layout.pageY(319.3) / proxy.size.height)
