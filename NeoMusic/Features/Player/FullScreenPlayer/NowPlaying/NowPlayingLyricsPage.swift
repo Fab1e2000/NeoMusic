@@ -167,10 +167,12 @@ struct NowPlayingLyricsPage: View {
 
     @ViewBuilder
     private func plainLyricsContent(_ plainText: String) -> some View {
+        let filteredText = LyricsCreditFilter.filterPlainText(plainText)
+        let displayText = filteredText.isEmpty ? plainText : filteredText
         let topOverlay = max(0, sharedSongHeaderInset - lyricsContentSpacing)
         let bottomInset = isInterfaceHidden ? CGFloat(24) : appleMusicBottomOverlayHeight
         ScrollView {
-            Text(plainText)
+            Text(displayText)
                 .font(.system(size: plainLyricsFontSize, weight: .bold))
                 .lineSpacing(plainLyricsLineSpacing)
                 .nowPlayingPrimary()

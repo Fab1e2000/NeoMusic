@@ -137,9 +137,12 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
     static let horizontalBleed: CGFloat = 24
     /// Rows just outside the viewport stay materialized for the line spring.
     static let viewportOverscan: CGFloat = 160
+    /// Synthetic row ID used for a leading intro interlude (`•••`) when the first sung line starts after 4s.
+    static let introInterludeLineID = -1
 
     private let motion = AppleMusicLyricsMotionProfile.iOS26_6
     private var input: NativeLyricsScrollContent?
+    private var sourceLines: [PlayerLyricLine] = []
     private var renderedLines: [PlayerLyricLine] = []
     private var lineIndices: [Int: Int] = [:]
     private var renderedFontSize: CGFloat = 0
@@ -253,7 +256,7 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
 
     fileprivate func update(_ value: NativeLyricsScrollContent) {
         let previous = input
-        let replaced = renderedLines != value.lyrics.lines
+        let replaced = sourceLines != value.lyrics.lines
             || renderedFontSize != value.fontSize
             || renderedTranslationFontSize != value.translationFontSize
             || renderedForeground != value.foreground
@@ -274,12 +277,14 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
         if replaced {
             stop()
             cancelAllAnimations()
-            renderedLines = value.lyrics.lines
+            sourceLines = value.lyrics.lines
+            let display = Self.displayLines(from: sourceLines)
+            renderedLines = display.lines
             renderedFontSize = value.fontSize
             renderedTranslationFontSize = value.translationFontSize
             renderedShowsTranslation = value.showsTranslation
             renderedForeground = value.foreground
-            lineIndices = Self.lineIndices(for: renderedLines)
+            lineIndices = display.indices
             lastVisualSize = .zero
             focusedIndex = nil
             holdsTranslationAnchor = false
@@ -305,9 +310,6 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
         )
         let canAnimate = wasActive && !replaced && !value.reducesMotion
             && lastVisualSize != .zero && currentVisualSize == lastVisualSize
-        let cascades = canAnimate && !needsFocus && !browsing
-            && !interfaceChanged && !geometryChanged
-            && motion.isForwardLineChange(from: focusedIndex, to: next)
         if bounds.width > 0, bounds.height > 0 {
             updateMetricsIfNeeded()
             updateAppearances(activeIndex: next, animated: appearanceAnimated)
@@ -316,12 +318,7 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
             }
             if !browsing && (changed || needsFocus || geometryChanged) {
                 let animates = canAnimate && (focusedIndex != nil || geometryChanged)
-                let spring: LyricPhysicalSpringParameters = if cascades || geometryChanged {
-                    motion.lineChangeSpring
-                } else {
-                    motion.forcedLineCatchUpSpring
-                }
-                align(to: next, cascade: cascades, animated: animates, spring: spring,
+                align(to: next, cascade: animates, animated: animates, spring: motion.lineChangeSpring,
                       appearanceAnimated: appearanceAnimated)
             }
         }
@@ -329,13 +326,72 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
         setNeedsLayout()
     }
 
-    private static func lineIndices(for lines: [PlayerLyricLine]) -> [Int: Int] {
-        var indices: [Int: Int] = [:]
-        indices.reserveCapacity(lines.count)
-        for (index, line) in lines.enumerated() where indices[line.id] == nil {
-            indices[line.id] = index
+    /// Filters out production credit rows, short blank timestamp rows, and trailing
+    /// blank rows, keeping at most one interlude row when the gap to the next sung
+    /// line exceeds 4 seconds (including a leading intro interlude before the first sung line).
+    /// Filtered row IDs map to the preceding kept row so focus never drops.
+    static func displayLines(
+        from source: [PlayerLyricLine],
+        minimumInterludeDuration: TimeInterval = 4.0
+    ) -> (lines: [PlayerLyricLine], indices: [Int: Int]) {
+        func isBlank(_ line: PlayerLyricLine) -> Bool {
+            line.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && line.translation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
-        return indices
+
+        let creditIndices = LyricsCreditFilter.creditLineIndices(in: source)
+        let firstSungOffset = source.indices.first { !creditIndices.contains($0) && !isBlank(source[$0]) }
+
+        var rendered: [PlayerLyricLine] = []
+        rendered.reserveCapacity(source.count + 1)
+        var indices: [Int: Int] = [:]
+        indices.reserveCapacity(source.count + 1)
+
+        if let firstSungOffset, source[firstSungOffset].time > minimumInterludeDuration {
+            rendered.append(PlayerLyricLine(id: Self.introInterludeLineID, time: 0, text: ""))
+            indices[Self.introInterludeLineID] = 0
+        }
+
+        var previousWasBlank = false
+        for (i, line) in source.enumerated() {
+            // Everything before the first sung line (credits / leading blanks) collapses
+            // into the intro interlude if one was inserted, or is skipped if the song starts promptly.
+            if let firstSungOffset, i < firstSungOffset {
+                if !rendered.isEmpty, indices[line.id] == nil {
+                    indices[line.id] = 0
+                }
+                continue
+            }
+
+            if creditIndices.contains(i) {
+                if !rendered.isEmpty, indices[line.id] == nil {
+                    indices[line.id] = rendered.count - 1
+                }
+                continue
+            }
+
+            if !isBlank(line) {
+                let targetIndex = rendered.count
+                rendered.append(line)
+                if indices[line.id] == nil { indices[line.id] = targetIndex }
+                previousWasBlank = false
+                continue
+            }
+
+            if !previousWasBlank,
+               let nextNonBlank = source[(i + 1)...].enumerated().first(where: { offset, candidate in
+                   !creditIndices.contains(i + 1 + offset) && !isBlank(candidate)
+               })?.element,
+               nextNonBlank.time - line.time > minimumInterludeDuration {
+                let targetIndex = rendered.count
+                rendered.append(line)
+                if indices[line.id] == nil { indices[line.id] = targetIndex }
+            } else if !rendered.isEmpty, indices[line.id] == nil {
+                indices[line.id] = rendered.count - 1
+            }
+            previousWasBlank = true
+        }
+        return (rendered, indices)
     }
 
     // MARK: - Table data
@@ -390,6 +446,14 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
         cell.appearance.onTap = { [weak self, weak cell] in
             guard let self, let cell, let indexPath = self.indexPath(for: cell) else { return }
             self.seek(indexPath.row)
+        }
+        cell.appearance.onPressStateChange = { [weak self, weak cell] _ in
+            cell?.invalidateFadeTargets()
+            self?.setNeedsLayout()
+            DispatchQueue.main.async { [weak self, weak cell] in
+                cell?.invalidateFadeTargets()
+                self?.refreshVisualGeometry()
+            }
         }
         cell.onPrepareForReuse = { [weak self, weak cell] in
             self?.cancelAnimations(for: cell)
@@ -557,11 +621,16 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
         if let suppressed = suppressedPreSeekActiveID {
             if activeID != suppressed {
                 if updatingSuppression { suppressedPreSeekActiveID = nil }
-                return activeID.flatMap { lineIndices[$0] }
+                return resolvedRowIndex(for: activeID)
             }
-            return focusedIndex ?? activeID.flatMap { lineIndices[$0] }
+            return focusedIndex ?? resolvedRowIndex(for: activeID)
         }
-        return activeID.flatMap { lineIndices[$0] }
+        return resolvedRowIndex(for: activeID)
+    }
+
+    private func resolvedRowIndex(for activeID: Int?) -> Int? {
+        if let activeID { return lineIndices[activeID] }
+        return renderedLines.first?.id == Self.introInterludeLineID ? 0 : nil
     }
 
     private func targetOffset(for index: Int, activeID: Int? = nil,
@@ -765,7 +834,8 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
             return
         }
         let timingSpring = spring ?? motion.lineChangeSpring
-        var createdAnimator = false
+        var animatedEntries: [(cell: NativeLyricCell, row: Int)] = []
+        animatedEntries.reserveCapacity(cells.count)
         for cell in cells {
             guard let row = indexPath(for: cell)?.row else {
                 cell.transform = .identity
@@ -780,6 +850,29 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
                 cell.transform = .identity
                 continue
             }
+            animatedEntries.append((cell, row))
+        }
+        // Directional wave cascade matching Apple Music:
+        // - Moving up (delta >= 0, forward/long tap): top-most visible row in the fade window leads.
+        // - Moving down (delta < 0, reverse jump): rows just below the target lead so lower lines
+        //   peel away first without stalling the tapped upper line at the header edge.
+        let fade = currentFade()
+        let visibleFadeRows = animatedEntries.compactMap { entry -> Int? in
+            let top = entry.cell.center.y - entry.cell.bounds.height / 2 + entry.cell.transform.ty
+                - target - Self.viewportOverscan
+            let height = textHeight(of: entry.cell)
+            return (top + height > fade.topStart && top < fade.bottomEnd) ? entry.row : nil
+        }
+        let movingUp = delta >= 0
+        let cascadeAnchorRow: Int = if movingUp {
+            visibleFadeRows.min() ?? animatedEntries.map(\.row).min() ?? index
+        } else {
+            min(visibleFadeRows.max() ?? animatedEntries.map(\.row).max() ?? index, index + 2)
+        }
+        let stepDelay: TimeInterval = movingUp ? motion.cascadeDelay : 0.035
+        let maxCascadeDelay: TimeInterval = movingUp ? 0.30 : 0.14
+        var createdAnimator = false
+        for (cell, row) in animatedEntries {
             pendingStartTransforms[ObjectIdentifier(cell)] = cell.transform
             let animator = UIViewPropertyAnimator(duration: motion.lineChangeDuration, timingParameters:
                 UISpringTimingParameters(mass: timingSpring.mass, stiffness: timingSpring.stiffness,
@@ -796,8 +889,9 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
                 self?.stopDisplayLinkIfIdle()
                 self?.settleFocusAfterAnimationIfNeeded()
             }
-            animator.startAnimation(afterDelay: cascade
-                ? motion.lineChangeDelay(rowIndex: row, activeIndex: index) : 0)
+            let rank = movingUp ? max(row - cascadeAnchorRow, 0) : max(cascadeAnchorRow - row, 0)
+            let delay: TimeInterval = cascade ? min(Double(rank) * stepDelay, maxCascadeDelay) : 0
+            animator.startAnimation(afterDelay: delay)
         }
         if animates, abs(delta) > Self.viewportOverscan {
             installSourceSnapshots(capturedSourceRows, delta: delta, spring: timingSpring,
@@ -953,6 +1047,13 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
             mass: spring.mass, stiffness: spring.stiffness,
             damping: spring.damping, initialVelocity: .zero
         )
+        let movingUp = delta >= 0
+        let sourceAnchorRow: Int = if movingUp {
+            sourceOnly.map(\.row).min() ?? activeIndex
+        } else {
+            sourceOnly.map(\.row).max() ?? activeIndex
+        }
+        let maxSnapshotDelay: TimeInterval = 0.25
         for source in sourceOnly {
             source.view.frame = source.screenFrame.offsetBy(
                 dx: -container.frame.minX, dy: -container.frame.minY
@@ -970,8 +1071,9 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
                 view?.alpha = 0
             }
             animator.addCompletion { [weak self] _ in self?.removeSourceSnapshot(id: id) }
-            animator.startAnimation(afterDelay: cascade
-                ? motion.lineChangeDelay(rowIndex: source.row, activeIndex: activeIndex) : 0)
+            let rank = movingUp ? max(source.row - sourceAnchorRow, 0) : max(sourceAnchorRow - source.row, 0)
+            let delay: TimeInterval = cascade ? min(Double(rank) * motion.cascadeDelay, maxSnapshotDelay) : 0
+            animator.startAnimation(afterDelay: delay)
         }
     }
 

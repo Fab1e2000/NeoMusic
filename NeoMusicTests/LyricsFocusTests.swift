@@ -73,6 +73,68 @@ final class LyricsFocusTests: XCTestCase {
         XCTAssertLessThan(motion.focusBlurTransitionDuration, motion.lineChangeDuration)
     }
 
+    func testBlankInterludeRowsOnlyDisplayWhenExceedingFourSeconds() {
+        let source = [
+            PlayerLyricLine(id: 0, time: 0.0, text: ""),         // <= 4.0s before line 1 -> filtered
+            PlayerLyricLine(id: 1, time: 4.0, text: "First"),
+            PlayerLyricLine(id: 2, time: 7.0, text: ""),         // 3.0s gap -> filtered, maps to line 1
+            PlayerLyricLine(id: 3, time: 10.0, text: "Second"),
+            PlayerLyricLine(id: 4, time: 14.0, text: ""),        // 4.0s exact gap -> filtered (must exceed 4s)
+            PlayerLyricLine(id: 5, time: 18.0, text: "Third"),
+            PlayerLyricLine(id: 6, time: 20.0, text: ""),        // 5.5s gap to line 8 -> kept
+            PlayerLyricLine(id: 7, time: 22.0, text: "  "),      // consecutive blank -> deduplicated, maps to interlude 6
+            PlayerLyricLine(id: 8, time: 25.5, text: "Fourth"),
+            PlayerLyricLine(id: 9, time: 30.0, text: "")         // trailing blank -> filtered, maps to line 8
+        ]
+        let display = NativeLyricsScrollView.displayLines(from: source)
+        XCTAssertEqual(display.lines.map(\.id), [1, 3, 5, 6, 8])
+        XCTAssertNil(display.indices[0])
+        XCTAssertEqual(display.indices[1], 0)
+        XCTAssertEqual(display.indices[2], 0)
+        XCTAssertEqual(display.indices[3], 1)
+        XCTAssertEqual(display.indices[4], 1)
+        XCTAssertEqual(display.indices[5], 2)
+        XCTAssertEqual(display.indices[6], 3)
+        XCTAssertEqual(display.indices[7], 3)
+        XCTAssertEqual(display.indices[8], 4)
+        XCTAssertEqual(display.indices[9], 4)
+    }
+
+    func testCreditLinesAreFilteredWithoutDroppingSungLyrics() {
+        let source = [
+            PlayerLyricLine(id: 0, time: 0.0, text: "{\"t\":0,\"c\":[{\"tx\":\"作词: \"},{\"tx\":\"林夕\"}]}"),
+            PlayerLyricLine(id: 1, time: 0.5, text: "作词 : 林夕"),
+            PlayerLyricLine(id: 2, time: 1.0, text: "作曲/编曲：陈辉阳"),
+            PlayerLyricLine(id: 3, time: 1.5, text: "Lyrics by John Doe"),
+            PlayerLyricLine(id: 4, time: 2.0, text: "演唱：王菲"),
+            PlayerLyricLine(id: 5, time: 12.0, text: "她说：今晚月色很美"),
+            PlayerLyricLine(id: 6, time: 16.0, text: "我回答: 你也是"),
+            PlayerLyricLine(id: 7, time: 20.0, text: "混音师：张某某"),
+            PlayerLyricLine(id: 8, time: 24.0, text: "沿着熟悉的街道继续向前"),
+            PlayerLyricLine(id: 9, time: 30.0, text: "OP：某版权公司"),
+            PlayerLyricLine(id: 10, time: 32.0, text: "未经著作权人许可，不得翻唱或使用")
+        ]
+        let display = NativeLyricsScrollView.displayLines(from: source)
+        XCTAssertEqual(display.lines.map(\.id), [NativeLyricsScrollView.introInterludeLineID, 5, 6, 8])
+        XCTAssertEqual(display.indices[0], 0)
+        XCTAssertEqual(display.indices[4], 0)
+        XCTAssertEqual(display.indices[5], 1)
+        XCTAssertEqual(display.indices[6], 2)
+        XCTAssertEqual(display.indices[7], 2)
+        XCTAssertEqual(display.indices[8], 3)
+        XCTAssertEqual(display.indices[9], 3)
+        XCTAssertEqual(display.indices[10], 3)
+
+        let plain = """
+        作词：林夕
+        作曲：陈辉阳
+        第一句正文
+        她说：别怕
+        出品：某工作室
+        """
+        XCTAssertEqual(LyricsCreditFilter.filterPlainText(plain), "第一句正文\n她说：别怕")
+    }
+
     func testLyricsControlsHideAfterThreeIdleSecondsOnlyWhileWatching() {
         XCTAssertEqual(LyricsControlsIdle.duration, .seconds(3))
         XCTAssertTrue(LyricsControlsIdle.shouldScheduleHide(

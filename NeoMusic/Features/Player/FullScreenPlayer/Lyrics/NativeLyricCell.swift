@@ -11,6 +11,7 @@ import UIKit
     // Read alongside focus/opacity changes; changing timing alone must not redraw every row.
     @ObservationIgnored var animated = false
     @ObservationIgnored var onTap: (() -> Void)?
+    @ObservationIgnored var onPressStateChange: ((Bool) -> Void)?
 }
 
 private struct LyricsInterludeDots: View {
@@ -26,7 +27,7 @@ private struct LyricsInterludeDots: View {
             ForEach(0..<3, id: \.self) { index in
                 Circle()
                     .frame(width: dotSize, height: dotSize)
-                    .scaleEffect(focused && !reducesMotion ? (pulse ? 1.12 : 0.88) : 0.9)
+                    .scaleEffect(focused && !reducesMotion ? (pulse ? 1.06 : 0.92) : 0.94)
                     .opacity(focused ? (pulse ? 0.95 : 0.55) : 0.45)
                     .animation(
                         focused && !reducesMotion
@@ -38,6 +39,7 @@ private struct LyricsInterludeDots: View {
                     )
             }
         }
+        .padding(.leading, 2)
         .padding(.vertical, max(4, fontSize * 0.16))
         .accessibilityLabel("间奏")
         .onAppear {
@@ -81,9 +83,10 @@ private struct LocalLyricsRow: View {
         LyricPressInteraction(
             isSelected: false,
             allowsLongPress: false,
-            scaleAnchor: .leading,
+            scaleAnchor: .center,
             onTap: onTap,
-            onLongPress: {}
+            onLongPress: {},
+            onPressStateChange: { appearance.onPressStateChange?($0) }
         ) { progress in
             VStack(alignment: .leading, spacing: 0) {
                 if trimmedText.isEmpty {
@@ -225,6 +228,7 @@ final class NativeLyricCell: UITableViewCell {
         appearance.showsTranslation = false
         appearance.distanceBlurRadius = 0
         appearance.onTap = nil
+        appearance.onPressStateChange = nil
         removeEdgeMask(in: layer)
         hasActiveEdgeMask = false
         cachedFadeTargets.count = 0
@@ -254,6 +258,10 @@ final class NativeLyricCell: UITableViewCell {
         }
     }
 
+    func invalidateFadeTargets() {
+        needsFadeTargetDiscovery = true
+    }
+
     func applyEdgeFade(_ fade: LyricsViewportFade, viewportTop: CGFloat, in scroll: UIScrollView, presentation: Bool) {
         if !presentation, viewportTop >= fade.topEnd, viewportTop + bounds.height <= fade.bottomStart {
             guard hasActiveEdgeMask else { return }
@@ -267,8 +275,11 @@ final class NativeLyricCell: UITableViewCell {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
+        // Rows overlapping the top/bottom fade zone may gain dynamic press-highlight
+        // backing layers on touch; re-discover targets so the highlight is always masked.
+        let inEdgeFadeZone = viewportTop < fade.topEnd || viewportTop + bounds.height > fade.bottomStart
         var targets = cachedFadeTargets.allObjects.compactMap { $0 as? CALayer }.filter { $0.superlayer != nil }
-        if needsFadeTargetDiscovery || targets.isEmpty {
+        if needsFadeTargetDiscovery || inEdgeFadeZone || targets.isEmpty {
             targets.removeAll(keepingCapacity: true)
             collectTargets(in: layer, targets: &targets)
             cachedFadeTargets.count = 0
