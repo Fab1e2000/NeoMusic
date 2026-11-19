@@ -33,6 +33,7 @@ struct NowPlayingLyricsPage: View {
     let isInterfaceHidden: Bool
     @Environment(PlayerState.self) private var player
     @State private var lastActiveLineID: Int?
+    @State private var isScrubbingProgress = false
     @State private var loadingFeedback = NowPlayingLyricsLoadingFeedback()
     let artworkNamespace: Namespace.ID
     let usesArtworkTransition: Bool
@@ -91,7 +92,13 @@ struct NowPlayingLyricsPage: View {
         )
         .background {
             // Progress ticks five times a second. Publish a new line only when the focused row changes.
-            LyricLineObserver(lyrics: lyrics, isActive: isActive, fallback: lastActiveLineID, lineID: $lastActiveLineID)
+            LyricLineObserver(
+                lyrics: lyrics,
+                isActive: isActive,
+                fallback: lastActiveLineID,
+                lineID: $lastActiveLineID,
+                isScrubbing: $isScrubbingProgress
+            )
         }
     }
 
@@ -124,6 +131,8 @@ struct NowPlayingLyricsPage: View {
                         onSeek: { player.seek(to: $0) },
                         topOverlayHeight: sharedSongHeaderInset - lyricsContentSpacing,
                         showsTranslation: showsTranslation,
+                        isPlaying: player.isPlaying,
+                        isScrubbing: isScrubbingProgress,
                         onInterfaceInteraction: onInterfaceInteraction,
                         onUserInteractionChange: onUserInteractionChange
                     )
@@ -278,16 +287,32 @@ private struct NowPlayingLyricsLoadingRequest: Equatable {
     }
 }
 
-/// Reads playback progress without invalidating the lyric rows until the active line changes.
+/// Reads playback progress and live scrubber state without invalidating lyric rows
+/// until the active line or scrubbing state changes.
 private struct LyricLineObserver: View {
     let lyrics: PlayerLyrics?
     let isActive: Bool
     let fallback: Int?
     @Binding var lineID: Int?
+    @Binding var isScrubbing: Bool
     @Environment(PlayerState.self) private var player
+    @Environment(NowPlayingProgressInteraction.self) private var progressInteraction: NowPlayingProgressInteraction?
+
+    private var scrubbing: Bool {
+        guard isActive else { return false }
+        return progressInteraction?.isPressed == true
+    }
 
     private var line: Int? {
         guard isActive, let lyrics else { return fallback }
+        if let interaction = progressInteraction {
+            if let scrubbingTime = interaction.scrubbingProgress {
+                return lyrics.activeLine(at: scrubbingTime)
+            }
+            if interaction.isAwaitingCommittedSeek {
+                return lyrics.activeLine(at: interaction.displayProgress(live: player.progress))
+            }
+        }
         let headstart = player.isPlaying ? AppleMusicLyricsMotionProfile.iOS26_6.animationHeadstart : 0
         return lyrics.activeLine(at: player.progress + headstart)
     }
@@ -298,6 +323,9 @@ private struct LyricLineObserver: View {
             .accessibilityHidden(true)
             .onChange(of: line, initial: true) { _, value in
                 if lineID != value { lineID = value }
+            }
+            .onChange(of: scrubbing, initial: true) { _, value in
+                if isScrubbing != value { isScrubbing = value }
             }
     }
 }

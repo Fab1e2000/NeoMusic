@@ -135,8 +135,8 @@ final class LyricsFocusTests: XCTestCase {
         XCTAssertEqual(LyricsCreditFilter.filterPlainText(plain), "第一句正文\n她说：别怕")
     }
 
-    func testLyricsControlsHideAfterThreeIdleSecondsOnlyWhileWatching() {
-        XCTAssertEqual(LyricsControlsIdle.duration, .seconds(3))
+    func testLyricsControlsHideAfterFourIdleSecondsOnlyWhileWatching() {
+        XCTAssertEqual(LyricsControlsIdle.duration, .seconds(4))
         XCTAssertTrue(LyricsControlsIdle.shouldScheduleHide(
             onLyricsPage: true, controlsVisible: true, voiceOver: false,
             playerActive: true, touching: false, transitioning: false))

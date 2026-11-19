@@ -52,6 +52,25 @@ enum NowPlayingProgressFeedbackSpec {
 final class NowPlayingProgressInteraction {
     var isPressed = false
     var scrubbingProgress: TimeInterval?
+    /// Retains the just-committed seek target briefly until async player progress catches up.
+    var committedSeekProgress: TimeInterval?
+    var committedSeekDeadline: ContinuousClock.Instant?
+
+    func displayProgress(live: TimeInterval) -> TimeInterval {
+        if let scrubbingProgress { return scrubbingProgress }
+        if let committed = committedSeekProgress, let deadline = committedSeekDeadline {
+            if abs(live - committed) <= 1.0 || ContinuousClock.now >= deadline {
+                return live
+            }
+            return committed
+        }
+        return live
+    }
+
+    var isAwaitingCommittedSeek: Bool {
+        guard let deadline = committedSeekDeadline, committedSeekProgress != nil else { return false }
+        return ContinuousClock.now < deadline
+    }
 }
 
 struct NowPlayingProgressControl: View {
@@ -61,8 +80,13 @@ struct NowPlayingProgressControl: View {
     @ScaledMetric(relativeTo: .caption2) private var timeFontSize: CGFloat = 12.5
 
     @Environment(\.nowPlayingLayout) private var layout
-    @State private var interaction = NowPlayingProgressInteraction()
+    @Environment(NowPlayingProgressInteraction.self) private var sharedInteraction: NowPlayingProgressInteraction?
+    @State private var localInteraction = NowPlayingProgressInteraction()
     let song: PlayerTrack
+
+    private var interaction: NowPlayingProgressInteraction {
+        sharedInteraction ?? localInteraction
+    }
 
     var body: some View {
         if dynamicTypeSize.isAccessibilitySize {
@@ -142,7 +166,7 @@ struct NowPlayingProgressControl: View {
 
 /// Shared custom capsule track so bar thickness, horizontal expansion, and
 /// surrounding labels/icons are driven by the exact same SwiftUI spring.
-private struct NowPlayingCapsuleTrack: View {
+struct NowPlayingCapsuleTrack: View {
     let fraction: CGFloat
     let baseWidth: CGFloat
     let isPressed: Bool
@@ -196,7 +220,7 @@ private struct NowPlayingProgressSliderView: View {
     @Environment(PlayerState.self) private var player
 
     var body: some View {
-        let displayProgress = interaction.scrubbingProgress ?? player.progress
+        let displayProgress = interaction.displayProgress(live: player.progress)
         let fraction = maximum > 0 ? CGFloat(displayProgress / maximum) : 0
 
         GeometryReader { proxy in
@@ -255,12 +279,8 @@ private struct NowPlayingProgressSlider: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(player: player, interaction: interaction) }
 
-    func makeUIView(context: Context) -> UISlider {
+    func makeUIView(context: Context) -> NowPlayingScrubbingSlider {
         let slider = NowPlayingScrubbingSlider()
-        slider.sliderStyle = .thumbless
-        slider.alpha = 0.02
-        slider.minimumTrackTintColor = .clear
-        slider.maximumTrackTintColor = .clear
         slider.onHighlightChanged = { [interaction] highlighted in
             interaction.isPressed = highlighted
         }
@@ -272,22 +292,21 @@ private struct NowPlayingProgressSlider: UIViewRepresentable {
         return slider
     }
 
-    func updateUIView(_ slider: UISlider, context: Context) {
+    func updateUIView(_ slider: NowPlayingScrubbingSlider, context: Context) {
         context.coordinator.player = player
         context.coordinator.interaction = interaction
-        if let scrubbingSlider = slider as? NowPlayingScrubbingSlider {
-            scrubbingSlider.onHighlightChanged = { [interaction] highlighted in
-                interaction.isPressed = highlighted
-            }
+        slider.onHighlightChanged = { [interaction] highlighted in
+            interaction.isPressed = highlighted
         }
         slider.maximumValue = Float(maximum)
         if !slider.isTracking && !context.coordinator.isEditing {
-            slider.value = Float(min(player.progress, maximum))
+            let displayProgress = context.coordinator.resolvedExternalProgress(from: player.progress)
+            slider.value = Float(min(displayProgress, maximum))
         }
         slider.accessibilityValue = "\(formatPlaybackTime(player.progress))，共 \(formatPlaybackTime(maximum))"
     }
 
-    func sizeThatFits(_ proposal: ProposedViewSize, uiView: UISlider, context: Context) -> CGSize? {
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView: NowPlayingScrubbingSlider, context: Context) -> CGSize? {
         CGSize(width: proposal.width ?? 338, height: 43)
     }
 
@@ -296,6 +315,8 @@ private struct NowPlayingProgressSlider: UIViewRepresentable {
         var interaction: NowPlayingProgressInteraction
         private let scrub = NowPlayingProgressScrub()
         private var hasDraggedValue = false
+        private var pendingSeekTarget: Double?
+        private var pendingSeekDeadline: ContinuousClock.Instant?
         var isEditing: Bool { scrub.isEditing }
 
         init(player: PlayerState, interaction: NowPlayingProgressInteraction) {
@@ -303,29 +324,58 @@ private struct NowPlayingProgressSlider: UIViewRepresentable {
             self.interaction = interaction
         }
 
-        @objc func begin(_ slider: UISlider) {
-            scrub.setEditing(true)
-            hasDraggedValue = false
+        /// Prevents stale `player.progress` ticks emitted before an async `seek` settles
+        /// from snapping the slider backward during rapid repeated drags.
+        func resolvedExternalProgress(from liveProgress: Double) -> Double {
+            guard let target = pendingSeekTarget, let deadline = pendingSeekDeadline else {
+                return liveProgress
+            }
+            if abs(liveProgress - target) <= 1.0 || ContinuousClock.now >= deadline {
+                pendingSeekTarget = nil
+                pendingSeekDeadline = nil
+                return liveProgress
+            }
+            return target
         }
 
-        @objc func end(_ slider: UISlider) {
+        @objc func begin(_ slider: NowPlayingScrubbingSlider) {
+            scrub.setEditing(true)
+            hasDraggedValue = false
+            if let target = pendingSeekTarget, let deadline = pendingSeekDeadline, ContinuousClock.now < deadline {
+                slider.syncDragBaseline(to: Float(target))
+            }
+        }
+
+        @objc func end(_ slider: NowPlayingScrubbingSlider) {
             if hasDraggedValue {
-                scrub.propose(Double(slider.value)) { player.seek(to: $0) }
+                let committed = Double(slider.value)
+                let deadline = ContinuousClock.now.advanced(by: .milliseconds(600))
+                pendingSeekTarget = committed
+                pendingSeekDeadline = deadline
+                interaction.committedSeekProgress = committed
+                interaction.committedSeekDeadline = deadline
+                scrub.propose(committed) { player.seek(to: $0) }
             }
             hasDraggedValue = false
             scrub.setEditing(false)
             interaction.scrubbingProgress = nil
         }
 
-        @objc func changed(_ slider: UISlider) {
+        @objc func changed(_ slider: NowPlayingScrubbingSlider) {
             // While dragging, drive the visual bar/time from the finger only and
             // commit a single AVPlayer seek on release so background time ticks
             // and mid-drag seeks never fight the user's finger.
             if slider.isTracking {
+                let value = Double(slider.value)
                 scrub.setEditing(true)
                 hasDraggedValue = true
-                interaction.scrubbingProgress = Double(slider.value)
+                pendingSeekTarget = nil
+                pendingSeekDeadline = nil
+                interaction.committedSeekProgress = nil
+                interaction.committedSeekDeadline = nil
+                interaction.scrubbingProgress = value
             } else {
+                // VoiceOver adjustable increment/decrement.
                 scrub.setEditing(true)
                 scrub.propose(Double(slider.value)) { player.seek(to: $0) }
                 scrub.setEditing(false)
@@ -335,38 +385,96 @@ private struct NowPlayingProgressSlider: UIViewRepresentable {
     }
 }
 
-final class NowPlayingScrubbingSlider: UISlider {
+/// Native `UIControl` relative progress scrubber with zero post-release inertia.
+final class NowPlayingScrubbingSlider: UIControl {
     static let clearTrackImage = UIGraphicsImageRenderer(size: CGSize(width: 1, height: 1)).image { _ in }
     var onHighlightChanged: ((Bool) -> Void)?
     private(set) var isTrackHighlighted = false
 
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        // Keep .thumbless full-track hit testing while hiding UIKit's rendered subviews.
-        for subview in subviews where subview.alpha != 0 {
-            subview.alpha = 0
+    var value: Float = 0 {
+        didSet {
+            let clamped = min(max(value, 0), max(maximumValue, 0))
+            if value != clamped { value = clamped }
+        }
+    }
+    var maximumValue: Float = 1 {
+        didSet {
+            if maximumValue < 0 { maximumValue = 0 }
+            if value > maximumValue { value = maximumValue }
         }
     }
 
+    private var dragStartX: CGFloat = 0
+    private var dragStartValue: Float = 0
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+        isMultipleTouchEnabled = false
+        isAccessibilityElement = true
+        accessibilityTraits = .adjustable
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    func setValue(_ newValue: Float, animated: Bool) {
+        value = newValue
+    }
+
+    func syncDragBaseline(to baseline: Float) {
+        value = baseline
+        dragStartValue = value
+    }
+
     override func beginTracking(_ touch: UITouch, with event: UIEvent?) -> Bool {
-        let tracking = super.beginTracking(touch, with: event)
-        if tracking { updateTrackHighlight(true) }
-        return tracking
+        dragStartX = touch.location(in: self).x
+        dragStartValue = value
+        updateTrackHighlight(true)
+        return true
     }
 
-    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        super.touchesEnded(touches, with: event)
-        updateTrackHighlight(false)
+    override func continueTracking(_ touch: UITouch, with event: UIEvent?) -> Bool {
+        let width = max(bounds.width, 1)
+        let deltaX = touch.location(in: self).x - dragStartX
+        let deltaValue = Float(deltaX / width) * maximumValue
+        let nextValue = min(max(dragStartValue + deltaValue, 0), maximumValue)
+        if abs(nextValue - value) > 0.0001 {
+            value = nextValue
+            sendActions(for: .valueChanged)
+        }
+        return true
     }
 
-    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
-        super.touchesCancelled(touches, with: event)
+    override func endTracking(_ touch: UITouch?, with event: UIEvent?) {
+        if let touch {
+            let width = max(bounds.width, 1)
+            let deltaX = touch.location(in: self).x - dragStartX
+            let deltaValue = Float(deltaX / width) * maximumValue
+            let nextValue = min(max(dragStartValue + deltaValue, 0), maximumValue)
+            if abs(nextValue - value) > 0.0001 {
+                value = nextValue
+                sendActions(for: .valueChanged)
+            }
+        }
         updateTrackHighlight(false)
+        super.endTracking(touch, with: event)
     }
 
     override func cancelTracking(with event: UIEvent?) {
-        super.cancelTracking(with: event)
         updateTrackHighlight(false)
+        super.cancelTracking(with: event)
+    }
+
+    override func accessibilityIncrement() {
+        let step = max(maximumValue * 0.05, 5)
+        value = min(value + step, maximumValue)
+        sendActions(for: .valueChanged)
+    }
+
+    override func accessibilityDecrement() {
+        let step = max(maximumValue * 0.05, 5)
+        value = max(value - step, 0)
+        sendActions(for: .valueChanged)
     }
 
     func setTrackHighlightedForTesting(_ highlighted: Bool) {
@@ -394,8 +502,9 @@ private struct NowPlayingTimeLabels: View {
         let spatialAnimation: Animation? = accessibilityReduceMotion
             ? nil
             : (isPressed ? NowPlayingProgressFeedbackSpec.pressSpring : NowPlayingProgressFeedbackSpec.releaseSpring)
-        let elapsedText = formatPlaybackTime(interaction.scrubbingProgress ?? player.progress)
-        let remainingText = "−\(formatPlaybackTime(max(player.duration - (interaction.scrubbingProgress ?? player.progress), 0)))"
+        let currentProgress = interaction.displayProgress(live: player.progress)
+        let elapsedText = formatPlaybackTime(currentProgress)
+        let remainingText = "−\(formatPlaybackTime(max(player.duration - currentProgress, 0)))"
 
         HStack {
             Text(elapsedText)

@@ -24,6 +24,7 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
     @State private var geometryState: NowPlayingGeometry
     @State private var artworkPageFrame = CGRect.zero
     @State private var lyricsModel = NowPlayingLyricsModel()
+    @State private var progressInteraction = NowPlayingProgressInteraction()
     @State private var controlsHeight = NowPlayingBottomControls.overlayHeight
     @State private var importingLyrics = false
     @State private var importTrackID: String?
@@ -80,6 +81,19 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
         .foregroundStyle(.white)
         .environment(\.colorScheme, .dark)
         .environment(\.playerVisualsActive, visualsActive)
+        .background {
+            LyricsControlsAutoHideObserver(
+                onLyricsPage: page == .lyrics,
+                controlsVisible: showsLyricsControls,
+                active: visualsActive,
+                voiceOver: accessibilityVoiceOverEnabled,
+                touching: lyricsControlTouchCount > 0,
+                transitioning: pageChange != nil,
+                generation: appleMusicControlsActivityGeneration,
+                onAutoHide: { setAppleMusicLyricsControlsVisible(false) }
+            )
+        }
+        .environment(progressInteraction)
         .task(id: artworkPreparationIDs) {
             for identity in Set(artworkPreparationIDs) { services?.artwork.prepare(identity) }
         }
@@ -100,7 +114,6 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
         .onChange(of: accessibilityVoiceOverEnabled) { _, enabled in
             if enabled, page == .lyrics { showsLyricsControls = true }
         }
-        .task(id: lyricsControlsIdleKey) { await hideLyricsControlsAfterIdle() }
         .onChange(of: player.currentTrack == nil) { _, empty in if empty { closePlayer() } }
         .onDisappear { finishPageChange() }
         .fileImporter(isPresented: $importingLyrics, allowedContentTypes: [.data, .plainText]) { result in
@@ -435,32 +448,6 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
         registerAppleMusicControlsActivity()
     }
 
-    private var lyricsControlsIdleKey: LyricsControlsIdleKey {
-        LyricsControlsIdleKey(
-            page: page,
-            controlsVisible: showsLyricsControls,
-            active: visualsActive,
-            voiceOver: accessibilityVoiceOverEnabled,
-            touching: lyricsControlTouchCount > 0,
-            transitioning: pageChange != nil,
-            generation: appleMusicControlsActivityGeneration
-        )
-    }
-
-    private func hideLyricsControlsAfterIdle() async {
-        guard LyricsControlsIdle.shouldScheduleHide(
-            onLyricsPage: page == .lyrics,
-            controlsVisible: showsLyricsControls,
-            voiceOver: accessibilityVoiceOverEnabled,
-            playerActive: visualsActive,
-            touching: lyricsControlTouchCount > 0,
-            transitioning: pageChange != nil
-        ) else { return }
-        do { try await Task.sleep(for: LyricsControlsIdle.duration) } catch { return }
-        guard !Task.isCancelled else { return }
-        setAppleMusicLyricsControlsVisible(false)
-    }
-
     private func lyricsControlTouchBegan() {
         guard page == .lyrics else { return }
         lyricsControlTouchCount += 1
@@ -520,22 +507,76 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
 }
 
 enum LyricsControlsIdle {
-    static let duration: Duration = .seconds(3)
+    static let duration: Duration = .seconds(4)
 
     static func shouldScheduleHide(onLyricsPage: Bool, controlsVisible: Bool, voiceOver: Bool,
-                                    playerActive: Bool, touching: Bool, transitioning: Bool) -> Bool {
-        onLyricsPage && controlsVisible && playerActive && !voiceOver && !touching && !transitioning
+                                    playerActive: Bool, touching: Bool, transitioning: Bool,
+                                    isPlaying: Bool = true) -> Bool {
+        onLyricsPage && controlsVisible && playerActive && isPlaying && !voiceOver && !touching && !transitioning
     }
 }
 
 private struct LyricsControlsIdleKey: Equatable {
-    let page: NowPlayingPage
+    let onLyricsPage: Bool
+    let controlsVisible: Bool
+    let active: Bool
+    let isPlaying: Bool
+    let voiceOver: Bool
+    let touching: Bool
+    let transitioning: Bool
+    let generation: Int
+}
+
+/// Observes `player.isPlaying` and scrubbing state outside `NowPlayingContent.body`
+/// so toggling playback disables auto-hide without re-evaluating the whole player tree.
+private struct LyricsControlsAutoHideObserver: View {
+    @Environment(PlayerState.self) private var player
+    @Environment(NowPlayingProgressInteraction.self) private var progressInteraction: NowPlayingProgressInteraction?
+    let onLyricsPage: Bool
     let controlsVisible: Bool
     let active: Bool
     let voiceOver: Bool
     let touching: Bool
     let transitioning: Bool
     let generation: Int
+    let onAutoHide: () -> Void
+
+    private var isScrubbing: Bool {
+        progressInteraction?.isPressed == true || progressInteraction?.scrubbingProgress != nil
+    }
+
+    private var idleKey: LyricsControlsIdleKey {
+        LyricsControlsIdleKey(
+            onLyricsPage: onLyricsPage,
+            controlsVisible: controlsVisible,
+            active: active,
+            isPlaying: player.isPlaying,
+            voiceOver: voiceOver,
+            touching: touching || isScrubbing,
+            transitioning: transitioning,
+            generation: generation
+        )
+    }
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
+            .task(id: idleKey) {
+                guard LyricsControlsIdle.shouldScheduleHide(
+                    onLyricsPage: onLyricsPage,
+                    controlsVisible: controlsVisible,
+                    voiceOver: voiceOver,
+                    playerActive: active,
+                    touching: touching || isScrubbing,
+                    transitioning: transitioning,
+                    isPlaying: player.isPlaying
+                ) else { return }
+                do { try await Task.sleep(for: LyricsControlsIdle.duration) } catch { return }
+                guard !Task.isCancelled else { return }
+                onAutoHide()
+            }
+    }
 }
 
 /// Observes touches on the player without taking them from buttons, sliders, or lyric rows.

@@ -121,7 +121,11 @@ private struct LocalLyricsRow: View {
             }
         }
         .scaleEffect(appearance.focused ? 1 : motion.deselectedScale, anchor: .topLeading)
-        .animation(animation, value: appearance.focused)
+        .animation(
+            appearance.animated && !appearance.reducesMotion
+                ? .timingCurve(0.22, 1, 0.36, 1, duration: 0.25) : nil,
+            value: appearance.focused
+        )
         .animation(animation, value: opacity)
         .animation(animation, value: radius)
         .accessibilityAddTraits(appearance.focused ? .isSelected : [])

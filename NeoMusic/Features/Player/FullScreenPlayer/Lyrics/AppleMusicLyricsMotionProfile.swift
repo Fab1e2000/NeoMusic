@@ -63,7 +63,7 @@ nonisolated struct AppleMusicLyricsMotionProfile: Equatable, Sendable {
         translationBackgroundVocalsFontCoefficient: 0.36,
         transliterationBackgroundVocalsFontCoefficient: 0.27,
         cascadeDelay: 0.05,
-        deselectedScale: 0.98,
+        deselectedScale: 0.96,
         nonFocusedBlurRadius: 2.0,
         maximumNonFocusedBlurRadius: 4.25,
         selectedTextOpacity: 1,
