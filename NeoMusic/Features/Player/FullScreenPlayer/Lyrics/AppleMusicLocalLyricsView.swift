@@ -335,8 +335,9 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
         let next = activeRowIndex(for: value.activeID, updatingSuppression: true)
         let changed = next != focusedIndex
         let unblurred = browsing || value.isScrubbing
-        let exitedUnblurred = !unblurred && visibleRows.contains { $0.appearance.browsing }
-        let appearanceAnimated = (changed || exitedUnblurred || scrubbingChanged) && wasActive && !value.reducesMotion
+        let exitedBrowsing = !unblurred && !scrubbingChanged && visibleRows.contains { $0.appearance.browsing }
+        // Pressing/releasing the progress bar toggles blur instantaneously like Apple Music.
+        let appearanceAnimated = (changed || exitedBrowsing) && wasActive && !value.reducesMotion
         let currentVisualSize = CGSize(
             width: bounds.width,
             height: max(bounds.height - 2 * Self.viewportOverscan, 0)
