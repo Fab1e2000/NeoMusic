@@ -45,11 +45,18 @@ final class DownloadMusicIntegration {
             guard let self, let songID = self.songID(id), store.records[songID] != nil else { return nil }
             return songID
         }
-        LocalLibrary.songLibrary.downloadedFavoriteAction = { [weak self] song, liked in
+        LocalLibrary.songLibrary.downloadedFavoriteAction = { [weak self] song, liked, playsSuccessHaptic in
             guard let self, let id = self.songID(song.id), store.records[id] != nil else { return false }
-            guard let music = self.account.music, music.userID != nil else { self.requestLogin?(); return true }
+            guard let music = self.account.music, let owner = music.userID else { self.requestLogin?(); return true }
+            let revision = music.sessionRevision
             Task {
-                do { try await music.setLiked(songID: id, liked: liked); await self.publishMetadataAsync() }
+                do {
+                    try await music.setLiked(songID: id, liked: liked)
+                    await self.publishMetadataAsync()
+                    guard revision == music.sessionRevision, music.userID == owner else { return }
+                    if playsSuccessHaptic { LibraryHaptics.success() }
+                    LocalLibrary.toasts.show(liked ? .favorited : .unfavorited)
+                }
                 catch is CancellationError { }
                 catch { LocalLibrary.toasts.show(.error(error.localizedDescription)) }
             }

@@ -64,7 +64,7 @@ enum CollectionTrackUI {
                                           notify: @escaping (LibraryToast) -> Void) -> UISwipeActionsConfiguration {
         let next = UIContextualAction(style: .normal, title: nil) { _, _, done in
             songActions.playNext(song)
-            notify(.playingNext)
+            if !songActions.defersQueueNotice { notify(.playingNext) }
             done(true)
         }
         next.image = UIImage(systemName: "text.line.first.and.arrowtriangle.forward")
@@ -74,7 +74,7 @@ enum CollectionTrackUI {
 
         let later = UIContextualAction(style: .normal, title: nil) { _, _, done in
             songActions.playLater(song)
-            notify(.addedToQueue)
+            if !songActions.defersQueueNotice { notify(.addedToQueue) }
             done(true)
         }
         later.image = UIImage(systemName: "text.line.last.and.arrowtriangle.forward")
@@ -131,9 +131,10 @@ enum CollectionTrackUI {
         case .like:
             let like = UIContextualAction(style: .normal, title: nil) { _, _, done in
                 done(true)
-                LibraryHaptics.success()
+                let asyncFavorite = songActions.isAsynchronousFavorite(song)
+                if !asyncFavorite { LibraryHaptics.success() }
                 songActions.toggleFavorite(song)
-                notify(.favorited)
+                if !asyncFavorite { notify(.favorited) }
             }
             like.image = UIImage(systemName: "heart.fill")
             like.backgroundColor = .systemPink
@@ -155,13 +156,14 @@ enum CollectionTrackUI {
         case .removeFromLiked:
             let remove = UIContextualAction(style: .normal, title: nil) { _, _, done in
                 done(true)
+                let asyncFavorite = songActions.isAsynchronousFavorite(song)
                 CenteredActionSheet.confirmRemoveFromLiked {
                     if animateFavoriteRemoval {
                         withAnimation { songActions.removeFromFavorites(song) }
                     } else {
                         songActions.removeFromFavorites(song)
                     }
-                    notify(.unfavorited)
+                    if !asyncFavorite { notify(.unfavorited) }
                 }
             }
             remove.image = UIImage(systemName: "trash")

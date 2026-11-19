@@ -35,7 +35,7 @@ final class DownloadedLibraryTests: XCTestCase {
         let downloaded = song("Downloads/one.flac"), imported = song("Imported/two.flac")
         let library = SongLibrary(songs: [downloaded, imported], defaults: defaults)
         var requested: [(String, Bool)] = []
-        library.downloadedFavoriteAction = { song, liked in
+        library.downloadedFavoriteAction = { song, liked, _ in
             guard song.id == downloaded.id else { return false }
             requested.append((song.id, liked))
             return true

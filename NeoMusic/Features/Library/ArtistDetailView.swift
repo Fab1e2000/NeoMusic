@@ -38,7 +38,6 @@ struct ArtistDetailView: View {
     @ScaledMetric(relativeTo: .callout) private var releaseTitleSize = 16.0
     @ScaledMetric(relativeTo: .title3) private var headingSize = 20.0
     @State private var biography = false
-    @State private var releaseFeedback = 0
     private var identity: String { detail.id.isEmpty ? detail.name : detail.id }
     var body: some View {
         ScrollView {
@@ -74,7 +73,6 @@ struct ArtistDetailView: View {
                             CollectionDownloadButton(route: route, songs: [], compact: true)
                         } else if let collectRelease {
                             Button {
-                                releaseFeedback &+= 1
                                 collectRelease(latest)
                             } label: {
                                 Image(systemName: "plus")
@@ -87,7 +85,6 @@ struct ArtistDetailView: View {
                             .accessibilityLabel("将\(latest.title)加入资料库")
                         }
                     }.padding(12).padding(.trailing, 8).background(.white.opacity(0.13), in: .rect(cornerRadius: 26)).overlay(RoundedRectangle(cornerRadius: 26).strokeBorder(.white.opacity(0.17), lineWidth: 0.7)).padding(.horizontal, 20).padding(.top, 24)
-                        .sensoryFeedback(.success, trigger: releaseFeedback)
                 }
                 if !detail.songs.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
@@ -148,10 +145,10 @@ struct ArtistDetailView: View {
         return navigationPreview
     }
     private func favorite() {
-        LibraryHaptics.success()
         if let toggleFavorite {
             toggleFavorite()
         } else {
+            LibraryHaptics.success()
             actions.toggleFavorite(.artist(identity))
             actions.notify(detail.isFavorite ? .unfavorited : .favorited)
         }

@@ -158,7 +158,7 @@ final class SongLibrary {
     @ObservationIgnored private(set) var catalogRevision = 0
     private var isBatching = false
     @ObservationIgnored var downloadedFileID: (@MainActor (String) -> String?)?
-    @ObservationIgnored var downloadedFavoriteAction: (@MainActor (LibrarySongItem, Bool) -> Bool)?
+    @ObservationIgnored var downloadedFavoriteAction: (@MainActor (LibrarySongItem, Bool, Bool) -> Bool)?
 
     func refreshDownloadPresentation() { rebuildCatalog() }
 
@@ -253,7 +253,7 @@ final class SongLibrary {
             if externalSongs != updated { externalSongs = updated }
         }
     }
-    @ObservationIgnored var onlineFavoriteAction: (@MainActor (String, Bool) -> Void)?
+    @ObservationIgnored var onlineFavoriteAction: (@MainActor (String, Bool, Bool) -> Void)?
     private let defaults: UserDefaults
     init(songs: [LibrarySongItem], defaults: UserDefaults = .standard) {
         self.songs = []
@@ -333,10 +333,10 @@ final class SongLibrary {
         }.map(\.element)
     }
 
-    func setFavorite(_ id: String, _ value: Bool) {
-        if let song = song(id: id), downloadedFavoriteAction?(song, value) == true { return }
+    func setFavorite(_ id: String, _ value: Bool, playsSuccessHaptic: Bool = true) {
+        if let song = song(id: id), downloadedFavoriteAction?(song, value, playsSuccessHaptic) == true { return }
         if OnlineSongIdentity.parse(id) != nil {
-            if song(id: id)?.isFavorite != value { onlineFavoriteAction?(id, value) }
+            if song(id: id)?.isFavorite != value { onlineFavoriteAction?(id, value, playsSuccessHaptic) }
             return
         }
         guard let index = songs.firstIndex(where: { $0.id == id }), songs[index].isFavorite != value else { return }

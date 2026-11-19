@@ -62,13 +62,19 @@ final class OnlineLibraryIntegration {
             let stream = try await music.stream(songID: parts.song)
             return PlaybackResource(url: stream.url, expiresAt: stream.expiresAt, quality: stream.quality.rawValue)
         }
-        LocalLibrary.songLibrary.onlineFavoriteAction = { [weak music] id, liked in
+        LocalLibrary.songLibrary.onlineFavoriteAction = { [weak music] id, liked, playsSuccessHaptic in
             guard let music, let parts = OnlineSongIdentity.parse(id), music.userID == parts.owner else {
                 LocalLibrary.toasts.show(.error("请登录原网易云账号后重试"))
                 return
             }
+            let revision = music.sessionRevision
             Task {
-                do { try await music.setLiked(songID: parts.song, liked: liked) }
+                do {
+                    try await music.setLiked(songID: parts.song, liked: liked)
+                    guard revision == music.sessionRevision, music.userID == parts.owner else { return }
+                    if playsSuccessHaptic { LibraryHaptics.success() }
+                    LocalLibrary.toasts.show(liked ? .favorited : .unfavorited)
+                }
                 catch is CancellationError { }
                 catch { LocalLibrary.toasts.show(.error(error.localizedDescription)) }
             }
@@ -241,6 +247,7 @@ final class OnlineLibraryIntegration {
                 if !subscribed, music.playlists.contains(where: { $0.id == playlistID && $0.isSubscribed == true }) == false {
                     LocalLibrary.playlistLibrary.releaseRetainedOnlinePlaylist(PlaylistRouteIdentity.accountID(owner: owner, playlistID: playlistID))
                 }
+                if subscribed { LibraryHaptics.success() }
                 onSubscribedChanged?()
             } catch is CancellationError { }
             catch {

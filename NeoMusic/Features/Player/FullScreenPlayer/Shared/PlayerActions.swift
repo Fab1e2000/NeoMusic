@@ -84,6 +84,7 @@ extension SongMenuConfiguration {
     private let feedbackAction: () -> Void
     private let favoriteLookup: (String) -> Bool
     private let favoriteAction: (String) -> Void
+    private let favoriteCompletesSynchronously: ((String) -> Bool)?
     private let playlistAction: (String) -> Void
     private let albumAction: (String) -> Void
     private let artistAction: (String) -> Void
@@ -98,10 +99,12 @@ extension SongMenuConfiguration {
          openNamedArtist: ((String, String) -> Void)? = nil,
          feedback: @escaping () -> Void = {},
          notify: @escaping (PlayerNotice) -> Void = { _ in },
+         completesFavoriteSynchronously: ((String) -> Bool)? = nil,
          audioQuality: ((String) -> PlayerAudioQuality?)? = nil,
          openAudioQualitySettings: (() -> Void)? = nil) {
         artistLookup = artistNames; namedArtistAction = openNamedArtist
-        favoriteLookup = isFavorite; favoriteAction = toggleFavorite; playlistAction = addToPlaylist; albumAction = openAlbum; artistAction = openArtist
+        favoriteLookup = isFavorite; favoriteAction = toggleFavorite; favoriteCompletesSynchronously = completesFavoriteSynchronously
+        playlistAction = addToPlaylist; albumAction = openAlbum; artistAction = openArtist
         feedbackAction = feedback
         notifyAction = notify
         audioQualityLookup = audioQuality
@@ -123,10 +126,13 @@ extension SongMenuConfiguration {
     }
     public func notify(_ toast: PlayerNotice) { notifyAction(toast) }
     public func toggleFavorite(_ track: PlayerTrack) {
-        feedbackAction()
         let removing = isFavorite(track)
+        let completesImmediately = favoriteCompletesSynchronously?(track.id) ?? true
         favoriteAction(track.id)
-        notify(removing ? .unfavorited : .favorited)
+        if completesImmediately {
+            feedbackAction()
+            notify(removing ? .unfavorited : .favorited)
+        }
     }
 }
 

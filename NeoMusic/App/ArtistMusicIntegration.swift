@@ -521,6 +521,7 @@ import Observation
                 ? store.subscribedAlbums.contains { $0.id == id }
                 : store.subscribedArtists.contains { $0.id == id }
             guard confirmed == subscribed else { throw NeteaseAccountError.invalidResponse }
+            LibraryHaptics.success()
             if !route.isCatalogAlbum { LocalLibrary.toasts.show(subscribed ? .favorited : .unfavorited) }
         } catch is CancellationError {
         } catch {
@@ -536,6 +537,7 @@ import Observation
         }
         if owner == nil {
             let login: (LibrarySongItem) -> Void = { [weak self] _ in self?.showsLogin = true }
+            actions.defersQueueNotice = true
             actions.playNext = login; actions.playLater = login; actions.toggleFavorite = login
             actions.addToPlaylist = login; actions.removeFromFavorites = login
         }
@@ -543,6 +545,7 @@ import Observation
     }
     var collectionActions: CollectionMenuActions {
         var actions = LocalLibrary.menuActions
+        actions.defersQueueNotice = true
         actions.play = { [weak self] route, shuffle in
             guard let self else { return }
             guard let captured = self.owner else { self.showsLogin = true; return }
@@ -562,7 +565,10 @@ import Observation
             guard available, captured == owner, let id = Self.number(route) else { return }
             let songs = route.isCatalogAlbum ? albumDetail(id)?.songs : artistDetail(id)?.songs
             guard let songs else { return }
-            if let next { if next { self.player.insertNext(songs) } else { self.player.appendLater(songs) } }
+            if let next {
+                if next { self.player.insertNext(songs) } else { self.player.appendLater(songs) }
+                LocalLibrary.toasts.show(next ? .playingNext : .addedToQueue)
+            }
             else { self.playlistLibrary.pendingAddition = .init(songs: songs) }
         }
     }

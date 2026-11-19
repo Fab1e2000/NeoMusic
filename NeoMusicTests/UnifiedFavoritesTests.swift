@@ -1,4 +1,5 @@
 import XCTest
+import FullScreenPlayer
 @testable import NeoMusic
 
 @MainActor
@@ -21,11 +22,14 @@ final class UnifiedFavoritesTests: XCTestCase {
     func testOnlineLikeDelegatesWithoutPublishingSuccess() {
         let library = SongLibrary(songs: [song("local")])
         library.replaceOnline([song("netease:1:1"), song("netease:1:1")])
-        var request: (String, Bool)?
-        library.onlineFavoriteAction = { request = ($0, $1) }
+        var request: (String, Bool, Bool)?
+        library.onlineFavoriteAction = { request = ($0, $1, $2) }
         library.toggleFavorite("netease:1:1")
         XCTAssertEqual(request?.0, "netease:1:1")
         XCTAssertEqual(request?.1, false)
+        XCTAssertEqual(request?.2, true)
+        library.setFavorite("netease:1:1", false, playsSuccessHaptic: false)
+        XCTAssertEqual(request?.2, false)
         XCTAssertTrue(library.onlineSongs[0].isFavorite)
         XCTAssertEqual(library.onlineSongs.count, 1)
         library.replaceOnline([])
@@ -46,5 +50,33 @@ final class UnifiedFavoritesTests: XCTestCase {
         XCTAssertEqual(restoredTime.timeIntervalSince1970, time.timeIntervalSince1970)
         restored.setFavorite("old", false)
         XCTAssertNil(restored.songs[0].favoriteAddedAt)
+    }
+
+    func testPlayerActionsDefersFavoriteFeedbackForAsynchronousTracks() {
+        var feedbackCount = 0
+        var notices: [PlayerNotice] = []
+        var toggled: [String] = []
+        let actions = PlayerActions(
+            isFavorite: { _ in false },
+            toggleFavorite: { toggled.append($0) },
+            addToPlaylist: { _ in },
+            openAlbum: { _ in },
+            openArtist: { _ in },
+            feedback: { feedbackCount += 1 },
+            notify: { notices.append($0) },
+            completesFavoriteSynchronously: { $0 == "local" }
+        )
+        let onlineTrack = PlayerTrack(id: "netease:1:1", title: "Online", artists: "Artist", albumTitle: "Album", coverURL: nil, duration: 100)
+        let localTrack = PlayerTrack(id: "local", title: "Local", artists: "Artist", albumTitle: "Album", coverURL: nil, duration: 100)
+
+        actions.toggleFavorite(onlineTrack)
+        XCTAssertEqual(toggled, ["netease:1:1"])
+        XCTAssertEqual(feedbackCount, 0)
+        XCTAssertTrue(notices.isEmpty)
+
+        actions.toggleFavorite(localTrack)
+        XCTAssertEqual(toggled, ["netease:1:1", "local"])
+        XCTAssertEqual(feedbackCount, 1)
+        XCTAssertEqual(notices, [.favorited])
     }
 }

@@ -611,8 +611,9 @@ struct NowPlayingQueueList: UIViewRepresentable {
             (scrollView as? EdgeFadedCollectionView)?.setNeedsLayout()
             let offset = scrollView.contentOffset.y + scrollView.adjustedContentInset.top
             latest.onScroll(min(max(offset, 0), latest.headerHeight))
-            // 手指按着往下拉列表时不振。
+            // 仅在用户拖动或惯性减速/吸附时触发，且手指按着往下拉列表时不振。
             if let previous = previousOffset, latest.headerHeight > 0,
+               scrollView.isTracking || scrollView.isDecelerating,
                !(scrollView.isTracking && offset < previous) {
                 playSnapFeedbackIfReached(from: previous, to: offset, headerHeight: latest.headerHeight)
             }

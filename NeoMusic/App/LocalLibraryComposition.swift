@@ -283,7 +283,10 @@ enum LocalLibrary {
                 guard let song = song(id: id) else { return }
                 if let ref = song.artistReferences.first(where: { $0.name == name }) { openRoute(.artist(ref.id)) }
                 else if song.isNeteaseCatalogSong || catalog.downloadedOnlineSongID?(id) != nil { catalog.openSongArtist?(id, name, openRoute) }
-            }, feedback: { LibraryHaptics.success() }, notify: { toasts.show(LibraryToast($0)) }, audioQuality: { id in
+            }, feedback: { LibraryHaptics.success() }, notify: { toasts.show(LibraryToast($0)) }, completesFavoriteSynchronously: { id in
+                guard let song = song(id: id) else { return false }
+                return !song.isNeteaseCatalogSong && !downloads.canRemove(song)
+            }, audioQuality: { id in
                 guard player.hasCurrent, player.current.id == id else { return nil }
                 if !player.current.isOnline {
                     return PlayerAudioQuality.localFile(runtime.root.appending(path: id))
@@ -456,7 +459,7 @@ enum LocalLibrary {
             play: { songs, index, source in player.requestPlay(songs, startingAt: index, from: source) },
             playNext: { player.insertNext([$0]) },
             toggleFavorite: { songLibrary.toggleFavorite($0.id) },
-            removeFromFavorites: { songLibrary.setFavorite($0.id, false) },
+            removeFromFavorites: { songLibrary.setFavorite($0.id, false, playsSuccessHaptic: false) },
             togglePin: { songLibrary.togglePin($0.id) },
             addToPlaylist: { song in
                 if let prepareSongForLibraryAction {
@@ -480,7 +483,8 @@ enum LocalLibrary {
                 if let ref = song.artistReferences.first { open(.artist(ref.id)) }
                 else if song.isNeteaseCatalogSong || catalog.downloadedOnlineSongID?(song.id) != nil { catalog.openSongArtist?(song.id, nil, open) }
             },
-            notify: { toasts.show($0) }
+            notify: { toasts.show($0) },
+            isAsynchronousFavorite: { $0.isNeteaseCatalogSong || downloads.canRemove($0) }
         )
     }
 

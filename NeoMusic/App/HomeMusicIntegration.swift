@@ -615,6 +615,7 @@ import Observation
             showsLogin = true
             return
         }
+        if !action.opensDetail { LibraryHaptics.impact() }
         runQuickAction(action)
     }
 
@@ -895,28 +896,30 @@ import Observation
             actions.collect = { [weak self] in self?.changeCollection(id, subscribed: true) }
         }
         var collection = LocalLibrary.menuActions
+        collection.defersQueueNotice = true
         collection.play = { [weak self] _, shuffled in self?.requestPlayback(id, songID: nil, shuffled: shuffled) }
-        collection.playNext = { [weak self] _ in self?.withCompleteCollection(id) { [weak self] in self?.player.insertNext($0) } }
-        collection.playLater = { [weak self] _ in self?.withCompleteCollection(id) { [weak self] in self?.player.appendLater($0) } }
+        collection.playNext = { [weak self] _ in self?.withCompleteCollection(id) { [weak self] in self?.player.insertNext($0); LocalLibrary.toasts.show(.playingNext) } }
+        collection.playLater = { [weak self] _ in self?.withCompleteCollection(id) { [weak self] in self?.player.appendLater($0); LocalLibrary.toasts.show(.addedToQueue) } }
         var songs = LocalLibrary.songActions(for: route)
+        songs.defersQueueNotice = true
         songs.play = { [weak self] list, index, _ in
             guard list.indices.contains(index) else { return }
             let target = list[index]
             guard let songID = target.onlineSongID ?? LocalLibrary.catalog.downloadedOnlineSongID?(target.id) else { return }
             self?.requestPlayback(id, songID: songID, shuffled: false)
         }
-        songs.playNext = { [weak self] song in guard self?.owner != nil else { self?.showsLogin = true; return }; self?.player.insertNext([song]) }
-        songs.playLater = { [weak self] song in guard self?.owner != nil else { self?.showsLogin = true; return }; self?.player.appendLater([song]) }
+        songs.playNext = { [weak self] song in guard self?.owner != nil else { self?.showsLogin = true; return }; self?.player.insertNext([song]); LocalLibrary.toasts.show(.playingNext) }
+        songs.playLater = { [weak self] song in guard self?.owner != nil else { self?.showsLogin = true; return }; self?.player.appendLater([song]); LocalLibrary.toasts.show(.addedToQueue) }
         songs.addToPlaylist = { [weak self] song in guard self?.owner != nil else { self?.showsLogin = true; return }; LocalLibrary.playlistLibrary.pendingAddition = .init(songs: [song]) }
-        songs.toggleFavorite = { [weak self] song in self?.setOnlineLiked(song, liked: !song.isFavorite) }
-        songs.removeFromFavorites = { [weak self] song in self?.setOnlineLiked(song, liked: false) }
+        songs.toggleFavorite = { [weak self] song in self?.setOnlineLiked(song, liked: !song.isFavorite, playsSuccessHaptic: !song.isFavorite) }
+        songs.removeFromFavorites = { [weak self] song in self?.setOnlineLiked(song, liked: false, playsSuccessHaptic: false) }
         return AnyView(HomeCollectionDetailView(playlistID: id, library: detailLibrary, actions: actions,
             onAppear: { [weak self] in self?.detailAppeared(id) },
             onDisappear: { [weak self] in self?.detailDisappeared(id) })
             .environment(\.collectionMenuActions, collection).environment(\.songMenuActions, songs))
     }
 
-    private func setOnlineLiked(_ song: LibrarySongItem, liked: Bool) {
+    private func setOnlineLiked(_ song: LibrarySongItem, liked: Bool, playsSuccessHaptic: Bool) {
         guard let owner,
               let number = song.onlineSongID ?? LocalLibrary.catalog.downloadedOnlineSongID?(song.id) else {
             showsLogin = true
@@ -925,7 +928,14 @@ import Observation
         Task { [weak self] in
             guard let self, self.owner == owner, self.account.profile.map({ String($0.userID) }) == owner,
                   let music = self.account.music, music.userID.map(String.init) == owner else { return }
-            do { try await music.setLiked(songID: number, liked: liked) }
+            let revision = music.sessionRevision
+            do {
+                try await music.setLiked(songID: number, liked: liked)
+                guard revision == music.sessionRevision, self.owner == owner,
+                      self.account.profile.map({ String($0.userID) }) == owner else { return }
+                if playsSuccessHaptic { LibraryHaptics.success() }
+                LocalLibrary.toasts.show(liked ? .favorited : .unfavorited)
+            }
             catch is CancellationError {} catch {
                 guard self.owner == owner, self.account.profile.map({ String($0.userID) }) == owner else { return }
                 LocalLibrary.toasts.show(.error(error.localizedDescription))
@@ -993,8 +1003,12 @@ import Observation
                         self.loaded[id] = value; self.updateDetail(id, item: value.0, songs: value.1)
                     }
                     switch action {
-                    case .favorite: LocalLibrary.toasts.show(retained.isFavorite ? .favorited : .unfavorited)
-                    case .pin: LocalLibrary.toasts.show(retained.isPinned ? .pinned : .unpinned)
+                    case .favorite:
+                        LibraryHaptics.success()
+                        LocalLibrary.toasts.show(retained.isFavorite ? .favorited : .unfavorited)
+                    case .pin:
+                        LibraryHaptics.success()
+                        LocalLibrary.toasts.show(retained.isPinned ? .pinned : .unpinned)
                     case .folder: break
                     }
                 }

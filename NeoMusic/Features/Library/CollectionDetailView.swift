@@ -352,7 +352,6 @@ private struct CollectionActions: View {
     @Environment(\.dynamicTypeSize) private var textSize
     @Environment(\.collectionPagePalette) private var palette
     @State private var actionFeedback = 0
-    @State private var collectFeedback = 0
 
     private var canPlay: Bool { detail.route != nil && !detail.songs.isEmpty }
 
@@ -396,7 +395,6 @@ private struct CollectionActions: View {
             }
         }
         .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.6), trigger: actionFeedback)
-        .sensoryFeedback(.success, trigger: collectFeedback)
         if let route = detail.route { CollectionDownloadSummary(route: route) }
         }
     }
@@ -404,7 +402,6 @@ private struct CollectionActions: View {
     private var albumCollectionButton: some View {
         Button {
             guard !detail.isFavorite, let route = detail.route else { return }
-            collectFeedback &+= 1
             actions.toggleFavorite(route)
         } label: {
             Image(systemName: detail.isFavorite ? "arrow.down" : "plus")

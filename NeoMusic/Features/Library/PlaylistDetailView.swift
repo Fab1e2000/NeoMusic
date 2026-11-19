@@ -41,13 +41,12 @@ struct PlaylistDetailView: View {
     @State private var backdrop: AlbumArtworkBackdrop?
     @State private var query = ""
     @State private var sort = DetailSort.order
-    @State private var projection = AsyncListProjection<ProjectionInput, Projection>()
+    @State private var projection = AsyncListProjection<TrackFilterProjectionInput, TrackFilterProjectionResult>()
     @State private var showsAddMusic = false
     @State private var showsEditor = false
     @State private var showsDestinations = false
     @State private var playbackTask: Task<Void, Never>?
     @State private var actionFeedback = 0
-    @State private var collectFeedback = 0
 
     private var playlist: LibraryPlaylistItem? { library.playlist(playlistID) }
     private var backgroundArtwork: Artwork {
@@ -373,7 +372,6 @@ struct PlaylistDetailView: View {
                     .disabled(tracks.isEmpty)
                     if playlist.offersCollection {
                         Button {
-                            collectFeedback &+= 1
                             externalActions?.collect?()
                         } label: {
                             Image(systemName: "plus")
@@ -385,7 +383,6 @@ struct PlaylistDetailView: View {
                     }
                 }
                 .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.6), trigger: actionFeedback)
-                .sensoryFeedback(.success, trigger: collectFeedback)
                 .padding(.top, 15)
                 if !playlist.offersCollection { CollectionDownloadSummary(route: .playlist(playlistID)) }
             }
@@ -456,13 +453,11 @@ struct PlaylistDetailView: View {
         collectionDownloadMenuAction()
         if let toggleFavorite = actions.toggleFavorite {
             Button(playlist.isFavorite ? "撤销喜爱" : "喜爱", systemImage: playlist.isFavorite ? "star.slash.fill" : "star.fill") {
-                LibraryHaptics.success()
                 toggleFavorite()
             }
         }
         if let togglePin = actions.togglePin {
             Button(playlist.isPinned ? "取消置顶播放列表" : "置顶播放列表", systemImage: playlist.isPinned ? "pin.slash" : "pin") {
-                LibraryHaptics.success()
                 togglePin()
             }
         }
@@ -481,7 +476,7 @@ struct PlaylistDetailView: View {
                 isDisabled: tracks.isEmpty,
                 playNext: { collectionActions.playNext(.playlist(playlistID)) },
                 playLater: { collectionActions.playLater(.playlist(playlistID)) },
-                notify: collectionActions.notify)
+                notify: collectionActions.defersQueueNotice ? { _ in } : collectionActions.notify)
         ], firstSectionIsRow: false)
         if playlist.isSubscribed { Section {
             Button("从资料库删除", systemImage: "trash", role: .destructive) { library.pendingDeletion = playlist }

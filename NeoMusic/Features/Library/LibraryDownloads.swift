@@ -175,10 +175,16 @@ struct CollectionDownloadButton: View {
             } else {
                 Button {
                     guard active || actions.canDownload(route) || (completed && actions.canRemoveDownload(route)) else { return }
-                    feedback &+= 1
-                    if active { actions.stopDownload(route) }
-                    else if completed { actions.removeDownload(route) }
-                    else { downloadedHere = true; actions.download(route) }
+                    if active {
+                        feedback &+= 1
+                        actions.stopDownload(route)
+                    } else if completed {
+                        actions.removeDownload(route)
+                    } else {
+                        feedback &+= 1
+                        downloadedHere = true
+                        actions.download(route)
+                    }
                 } label: { label }
                 .buttonStyle(.plain)
                 .disabled(!active && !(completed ? actions.canRemoveDownload(route) : actions.canDownload(route)))

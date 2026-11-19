@@ -181,13 +181,13 @@ private struct SongListRowModifier: ViewModifier {
             .swipeActions(edge: .leading, allowsFullSwipe: true) {
                 Button("插播", systemImage: "text.line.first.and.arrowtriangle.forward") {
                     songActions.playNext(song)
-                    songActions.notify(.playingNext)
+                    if !songActions.defersQueueNotice { songActions.notify(.playingNext) }
                 }
                 .labelStyle(.iconOnly)
                 .tint(.indigo)
                 Button("添加到队列", systemImage: "text.line.last.and.arrowtriangle.forward") {
                     songActions.playLater(song)
-                    songActions.notify(.addedToQueue)
+                    if !songActions.defersQueueNotice { songActions.notify(.addedToQueue) }
                 }
                 .labelStyle(.iconOnly)
                 .tint(.orange)

@@ -35,6 +35,7 @@ struct HomeFeedView: View {
                             ForEach(model.quickActions) { item in
                                 HomeQuickActionCard(item: item, state: model.quickActionStates[item.action] ?? .idle,
                                                     sources: artworkSources, sourceID: "\(model.navigationOwnerID ?? "public"):quick:\(item.id)",
+                                                    allowsImmediateFeedback: false,
                                                     captureSource: { quickActionSource = $0 }) {
                                     model.performQuickAction(item.action)
                                 }
@@ -93,6 +94,7 @@ struct HomeQuickActionCard: View {
     let state: HomeQuickActionState
     var sources: LibraryArtworkSources? = nil
     var sourceID: String? = nil
+    var allowsImmediateFeedback = true
     var captureSource: (@escaping () -> UIView?) -> Void = { _ in }
     let action: () -> Void
     @State private var localSources = LibraryArtworkSources()
@@ -129,7 +131,7 @@ struct HomeQuickActionCard: View {
     }
 
     private func activate() {
-        if !item.action.opensDetail { LibraryHaptics.impact() }
+        if allowsImmediateFeedback, !item.action.opensDetail { LibraryHaptics.impact() }
         captureSource { [sources = artworkSources, id = sourceIdentity] in sources.view(for: id) }
         action()
     }

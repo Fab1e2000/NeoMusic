@@ -28,7 +28,7 @@ import XCTest
         let library = SongLibrary(songs: [], defaults: defaults)
         let song = LibrarySongItem(id: "netease:1:42", title: "Recommended", artist: "Artist", album: "Album", albumArtist: "Artist", trackNumber: 0, artwork: .missing)
         var requested: String?
-        library.onlineFavoriteAction = { id, liked in if liked { requested = id } }
+        library.onlineFavoriteAction = { id, liked, _ in if liked { requested = id } }
         library.replaceExternalSongs([song, song])
         XCTAssertTrue(library.songs.isEmpty)
         XCTAssertTrue(library.onlineSongs.isEmpty)

@@ -160,6 +160,8 @@ struct CollectionMenuActions {
     var delete: (LibraryRoute) -> Void = { _ in }
     /// 显示操作完成的提示，例如“已喜爱”“已置顶”。
     var notify: (LibraryToast) -> Void = { _ in }
+    /// 为 true 时由队列操作本身在校验与入队成功后发提示，菜单不提前触发。
+    var defersQueueNotice = false
     /// 请求移除完整集合的下载；宿主先显示共享文件确认。
     var removeDownload: (LibraryRoute) -> Void = { _ in }
     var download: (LibraryRoute) -> Void = { _ in }
@@ -187,7 +189,7 @@ struct CollectionMenuActions {
     }
 
     private func toggleFavoriteAndNotify(_ item: LibraryShelfItem, _ route: LibraryRoute) {
-        LibraryHaptics.success()
+        if !item.id.hasPrefix("catalog:") { LibraryHaptics.success() }
         toggleFavorite(route)
         if !item.id.hasPrefix("catalog:") { notify(item.isFavorite ? .unfavorited : .favorited) }
     }
@@ -229,7 +231,7 @@ struct CollectionMenuActions {
     private func queueItems(_ route: LibraryRoute) -> [LibraryMenuItem] {
         libraryQueueMenuItems(playbackSource: playbackSource(),
                               playNext: { playNext(route) }, playLater: { playLater(route) },
-                              notify: notify)
+                              notify: defersQueueNotice ? { _ in } : notify)
     }
 
     private func playItems(_ route: LibraryRoute) -> [LibraryMenuItem] {
@@ -442,6 +444,10 @@ struct SongMenuActions {
     var openArtist: (LibrarySongItem, @escaping (LibraryRoute) -> Void) -> Void = { _, _ in }
     /// 菜单和侧滑共用的完成提示。调用方没另传时用这一份。
     var notify: (LibraryToast) -> Void = { _ in }
+    /// 为 true 时由队列操作本身在校验与入队成功后发提示，菜单与侧滑不提前触发。
+    var defersQueueNotice = false
+    /// 在线或已下载网易云歌曲的喜爱走异步网络请求，成功后再由业务层触发触感与提示。
+    var isAsynchronousFavorite: (LibrarySongItem) -> Bool = { $0.isNeteaseCatalogSong }
 
     /// 专辑详情页曲目的菜单：已隐藏「前往专辑」，保留网易云艺人入口。
     @MainActor func albumTrackSections(for song: LibrarySongItem, isDownloaded: Bool,
@@ -479,16 +485,17 @@ struct SongMenuActions {
                             removeFromPlaylist: (() -> Void)? = nil,
                             goToAlbum: @escaping () -> Void) -> LibraryMenuSections {
         let notify = explicitNotify ?? self.notify
+        let asyncFavorite = isAsynchronousFavorite(song)
         var quick = [favoriteItem(isFavorite: song.isFavorite) {
             if song.isFavorite {
                 CenteredActionSheet.confirmRemoveFromLiked {
-                    toggleFavorite(song)
-                    notify(.unfavorited)
+                    removeFromFavorites(song)
+                    if !asyncFavorite { notify(.unfavorited) }
                 }
             } else {
-                LibraryHaptics.success()
+                if !asyncFavorite { LibraryHaptics.success() }
                 toggleFavorite(song)
-                notify(.favorited)
+                if !asyncFavorite { notify(.favorited) }
             }
         }]
         if let item = downloadItem(for: song) { quick.insert(item, at: 0) }
@@ -499,7 +506,7 @@ struct SongMenuActions {
             })
         }
         var groups: LibraryMenuSections = [quick, additions,
-            libraryQueueMenuItems(playbackSource: playbackSource(), playNext: { playNext(song) }, playLater: { playLater(song) }, notify: notify)]
+            libraryQueueMenuItems(playbackSource: playbackSource(), playNext: { playNext(song) }, playLater: { playLater(song) }, notify: defersQueueNotice ? { _ in } : notify)]
         if let downloads, downloads.canRemove(song) {
             groups.append([LibraryMenuItem(title: "移除下载", systemImage: "xmark.circle") { downloads.requestRemoval([song]) }])
         }
@@ -579,9 +586,10 @@ struct OnlineSongTrailingSwipeButtons: View {
             switch edge {
             case .like:
                 Button("喜欢", systemImage: "heart.fill") {
-                    LibraryHaptics.success()
+                    let asyncFavorite = songActions.isAsynchronousFavorite(song)
+                    if !asyncFavorite { LibraryHaptics.success() }
                     songActions.toggleFavorite(song)
-                    songActions.notify(.favorited)
+                    if !asyncFavorite { songActions.notify(.favorited) }
                 }
                 .labelStyle(.iconOnly)
                 .tint(.pink)
@@ -606,13 +614,14 @@ struct OnlineSongTrailingSwipeButtons: View {
         if items.contains(.removeFromLiked) {
             // 不用 destructive。系统列表会把这个角色当成删掉当前行，歌还在歌单里也会从界面消失。
             Button("从喜欢歌曲移除", systemImage: "trash") {
+                let asyncFavorite = songActions.isAsynchronousFavorite(song)
                 CenteredActionSheet.confirmRemoveFromLiked {
                     if animateRemoval {
                         withAnimation { songActions.removeFromFavorites(song) }
                     } else {
                         songActions.removeFromFavorites(song)
                     }
-                    songActions.notify(.unfavorited)
+                    if !asyncFavorite { songActions.notify(.unfavorited) }
                 }
             }
             .labelStyle(.iconOnly)
