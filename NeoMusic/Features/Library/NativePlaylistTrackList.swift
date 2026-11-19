@@ -266,11 +266,12 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
         configuration.itemSeparatorHandler = { [weak self] path, separator in
             guard let self, let item = source?.itemIdentifier(for: path) else { return separator }
             var result = separator
+            result.color = currentPalette.separator
             switch item {
             case .header:
                 let inset = model?.headerSeparatorInset ?? 0
                 result.topSeparatorVisibility = .hidden
-                result.bottomSeparatorVisibility = model?.songs.isEmpty == false ? .automatic : .hidden
+                result.bottomSeparatorVisibility = (model?.songs.isEmpty == false || model?.showsAddMusicRow == true) ? .automatic : .hidden
                 result.bottomSeparatorInsets = .init(top: 0, leading: inset, bottom: 0, trailing: inset)
             case .banner, .footer:
                 result.topSeparatorVisibility = .hidden
@@ -285,7 +286,7 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
                 result.bottomSeparatorInsets = .init(top: 0, leading: leading, bottom: 0, trailing: 20)
             case .addMusic:
                 result.topSeparatorVisibility = .automatic
-                result.bottomSeparatorVisibility = .automatic
+                result.bottomSeparatorVisibility = model?.songs.isEmpty == false ? .automatic : .hidden
                 result.bottomSeparatorInsets = .init(top: 0, leading: 20, bottom: 0, trailing: 20)
             }
             return result
@@ -421,11 +422,6 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
 
         overrideUserInterfaceStyle = model.scheme == .dark ? .dark : .light
         collectionView.backgroundColor = model.pageColor
-        if (backgroundChanged || schemeChanged), var configuration = listConfiguration {
-            configuration.separatorConfiguration.color = currentPalette.separator
-            listConfiguration = configuration
-            collectionView.setCollectionViewLayout(UICollectionViewCompositionalLayout.list(using: configuration), animated: false)
-        }
         headerHost.rootView = AnyView(hosted(model.header))
         bannerHost.rootView = model.banner.map { AnyView(hosted($0)) } ?? AnyView(EmptyView())
 
@@ -477,7 +473,18 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
             && (previousSongs.count - ids.count) <= 2
             && !collectionView.isDragging
             && !collectionView.isDecelerating
+        let wasAtTop = !isNewAppearance
+            && !collectionView.isDragging
+            && !collectionView.isDecelerating
+            && collectionView.contentOffset.y <= -collectionView.adjustedContentInset.top + 1
         source.apply(snapshot, animatingDifferences: isSmallShrink)
+        if wasAtTop {
+            collectionView.layoutIfNeeded()
+            let topOffset = -collectionView.adjustedContentInset.top
+            if abs(collectionView.contentOffset.y - topOffset) > 0.5 {
+                collectionView.contentOffset.y = topOffset
+            }
+        }
         if environmentChanged || isNewAppearance { observePlayback() }
     }
 
