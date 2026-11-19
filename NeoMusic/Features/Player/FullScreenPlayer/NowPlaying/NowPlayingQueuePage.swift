@@ -44,6 +44,7 @@ struct NowPlayingQueuePage: View {
             NowPlayingQueueList(
                 entries: player.upcomingQueueEntries,
                 version: player.upcomingQueueVersion,
+                trackTransitionKey: player.currentTrackTransitionKey,
                 subtitle: player.automaticContinuationDescription,
                 headerHeight: songHeaderHeight,
                 horizontalInset: Self.contentHorizontalInset,
@@ -66,11 +67,18 @@ struct NowPlayingQueuePage: View {
             .padding(.bottom, bottomContentInset)
         }
         .onAppear {
-            if presentation == .portrait {
-                headerScroll.offset = 0
-                onSongHeaderHiddenChange(false)
-                onSongHeaderOffsetChange(0)
-            }
+            resetSongHeaderState()
+        }
+        .onChange(of: player.currentTrackTransitionKey) { _, _ in
+            resetSongHeaderState()
+        }
+    }
+
+    private func resetSongHeaderState() {
+        if presentation == .portrait {
+            headerScroll.offset = 0
+            onSongHeaderHiddenChange(false)
+            onSongHeaderOffsetChange(0)
         }
     }
 
@@ -251,8 +259,10 @@ private struct NowPlayingQueueModeControls: View {
             .frame(maxWidth: .infinity)
             .frame(height: 38)
             .opacity(isEnabled ? 1 : 0.25)
+            .frame(height: 44)
             .contentShape(.rect(cornerRadius: 22))
         }
+        .padding(.vertical, -3)
         .buttonStyle(.plain)
         .disabled(!isEnabled)
         .accessibilityLabel(accessibilityLabel)

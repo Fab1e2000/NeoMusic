@@ -29,6 +29,7 @@ struct NowPlayingLyricsPage: View {
     let lyrics: PlayerLyrics?
     let errorMessage: String?
     let isActive: Bool
+    let isPageVisible: Bool
     let presentation: NowPlayingLyricsPresentation
     let isInterfaceHidden: Bool
     @Environment(PlayerState.self) private var player
@@ -49,6 +50,7 @@ struct NowPlayingLyricsPage: View {
         lyrics: PlayerLyrics?,
         errorMessage: String?,
         isActive: Bool = true,
+        isPageVisible: Bool? = nil,
         presentation: NowPlayingLyricsPresentation = .portrait,
         isInterfaceHidden: Bool = false,
         artworkNamespace: Namespace.ID,
@@ -64,6 +66,7 @@ struct NowPlayingLyricsPage: View {
         self.lyrics = lyrics
         self.errorMessage = errorMessage
         self.isActive = isActive
+        self.isPageVisible = isPageVisible ?? isActive
         self.presentation = presentation
         self.isInterfaceHidden = isInterfaceHidden
         self.artworkNamespace = artworkNamespace
@@ -119,14 +122,20 @@ struct NowPlayingLyricsPage: View {
             if let errorMessage {
                 ContentUnavailableView("歌词读取失败", systemImage: "exclamationmark.bubble", description: Text(errorMessage))
                     .padding(.top, sharedSongHeaderInset)
+                    .contentShape(Rectangle())
+                    .onTapGesture { onInterfaceInteraction?() }
             } else if let lyrics {
                 if lyrics.isEmpty {
                     ContentUnavailableView("暂无歌词", systemImage: "quote.bubble")
                         .padding(.top, sharedSongHeaderInset)
+                        .contentShape(Rectangle())
+                        .onTapGesture { onInterfaceInteraction?() }
                 } else if lyrics.isTimed {
                     AppleMusicLocalLyricsView(
                         lyrics: lyrics, activeID: lastActiveLineID,
-                        bottomOverlayHeight: appleMusicBottomOverlayHeight, isActive: isActive,
+                        bottomOverlayHeight: appleMusicBottomOverlayHeight,
+                        isActive: isActive,
+                        isPageVisible: isPageVisible,
                         isInterfaceHidden: Binding(get: { isInterfaceHidden }, set: { onInterfaceVisibilityChange?(!$0) }),
                         onSeek: { player.seek(to: $0) },
                         topOverlayHeight: sharedSongHeaderInset - lyricsContentSpacing,
@@ -287,7 +296,7 @@ private struct NowPlayingLyricsLoadingRequest: Equatable {
     }
 }
 
-/// Reads playback progress and live scrubber state without invalidating lyric rows
+/// Reads playback timeline anchor and live scrubber state without invalidating lyric rows
 /// until the active line or scrubbing state changes.
 private struct LyricLineObserver: View {
     let lyrics: PlayerLyrics?
@@ -303,29 +312,47 @@ private struct LyricLineObserver: View {
         return progressInteraction?.isPressed == true
     }
 
-    private var line: Int? {
+    private func resolvedLine(anchor: PlayerTimelineAnchor) -> Int? {
         guard isActive, let lyrics else { return fallback }
+        let liveProgress = anchor.elapsed()
         if let interaction = progressInteraction {
             if let scrubbingTime = interaction.scrubbingProgress {
                 return lyrics.activeLine(at: scrubbingTime)
             }
             if interaction.isAwaitingCommittedSeek {
-                return lyrics.activeLine(at: interaction.displayProgress(live: player.progress))
+                return lyrics.activeLine(at: interaction.displayProgress(live: liveProgress))
             }
         }
-        let headstart = player.isPlaying ? AppleMusicLyricsMotionProfile.iOS26_6.animationHeadstart : 0
-        return lyrics.activeLine(at: player.progress + headstart)
+        let headstart = anchor.rate > 0 ? AppleMusicLyricsMotionProfile.iOS26_6.animationHeadstart : 0
+        return lyrics.activeLine(at: liveProgress + headstart)
     }
 
     var body: some View {
-        Color.clear
-            .frame(width: 0, height: 0)
-            .accessibilityHidden(true)
-            .onChange(of: line, initial: true) { _, value in
-                if lineID != value { lineID = value }
+        let anchor = player.timelineAnchor
+        let animatesLive = isActive && lyrics != nil && anchor.rate > 0 && !scrubbing
+
+        Group {
+            if animatesLive {
+                TimelineView(.animation(minimumInterval: 1.0 / 24.0)) { _ in
+                    let activeLine = resolvedLine(anchor: anchor)
+                    Color.clear
+                        .frame(width: 0, height: 0)
+                        .onChange(of: activeLine, initial: true) { _, value in
+                            if lineID != value { lineID = value }
+                        }
+                }
+            } else {
+                let activeLine = resolvedLine(anchor: anchor)
+                Color.clear
+                    .frame(width: 0, height: 0)
+                    .onChange(of: activeLine, initial: true) { _, value in
+                        if lineID != value { lineID = value }
+                    }
             }
-            .onChange(of: scrubbing, initial: true) { _, value in
-                if isScrubbing != value { isScrubbing = value }
-            }
+        }
+        .accessibilityHidden(true)
+        .onChange(of: scrubbing, initial: true) { _, value in
+            if isScrubbing != value { isScrubbing = value }
+        }
     }
 }

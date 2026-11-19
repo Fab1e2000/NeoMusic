@@ -79,16 +79,53 @@ public struct PlayerLyrics: Equatable, Sendable {
     public func activeLine(at time: TimeInterval) -> Int? { lines.last { $0.time <= time }?.id }
 }
 
+/// Immutable playback clock anchor published only on discrete transport transitions
+/// (play, pause, seek, track change, or low-frequency drift sync) so UI surfaces can
+/// derive live progress locally via `TimelineView` without 60Hz main-actor polling.
+public struct PlayerTimelineAnchor: Equatable, Sendable {
+    public let baseElapsed: Double
+    public let hostTimestamp: TimeInterval
+    public let rate: Double
+    public let duration: Double
+
+    public init(
+        baseElapsed: Double,
+        hostTimestamp: TimeInterval = ProcessInfo.processInfo.systemUptime,
+        rate: Double,
+        duration: Double
+    ) {
+        self.baseElapsed = baseElapsed.isFinite ? max(0, baseElapsed) : 0
+        self.hostTimestamp = hostTimestamp
+        self.rate = rate.isFinite ? max(0, rate) : 0
+        self.duration = duration.isFinite ? max(0, duration) : 0
+    }
+
+    public static let zero = PlayerTimelineAnchor(baseElapsed: 0, hostTimestamp: 0, rate: 0, duration: 0)
+
+    public func elapsed(at uptime: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Double {
+        guard rate > 0 else { return clamped(baseElapsed) }
+        let delta = max(0, uptime - hostTimestamp)
+        return clamped(baseElapsed + delta * rate)
+    }
+
+    private func clamped(_ value: Double) -> Double {
+        let safe = value.isFinite ? max(0, value) : 0
+        return duration > 0 ? min(safe, duration) : safe
+    }
+}
+
 /// Reads must participate in Observation. The host owns playback and queue mutations.
 @MainActor public protocol PlayerPlaybackSource: AnyObject, Observable {
     var tracks: [PlayerTrack] { get }
     var currentTrack: PlayerTrack? { get }
     var currentQueueIndex: Int { get }
+    var playbackGeneration: UInt64 { get }
     var isPlaying: Bool { get set }
     var isLoading: Bool { get }
     var issue: String? { get }
     var duration: Double { get }
     var progress: Double { get }
+    var timelineAnchor: PlayerTimelineAnchor { get }
     var isCrossfadeEnabled: Bool { get }
     var isShuffled: Bool { get }
     var repeatMode: PlayerRepeatMode { get }
@@ -117,6 +154,13 @@ public struct PlayerLyrics: Equatable, Sendable {
     func removeFromQueue(at index: Int)
 }
 
+public extension PlayerPlaybackSource {
+    var playbackGeneration: UInt64 { 0 }
+    var timelineAnchor: PlayerTimelineAnchor {
+        PlayerTimelineAnchor(baseElapsed: progress, rate: 0, duration: duration)
+    }
+}
+
 /// Stable environment identity with live reads into the host; no copied playback state or clock.
 @MainActor @Observable public final class PlayerState {
     private let source: any PlayerPlaybackSource
@@ -133,10 +177,15 @@ public struct PlayerLyrics: Equatable, Sendable {
     public var tracks: [PlayerTrack] { source.tracks }
     public var currentTrack: PlayerTrack? { source.currentTrack }
     public var currentQueueIndex: Int { source.currentQueueIndex }
+    public var playbackGeneration: UInt64 { source.playbackGeneration }
+    public var currentTrackTransitionKey: String {
+        "\(currentTrack?.id ?? ""):\(currentQueueIndex):\(playbackGeneration)"
+    }
     public var isLoading: Bool { source.isLoading }
     public var issue: String? { source.issue }
     public var duration: Double { source.duration }
     public var progress: Double { source.progress }
+    public var timelineAnchor: PlayerTimelineAnchor { source.timelineAnchor }
     public var isCrossfadeEnabled: Bool { source.isCrossfadeEnabled }
     public var isShuffled: Bool { source.isShuffled }
     public var repeatMode: PlayerRepeatMode { source.repeatMode }

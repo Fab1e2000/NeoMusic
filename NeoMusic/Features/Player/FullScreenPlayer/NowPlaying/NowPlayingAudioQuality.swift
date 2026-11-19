@@ -5,6 +5,7 @@ import UIKit
 struct NowPlayingAudioQualityControl: View {
     let quality: PlayerAudioQuality?
     var openAudioQualitySettings: (() -> Void)?
+    @Environment(PlayerState.self) private var player: PlayerState?
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @State private var presenter = PlayerQualityPresentationController()
     @State private var displayedQuality: PlayerAudioQuality?
@@ -39,7 +40,7 @@ struct NowPlayingAudioQualityControl: View {
                         .transition(.opacity)
                 }
             }
-            .frame(minWidth: 44, minHeight: 28)
+            .frame(minWidth: 64, minHeight: 36)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
@@ -51,6 +52,24 @@ struct NowPlayingAudioQualityControl: View {
         .background { NowPlayingQualityPresentation(controller: presenter) }
         .onChange(of: quality) { _, newQuality in
             updateDisplayedQuality(with: newQuality)
+        }
+        .onChange(of: player?.currentTrackTransitionKey) { _, _ in
+            presenter.dismissIfNeeded()
+            if quality == nil, player?.isLoading != true {
+                clearDisplayedQuality()
+            }
+        }
+        .onChange(of: player?.isLoading) { _, isLoading in
+            if isLoading != true, quality == nil {
+                clearDisplayedQuality()
+            }
+        }
+    }
+
+    private func clearDisplayedQuality() {
+        guard displayedQuality != nil else { return }
+        withAnimation(accessibilityReduceMotion ? nil : .easeInOut(duration: 0.2)) {
+            displayedQuality = nil
         }
     }
 
@@ -87,6 +106,11 @@ private struct NowPlayingQualityPresentation: UIViewControllerRepresentable {
 }
 
 private final class PlayerQualityPresentationController: UIViewController, UIViewControllerTransitioningDelegate {
+    func dismissIfNeeded() {
+        guard presentedViewController != nil else { return }
+        dismiss(animated: true)
+    }
+
     func show(quality: PlayerAudioQuality, openSettings: (() -> Void)?) {
         guard presentedViewController == nil, let window = view.window else { return }
         let content = PlayerQualityInformation(quality: quality, canOpenSettings: openSettings != nil,

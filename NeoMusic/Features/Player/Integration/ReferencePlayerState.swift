@@ -20,9 +20,19 @@ import FullScreenPlayer
         model.sourceTitle.flatMap { $0.isEmpty ? nil : "来自\($0)" } ?? "接下来播放的歌曲"
     }
     var currentQueueIndex: Int { model.currentIndex }
+    var playbackGeneration: UInt64 { model.playbackGeneration }
     var currentTrack: PlayerTrack? { item(at: currentQueueIndex)?.track }
     var duration: Double { model.duration }
-    var progress: Double { model.elapsed }
+    var progress: Double { model.liveElapsed }
+    var timelineAnchor: PlayerTimelineAnchor {
+        let anchor = model.timelineAnchor
+        return PlayerTimelineAnchor(
+            baseElapsed: anchor.baseElapsed,
+            hostTimestamp: anchor.hostTimestamp,
+            rate: anchor.rate,
+            duration: anchor.duration
+        )
+    }
     var isShuffled: Bool { model.isShuffled }
     var repeatMode: PlayerRepeatMode { switch model.repeatMode { case .off: .off; case .all: .all; case .one: .one } }
     var canPlayNext: Bool { model.canSkipForward }

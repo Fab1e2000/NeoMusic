@@ -27,16 +27,17 @@ struct PlayerPopup: ViewModifier {
 
     private var shouldShowBar: Bool { player.currentTrack != nil && !isSuppressed }
     private var isBarActive: Bool { shouldShowBar && !isPresented && scenePhase == .active }
-    private var prefetchURLs: [URL] { scenePhase == .active && (isPresented || player.isPlaying) ? player.adjacentArtworkURLs : [] }
-    private var artworkLoadIDs: [String] {
-        let current = [player.currentTrack?.artworkLoadID].compactMap { $0 }
-        guard scenePhase == .active, isPresented || player.isPlaying else { return current }
-        return current + [player.previousInOrder?.track.artworkLoadID, player.nextInOrder?.track.artworkLoadID].compactMap { $0 }
-    }
 
     func body(content: Content) -> some View {
         content
             .environment(\.songPlaybackIndicatorsActive, !isPresented)
+            .background {
+                PlayerPopupArtworkPrefetcher(
+                    isPresented: isPresented,
+                    scenePhase: scenePhase,
+                    loadArtwork: { loadArtwork($0) }
+                )
+            }
             .transaction { transaction in
                 if reducesMotion { transaction.disablesAnimations = true }
             } body: { content in
@@ -45,7 +46,7 @@ struct PlayerPopup: ViewModifier {
                 }, onClose: onClose) {
                     PlayerPopupContent(barImage: barImage,
                                        barColorScheme: barColorScheme ?? colorScheme,
-                                       isActive: isPresented && scenePhase == .active,
+                                       isActive: isPresented,
                                        isBarActive: isBarActive,
                                        toasts: toasts) { isPresented = false }
                         .environment(\.playerVolumeHUDRefreshID, volumeHUDRefreshID)
@@ -97,15 +98,6 @@ struct PlayerPopup: ViewModifier {
                 guard let image = try? await ImagePipeline.shared.image(for: request),
                       !Task.isCancelled else { return }
                 artwork = image
-            }
-            .task(id: artworkLoadIDs) {
-                for id in Set(artworkLoadIDs) { loadArtwork(id) }
-            }
-            .task(id: prefetchURLs) {
-                let requests = prefetchURLs.flatMap { url in
-                    [160, 240].map { ArtworkImagePipeline.thumbnailRequest(for: url, pixels: $0) }
-                }
-                await ArtworkImagePipeline.prefetch(requests)
             }
     }
 
@@ -163,15 +155,63 @@ private struct PlayerPopupContent: View {
                                 .accessibilityIdentifier("mini.trackTitle")
                         }, buttons: {
                             ToolbarItem(placement: .popupBar) {
-                                MiniPlayerControls(isPlaying: player.isPlaying,
-                                                   canPlayNext: player.canPlayNext,
-                                                   togglePlayback: player.togglePlayback, next: player.next)
+                                MiniPlayerControlsObserver()
+                                    .environment(player)
                                     .environment(\.colorScheme, barColorScheme)
                             }
                         })
                     }
             }
         }
+    }
+}
+
+/// Observes `player.isPlaying` and adjacent tracks outside `PlayerPopup.body` so toggling playback
+/// does not re-evaluate the root popup container or rebuild `LNPopupUI` items.
+private struct PlayerPopupArtworkPrefetcher: View {
+    let isPresented: Bool
+    let scenePhase: ScenePhase
+    let loadArtwork: (String) -> Void
+    @Environment(PlayerState.self) private var player
+
+    private var prefetchURLs: [URL] {
+        scenePhase == .active && (isPresented || player.isPlaying) ? player.adjacentArtworkURLs : []
+    }
+
+    private var artworkLoadIDs: [String] {
+        let current = [player.currentTrack?.artworkLoadID].compactMap { $0 }
+        guard scenePhase == .active, isPresented || player.isPlaying else { return current }
+        return current + [player.previousInOrder?.track.artworkLoadID, player.nextInOrder?.track.artworkLoadID].compactMap { $0 }
+    }
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
+            .task(id: artworkLoadIDs) {
+                for id in Set(artworkLoadIDs) { loadArtwork(id) }
+            }
+            .task(id: prefetchURLs) {
+                let requests = prefetchURLs.flatMap { url in
+                    [160, 240].map { ArtworkImagePipeline.thumbnailRequest(for: url, pixels: $0) }
+                }
+                await ArtworkImagePipeline.prefetch(requests)
+            }
+    }
+}
+
+/// Isolates `player.isPlaying` observation to the mini-player toolbar buttons so toggling playback
+/// while full-screen is open does not invalidate `PlayerPopupContent` or rebuild `.popupItem`.
+private struct MiniPlayerControlsObserver: View {
+    @Environment(PlayerState.self) private var player
+
+    var body: some View {
+        MiniPlayerControls(
+            isPlaying: player.isPlaying,
+            canPlayNext: player.canPlayNext,
+            togglePlayback: player.togglePlayback,
+            next: player.next
+        )
     }
 }
 

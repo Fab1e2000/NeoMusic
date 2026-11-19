@@ -396,11 +396,11 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
         let previousLastID = uniqueSongIDs.last
         let backgroundChanged = previousColor != model.pageColor
         let schemeChanged = previousScheme != model.scheme
-        let environmentChanged = self.environment.scenePhase != environment.scenePhase
-            || self.environment.dynamicTypeSize != environment.dynamicTypeSize
+        let playbackVisualsChanged = self.environment.scenePhase != environment.scenePhase
+            || self.environment.songPlaybackIndicatorsActive != environment.songPlaybackIndicatorsActive
+        let environmentChanged = self.environment.dynamicTypeSize != environment.dynamicTypeSize
             || self.environment.songRowPlayback !== environment.songRowPlayback
             || self.environment.libraryDownloads !== environment.libraryDownloads
-            || self.environment.songPlaybackIndicatorsActive != environment.songPlaybackIndicatorsActive
             || self.environment.accessibilityReduceMotion != environment.accessibilityReduceMotion
 
         self.model = model
@@ -417,7 +417,7 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
             byID[song.id] = song
             indices[song.id] = offset
         }
-        if uniqueSongIDs.count != ids.count { lastReachedEndCount = nil }
+        if uniqueSongIDs.count != ids.count || (previousBanner && model.banner == nil) { lastReachedEndCount = nil }
         uniqueSongIDs = ids
         songsByID = byID
         indexByID = indices
@@ -466,7 +466,7 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
             }
         }
         guard oldIDs != items || !reconfigured.isEmpty else {
-            if environmentChanged || isNewAppearance { observePlayback() }
+            if environmentChanged || playbackVisualsChanged || isNewAppearance { observePlayback() }
             return
         }
         if !reconfigured.isEmpty { snapshot.reconfigureItems(reconfigured) }

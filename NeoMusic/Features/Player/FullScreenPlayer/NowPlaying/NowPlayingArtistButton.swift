@@ -126,7 +126,7 @@ private struct NowPlayingArtistMenuButton: UIViewRepresentable {
     func makeCoordinator() -> PlayerArtistMenuController { PlayerArtistMenuController() }
 
     func makeUIView(context: Context) -> UIButton {
-        let button = UIButton(type: .system)
+        let button = ExpandedHitTestArtistButton(type: .system)
         button.contentHorizontalAlignment = .leading
         button.titleLabel?.font = .systemFont(ofSize: 20)
         button.titleLabel?.lineBreakMode = .byTruncatingTail
@@ -144,6 +144,9 @@ private struct NowPlayingArtistMenuButton: UIViewRepresentable {
     private func configure(_ button: UIButton, coordinator: PlayerArtistMenuController) {
         let changed = coordinator.bind(track: track, actions: actions)
         guard changed || !coordinator.hasConfiguredButton else { return }
+        if changed {
+            button.contextMenuInteraction?.dismissMenu()
+        }
         button.setTitle(track.artists, for: .normal)
         button.accessibilityLabel = track.artists
         button.isEnabled = !track.artists.isEmpty
@@ -159,6 +162,14 @@ private struct NowPlayingArtistMenuButton: UIViewRepresentable {
 
     static func dismantleUIView(_ uiView: UIButton, coordinator: PlayerArtistMenuController) {
         coordinator.cancel()
+    }
+}
+
+/// 保持视觉行高不变，将垂直点击热区扩展至 44pt 以提升命中率。
+private final class ExpandedHitTestArtistButton: UIButton {
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        let verticalExpansion = max(0, (44 - bounds.height) / 2)
+        return bounds.insetBy(dx: 0, dy: -verticalExpansion).contains(point)
     }
 }
 

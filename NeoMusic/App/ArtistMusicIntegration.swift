@@ -614,7 +614,7 @@ private struct ArtistCatalogDestination: View {
         }.environment(\.songMenuActions, integration.songActions(route))
         .environment(\.collectionMenuActions, integration.collectionActions)
         .task(id: "\(route):\(integration.sessionIdentity)") { await integration.load(route) }
-        .onChange(of: scenePhase) { old, new in if old == .background, new == .active { Task { await integration.load(route) } } }
+        .onChange(of: scenePhase) { old, new in if old == .background, new != .background { Task { await integration.load(route) } } }
     }
 
     @ViewBuilder private func artistPage(_ detail: ArtistDetail) -> some View {

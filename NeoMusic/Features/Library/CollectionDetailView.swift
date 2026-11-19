@@ -670,6 +670,7 @@ private final class AlbumSongsController: UICollectionViewController {
             .environment(\.collectionMenuActions, environment.collectionMenuActions)
             .environment(\.libraryDownloads, environment.libraryDownloads)
             .environment(\.songRowPlayback, environment.songRowPlayback)
+            .environment(\.songPlaybackIndicatorsActive, environment.songPlaybackIndicatorsActive)
             .environment(\.colorScheme, model?.scheme ?? environment.colorScheme)
             .environment(\.collectionPagePalette, environment.collectionPagePalette)
             .environment(\.locale, environment.locale)
@@ -687,11 +688,11 @@ private final class AlbumSongsController: UICollectionViewController {
         let previous = songsByID
         let previousScheme = self.model?.scheme
         let backgroundChanged = self.model?.pageColor != model.pageColor
-        let environmentChanged = self.environment.scenePhase != environment.scenePhase
-            || self.environment.dynamicTypeSize != environment.dynamicTypeSize
+        let playbackVisualsChanged = self.environment.scenePhase != environment.scenePhase
+            || self.environment.songPlaybackIndicatorsActive != environment.songPlaybackIndicatorsActive
+        let environmentChanged = self.environment.dynamicTypeSize != environment.dynamicTypeSize
             || self.environment.songRowPlayback !== environment.songRowPlayback
             || self.environment.libraryDownloads !== environment.libraryDownloads
-            || self.environment.songPlaybackIndicatorsActive != environment.songPlaybackIndicatorsActive
             || self.environment.accessibilityReduceMotion != environment.accessibilityReduceMotion
         let schemeChanged = previousScheme != model.scheme
         let globalAppearanceChanged = schemeChanged || backgroundChanged || environmentChanged
@@ -732,7 +733,8 @@ private final class AlbumSongsController: UICollectionViewController {
                     || old.trackNumber != song.trackNumber
                     || old.isFavorite != song.isFavorite
                     || old.unavailabilityReason != song.unavailabilityReason
-                if metadataChanged || globalAppearanceChanged || separatorChanged {
+                let playbackRowAffected = playbackVisualsChanged && song.id == activeSongID
+                if metadataChanged || globalAppearanceChanged || separatorChanged || playbackRowAffected {
                     reconfigured.append(.song(song.id))
                 }
             }

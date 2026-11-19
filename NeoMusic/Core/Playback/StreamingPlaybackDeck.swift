@@ -2,13 +2,15 @@
 @preconcurrency import AudioStreaming
 
 /// One decoded stream. Seeking stays muted until the requested sample is ready.
-@MainActor final class StreamingPlaybackDeck: NSObject, @preconcurrency AudioPlayerDelegate {
+/// Isolated to `@PlaybackAudioActor` so decoding, graph changes, and AudioStreaming
+/// control calls never block the main thread.
+@PlaybackAudioActor final class StreamingPlaybackDeck: NSObject, @preconcurrency AudioPlayerDelegate {
     var onChange: (() -> Void)?
     var onEnded: (() -> Void)?
     private(set) var itemID: UUID?
     private(set) var isLoading = false
     private(set) var error: Error?
-    private let graph: SharedAudioGraph
+    private nonisolated let graph: SharedAudioGraph
     private var preparation: Task<Void, Never>?
     private var operationStarted = ProcessInfo.processInfo.systemUptime
     private var operation = "load"
@@ -47,7 +49,7 @@
         guard let duration = audio?.duration, duration > 0 else { return nil }
         return duration
     }
-    func spectrumLevels() -> [Float] { graph.spectrumLevels() }
+    nonisolated func spectrumLevels() -> [Float] { graph.spectrumLevels() }
 
     func exactEndHostTime() -> UInt64? {
         if let localNode { return localNode.exactEndHostTime() }
@@ -201,7 +203,7 @@
                 else { readiness[waiter] = continuation }
             }
         } onCancel: {
-            Task { @MainActor [weak self] in
+            Task { @PlaybackAudioActor [weak self] in
                 self?.readiness.removeValue(forKey: waiter)?.resume(throwing: CancellationError())
             }
         }
@@ -211,12 +213,26 @@
         readiness.removeAll()
         for continuation in pending { continuation.resume(with: result) }
     }
-    func audioPlayerDidStartPlaying(player: AudioStreaming.AudioPlayer, with entryId: AudioEntryId) {
+    nonisolated func audioPlayerDidStartPlaying(player: AudioStreaming.AudioPlayer, with entryId: AudioEntryId) {
+        let playerBox = UncheckedSendableBox(value: player)
+        let entryBox = UncheckedSendableBox(value: entryId)
+        Task { @PlaybackAudioActor [weak self] in
+            self?.handleDidStartPlaying(player: playerBox.value, entryId: entryBox.value)
+        }
+    }
+    private func handleDidStartPlaying(player: AudioStreaming.AudioPlayer, entryId: AudioEntryId) {
         guard player === audio else { return }
         entryID = entryId
         if let position = initialPosition { initialPosition = nil; player.seek(to: position, resumeAfterSeek: wantsPlayback) }
     }
-    func audioPlayerStateChanged(player: AudioStreaming.AudioPlayer, with newState: AudioPlayerState, previous: AudioPlayerState) {
+    nonisolated func audioPlayerStateChanged(player: AudioStreaming.AudioPlayer, with newState: AudioPlayerState, previous: AudioPlayerState) {
+        let playerBox = UncheckedSendableBox(value: player)
+        let stateBox = UncheckedSendableBox(value: newState)
+        Task { @PlaybackAudioActor [weak self] in
+            self?.handleStateChanged(player: playerBox.value, newState: stateBox.value)
+        }
+    }
+    private func handleStateChanged(player: AudioStreaming.AudioPlayer, newState: AudioPlayerState) {
         guard player === audio else { return }
         switch newState {
         case .playing:
@@ -247,21 +263,40 @@
         }
         onChange?()
     }
-    func audioPlayerDidFinishPlaying(player: AudioStreaming.AudioPlayer, entryId: AudioEntryId, stopReason: AudioPlayerStopReason, progress: Double, duration: Double) {
+    nonisolated func audioPlayerDidFinishPlaying(player: AudioStreaming.AudioPlayer, entryId: AudioEntryId, stopReason: AudioPlayerStopReason, progress: Double, duration: Double) {
+        let playerBox = UncheckedSendableBox(value: player)
+        let entryBox = UncheckedSendableBox(value: entryId)
+        let reasonBox = UncheckedSendableBox(value: stopReason)
+        Task { @PlaybackAudioActor [weak self] in
+            self?.handleDidFinishPlaying(player: playerBox.value, entryId: entryBox.value, stopReason: reasonBox.value, progress: progress)
+        }
+    }
+    private func handleDidFinishPlaying(player: AudioStreaming.AudioPlayer, entryId: AudioEntryId, stopReason: AudioPlayerStopReason, progress: Double) {
         guard player === audio, self.entryID == entryId, stopReason == .eof else { return }
         finishedPosition = progress; isLoading = false; wantsPlayback = false
         finishReadiness(.success(()))
         onChange?(); onEnded?()
     }
-    func audioPlayerUnexpectedError(player: AudioStreaming.AudioPlayer, error: AudioPlayerError) {
+    nonisolated func audioPlayerUnexpectedError(player: AudioStreaming.AudioPlayer, error: AudioPlayerError) {
+        let playerBox = UncheckedSendableBox(value: player)
+        let errorBox = UncheckedSendableBox(value: error)
+        Task { @PlaybackAudioActor [weak self] in
+            self?.handleUnexpectedError(player: playerBox.value, error: errorBox.value)
+        }
+    }
+    private func handleUnexpectedError(player: AudioStreaming.AudioPlayer, error: AudioPlayerError) {
         guard player === audio else { return }
         self.error = error; isLoading = false; wantsPlayback = false
         finishReadiness(.failure(error))
         onChange?()
     }
-    func audioPlayerDidFinishBuffering(player: AudioStreaming.AudioPlayer, with entryId: AudioEntryId) {}
-    func audioPlayerDidCancel(player: AudioStreaming.AudioPlayer, queuedItems: [AudioEntryId]) {}
-    func audioPlayerDidReadMetadata(player: AudioStreaming.AudioPlayer, metadata: [String: String]) {}
+    nonisolated func audioPlayerDidFinishBuffering(player: AudioStreaming.AudioPlayer, with entryId: AudioEntryId) {}
+    nonisolated func audioPlayerDidCancel(player: AudioStreaming.AudioPlayer, queuedItems: [AudioEntryId]) {}
+    nonisolated func audioPlayerDidReadMetadata(player: AudioStreaming.AudioPlayer, metadata: [String: String]) {}
+}
+
+private struct UncheckedSendableBox<Value>: @unchecked Sendable {
+    let value: Value
 }
 
 /// Real-time audio thread gate for pulling `AudioStreaming` frames at an exact `hostTime`.

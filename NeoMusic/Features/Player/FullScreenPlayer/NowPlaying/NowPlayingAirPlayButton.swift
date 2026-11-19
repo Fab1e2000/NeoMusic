@@ -6,7 +6,6 @@ import CoreBluetooth
 struct ReferenceAirPlayButton: View {
     var opacity: Double = 0.72
     @State private var route = ReferenceAudioOutputRoute()
-    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         ReferenceAirPlayRoutePicker(opacity: route.symbol == nil ? opacity : 0)
@@ -34,9 +33,6 @@ struct ReferenceAirPlayButton: View {
                         .accessibilityHidden(true)
                 }
             }
-        .onChange(of: scenePhase) { _, phase in
-            if phase == .active { route.refresh() }
-        }
         .accessibilityLabel("音频输出")
         .accessibilityValue(route.output.name)
         .accessibilityHint("选择播放设备")

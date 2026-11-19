@@ -71,6 +71,13 @@ final class NowPlayingProgressInteraction {
         guard let deadline = committedSeekDeadline, committedSeekProgress != nil else { return false }
         return ContinuousClock.now < deadline
     }
+
+    func resetForTrackChange() {
+        isPressed = false
+        scrubbingProgress = nil
+        committedSeekProgress = nil
+        committedSeekDeadline = nil
+    }
 }
 
 struct NowPlayingProgressControl: View {
@@ -218,20 +225,25 @@ private struct NowPlayingProgressSliderView: View {
     let interaction: NowPlayingProgressInteraction
     let allowsSpatialExpansion: Bool
     @Environment(PlayerState.self) private var player
+    @Environment(\.playerVisualsActive) private var visualsActive
 
     var body: some View {
-        let displayProgress = interaction.displayProgress(live: player.progress)
-        let fraction = maximum > 0 ? CGFloat(displayProgress / maximum) : 0
+        let anchor = player.timelineAnchor
+        let animatesLive = anchor.rate > 0 && visualsActive && interaction.scrubbingProgress == nil
 
         GeometryReader { proxy in
             ZStack {
-                NowPlayingCapsuleTrack(
-                    fraction: fraction,
-                    baseWidth: proxy.size.width,
-                    isPressed: interaction.isPressed,
-                    allowsSpatialExpansion: allowsSpatialExpansion,
-                    highlightFeedback: NowPlayingProgressFeedbackSpec.progressHighlight
-                )
+                TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !animatesLive)) { _ in
+                    let displayProgress = interaction.displayProgress(live: anchor.elapsed())
+                    let fraction = maximum > 0 ? CGFloat(displayProgress / maximum) : 0
+                    NowPlayingCapsuleTrack(
+                        fraction: fraction,
+                        baseWidth: proxy.size.width,
+                        isPressed: interaction.isPressed,
+                        allowsSpatialExpansion: allowsSpatialExpansion,
+                        highlightFeedback: NowPlayingProgressFeedbackSpec.progressHighlight
+                    )
+                }
                 NowPlayingProgressSlider(maximum: maximum, interaction: interaction)
                     .frame(width: proxy.size.width, height: 43)
             }
@@ -287,7 +299,8 @@ private struct NowPlayingProgressSlider: UIViewRepresentable {
         slider.addTarget(context.coordinator, action: #selector(Coordinator.begin(_:)), for: .touchDown)
         slider.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .valueChanged)
         slider.addTarget(context.coordinator, action: #selector(Coordinator.end(_:)),
-                         for: [.touchUpInside, .touchUpOutside, .touchCancel])
+                         for: [.touchUpInside, .touchUpOutside])
+        slider.addTarget(context.coordinator, action: #selector(Coordinator.cancel(_:)), for: .touchCancel)
         slider.accessibilityLabel = "播放进度"
         return slider
     }
@@ -299,11 +312,17 @@ private struct NowPlayingProgressSlider: UIViewRepresentable {
             interaction.isPressed = highlighted
         }
         slider.maximumValue = Float(maximum)
+        let trackKey = player.currentTrackTransitionKey
+        if context.coordinator.lastTrackTransitionKey != trackKey {
+            context.coordinator.lastTrackTransitionKey = trackKey
+            context.coordinator.resetForTrackChange(slider: slider)
+        }
+        let liveProgress = player.timelineAnchor.elapsed()
         if !slider.isTracking && !context.coordinator.isEditing {
-            let displayProgress = context.coordinator.resolvedExternalProgress(from: player.progress)
+            let displayProgress = context.coordinator.resolvedExternalProgress(from: liveProgress)
             slider.value = Float(min(displayProgress, maximum))
         }
-        slider.accessibilityValue = "\(formatPlaybackTime(player.progress))，共 \(formatPlaybackTime(maximum))"
+        slider.accessibilityValue = "\(formatPlaybackTime(liveProgress))，共 \(formatPlaybackTime(maximum))"
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: NowPlayingScrubbingSlider, context: Context) -> CGSize? {
@@ -322,6 +341,16 @@ private struct NowPlayingProgressSlider: UIViewRepresentable {
         init(player: PlayerState, interaction: NowPlayingProgressInteraction) {
             self.player = player
             self.interaction = interaction
+            self.lastTrackTransitionKey = player.currentTrackTransitionKey
+        }
+
+        func resetForTrackChange(slider: NowPlayingScrubbingSlider) {
+            hasDraggedValue = false
+            pendingSeekTarget = nil
+            pendingSeekDeadline = nil
+            scrub.setEditing(false)
+            interaction.resetForTrackChange()
+            slider.cancelTracking(with: nil)
         }
 
         /// Prevents stale `player.progress` ticks emitted before an async `seek` settles
@@ -343,6 +372,8 @@ private struct NowPlayingProgressSlider: UIViewRepresentable {
             hasDraggedValue = false
             if let target = pendingSeekTarget, let deadline = pendingSeekDeadline, ContinuousClock.now < deadline {
                 slider.syncDragBaseline(to: Float(target))
+            } else if player.timelineAnchor.rate > 0 {
+                slider.syncDragBaseline(to: Float(min(player.timelineAnchor.elapsed(), Double(slider.maximumValue))))
             }
         }
 
@@ -359,6 +390,15 @@ private struct NowPlayingProgressSlider: UIViewRepresentable {
             hasDraggedValue = false
             scrub.setEditing(false)
             interaction.scrubbingProgress = nil
+        }
+
+        @objc func cancel(_ slider: NowPlayingScrubbingSlider) {
+            hasDraggedValue = false
+            scrub.setEditing(false)
+            interaction.scrubbingProgress = nil
+            interaction.isPressed = false
+            let liveProgress = player.timelineAnchor.elapsed()
+            slider.value = Float(min(liveProgress, Double(slider.maximumValue)))
         }
 
         @objc func changed(_ slider: NowPlayingScrubbingSlider) {
@@ -494,19 +534,29 @@ private struct NowPlayingTimeLabels: View {
     let allowsSpatialExpansion: Bool
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @Environment(\.nowPlayingLayout) private var layout
+    @Environment(\.playerVisualsActive) private var visualsActive
     @Environment(PlayerState.self) private var player
 
     var body: some View {
+        let anchor = player.timelineAnchor
+        let animatesLive = anchor.rate > 0 && visualsActive && interaction.scrubbingProgress == nil
+
+        TimelineView(.animation(minimumInterval: 0.5, paused: !animatesLive)) { _ in
+            labelsBody(liveProgress: anchor.elapsed(), totalDuration: anchor.duration > 0 ? anchor.duration : player.duration)
+        }
+    }
+
+    private func labelsBody(liveProgress: TimeInterval, totalDuration: TimeInterval) -> some View {
         let isPressed = interaction.isPressed
         let expandsSpatially = isPressed && allowsSpatialExpansion && !accessibilityReduceMotion
         let spatialAnimation: Animation? = accessibilityReduceMotion
             ? nil
             : (isPressed ? NowPlayingProgressFeedbackSpec.pressSpring : NowPlayingProgressFeedbackSpec.releaseSpring)
-        let currentProgress = interaction.displayProgress(live: player.progress)
+        let currentProgress = interaction.displayProgress(live: liveProgress)
         let elapsedText = formatPlaybackTime(currentProgress)
-        let remainingText = "−\(formatPlaybackTime(max(player.duration - currentProgress, 0)))"
+        let remainingText = "−\(formatPlaybackTime(max(totalDuration - currentProgress, 0)))"
 
-        HStack {
+        return HStack {
             Text(elapsedText)
             Spacer()
             Text(remainingText)

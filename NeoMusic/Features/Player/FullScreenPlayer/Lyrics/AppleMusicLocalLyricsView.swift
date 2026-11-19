@@ -17,6 +17,7 @@ struct AppleMusicLocalLyricsView: View {
     let bottomOverlayHeight: CGFloat
     let topOverlayHeight: CGFloat
     let isActive: Bool
+    let isPageVisible: Bool
     var isPlaying: Bool = true
     var isScrubbing: Bool = false
     @Binding var isInterfaceHidden: Bool
@@ -34,7 +35,7 @@ struct AppleMusicLocalLyricsView: View {
     @State private var rowGeometry: LyricsRowGeometry
 
     init(lyrics: PlayerLyrics, activeID: Int?, bottomOverlayHeight: CGFloat,
-         isActive: Bool, isInterfaceHidden: Binding<Bool>, onSeek: @escaping (Double) -> Void,
+         isActive: Bool, isPageVisible: Bool? = nil, isInterfaceHidden: Binding<Bool>, onSeek: @escaping (Double) -> Void,
          topOverlayHeight: CGFloat = 0, fixedFontSize: CGFloat? = nil,
          foreground: Color = .white, showsTranslation: Bool = false,
          isPlaying: Bool = true, isScrubbing: Bool = false,
@@ -46,6 +47,7 @@ struct AppleMusicLocalLyricsView: View {
         self.bottomOverlayHeight = bottomOverlayHeight
         self.topOverlayHeight = topOverlayHeight
         self.isActive = isActive
+        self.isPageVisible = isPageVisible ?? isActive
         self.isPlaying = isPlaying
         self.isScrubbing = isScrubbing
         _isInterfaceHidden = isInterfaceHidden
@@ -69,7 +71,8 @@ struct AppleMusicLocalLyricsView: View {
     var body: some View {
         NativeLyricsScrollContent(
             lyrics: lyrics, activeID: activeID, bottomOverlayHeight: bottomOverlayHeight,
-            topOverlayHeight: topOverlayHeight, isActive: isActive, isPlaying: isPlaying,
+            topOverlayHeight: topOverlayHeight, isActive: isActive, isPageVisible: isPageVisible,
+            isPlaying: isPlaying,
             isScrubbing: isScrubbing,
             isInterfaceHidden: $isInterfaceHidden, onSeek: onSeek,
             fontSize: fixedFontSize ?? scaledFontSize, translationFontSize: translationFontSize,
@@ -90,6 +93,7 @@ private struct NativeLyricsScrollContent: UIViewRepresentable {
     let bottomOverlayHeight: CGFloat
     let topOverlayHeight: CGFloat
     let isActive: Bool
+    let isPageVisible: Bool
     var isPlaying: Bool = true
     var isScrubbing: Bool = false
     @Binding var isInterfaceHidden: Bool
@@ -168,6 +172,7 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
     private var focusedIndex: Int?
     private var needsFocus = true
     private var wasActive = false
+    private var wasPageVisible = false
     private var positioning = false
     private var deferringFocusAppearance = false
     private let pendingAnimatedFocusCells = NSHashTable<NativeLyricCell>.weakObjects()
@@ -299,6 +304,7 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
         if !value.isActive {
             if wasActive { stop() }
             wasActive = false
+            if !value.isPageVisible { wasPageVisible = false }
             return
         }
         if replaced {
@@ -315,15 +321,17 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
             lastVisualSize = .zero
             focusedIndex = nil
             holdsTranslationAnchor = false
+            browsing = false
             needsFocus = true
+            value.rowGeometry.reset()
             reloadData()
         } else if translationChanged {
             revealTranslations(value.showsTranslation, animated: !value.reducesMotion && wasActive)
         }
         hasAppliedLyricsInput = true
         if value.reducesMotion && previous?.reducesMotion != true { needsFocus = true }
-        if !wasActive || replaced { suppressedPreSeekActiveID = nil }
-        if !wasActive {
+        if !wasPageVisible || replaced { suppressedPreSeekActiveID = nil }
+        if !wasPageVisible {
             browsing = false
             needsFocus = true
         }
@@ -367,6 +375,7 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
             }
         }
         wasActive = true
+        wasPageVisible = value.isPageVisible
         setNeedsLayout()
     }
 

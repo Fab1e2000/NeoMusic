@@ -2,7 +2,7 @@
 
 /// Native `AVAudioFile` + `AVAudioPlayerNode` deck for local files.
 /// Seeking schedules directly at the target sample frame without re-decoding from frame 0.
-@MainActor final class LocalFilePlaybackNode {
+@PlaybackAudioActor final class LocalFilePlaybackNode {
     var onEnded: (() -> Void)?
 
     private let file: AVAudioFile
@@ -176,7 +176,7 @@
         generation: Int
     ) -> AVAudioPlayerNodeCompletionHandler {
         { [weak node] _ in
-            Task { @MainActor [weak node] in
+            Task { @PlaybackAudioActor [weak node] in
                 node?.handleSegmentCompleted(generation: generation)
             }
         }

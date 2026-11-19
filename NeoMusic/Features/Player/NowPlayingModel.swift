@@ -10,12 +10,33 @@ final class NowPlayingModel {
 
     private(set) var queue: [LibrarySongItem] { didSet { queueRevision &+= 1; updateRemoteCommandAvailability() } }
     private(set) var queueRevision: UInt64 = 0
+    /// Monotonic token incremented whenever playback transitions to a new track occurrence or restarts a track.
+    /// Does not increment on pause/resume, seek, quality reload, or foreground/background transitions.
+    private(set) var playbackGeneration: UInt64 = 0
     private(set) var currentIndex: Int { didSet { updateRemoteCommandAvailability() } }
     private(set) var entryIDs: [UUID]
     private var originalOrder: [UUID] = []
     private var applyingState = false
     var isPlaying: Bool
-    var elapsed: Double { didSet { if !updatingTime && !applyingState { audio?.seek(to: elapsed); saveQueue(); updateNowPlaying() } } }
+    @ObservationIgnored private var idleAnchorTimestamp: TimeInterval = ProcessInfo.processInfo.systemUptime
+    private var storedElapsed: Double {
+        didSet {
+            if storedElapsed != oldValue {
+                idleAnchorTimestamp = ProcessInfo.processInfo.systemUptime
+            }
+        }
+    }
+    var elapsed: Double {
+        get { timelineAnchor.elapsed() }
+        set {
+            storedElapsed = newValue
+            if !updatingTime && !applyingState {
+                audio?.seek(to: newValue)
+                saveQueue()
+                updateNowPlaying()
+            }
+        }
+    }
     var repeatMode = RepeatMode.all { didSet { if !applyingState { prepareNext() }; updateRemoteCommandAvailability(); saveQueue() } }
     var isShuffled = false { didSet {
         guard !applyingState, oldValue != isShuffled, hasCurrent else { return }
@@ -59,7 +80,7 @@ final class NowPlayingModel {
         self.entryIDs = queue.map { _ in UUID() }
         self.currentIndex = min(max(0, currentIndex), max(0, queue.count - 1))
         self.isPlaying = isPlaying
-        self.elapsed = elapsed
+        self.storedElapsed = elapsed
         self.makeAudioEngine = makeAudioEngine
     }
 
@@ -69,6 +90,36 @@ final class NowPlayingModel {
         if let duration = audio?.duration, duration > 0 { return duration }
         return Double(max(current.duration, 1))
     }
+    /// Discrete playback clock anchor so UI surfaces derive live progress locally
+    /// via `TimelineView` without 60Hz `@MainActor` writes.
+    var timelineAnchor: PlaybackTimelineAnchor {
+        let knownDuration: Double = if let audioDuration = audio?.duration, audioDuration > 0 {
+            audioDuration
+        } else if current.duration > 0 {
+            Double(current.duration)
+        } else {
+            0
+        }
+        if let audio, hasCurrent, loadedEntry == entryIDs[currentIndex] {
+            let anchor = audio.timelineAnchor
+            let resolvedDuration = anchor.duration > 0 ? anchor.duration : knownDuration
+            let effectiveRate = (isPlaying && !audio.isLoading && audio.error == nil) ? anchor.rate : 0
+            return PlaybackTimelineAnchor(
+                baseElapsed: anchor.baseElapsed,
+                hostTimestamp: anchor.hostTimestamp,
+                rate: effectiveRate,
+                duration: resolvedDuration
+            )
+        }
+        return PlaybackTimelineAnchor(
+            baseElapsed: storedElapsed,
+            hostTimestamp: idleAnchorTimestamp,
+            rate: 0,
+            duration: knownDuration
+        )
+    }
+    /// Current playback time derived on demand from `timelineAnchor`.
+    var liveElapsed: Double { timelineAnchor.elapsed() }
     var isLoading: Bool { resolvingResource || (audio?.isLoading ?? false) || (audio?.isActivating ?? false) }
     func spectrumLevels() -> [Float] { audio?.spectrumLevels() ?? Array(repeating: 0, count: 5) }
     private(set) var isCrossfadeEnabled = false
@@ -96,7 +147,7 @@ final class NowPlayingModel {
 
     /// 播放超过 3 秒时先回到开头，否则回到上一首。
     func skipBackward() {
-        if elapsed > 3 || previous == nil {
+        if liveElapsed > 3 || previous == nil {
             seek(to: 0, source: .previous)
         } else {
             select(currentIndex - 1)
@@ -113,6 +164,7 @@ final class NowPlayingModel {
             return
         }
         currentIndex = index
+        playbackGeneration &+= 1
         updatingTime = true; elapsed = 0; updatingTime = false
         startCurrent()
         if let continuation { replenishQueue?(continuation, false, false) }
@@ -202,6 +254,7 @@ final class NowPlayingModel {
         elapsed = 0
         isShuffled = shuffled
         applyingState = false
+        playbackGeneration &+= 1
         isPlaying = true
         sourceTitle = source
         self.continuation = continuation
@@ -222,9 +275,10 @@ final class NowPlayingModel {
         entryIDs = songs.map { _ in UUID() }
         originalOrder = entryIDs
         isShuffled = false
-        applyingState = false
         currentIndex = index
         elapsed = 0
+        applyingState = false
+        playbackGeneration &+= 1
         isPlaying = true
         sourceTitle = source
         self.continuation = continuation
@@ -295,6 +349,7 @@ final class NowPlayingModel {
     @ObservationIgnored private var persistenceURL: URL?
     @ObservationIgnored private let queuePersistence = PlaybackQueuePersistence()
     @ObservationIgnored private var queuePersistenceTask: Task<Void, Never>?
+    @ObservationIgnored private var queuePersistenceDebounceTask: Task<Void, Never>?
     @ObservationIgnored private var queuePersistenceRevision = 0
     @ObservationIgnored private var persistenceBackgroundTask = UIBackgroundTaskIdentifier.invalid
     @ObservationIgnored private var updatingTime = false
@@ -551,8 +606,10 @@ final class NowPlayingModel {
             guard let self, let entry = self.preparedEntry, let index = self.entryIDs.firstIndex(of: entry) else { return }
             let quality = self.preparedQuality
             self.currentIndex = index
+            self.playbackGeneration &+= 1
             self.loadedEntry = entry
             self.actualQuality = quality
+            self.errorMessage = nil
             self.syncTransport()
             self.prepareNext()
             self.saveQueue()
@@ -560,7 +617,11 @@ final class NowPlayingModel {
         }
         engine.onFinished = { [weak self] in
             guard let self else { return }
-            if self.repeatMode == .one { self.isPlaying = true; self.startCurrent() }
+            if self.repeatMode == .one {
+                self.playbackGeneration &+= 1
+                self.isPlaying = true
+                self.startCurrent()
+            }
             else if self.queue.indices.contains(self.currentIndex + 1) {
                 self.isPlaying = true
                 self.select(self.currentIndex + 1)
@@ -646,9 +707,25 @@ final class NowPlayingModel {
         ensureAudioEngine().load(url: url, nextURL: next.flatMap { resolveURL(queue[$0].id) }, position: position, autoplay: autoplay)
     }
 
-    func saveQueue() {
+    func saveQueue(immediate: Bool = false) {
         guard !applyingState, !queueRestorationFailed, let persistenceURL else { return }
         lastSavedPlaybackTime = Date()
+        queuePersistenceDebounceTask?.cancel()
+        queuePersistenceDebounceTask = nil
+        if !immediate {
+            queuePersistenceDebounceTask = Task { [weak self] in
+                do { try await Task.sleep(for: .milliseconds(350)) } catch { return }
+                guard !Task.isCancelled, let self else { return }
+                self.queuePersistenceDebounceTask = nil
+                self.commitQueueSave(to: persistenceURL)
+            }
+            return
+        }
+        commitQueueSave(to: persistenceURL)
+    }
+
+    private func commitQueueSave(to persistenceURL: URL) {
+        guard !applyingState, !queueRestorationFailed else { return }
         // Progress-only saves share these arrays. Queue or restored metadata changes invalidate them.
         if cachedQueueContent?.revision != queueRevision {
             var seen = Set<String>()
@@ -658,7 +735,7 @@ final class NowPlayingModel {
             cachedQueueContent = (queueRevision, queue.map(\.id), metadata)
         }
         guard let content = cachedQueueContent else { return }
-        let state = SavedQueue(ids: content.ids, index: currentIndex, elapsed: elapsed,
+        let state = SavedQueue(ids: content.ids, index: currentIndex, elapsed: liveElapsed,
                                repeatMode: repeatMode, shuffled: isShuffled, source: sourceTitle,
                                entryIDs: entryIDs, originalOrder: originalOrder, userQueuedIDs: userQueuedIDs,
                                crossfadeEnabled: isCrossfadeEnabled, songs: content.songs, continuation: continuation)
@@ -686,6 +763,11 @@ final class NowPlayingModel {
 
     /// Wait for submitted snapshots, including changes made while a write finishes.
     func flushQueuePersistence() async {
+        if queuePersistenceDebounceTask != nil, let persistenceURL {
+            queuePersistenceDebounceTask?.cancel()
+            queuePersistenceDebounceTask = nil
+            commitQueueSave(to: persistenceURL)
+        }
         while let pending = queuePersistenceTask {
             await pending.value
         }
@@ -698,7 +780,7 @@ final class NowPlayingModel {
                 self?.endPersistenceBackgroundTask()
             }
         }
-        saveQueue()
+        saveQueue(immediate: true)
         Task { [weak self] in
             guard let self else { return }
             await flushQueuePersistence()
@@ -830,7 +912,10 @@ final class NowPlayingModel {
         for id in queueIDs {
             if let resolved = offlineSong?(id) { offline[id] = resolved }
         }
-        offlineSongIDs = Set(offline.keys)
+        let nextOfflineIDs = Set(offline.keys)
+        if offlineSongIDs != nextOfflineIDs {
+            offlineSongIDs = nextOfflineIDs
+        }
         for id in offline.keys { pendingRestoredSongs.removeValue(forKey: id) }
 
         var refreshed: [String: LibrarySongItem] = [:]
@@ -887,6 +972,7 @@ final class NowPlayingModel {
     func shutdownPlayback() {
         pendingCollection = nil
         pendingPlay = nil
+        queuePersistenceDebounceTask?.cancel(); queuePersistenceDebounceTask = nil
         resourceRevision = UUID(); resourceTask?.cancel(); nextResourceTask?.cancel(); resourceTask = nil; resolvingResource = false
         audio?.onStateChange = nil; audio?.onTimeChange = nil; audio?.onAdvanced = nil; audio?.onFinished = nil
         audio?.shutdown(); audio = nil; mediaSession?.shutdown(); mediaSession = nil
@@ -899,6 +985,12 @@ final class NowPlayingModel {
 
     private func updateNowPlaying() {
         guard hasCurrent else { return }
-        mediaSession?.update(.init(title: current.title, artist: current.artist, album: current.album, artwork: current.artworkData, artworkURL: current.artworkURL), elapsed: elapsed, duration: duration, playing: isPlaying)
+        mediaSession?.update(
+            .init(title: current.title, artist: current.artist, album: current.album,
+                  artwork: current.artworkData, artworkURL: current.artworkURL),
+            elapsed: liveElapsed,
+            duration: duration,
+            playing: isPlaying
+        )
     }
 }

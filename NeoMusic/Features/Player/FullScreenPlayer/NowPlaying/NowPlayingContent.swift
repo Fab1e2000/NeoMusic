@@ -110,7 +110,15 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
         .onChange(of: visualsActive) { _, active in
             if !active { finishPageChange() }
         }
-        .onChange(of: page) { _, _ in showsLyricsControls = true }
+        .onChange(of: page) { _, _ in
+            showsLyricsControls = true
+            lyricsControlTouchCount = 0
+        }
+        .onChange(of: player.currentTrackTransitionKey) { _, _ in
+            showsLyricsControls = true
+            lyricsControlTouchCount = 0
+            progressInteraction.resetForTrackChange()
+        }
         .onChange(of: accessibilityVoiceOverEnabled) { _, enabled in
             if enabled, page == .lyrics { showsLyricsControls = true }
         }
@@ -405,7 +413,9 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
     private func portraitLyricsPage(for song: PlayerTrack, bottomExtension: CGFloat) -> some View {
         NowPlayingLyricsPage(
             song: song, lyrics: lyricsContent.lyrics, errorMessage: lyricsContent.error,
-            isActive: visualsActive && page == .lyrics, isInterfaceHidden: hidesLyricsControls,
+            isActive: visualsActive && page == .lyrics,
+            isPageVisible: isActive && page == .lyrics,
+            isInterfaceHidden: hidesLyricsControls,
             artworkNamespace: pageArtworkNamespace, showsSongHeader: false,
             showsTranslation: true,
             bottomOverlayExtension: bottomExtension,
@@ -423,7 +433,7 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
     private func residentAppleMusicLyricsPage(for song: PlayerTrack, bottomExtension: CGFloat) -> some View {
         let isVisible = page == .lyrics
         return portraitLyricsPage(for: song, bottomExtension: bottomExtension)
-            .id(song.id)
+            .id(player.currentTrackTransitionKey)
             .padding(.horizontal, portraitHorizontalPadding)
             .modifier(NowPlayingPagePresentation(
                 isVisible: isVisible, page: .lyrics, selectedPage: page, change: pageChange,
@@ -455,9 +465,10 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
     }
 
     private func lyricsControlTouchEnded() {
-        guard page == .lyrics else { return }
         lyricsControlTouchCount = max(0, lyricsControlTouchCount - 1)
-        appleMusicControlsActivityGeneration &+= 1
+        if page == .lyrics {
+            appleMusicControlsActivityGeneration &+= 1
+        }
     }
 
     private func registerAppleMusicControlsActivity() {

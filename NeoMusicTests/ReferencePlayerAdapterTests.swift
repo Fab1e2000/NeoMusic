@@ -20,8 +20,8 @@ import AVFoundation
         window.isHidden = false
         defer { window.isHidden = true }
         try await Task.sleep(for: .milliseconds(100))
-        func slider(in view: UIView) -> UISlider? {
-            if let slider = view as? UISlider, slider.accessibilityLabel == "播放进度" { return slider }
+        func slider(in view: UIView) -> NowPlayingScrubbingSlider? {
+            if let slider = view as? NowPlayingScrubbingSlider, slider.accessibilityLabel == "播放进度" { return slider }
             return view.subviews.lazy.compactMap { slider(in: $0) }.first
         }
         let control = try XCTUnwrap(slider(in: window))
@@ -153,8 +153,7 @@ import AVFoundation
 
         let slider = try XCTUnwrap(findSlider(in: window))
         slider.layoutIfNeeded()
-        XCTAssertEqual(slider.alpha, 0.02, accuracy: 0.001)
-        XCTAssertEqual(slider.sliderStyle, .thumbless)
+        XCTAssertEqual(slider.backgroundColor, .clear)
 
         let initialQualityReads = qualityReads
         XCTAssertFalse(slider.isTrackHighlighted)
@@ -164,7 +163,7 @@ import AVFoundation
         XCTAssertTrue(slider.isTrackHighlighted)
         XCTAssertEqual(qualityReads, initialQualityReads)
 
-        slider.touchesEnded([], with: nil)
+        slider.setTrackHighlightedForTesting(false)
         try await Task.sleep(for: .milliseconds(50))
         XCTAssertFalse(slider.isTrackHighlighted)
         XCTAssertEqual(qualityReads, initialQualityReads)
@@ -413,6 +412,30 @@ private struct HitTarget: UIViewRepresentable {
         XCTAssertTrue(player.isPlaying)
         XCTAssertEqual(owner.currentIndex, 3)
         XCTAssertTrue(owner.isPlaying)
+    }
+
+    func testTrackTransitionKeyChangesOnReturnToSameTrackAndStaysStableOnPause() {
+        let a = track("a"), b = track("b")
+        let owner = PlayerTestFixtures.owner(tracks: [a, b])
+        let player = PlayerState(model: owner)
+        let initialKey = player.currentTrackTransitionKey
+        let initialGeneration = player.playbackGeneration
+
+        // Pause/resume and availability reconciliation must not look like a track change.
+        player.togglePlayback()
+        player.togglePlayback()
+        owner.reconcileAvailability(songs: owner.queue)
+        XCTAssertEqual(player.playbackGeneration, initialGeneration)
+        XCTAssertEqual(player.currentTrackTransitionKey, initialKey)
+
+        // Switching A -> B -> A must produce a distinct transition key so player pages reset.
+        player.skip(toQueueIndex: 1)
+        let keyB = player.currentTrackTransitionKey
+        XCTAssertNotEqual(keyB, initialKey)
+        player.skip(toQueueIndex: 0)
+        let returnedKeyA = player.currentTrackTransitionKey
+        XCTAssertNotEqual(returnedKeyA, initialKey)
+        XCTAssertNotEqual(returnedKeyA, keyB)
     }
     func testUpcomingReorderPreservesCurrentSongAndPosition() {
         let player = PlayerTestFixtures.state(tracks: [track("a"), track("b"), track("c"), track("d")])

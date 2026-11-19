@@ -47,4 +47,11 @@ final class LyricsRowGeometry {
         // remains a useful estimate until it is measured after a distant seek.
         tops.removeValue(forKey: id)
     }
+
+    func reset() {
+        heights.removeAll(keepingCapacity: true)
+        tops.removeAll(keepingCapacity: true)
+        focusedID = nil
+        focusedHeight = nil
+    }
 }

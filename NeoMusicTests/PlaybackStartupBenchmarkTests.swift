@@ -20,8 +20,10 @@ import XCTest
                     let engine = LocalPlaybackEngine(activateSession: { true })
                     defer { engine.shutdown() }
                     engine.load(url: url, autoplay: true)
-                    let deck = try XCTUnwrap(Mirror(reflecting: engine).children.first { $0.label == "player" }?.value as? StreamingPlaybackDeck)
-                    try await waitUntil { !engine.isLoading && (deck.currentPlaybackTime ?? 0) > 0.01 }
+                    try await waitUntil {
+                        let time = await engine.debugBackendState().currentPlaybackTime ?? 0
+                        return !engine.isLoading && time > 0.01
+                    }
                     firstProgress = .now
                     XCTAssertNil(engine.error)
                 } else {
@@ -57,8 +59,10 @@ import XCTest
                     let engine = LocalPlaybackEngine(activateSession: { true })
                     defer { engine.shutdown() }
                     engine.load(url: url, autoplay: true)
-                    let deck = try XCTUnwrap(Mirror(reflecting: engine).children.first { $0.label == "player" }?.value as? StreamingPlaybackDeck)
-                    try await waitUntil(seconds: 30) { !engine.isLoading && (deck.currentPlaybackTime ?? 0) > 0.01 }
+                    try await waitUntil(seconds: 30) {
+                        let time = await engine.debugBackendState().currentPlaybackTime ?? 0
+                        return !engine.isLoading && time > 0.01
+                    }
                     firstProgress = .now
                     XCTAssertNil(engine.error)
                     engine.pause()
@@ -66,9 +70,13 @@ import XCTest
                     try await waitUntil(seconds: 30) { !engine.isLoading }
                     XCTAssertNil(engine.error)
                     XCTAssertFalse(engine.isPlaying)
-                    XCTAssertEqual(try XCTUnwrap(deck.currentPlaybackTime), 3.125, accuracy: 0.1)
+                    let soughtTime = await engine.debugBackendState().currentPlaybackTime
+                    XCTAssertEqual(try XCTUnwrap(soughtTime), 3.125, accuracy: 0.1)
                     engine.play()
-                    try await waitUntil(seconds: 30) { (deck.currentPlaybackTime ?? 0) > 3.225 }
+                    try await waitUntil(seconds: 30) {
+                        let time = await engine.debugBackendState().currentPlaybackTime ?? 0
+                        return time > 3.225
+                    }
                 } else {
                     let asset = AVURLAsset(url: url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
                     let player = AVPlayer(playerItem: AVPlayerItem(asset: asset))
@@ -100,10 +108,10 @@ import XCTest
         XCTAssertEqual(engine.duration, 20, accuracy: 0.1)
     }
 
-    private func waitUntil(seconds: Int = 10, _ predicate: () -> Bool) async throws {
+    private func waitUntil(seconds: Int = 10, _ predicate: () async -> Bool) async throws {
         let deadline = ContinuousClock.now.advanced(by: .seconds(seconds))
         while ContinuousClock.now < deadline {
-            if predicate() { return }
+            if await predicate() { return }
             try await Task.sleep(for: .milliseconds(5))
         }
         XCTFail("Playback did not reach the expected transport state within \(seconds) seconds")

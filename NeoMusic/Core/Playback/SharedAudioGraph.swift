@@ -1,10 +1,13 @@
 @preconcurrency import AVFoundation
 
 /// Single shared `AVAudioEngine` clock and mixer graph for all local and streaming decks.
-@MainActor final class SharedAudioGraph {
-    let engine = AVAudioEngine()
-    private let analyzer = AudioSpectrumAnalyzer()
+/// Isolated to `@PlaybackAudioActor` so CoreAudio graph operations never block the main thread.
+@PlaybackAudioActor final class SharedAudioGraph {
+    lazy var engine = AVAudioEngine()
+    private nonisolated let analyzer = ThreadSafeSpectrumAnalyzer()
     private var tapInstalled = false
+
+    nonisolated init() {}
 
     func attach(_ node: AVAudioNode, format: AVAudioFormat?) {
         if node.engine !== engine {
@@ -44,7 +47,7 @@
         engine.reset()
     }
 
-    func spectrumLevels() -> [Float] {
+    nonisolated func spectrumLevels() -> [Float] {
         (0..<5).map { analyzer.level(at: $0) }
     }
 
@@ -69,7 +72,20 @@
         tapInstalled = true
     }
 
-    nonisolated private static func makeTapBlock(analyzer: AudioSpectrumAnalyzer) -> AVAudioNodeTapBlock {
+    nonisolated private static func makeTapBlock(analyzer: ThreadSafeSpectrumAnalyzer) -> AVAudioNodeTapBlock {
         { buffer, _ in analyzer.consume(buffer) }
+    }
+}
+
+/// Bridges the thread-safe Objective-C `AudioSpectrumAnalyzer` across Swift 6 concurrency domains.
+private final class ThreadSafeSpectrumAnalyzer: @unchecked Sendable {
+    private let raw = AudioSpectrumAnalyzer()
+
+    func consume(_ buffer: AVAudioPCMBuffer) {
+        raw.consume(buffer)
+    }
+
+    func level(at index: Int) -> Float {
+        raw.level(at: index)
     }
 }

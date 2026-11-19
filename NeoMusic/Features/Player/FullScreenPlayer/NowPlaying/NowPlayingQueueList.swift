@@ -12,6 +12,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
     @Environment(PlayerServices.self) private var services: PlayerServices?
     let entries: [PlayerQueueEntry]
     let version: PlayerQueueVersion
+    var trackTransitionKey: String = ""
     var subtitle: String = "接下来播放的歌曲"
     /// 顶部给歌曲头部和模式按钮预留的高度，头部叠在上层，随列表滚动。
     let headerHeight: CGFloat
@@ -359,6 +360,8 @@ struct NowPlayingQueueList: UIViewRepresentable {
             let previousList = latest
             latest = list
             (collectionView as? EdgeFadedCollectionView)?.headerHeight = list.headerHeight
+            let trackChanged = hasApplied && !list.trackTransitionKey.isEmpty
+                && previousList?.trackTransitionKey != list.trackTransitionKey
             let entriesChanged = !hasApplied || previousList?.version != list.version
             let insetChanged = previousList?.horizontalInset != list.horizontalInset
             let headerChanged = previousList?.headerHeight != list.headerHeight
@@ -368,7 +371,15 @@ struct NowPlayingQueueList: UIViewRepresentable {
                 $0.player !== list.player || $0.actions !== list.actions
             } ?? false
             defer {
-                if becameActive || entriesChanged { requestVisibleArtwork() }
+                if trackChanged, let collectionView {
+                    let topY = -collectionView.adjustedContentInset.top
+                    if abs(collectionView.contentOffset.y - topY) > 0.5 {
+                        collectionView.setContentOffset(CGPoint(x: 0, y: topY), animated: false)
+                    }
+                    updateScrollIndicatorInsets()
+                    list.onScroll(0)
+                }
+                if becameActive || entriesChanged || trackChanged { requestVisibleArtwork() }
             }
             updateScrollIndicatorInsets()
             if let nativeOrder {

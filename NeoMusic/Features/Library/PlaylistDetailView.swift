@@ -45,6 +45,7 @@ struct PlaylistDetailView: View {
     @State private var showsAddMusic = false
     @State private var showsEditor = false
     @State private var showsDestinations = false
+    @State private var loadedOnlinePlaylistID: String?
     @State private var playbackTask: Task<Void, Never>?
     @State private var actionFeedback = 0
 
@@ -154,49 +155,22 @@ struct PlaylistDetailView: View {
             }
         }
         .task(id: backgroundArtwork) {
-            if let cached = LocalArtworkImages.cachedBackdrop(for: backgroundArtwork) { backdrop = cached; return }
-            let data: Data?
-            switch backgroundArtwork {
-            case .file(let url):
-                data = await Task.detached(priority: .utility) { try? Data(contentsOf: url) }.value
-            case .deferred(let id, _):
-                if let url = await loadArtwork.resolve?(id), !Task.isCancelled {
-                    data = await Task.detached(priority: .utility) { try? Data(contentsOf: url) }.value
-                } else { data = nil }
-            case .image(let image):
-                let renderer = ImageRenderer(content: image.resizable().scaledToFill().frame(width: 128, height: 128).clipped())
-                data = renderer.uiImage?.pngData()
-            default:
-                data = nil
-            }
-            guard !Task.isCancelled, let data else { return }
-            let result = await Task.detached(priority: .utility) { AlbumArtworkBackdrop.extract(from: data) }.value
+            let result = await CollectionBackdropResolver.resolve(artwork: backgroundArtwork, loadArtwork: loadArtwork)
             guard !Task.isCancelled else { return }
-            backdrop = result
+            if let result { backdrop = result }
         }
         .onChange(of: preparedBackdrop, initial: true) { _, value in chrome?.setAlbumBackdrop(value) }
-        .task(id: playlistID) { if playlist?.isReadOnly == true { await library.loadOnlinePlaylist?(playlistID) } }
+        .task(id: playlistID) {
+            guard playlist?.isReadOnly == true, loadedOnlinePlaylistID != playlistID else { return }
+            loadedOnlinePlaylistID = playlistID
+            await library.loadOnlinePlaylist?(playlistID)
+        }
         .task(id: FullCollectionRequest(playlistID: playlistID, query: query, sort: sort,
                                         hasMore: library.onlineHasMore.contains(playlistID))) {
             if !query.isEmpty || sort != .order { _ = await library.prepareCompleteCollection(playlistID) }
         }
-        .task(id: ProjectionInput(tracks: tracks, query: query, sort: sort)) {
-            let input = ProjectionInput(tracks: tracks, query: query, sort: sort)
-            guard Self.fastPath(input) == nil else { return }
-            let entries = input.tracks.enumerated().map { index, track in
-                TrackSortEntry(index: index, title: track.title, artist: track.artist,
-                               album: track.album, duration: track.duration)
-            }
-            let currentQuery = input.query
-            let currentSort = input.sort
-            await projection.computeIfNeeded(
-                for: input,
-                fastPath: Self.fastPath,
-                background: { Self.computeTrackIndices(entries: entries, query: currentQuery, sort: currentSort) },
-                finish: { result in
-                    Projection(tracks: result.indices.map { input.tracks[$0] }, totalDuration: result.totalDuration)
-                }
-            )
+        .task(id: TrackFilterProjectionInput(tracks: tracks, query: query, sort: sort)) {
+            await TrackFilterProjection.update(projection, for: TrackFilterProjectionInput(tracks: tracks, query: query, sort: sort))
         }
         .onDisappear { playbackTask?.cancel(); playbackTask = nil }
         .playlistDeletionConfirmation(library)

@@ -146,11 +146,18 @@ struct SearchPageView: View {
                     }
                 }
             }
+            .id(model.scope)
             .onChange(of: model.kind, initial: true) { _, nextKind in
                 mountedResultKinds.insert(nextKind)
             }
             .onChange(of: model.query) { _, _ in
                 mountedResultKinds = [model.kind]
+            }
+            .onChange(of: model.scope) { _, _ in
+                mountedResultKinds = [model.kind]
+            }
+            .onChange(of: model.submitted) { _, submitted in
+                if !submitted { mountedResultKinds = [model.kind] }
             }
         }
     }
