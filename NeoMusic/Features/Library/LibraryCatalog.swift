@@ -7,6 +7,7 @@ import Observation
     var albums: [LibraryShelfItem] = []
     var downloadedAlbums: [LibraryShelfItem] = []
     @ObservationIgnored var loadAlbumSongs: ((String) async throws -> [LibrarySongItem])?
+    @ObservationIgnored var loadArtistDetail: ((String) async throws -> ArtistDetail?)?
     @ObservationIgnored var actions = CollectionMenuActions()
     @ObservationIgnored var openSongAlbum: ((String, @escaping (LibraryRoute) -> Void) -> Void)?
     @ObservationIgnored var openSongArtist: ((String, String?, @escaping (LibraryRoute) -> Void) -> Void)?

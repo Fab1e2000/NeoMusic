@@ -591,14 +591,16 @@ private struct PlaylistAddMusicContent: View {
     let recentlyPlayedSongs: [LibrarySongItem]
 
     var body: some View {
-        let available = songs()
-        return AddPlaylistMusicView(title: library.playlist(playlistID)?.title ?? "播放列表", songs: available,
-            playlists: library.playlists, existingIDs: Set(library.songs(in: playlistID).map(\.id)),
-            playlistSongs: Dictionary(uniqueKeysWithValues: library.playlists.map { playlist in
-                (playlist.id, playlist.isSystem ? available.filter(\.isFavorite) : library.songs(in: playlist.id))
-            }), recentlyPlayedSongs: recentlyPlayedSongs) { selected in
-                library.addSongs(selected, to: playlistID)
-            }
+        AddPlaylistMusicView(
+            title: library.playlist(playlistID)?.title ?? "播放列表",
+            songs: songs(),
+            playlists: library.playlists,
+            existingIDs: Set(library.songs(in: playlistID).map(\.id)),
+            playlistLibrary: library,
+            recentlyPlayedSongs: recentlyPlayedSongs
+        ) { selected in
+            library.addSongs(selected, to: playlistID)
+        }
     }
 }
 
@@ -704,11 +706,13 @@ struct PlaylistEditor: View {
                 }
             }
             .sheet(isPresented: $showsMusic) {
-                AddPlaylistMusicView(title: title, songs: availableSongs, playlists: library.playlists,
-                                     existingIDs: Set(tracks.map(\.id)),
-                                     playlistSongs: Dictionary(uniqueKeysWithValues: library.playlists.map { playlist in
-                                         (playlist.id, playlist.isSystem ? availableSongs.filter(\.isFavorite) : library.songs(in: playlist.id))
-                                     })) { selected in tracks.append(contentsOf: selected) }
+                AddPlaylistMusicView(
+                    title: title,
+                    songs: availableSongs,
+                    playlists: library.playlists,
+                    existingIDs: Set(tracks.map(\.id)),
+                    playlistLibrary: library
+                ) { selected in tracks.append(contentsOf: selected) }
             }
             .modifier(PlaylistCoverPicker(selection: coverSelection))
             .interactiveDismissDisabled(hasChanges)

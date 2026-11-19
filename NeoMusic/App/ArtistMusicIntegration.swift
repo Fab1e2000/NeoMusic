@@ -64,6 +64,18 @@ import Observation
             guard available, let id = Self.number(route), let detail = self.albumDetail(id) else { throw NeteaseAccountError.invalidResponse }
             return detail.songs
         }
+        LocalLibrary.catalog.loadArtistDetail = { [weak self] key in
+            guard let self, let captured = self.owner else { throw NeteaseAccountError.authenticationRequired }
+            let route = LibraryRoute.artist(key)
+            await self.load(route)
+            guard captured == self.owner else { throw CancellationError() }
+            guard let id = Self.number(route) else { return nil }
+            if let detail = self.artistDetail(id) { return detail }
+            if let error = self.error(route) {
+                throw NSError(domain: "ArtistMusicIntegration", code: 1, userInfo: [NSLocalizedDescriptionKey: error])
+            }
+            return nil
+        }
         observe()
     }
     private func observe() {

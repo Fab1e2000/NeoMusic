@@ -117,7 +117,7 @@ enum LocalLibrary {
     }
 
     /// 最近添加：播放列表、专辑，以及喜爱或加入播放列表的单曲。按加入时间从新到旧。
-    static var recentlyAdded: [LibraryShelfItem] {
+    static var allRecentlyAdded: [LibraryShelfItem] {
         let playlists = playlistLibrary.playlists.filter { !$0.isSystem }.map { playlist in
             var shown = playlist
             shown.artwork = playlistLibrary.displayArtwork(of: playlist)
@@ -137,7 +137,37 @@ enum LocalLibrary {
             guard song.isFavorite || playlistDates[song.id] != nil else { return nil }
             return (song, [song.favoriteAddedAt, playlistDates[song.id]].compactMap { $0 }.max())
         }
-        return Array(LibraryRecentAdditions.ordered(collections: playlists + albumItems, songs: songItems).prefix(6))
+        return LibraryRecentAdditions.ordered(collections: playlists + albumItems, songs: songItems)
+    }
+
+    static var recentlyAdded: [LibraryShelfItem] {
+        Array(allRecentlyAdded.prefix(6))
+    }
+
+    static var musicPickerSource: MusicPickerSource {
+        MusicPickerSource(
+            songs: { allSongs },
+            artists: { artists },
+            albums: { albums.map(withPinState) },
+            downloadedAlbums: { downloadedAlbumItems.map(withPinState) },
+            recentlyAdded: { allRecentlyAdded },
+            recentlyPlayed: { recentPlaybackFixture },
+            playlistLibrary: playlistLibrary,
+            albumSongs: { albumSongs($0) },
+            loadAlbumSongs: { id in
+                if CatalogRouteIdentity.isCatalogID(id), let load = catalog.loadAlbumSongs {
+                    return try await load(id)
+                }
+                return albumSongs(id)
+            },
+            loadArtistDetail: { id in
+                if CatalogRouteIdentity.isCatalogID(id), let load = catalog.loadArtistDetail {
+                    return try await load(id)
+                }
+                return nil
+            },
+            songByID: { songForMenu($0) }
+        )
     }
 
     static func playLibrarySong(_ id: String) {
@@ -473,6 +503,7 @@ enum LocalLibrary {
         .environment(\.collectionMenuActions, menuActions)
         .environment(\.songMenuActions, songActions)
         .environment(\.songRowPlayback, player)
+        .environment(\.musicPickerSource, musicPickerSource)
     }
 
     static func playSongs(_ songs: [LibrarySongItem], shuffled: Bool) {
