@@ -33,6 +33,7 @@ struct NowPlayingLyricsPage: View {
     let presentation: NowPlayingLyricsPresentation
     let isInterfaceHidden: Bool
     @Environment(PlayerState.self) private var player
+    @Environment(NowPlayingProgressInteraction.self) private var progressInteraction: NowPlayingProgressInteraction?
     @State private var lastActiveLineID: Int?
     @State private var isScrubbingProgress = false
     @State private var loadingFeedback = NowPlayingLyricsLoadingFeedback()
@@ -142,6 +143,8 @@ struct NowPlayingLyricsPage: View {
                         showsTranslation: showsTranslation,
                         isPlaying: player.isPlaying,
                         isScrubbing: isScrubbingProgress,
+                        timelineAnchor: player.timelineAnchor,
+                        progressInteraction: progressInteraction,
                         onInterfaceInteraction: onInterfaceInteraction,
                         onUserInteractionChange: onUserInteractionChange
                     )

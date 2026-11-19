@@ -52,16 +52,7 @@ typealias ReferenceLyricsReader = PlayerLyricsStoreAdapter
 
 extension LyricsDocument {
     static func onlineLyrics(original: String, translation: String) -> Self {
-        let base = parse(original), translated = parse(translation)
-        guard !base.lines.isEmpty else { return base }
-        let translations = Dictionary(grouping: translated.lines, by: \.time)
-        let lines = base.lines.map { line in
-            let additional = translations[line.time, default: []].map(\.text)
-                .filter { !$0.isEmpty && $0 != line.text }
-            return LyricsLine(id: line.id, time: line.time, text: line.text,
-                               translation: additional.joined(separator: "\n"))
-        }
-        return Self(lines: lines, plainText: lines.map(\.text).joined(separator: "\n"), source: "网易云音乐")
+        merge(original: original, translation: translation, source: "网易云音乐")
     }
 }
 

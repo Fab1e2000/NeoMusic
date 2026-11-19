@@ -98,6 +98,246 @@ final class LyricsFocusTests: XCTestCase {
         XCTAssertEqual(display.indices[7], 3)
         XCTAssertEqual(display.indices[8], 4)
         XCTAssertEqual(display.indices[9], 4)
+
+        let layout = NativeLyricsScrollView.displayLayout(from: source)
+        XCTAssertEqual(layout.interludeIntervals.count, 1)
+        XCTAssertEqual(layout.interludeIntervals[6], LyricsInterludeInterval(start: 20.0, end: 25.5))
+    }
+
+    func testInterludeTimelinePhasesContinuityAndReduceMotion() {
+        let interval = LyricsInterludeInterval(start: 6.0, end: 26.0) // T = 20s
+
+        // Start of interlude: scale(0) and opacity(0) with base dot opacity ~0.3
+        let start = LyricsInterludeTimeline.evaluate(at: 6.0, interval: interval)
+        XCTAssertEqual(start.scale, 0, accuracy: 0.0001)
+        XCTAssertEqual(start.groupOpacity, 0, accuracy: 0.0001)
+        XCTAssertEqual(start.dot1Opacity, 0.30, accuracy: 0.001)
+        XCTAssertEqual(start.dot2Opacity, 0.30, accuracy: 0.001)
+        XCTAssertEqual(start.dot3Opacity, 0.30, accuracy: 0.001)
+
+        // Mid-entrance (~0.6s in): smoothly scaling up & fading in, still at base gray-white
+        let midEnter = LyricsInterludeTimeline.evaluate(at: 6.6, interval: interval)
+        XCTAssertGreaterThan(midEnter.scale, 0.5)
+        XCTAssertGreaterThan(midEnter.groupOpacity, 0.3)
+        XCTAssertLessThan(midEnter.groupOpacity, 0.8)
+        XCTAssertEqual(midEnter.dot1Opacity, 0.30, accuracy: 0.001)
+
+        // Entrance finished (1.2s in): full group opacity, dots begin 3-segment progression
+        let afterEnter = LyricsInterludeTimeline.evaluate(at: 7.2, interval: interval)
+        XCTAssertEqual(afterEnter.groupOpacity, 1.0, accuracy: 0.001)
+        XCTAssertEqual(afterEnter.dot1Opacity, 0.30, accuracy: 0.001)
+        XCTAssertEqual(afterEnter.dot2Opacity, 0.30, accuracy: 0.001)
+        XCTAssertEqual(afterEnter.dot3Opacity, 0.30, accuracy: 0.001)
+
+        // Segment 1 midpoint (~1.2 + 5.92/2 = 4.16s in -> t = 10.16s): dot 1 halfway lit, dots 2 & 3 base
+        let seg1Mid = LyricsInterludeTimeline.evaluate(at: 10.16, interval: interval)
+        XCTAssertEqual(seg1Mid.dot1Opacity, 0.65, accuracy: 0.03)
+        XCTAssertEqual(seg1Mid.dot2Opacity, 0.30, accuracy: 0.001)
+        XCTAssertEqual(seg1Mid.dot3Opacity, 0.30, accuracy: 0.001)
+
+        // Segment 2 midpoint (~t = 16.08s): dot 1 stays 1.0, dot 2 halfway lit, dot 3 base
+        let seg2Mid = LyricsInterludeTimeline.evaluate(at: 16.08, interval: interval)
+        XCTAssertEqual(seg2Mid.dot1Opacity, 1.0, accuracy: 0.001)
+        XCTAssertEqual(seg2Mid.dot2Opacity, 0.65, accuracy: 0.03)
+        XCTAssertEqual(seg2Mid.dot3Opacity, 0.30, accuracy: 0.001)
+
+        // Segment 3 midpoint (~t = 22.0s): dots 1 & 2 stay 1.0, dot 3 halfway lit
+        let seg3Mid = LyricsInterludeTimeline.evaluate(at: 22.0, interval: interval)
+        XCTAssertEqual(seg3Mid.dot1Opacity, 1.0, accuracy: 0.001)
+        XCTAssertEqual(seg3Mid.dot2Opacity, 1.0, accuracy: 0.001)
+        XCTAssertEqual(seg3Mid.dot3Opacity, 0.65, accuracy: 0.03)
+
+        // Parallel breathing oscillation across the wait: sweeps cleanly around [0.91, 1.09]
+        var minScale = Double.greatestFiniteMagnitude
+        var maxScale = 0.0
+        for step in 0..<90 {
+            let t = 8.0 + Double(step) * 0.1
+            let frame = LyricsInterludeTimeline.evaluate(at: t, interval: interval)
+            minScale = min(minScale, frame.scale)
+            maxScale = max(maxScale, frame.scale)
+        }
+        XCTAssertEqual(minScale, 0.91, accuracy: 0.01)
+        XCTAssertEqual(maxScale, 1.09, accuracy: 0.01)
+
+        // Exit anticipation (~0.55s before 0.45s shrink, all 3 dots fully lit -> swells to 1.25x)
+        let anticPeakTime = 26.0 - LyricsInterludeTimeline.exitLeadClearance - LyricsInterludeTimeline.maxShrinkDuration
+        let anticPeak = LyricsInterludeTimeline.evaluate(at: anticPeakTime, interval: interval)
+        XCTAssertEqual(anticPeak.dot1Opacity, 1.0, accuracy: 0.001)
+        XCTAssertEqual(anticPeak.dot2Opacity, 1.0, accuracy: 0.001)
+        XCTAssertEqual(anticPeak.dot3Opacity, 1.0, accuracy: 0.001)
+        XCTAssertEqual(anticPeak.scale, 1.25, accuracy: 0.01)
+        XCTAssertEqual(anticPeak.groupOpacity, 1.0, accuracy: 0.001)
+
+        // Rapid shrink & fade to 0 before interval.end
+        let midShrink = LyricsInterludeTimeline.evaluate(at: anticPeakTime + 0.25, interval: interval)
+        XCTAssertLessThan(midShrink.scale, anticPeak.scale)
+        XCTAssertGreaterThan(midShrink.scale, 0.2)
+        XCTAssertLessThan(midShrink.groupOpacity, 0.9)
+
+        let endFrame = LyricsInterludeTimeline.evaluate(at: 25.98, interval: interval)
+        XCTAssertEqual(endFrame.scale, 0, accuracy: 0.001)
+        XCTAssertEqual(endFrame.groupOpacity, 0, accuracy: 0.001)
+
+        // Scale trajectory must remain continuous without abrupt jumps across phase joints
+        var previousScale = 0.0
+        for step in 1...1000 {
+            let t = 6.0 + Double(step) * 0.02
+            let frame = LyricsInterludeTimeline.evaluate(at: t, interval: interval)
+            XCTAssertLessThan(abs(frame.scale - previousScale), 0.18, "Unexpected scale jump at t=\(t)")
+            previousScale = frame.scale
+        }
+
+        // Short interlude (T = 4.2s) still progresses monotonically through all 3 dots
+        let shortInterval = LyricsInterludeInterval(start: 10.0, end: 14.2)
+        let shortMid = LyricsInterludeTimeline.evaluate(at: 12.0, interval: shortInterval)
+        XCTAssertEqual(shortMid.groupOpacity, 1.0, accuracy: 0.001)
+        XCTAssertEqual(shortMid.dot1Opacity, 1.0, accuracy: 0.001)
+        XCTAssertGreaterThan(shortMid.dot2Opacity, 0.30)
+
+        // Reduce motion disables breathing & scale anticipation while keeping 3-dot progress
+        let reducedMid = LyricsInterludeTimeline.evaluate(at: 16.08, interval: interval, reducesMotion: true)
+        XCTAssertEqual(reducedMid.scale, 1.0, accuracy: 0.0001)
+        XCTAssertEqual(reducedMid.dot1Opacity, 1.0, accuracy: 0.001)
+        XCTAssertGreaterThan(reducedMid.dot2Opacity, 0.5)
+        let reducedAntic = LyricsInterludeTimeline.evaluate(at: anticPeakTime, interval: interval, reducesMotion: true)
+        XCTAssertEqual(reducedAntic.scale, 1.0, accuracy: 0.0001)
+    }
+
+    func testInterludeRowExpandsWhenActiveAndCollapsesKeepingPreviousLineAnchored() async throws {
+        let lyrics = PlayerLyrics(
+            lines: [
+                PlayerLyricLine(id: 0, time: 10.0, text: "第一句歌词"),
+                PlayerLyricLine(id: 1, time: 14.0, text: "迫るエンドロールの\n中で"),
+                PlayerLyricLine(id: 2, time: 18.0, text: ""),
+                PlayerLyricLine(id: 3, time: 36.0, text: "不幸自慢ばかり捩り\n拗れた"),
+                PlayerLyricLine(id: 4, time: 40.0, text: "抗弁垂れた to eat\nご馳走"),
+                PlayerLyricLine(id: 5, time: 44.0, text: "寧ろ 君のが針のモロ謡")
+            ],
+            plainText: "",
+            source: "test"
+        )
+        // Rendered rows: 0=intro(-1), 1=id0, 2=id1, 3=interlude(id2), 4=id3, 5=id4, 6=id5
+        let state = LyricsFocusTestState(lineCount: 6, activeID: nil)
+        state.lyrics = lyrics
+        state.timelineAnchor = PlayerTimelineAnchor(baseElapsed: 2.0, rate: 0, duration: 60)
+        let window = try await mount(state, size: .large)
+        defer { window.isHidden = true }
+        let table = try XCTUnwrap(scrollViews(in: window).compactMap { $0 as? NativeLyricsScrollView }.first)
+
+        // 1. Intro interlude expands when activeID is nil; mid-song interlude stays collapsed at height 0.
+        let introExpanded = try await waitUntil { table.expandedInterludeRowIndex == 0 }
+        XCTAssertTrue(introExpanded)
+        let expectedInterludeHeight = table.focusLineHeight + AppleMusicLyricsMotionProfile.iOS26_6.lineSpacing
+        XCTAssertEqual(table.rectForRow(at: IndexPath(row: 0, section: 0)).height, expectedInterludeHeight, accuracy: 1)
+        XCTAssertEqual(table.rectForRow(at: IndexPath(row: 3, section: 0)).height, 0, accuracy: 0.5)
+
+        // 2. Advancing to line 1 (row 2) collapses intro (row 0) and keeps mid-song interlude (row 3) collapsed
+        //    so row 4 sits immediately below row 2 with rowOffset == 1 blur (2.0).
+        state.activeID = 1
+        state.timelineAnchor = PlayerTimelineAnchor(baseElapsed: 15.0, rate: 0, duration: 60)
+        try await assertFocus(1, in: state)
+        XCTAssertNil(table.expandedInterludeRowIndex)
+        XCTAssertEqual(table.rectForRow(at: IndexPath(row: 0, section: 0)).height, 0, accuracy: 0.5)
+        XCTAssertEqual(table.rectForRow(at: IndexPath(row: 3, section: 0)).height, 0, accuracy: 0.5)
+        let row2RectBefore = table.rectForRow(at: IndexPath(row: 2, section: 0))
+        let row4RectBefore = table.rectForRow(at: IndexPath(row: 4, section: 0))
+        XCTAssertEqual(row4RectBefore.minY, row2RectBefore.maxY, accuracy: 0.5,
+                       "Collapsed interlude row must not leave a gap between surrounding lyrics")
+        XCTAssertEqual(try XCTUnwrap(table.rowDistanceBlurRadius(forRow: 4)), 2.0, accuracy: 0.05,
+                       "Row immediately after a collapsed interlude must receive adjacent rowOffset=1 blur")
+
+        // 3. Entering mid-song interlude (id 2 -> row 3) expands row 3 and focuses it.
+        state.activeID = 2
+        state.timelineAnchor = PlayerTimelineAnchor(baseElapsed: 24.0, rate: 0, duration: 60)
+        let midExpanded = try await waitUntil {
+            table.expandedInterludeRowIndex == 3 && !table.isRowTransitionAnimating
+        }
+        XCTAssertTrue(midExpanded)
+        try await assertFocus(2, in: state)
+        XCTAssertEqual(table.rectForRow(at: IndexPath(row: 3, section: 0)).height, expectedInterludeHeight, accuracy: 1)
+        let prevTopDuringInterlude = try XCTUnwrap(table.transitionViewportTop(forRow: 2))
+        let nextTopDuringInterlude = try XCTUnwrap(table.transitionViewportTop(forRow: 4))
+        let interludeTop = try XCTUnwrap(table.transitionViewportTop(forRow: 3))
+        XCTAssertEqual(nextTopDuringInterlude - interludeTop, expectedInterludeHeight, accuracy: 1.5)
+
+        // 4. Leaving mid-song interlude (id 3 -> row 4) collapses row 3 back to 0, animates row 4 upward,
+        //    and keeps row 2 anchored right above focus without extra gap.
+        state.activeID = 3
+        state.timelineAnchor = PlayerTimelineAnchor(baseElapsed: 36.0, rate: 0, duration: 60)
+        let collapseStarted = try await waitUntil {
+            state.renderedActiveID == 3 && table.expandedInterludeRowIndex == nil
+        }
+        XCTAssertTrue(collapseStarted)
+        XCTAssertEqual(table.rectForRow(at: IndexPath(row: 3, section: 0)).height, 0, accuracy: 0.5)
+        let collapsedSettled = try await waitUntil { !table.isRowTransitionAnimating }
+        XCTAssertTrue(collapsedSettled)
+        try await assertFocus(3, in: state)
+        let prevTopAfterCollapse = try XCTUnwrap(table.transitionViewportTop(forRow: 2))
+        XCTAssertEqual(prevTopAfterCollapse, prevTopDuringInterlude, accuracy: 2.0,
+                       "Previous lyric above the interlude must remain anchored in place as the interlude collapses")
+        let row2RectAfter = table.rectForRow(at: IndexPath(row: 2, section: 0))
+        let row4RectAfter = table.rectForRow(at: IndexPath(row: 4, section: 0))
+        XCTAssertEqual(row4RectAfter.minY, row2RectAfter.maxY, accuracy: 0.5,
+                       "Next lyric must sit directly below the previous lyric once the interlude collapses")
+    }
+
+    func testPreFirstLineAnchorsRowZeroUnblurredAndIlluminatesWithoutJumping() async throws {
+        let lyrics = PlayerLyrics(
+            lines: [
+                PlayerLyricLine(id: 0, time: 0.0, text: "作词：某作词人"),
+                PlayerLyricLine(id: 1, time: 1.5, text: "哪怕注定 褪色凋谢"),
+                PlayerLyricLine(id: 2, time: 5.0, text: "就让思念再痛一些再慢一些"),
+                PlayerLyricLine(id: 3, time: 9.0, text: "Erode me until the end"),
+                PlayerLyricLine(id: 4, time: 13.0, text: "Till the end...")
+            ],
+            plainText: "",
+            source: "test"
+        )
+        // First sung line starts at 1.5s <= 4.0s, so no intro interlude row is inserted.
+        // Rendered rows: 0=id1, 1=id2, 2=id3, 3=id4.
+        let state = LyricsFocusTestState(lineCount: 4, activeID: nil)
+        state.lyrics = lyrics
+        let window = try await mount(state, size: .large)
+        defer { window.isHidden = true }
+        let table = try XCTUnwrap(scrollViews(in: window).compactMap { $0 as? NativeLyricsScrollView }.first)
+
+        // 1. At 0:00 (activeID == nil), row 0 is already anchored at focusTop in waiting state:
+        //    unfocused, unblurred (0), while row 1 gets adjacent blur (2.0) and row 2 gets 3.125.
+        try await assertFocus(1, in: state)
+        let waitingOffset = table.contentOffset.y
+        let waitingTop = try XCTUnwrap(state.geometry.top(for: 1))
+        XCTAssertEqual(table.isRowFocused(forRow: 0), false)
+        XCTAssertEqual(try XCTUnwrap(table.rowDistanceBlurRadius(forRow: 0)), 0, accuracy: 0.01)
+        XCTAssertEqual(try XCTUnwrap(table.rowDistanceBlurRadius(forRow: 1)), 2.0, accuracy: 0.05)
+        XCTAssertEqual(try XCTUnwrap(table.rowDistanceBlurRadius(forRow: 2)), 3.125, accuracy: 0.05)
+
+        // 2. Active ID hitting a filtered leading credit line keeps the exact same waiting anchor.
+        state.activeID = 0
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertEqual(table.contentOffset.y, waitingOffset, accuracy: 0.5)
+        XCTAssertEqual(table.isRowFocused(forRow: 0), false)
+        XCTAssertEqual(try XCTUnwrap(table.rowDistanceBlurRadius(forRow: 0)), 0, accuracy: 0.01)
+
+        // 3. When the first sung line begins (id 1 -> row 0), offset does not jump and row 0 illuminates.
+        state.activeID = 1
+        let focusedFirst = try await waitUntil { table.isRowFocused(forRow: 0) == true }
+        XCTAssertTrue(focusedFirst)
+        XCTAssertEqual(table.contentOffset.y, waitingOffset, accuracy: 0.5,
+                       "Starting the first lyric must illuminate in place without jumping contentOffset")
+        XCTAssertEqual(try XCTUnwrap(state.geometry.top(for: 1)), waitingTop, accuracy: 1.0)
+        XCTAssertEqual(try XCTUnwrap(table.rowDistanceBlurRadius(forRow: 1)), 2.0, accuracy: 0.05)
+
+        // 4. Returning from a later line back to 0:00 (activeID == nil) re-anchors row 0 in waiting state.
+        state.activeID = 3
+        try await assertFocus(3, in: state)
+        state.activeID = nil
+        let returnedWaiting = try await waitUntil {
+            !table.isRowTransitionAnimating && table.isRowFocused(forRow: 0) == false
+        }
+        XCTAssertTrue(returnedWaiting)
+        try await assertFocus(1, in: state)
+        XCTAssertEqual(try XCTUnwrap(table.rowDistanceBlurRadius(forRow: 0)), 0, accuracy: 0.01)
+        XCTAssertEqual(try XCTUnwrap(table.rowDistanceBlurRadius(forRow: 1)), 2.0, accuracy: 0.05)
     }
 
     func testCreditLinesAreFilteredWithoutDroppingSungLyrics() {
@@ -1013,7 +1253,7 @@ final class LyricsFocusTests: XCTestCase {
 
 @MainActor @Observable
 private final class LyricsFocusTestState {
-    var activeID: Int
+    var activeID: Int?
     var isActive = true
     var isInterfaceHidden = false
     var trackIdentity = 0
@@ -1027,10 +1267,11 @@ private final class LyricsFocusTestState {
     var focusLineHeight: CGFloat = 0
     var reducesMotion = false
     var showsTranslation = false
+    var timelineAnchor: PlayerTimelineAnchor = .zero
     var onUserInteractionChange: ((Bool) -> Void)? = nil
     var lyrics: PlayerLyrics
 
-    init(lineCount: Int = 80, activeID: Int = 40, idOffset: Int = 0) {
+    init(lineCount: Int = 80, activeID: Int? = 40, idOffset: Int = 0) {
         self.activeID = activeID
         self.lyrics = Self.makeLyrics(count: lineCount, idOffset: idOffset)
     }
@@ -1074,6 +1315,7 @@ private struct LyricsFocusTestContent: View {
                 state.activeID = state.lyrics.activeLine(at: $0) ?? 0
             },
             topOverlayHeight: state.topOverlayHeight, showsTranslation: state.showsTranslation,
+            timelineAnchor: state.timelineAnchor,
             onUserInteractionChange: state.onUserInteractionChange,
             rowGeometry: state.geometry
         )

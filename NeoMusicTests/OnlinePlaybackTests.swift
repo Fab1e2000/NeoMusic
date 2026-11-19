@@ -221,6 +221,35 @@ final class OnlinePlaybackTests: XCTestCase {
         XCTAssertEqual(value.lines.first?.translation, "译文")
     }
 
+    func testOnlineLyricsRecognizesEmbeddedBilingualLinesAndMinorTimestampRounding() {
+        let embedded = LyricsDocument.onlineLyrics(
+            original: """
+            [00:01.081] 鮮やかなる色彩の
+            [00:01.081] 那绚烂夺目的色彩
+            [00:05.145] その意味など 君はもう Can’t know
+            [00:05.145] 其所蕴藏的真意 你已无从知晓
+            """,
+            translation: ""
+        )
+        XCTAssertEqual(embedded.source, "网易云音乐")
+        XCTAssertEqual(embedded.lines.map(\.text), ["鮮やかなる色彩の", "その意味など 君はもう Can’t know"])
+        XCTAssertEqual(embedded.lines.map(\.translation), ["那绚烂夺目的色彩", "其所蕴藏的真意 你已无从知晓"])
+
+        let rounded = LyricsDocument.onlineLyrics(
+            original: """
+            [00:01.081] 鮮やかなる色彩の
+            [00:41.098]
+            [00:41.181] まだ潜む
+            """,
+            translation: """
+            [00:01:08] 那绚烂夺目的色彩
+            [00:41.18] 仍潜藏着
+            """
+        )
+        XCTAssertEqual(rounded.lines.map(\.text), ["鮮やかなる色彩の", "", "まだ潜む"])
+        XCTAssertEqual(rounded.lines.map(\.translation), ["那绚烂夺目的色彩", "", "仍潜藏着"])
+    }
+
     func testLateResolutionAfterLogoutCannotStartAudio() async {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

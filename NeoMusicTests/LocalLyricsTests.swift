@@ -39,6 +39,10 @@ final class LocalLyricsTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(decoded.lines.map(\.text), ["Original"])
         XCTAssertEqual(decoded.lines.map(\.translation), ["译文"])
         XCTAssertEqual(LyricsDocument.decodeStored("[00:01.00]Original").lines.map(\.translation), [""])
+        let crlfStored = "[00:01.00]Original\r\n[neomusic:translation]\r\n[00:01.00]译文"
+        let crlfDecoded = LyricsDocument.decodeStored(crlfStored)
+        XCTAssertEqual(crlfDecoded.lines.map(\.text), ["Original"])
+        XCTAssertEqual(crlfDecoded.lines.map(\.translation), ["译文"])
         let profile = AppleMusicLyricsTypographyProfile.iOS26_6
         XCTAssertEqual(profile.primaryFontSize, 34)
         XCTAssertEqual(profile.translationFontSize, 20)
@@ -46,6 +50,76 @@ final class LocalLyricsTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(profile.translationTopSpacing, 6)
         XCTAssertEqual(AppleMusicLyricsMotionProfile.iOS26_6.supplementalTextShowSpring.stiffness, 150)
         XCTAssertEqual(AppleMusicLyricsMotionProfile.iOS26_6.supplementalTextHideSpring.stiffness, 130)
+    }
+
+    func testDecodeStoredRecognizesStackedAndInterleavedBilingualLRC() {
+        // Legacy concatenated download format (original block + translation block without marker)
+        let stacked = """
+        [00:00.000] 作词 : 藤井健太郎
+        [00:01.081] 鮮やかなる色彩の
+        [00:05.145] その意味など 君はもう Can’t know
+        [00:12.902]
+        [00:20.892] 温もりの意味 初めて知れば
+        [by:Aki惊蛰]
+        [00:01.081]那绚烂夺目的色彩
+        [00:05.145]其所蕴藏的真意 你已无从知晓
+        [00:12.902]
+        [00:20.892]倘若初次领悟温暖的涵义
+        """
+        let stackedDecoded = LyricsDocument.decodeStored(stacked)
+        XCTAssertEqual(stackedDecoded.lines.map(\.text), [
+            "作词 : 藤井健太郎",
+            "鮮やかなる色彩の",
+            "その意味など 君はもう Can’t know",
+            "",
+            "温もりの意味 初めて知れば"
+        ])
+        XCTAssertEqual(stackedDecoded.lines.map(\.translation), [
+            "",
+            "那绚烂夺目的色彩",
+            "其所蕴藏的真意 你已无从知晓",
+            "",
+            "倘若初次领悟温暖的涵义"
+        ])
+
+        // Interleaved bilingual LRC with duplicate timestamps and repeated chorus timestamps
+        let interleaved = """
+        [00:01.081][01:00.000] 鮮やかなる色彩の
+        [00:01.081][01:00.000] 那绚烂夺目的色彩
+        [00:05.145] その意味など 君はもう Can’t know
+        [00:05.145] 其所蕴藏的真意 你已无从知晓
+        [00:12.902]
+        [00:12.902]
+        [00:20.892] 温もりの意味 初めて知れば
+        [00:20.892] 倘若初次领悟温暖的涵义
+        """
+        let interleavedDecoded = LyricsDocument.decodeStored(interleaved)
+        XCTAssertEqual(interleavedDecoded.lines.map(\.time), [1.081, 5.145, 12.902, 20.892, 60.0])
+        XCTAssertEqual(interleavedDecoded.lines.map(\.text), [
+            "鮮やかなる色彩の",
+            "その意味など 君はもう Can’t know",
+            "",
+            "温もりの意味 初めて知れば",
+            "鮮やかなる色彩の"
+        ])
+        XCTAssertEqual(interleavedDecoded.lines.map(\.translation), [
+            "那绚烂夺目的色彩",
+            "其所蕴藏的真意 你已无从知晓",
+            "",
+            "倘若初次领悟温暖的涵义",
+            "那绚烂夺目的色彩"
+        ])
+
+        // Monolingual LRC with header credits sharing [00:00.00] must not trigger false translations
+        let monolingual = """
+        [00:00.00] 作词 : A
+        [00:00.00] 作曲 : B
+        [00:10.00] 第一句歌词
+        [00:15.00] 第二句歌词
+        """
+        let monolingualDecoded = LyricsDocument.decodeStored(monolingual)
+        XCTAssertEqual(monolingualDecoded.lines.map(\.text), ["作词 : A", "作曲 : B", "第一句歌词", "第二句歌词"])
+        XCTAssertTrue(monolingualDecoded.lines.allSatisfy { $0.translation.isEmpty })
     }
 
     func testImportOverridesSidecarAndFailedImportPreservesPrevious() async throws {
