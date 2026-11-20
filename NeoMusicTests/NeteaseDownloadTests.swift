@@ -182,19 +182,28 @@ final class NeteaseDownloadTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(store.collections[collection.key], collection)
         XCTAssertFalse(FileManager.default.fileExists(atPath: file.path)); XCTAssertTrue(FileManager.default.fileExists(atPath: unrelated.path))
     }
-    @MainActor func testExternalDeletionRemovesDownloadedState() async throws {
+    @MainActor func testExternalDeletionAndReturnUpdateDownloadedAvailability() async throws {
         let root = try directory(), job = try stage(root)
         try persist(Saved(jobs: [job]), root: root)
         let store = store(root, responses: [#"{"code":200}"#])
         await store.restore(); await store.activate(try saved()); await store.waitForProcessing()
         let file = try XCTUnwrap(store.resource(songID: 12))
+        let content = try Data(contentsOf: file)
+        XCTAssertEqual(store.availableFileIDs, [12])
         try FileManager.default.removeItem(at: file)
         await store.reconcileFiles()
         XCTAssertNotNil(store.records[12]); XCTAssertNil(store.resource(songID: 12)); XCTAssertNil(store.states[12])
+        XCTAssertTrue(store.availableFileIDs.isEmpty)
         var publications = 0
         store.onRecordsChanged = { publications += 1 }
         await store.reconcileFiles()
         XCTAssertEqual(publications, 0)
+
+        try content.write(to: file)
+        await store.reconcileFiles()
+        XCTAssertEqual(store.availableFileIDs, [12])
+        XCTAssertEqual(store.states[12], .downloaded)
+        XCTAssertEqual(publications, 1)
     }
     @MainActor func testRetainedProvenanceDoesNotSkipDownloadAfterFileRemoval() async throws {
         let root = try directory()
@@ -231,6 +240,31 @@ final class NeteaseDownloadTests: XCTestCase, @unchecked Sendable {
         XCTAssertTrue(store.states.isEmpty); XCTAssertTrue(store.records.isEmpty)
         XCTAssertNil(store.error)
         XCTAssertNil(store.collections["playlist:55"])
+        XCTAssertEqual(DownloadFixtureProtocol.state.withLock { $0.paths.count }, 1)
+    }
+
+    @MainActor func testStoppingLocalPlaylistCancelsSongSelectionPlanning() async throws {
+        let root = try directory(), store = store(root)
+        await store.restore()
+        await store.activate(try saved())
+        let started = expectation(description: "song selection metadata requested")
+        DownloadFixtureProtocol.state.withLock {
+            $0.holdNext = true
+            $0.onRequest = { started.fulfill() }
+        }
+        let preparation = Task { try await store.enqueue(songIDs: [12, 99, 12]) }
+        await fulfillment(of: [started], timeout: 2)
+
+        await store.stopSongSelection(songIDs: [99, 12])
+
+        switch await preparation.result {
+        case .success: XCTFail("Cancelled selection published jobs")
+        case .failure(let error): XCTAssertTrue(error is CancellationError)
+        }
+        await store.waitForProcessing()
+        XCTAssertTrue(store.states.isEmpty)
+        XCTAssertTrue(store.records.isEmpty)
+        XCTAssertNil(store.error)
         XCTAssertEqual(DownloadFixtureProtocol.state.withLock { $0.paths.count }, 1)
     }
     @MainActor func testConcurrentSameSongRequestsSharePlanningAndTransferAttempt() async throws {

@@ -21,3 +21,5 @@ NeoMusic changes:
 - Encoded waveform regression tests also cover 10%, 50%, and 90% positions.
 - Paused seeks stop at buffered target samples before render consumption; playback intent can change while seeking.
 - End-of-input without a readable audio format reports an error instead of remaining in buffering.
+- The source cancels its header probe with the current request, reports probe failures, and restarts incomplete non-range streams from byte zero without replaying the partial prefix.
+- URLSession transfer pauses with source consumption and when the compressed data waiting for the decoder exceeds a high-water mark.

@@ -299,7 +299,7 @@ private final class PlaybackAudioBackend {
         player.seek(to: position)
 
         let resume = await onSwapped(position)
-        guard self.generation == nextGeneration, !Task.isCancelled else {
+        guard self.generation == nextGeneration, player === candidate, !Task.isCancelled else {
             throw CancellationError()
         }
         if resume {
@@ -311,8 +311,9 @@ private final class PlaybackAudioBackend {
             graph.pause()
         }
         updateMonitorSchedule()
-        try await player.waitUntilReady()
+        try await candidate.waitUntilReady()
         try Task.checkCancellation()
+        guard self.generation == nextGeneration, player === candidate else { throw CancellationError() }
         let finalSnapshot = makeSnapshot()
         onSnapshot?(finalSnapshot)
         return finalSnapshot
@@ -368,7 +369,8 @@ private final class PlaybackAudioBackend {
                     break
                 }
             }
-            self?.monitorTask = nil
+            // stopMonitor already cleared a cancelled task's slot. It may since have been reused.
+            if !Task.isCancelled { self?.monitorTask = nil }
         }
     }
 
@@ -779,7 +781,7 @@ private final class PlaybackAudioBackend {
         guard expectedGen == generation else { throw CancellationError() }
 
         let swappedHandler: @MainActor @Sendable (Double) -> Bool = { [weak self] position in
-            guard let self else { return false }
+            guard let self, self.generation == expectedGen else { return false }
             let wantResume = self.playRequested && shouldResume()
             self.generation = nextGen
             self.cancelActivation()
@@ -796,16 +798,14 @@ private final class PlaybackAudioBackend {
             return wantResume && self.isPlaying
         }
 
-        let finalSnapshot = try await Task { @PlaybackAudioActor in
-            try await backend.replaceResource(
-                url: url,
-                expectedGeneration: expectedGen,
-                nextGeneration: nextGen,
-                sequence: seq,
-                fallbackElapsed: fallbackElapsed,
-                onSwapped: swappedHandler
-            )
-        }.value
+        let finalSnapshot = try await backend.replaceResource(
+            url: url,
+            expectedGeneration: expectedGen,
+            nextGeneration: nextGen,
+            sequence: seq,
+            fallbackElapsed: fallbackElapsed,
+            onSwapped: swappedHandler
+        )
 
         try Task.checkCancellation()
         if generation == nextGen {

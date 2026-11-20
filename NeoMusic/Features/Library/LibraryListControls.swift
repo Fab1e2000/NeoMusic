@@ -51,9 +51,13 @@ final class AsyncListProjection<Input: Equatable, Output> {
     /// background projection has committed. A retained snapshot for a previous input stays
     /// visible through `currentValue`, but must never make the new input look resolved.
     func isResolved(for input: Input, fastPath: (Input) -> Output?) -> Bool {
-        fastPath(input) != nil
-            || (committedInput == input && committedOutput != nil)
-            || (fallbackInput == input && fallbackOutput != nil)
+        fastPath(input) != nil || resolvedValue(for: input) != nil
+    }
+
+    func resolvedValue(for input: Input) -> Output? {
+        if committedInput == input, let committedOutput { return committedOutput }
+        if fallbackInput == input { return fallbackOutput }
+        return nil
     }
 
     func computeIfNeeded<Intermediate: Sendable>(
@@ -67,23 +71,26 @@ final class AsyncListProjection<Input: Equatable, Output> {
             commit(fast, for: input)
             return
         }
-        guard committedInput != input else { return }
+
+        await computeIfNeeded(for: input) {
+            // Structured cancellation reaches the worker when the page changes its task ID.
+            let intermediate = await withTaskGroup(of: Intermediate.self) { group in
+                group.addTask { background() }
+                return await group.next()
+            }
+            guard let intermediate, !Task.isCancelled else { return nil }
+            return finish(intermediate)
+        }
+    }
+
+    func computeIfNeeded(for input: Input, calculate: () async -> Output?) async {
+        guard committedInput != input, !Task.isCancelled else { return }
         if fallbackInput == input, let fallback = fallbackOutput {
-            guard !Task.isCancelled else { return }
             commit(fallback, for: input)
             return
         }
-        // The child of a task group inherits cancellation from the `.task(id:)` that owns this
-        // call, unlike `Task.detached`. When the controls change, the superseded filter/sort can
-        // observe `Task.isCancelled` and stop instead of running to completion.
-        let intermediate = await withTaskGroup(of: Intermediate?.self) { group -> Intermediate? in
-            group.addTask { background() }
-            for await value in group { return value }
-            return nil
-        }
-        // A cancelled task must never publish a result for an input the user already replaced.
-        guard let intermediate, !Task.isCancelled else { return }
-        commit(finish(intermediate), for: input)
+        guard let output = await calculate(), !Task.isCancelled else { return }
+        commit(output, for: input)
     }
 
     private func commit(_ output: Output, for input: Input) {

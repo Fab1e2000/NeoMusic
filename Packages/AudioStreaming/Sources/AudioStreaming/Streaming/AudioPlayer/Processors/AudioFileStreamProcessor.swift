@@ -635,7 +635,17 @@ final class AudioFileStreamProcessor {
         entry.lock.unlock()
         rendererContext.lock.lock()
         rendererContext.bufferContext.frameUsedCount += validFrames
+        let bufferedFrames = rendererContext.bufferContext.frameUsedCount
         rendererContext.lock.unlock()
+        if bufferedFrames >= 1024 {
+            completePausedSeek()
+        }
+    }
+
+    /// Decoded target audio is ready even if the host hasn't started rendering.
+    func completePausedSeek() {
+        guard !playerContext.resumeAfterSeek.value else { return }
+        playerContext.setInternalState(to: .paused, when: { $0 == .waitingForDataAfterSeek })
     }
 
     @inline(__always)

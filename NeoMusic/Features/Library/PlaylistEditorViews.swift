@@ -1,6 +1,7 @@
 import SwiftUI
 import PhotosUI
 import UniformTypeIdentifiers
+import ImageIO
 
 struct PlaylistDraftSnapshot: Equatable {
     let title: String
@@ -279,6 +280,19 @@ final class PlaylistCoverSelection {
     }
 
     func loadPhoto(using loader: @MainActor () async throws -> Data?) async {
+        await loadImage {
+            guard let data = try await loader() else { return nil }
+            return UIImage(data: data)
+        }
+    }
+
+    func importFile(_ result: Result<URL, Error>) async {
+        await loadImage {
+            try await Self.decodeFile(try result.get())
+        }
+    }
+
+    private func loadImage(using loader: @MainActor () async throws -> UIImage?) async {
         guard !Task.isCancelled else { return }
         generation += 1
         let requestGeneration = generation
@@ -289,10 +303,11 @@ final class PlaylistCoverSelection {
             if generation == requestGeneration { isLoading = false }
         }
         do {
-            let data = try await loader()
+            let loaded = try await loader()
             try Task.checkCancellation()
             guard generation == requestGeneration else { return }
-            accept(data)
+            guard let loaded else { photoError = true; return }
+            image = loaded
         } catch {
             if generation == requestGeneration, !Task.isCancelled, !Self.isCancellation(error) {
                 photoError = true
@@ -300,23 +315,20 @@ final class PlaylistCoverSelection {
         }
     }
 
-    func importFile(_ result: Result<URL, Error>) {
-        generation += 1
-        isLoading = false
-        photoError = false
-        do {
-            let url = try result.get()
-            let accessed = url.startAccessingSecurityScopedResource()
-            defer { if accessed { url.stopAccessingSecurityScopedResource() } }
-            accept(try Data(contentsOf: url))
-        } catch {
-            if !Self.isCancellation(error) { photoError = true }
+    @concurrent private static func decodeFile(_ url: URL) async throws -> UIImage? {
+        try Task.checkCancellation()
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary) else {
+            return nil
         }
-    }
-
-    private func accept(_ data: Data?) {
-        guard let data, let image = UIImage(data: data) else { photoError = true; return }
-        self.image = image
+        let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: 1536
+        ] as CFDictionary)
+        return thumbnail.map { UIImage(cgImage: $0) }
     }
 
     private static func isCancellation(_ error: Error) -> Bool {
@@ -373,7 +385,7 @@ struct PlaylistCoverPicker: ViewModifier {
             }
             .photosPicker(isPresented: $selection.showsPhotoPicker, selection: $selection.photo, matching: .images)
             .fileImporter(isPresented: $selection.showsFilePicker, allowedContentTypes: [.image]) { result in
-                selection.importFile(result)
+                Task { await selection.importFile(result) }
             }
             .task(id: selection.photo) {
                 guard let photo = selection.photo else { return }

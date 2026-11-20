@@ -89,7 +89,6 @@ private final class SearchPreviewPresentation {
             selectedMode = Mode(rawValue: args[index + 1]) ?? .browse
         }
         if let page { selectedMode = Mode(rawValue: page) ?? .browse }
-        model.onArtwork = { [weak self] in self?.artwork($0) }
         model.onKind = { [weak self] in self?.filter() }
         model.onSubmit = { [weak self] in self?.show(.results) }
         model.onQuery = { [weak self] in

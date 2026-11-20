@@ -246,13 +246,16 @@
             sourceNode?.volume = volume
             finishReadiness(.success(()))
         case .paused:
-            if initialPosition == nil, !player.isSeeking {
+            if initialPosition == nil, !player.isSeeking, player.state == .paused {
                 isLoading = false
                 player.volume = 1
                 sourceNode?.volume = volume
                 finishReadiness(.success(()))
+                if wantsPlayback { player.resume() }
             }
-        case .bufferring, .running: isLoading = true
+        case .bufferring, .running:
+            guard player.state == newState else { return }
+            isLoading = true
         default: break
         }
         onChange?()

@@ -71,7 +71,7 @@ final class NetworkingClient {
     /// Creates a data stream for the given `URLRequest`
     /// - parameter request: A `URLRequest` to be used for the data stream
     func stream(request: URLRequest) -> NetworkDataStream {
-        let stream = NetworkDataStream(id: UUID(), underlyingQueue: networkQueue)
+        let stream = NetworkDataStream(id: UUID())
         setupRequest(stream, request: request)
         return stream
     }

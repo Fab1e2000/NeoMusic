@@ -209,6 +209,7 @@ struct NativePlaylistTrackList: UIViewControllerRepresentable {
     var lastSongSeparatorLeading: CGFloat = 20
     var swipeMode: NativePlaylistSwipeMode = .standard(animateFavoriteRemoval: false)
     var scrollDistance: PlaylistScrollDistance? = nil
+    var pendingPlaybackSongID: String? = nil
     let onPlaySong: (LibrarySongItem, Int) -> Void
     var onAddMusic: (() -> Void)? = nil
     var onReachedEnd: (() -> Void)? = nil
@@ -394,6 +395,8 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
         let previousAddMusic = self.model?.showsAddMusicRow
         let previousFooter = self.model?.footer != nil
         let previousLastID = uniqueSongIDs.last
+        let previousPendingSongID = self.model?.pendingPlaybackSongID
+        let songsChanged = self.model?.songs != model.songs
         let backgroundChanged = previousColor != model.pageColor
         let schemeChanged = previousScheme != model.scheme
         let playbackVisualsChanged = self.environment.scenePhase != environment.scenePhase
@@ -406,26 +409,49 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
         self.model = model
         self.environment = environment
 
-        var ids: [String] = []
-        ids.reserveCapacity(model.songs.count)
-        var byID: [String: LibrarySongItem] = [:]
-        byID.reserveCapacity(model.songs.count)
-        var indices: [String: Int] = [:]
-        indices.reserveCapacity(model.songs.count)
-        for (offset, song) in model.songs.enumerated() where byID[song.id] == nil {
-            ids.append(song.id)
-            byID[song.id] = song
-            indices[song.id] = offset
+        if songsChanged {
+            var ids: [String] = []
+            var byID: [String: LibrarySongItem] = [:]
+            var indices: [String: Int] = [:]
+            ids.reserveCapacity(model.songs.count)
+            byID.reserveCapacity(model.songs.count)
+            indices.reserveCapacity(model.songs.count)
+            for (offset, song) in model.songs.enumerated() where byID[song.id] == nil {
+                ids.append(song.id)
+                byID[song.id] = song
+                indices[song.id] = offset
+            }
+            if uniqueSongIDs.count != ids.count { lastReachedEndCount = nil }
+            uniqueSongIDs = ids
+            songsByID = byID
+            indexByID = indices
         }
-        if uniqueSongIDs.count != ids.count || (previousBanner && model.banner == nil) { lastReachedEndCount = nil }
-        uniqueSongIDs = ids
-        songsByID = byID
-        indexByID = indices
+        if previousBanner && model.banner == nil { lastReachedEndCount = nil }
+        let ids = uniqueSongIDs
 
         overrideUserInterfaceStyle = model.scheme == .dark ? .dark : .light
         collectionView.backgroundColor = model.pageColor
         headerHost.rootView = AnyView(hosted(model.header))
         bannerHost.rootView = model.banner.map { AnyView(hosted($0)) } ?? AnyView(EmptyView())
+
+        if previousPendingSongID != model.pendingPlaybackSongID {
+            for path in collectionView.indexPathsForVisibleItems {
+                guard case .song(let id) = source.itemIdentifier(for: path),
+                      id == previousPendingSongID || id == model.pendingPlaybackSongID,
+                      let cell = collectionView.cellForItem(at: path) as? PlaylistTrackCell else { continue }
+                cell.setPreparingPlayback(id == model.pendingPlaybackSongID)
+            }
+        }
+
+        let structureChanged = previousBanner != (model.banner != nil)
+            || previousFooter != (model.footer != nil)
+            || previousAddMusic != model.showsAddMusicRow
+            || previousSongs.count != ids.count
+        let globalAppearanceChanged = schemeChanged || backgroundChanged || environmentChanged
+        guard songsChanged || structureChanged || globalAppearanceChanged || (ids.isEmpty && model.footer != nil) else {
+            if playbackVisualsChanged { observePlayback() }
+            return
+        }
 
         let oldIDs = source.snapshot().itemIdentifiers
         var snapshot = NSDiffableDataSourceSnapshot<Int, Item>()
@@ -439,11 +465,6 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
 
         var reconfigured: [Item] = []
         let isNewAppearance = oldIDs.isEmpty
-        let structureChanged = previousBanner != (model.banner != nil)
-            || previousFooter != (model.footer != nil)
-            || previousAddMusic != model.showsAddMusicRow
-            || previousSongs.count != ids.count
-        let globalAppearanceChanged = schemeChanged || backgroundChanged || environmentChanged
         if !isNewAppearance {
             if structureChanged || globalAppearanceChanged {
                 reconfigured.append(.header)
@@ -453,7 +474,7 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
                 reconfigured.append(.footer)
             }
             for id in ids {
-                guard let current = byID[id], let old = previousSongs[id] else { continue }
+                guard let current = songsByID[id], let old = previousSongs[id] else { continue }
                 let separatorChanged = (id == previousLastID) != (id == ids.last) || previousAddMusic != model.showsAddMusicRow
                 let visualMetadataChanged = old.title != current.title
                     || old.artist != current.artist
@@ -522,6 +543,7 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
             loadAction: environment.artworkLoadAction,
             menuProvider: { [weak self] in self?.menu(for: id) ?? UIMenu(children: []) }
         )
+        cell.setPreparingPlayback(id == model.pendingPlaybackSongID)
     }
 
     private func song(at path: IndexPath) -> LibrarySongItem? {
@@ -694,6 +716,22 @@ private final class PlaylistTrackCell: UICollectionViewListCell {
     private let textStack = UIStackView()
     private let downloadBadge = PlaylistDownloadBadgeView()
     private let moreButton = UIButton(type: .system)
+    private var isPreparingPlayback = false
+    private lazy var playbackPreparationIndicator: UIActivityIndicatorView = {
+        let indicator = UIActivityIndicatorView(style: .medium)
+        indicator.backgroundColor = .systemBackground.withAlphaComponent(0.9)
+        indicator.layer.cornerRadius = 15
+        indicator.translatesAutoresizingMaskIntoConstraints = false
+        indicator.isUserInteractionEnabled = false
+        artworkContainer.addSubview(indicator)
+        NSLayoutConstraint.activate([
+            indicator.centerXAnchor.constraint(equalTo: artworkContainer.centerXAnchor),
+            indicator.centerYAnchor.constraint(equalTo: artworkContainer.centerYAnchor),
+            indicator.widthAnchor.constraint(equalToConstant: 30),
+            indicator.heightAnchor.constraint(equalToConstant: 30)
+        ])
+        return indicator
+    }()
 
     private var song: LibrarySongItem?
     private var downloads: LibraryDownloads?
@@ -846,6 +884,7 @@ private final class PlaylistTrackCell: UICollectionViewListCell {
         playbackOverlay.isHidden = true
         spectrumView.active = false
         spectrumView.stop()
+        setPreparingPlayback(false)
         song = nil
         downloads = nil
     }
@@ -893,6 +932,14 @@ private final class PlaylistTrackCell: UICollectionViewListCell {
         observeArtwork(retainingImage: sameSong)
         observeDownloads()
         setNeedsUpdateConfiguration()
+    }
+
+    func setPreparingPlayback(_ preparing: Bool) {
+        guard isPreparingPlayback != preparing else { return }
+        isPreparingPlayback = preparing
+        accessibilityValue = preparing ? "正在准备播放" : nil
+        if preparing { playbackPreparationIndicator.startAnimating() }
+        else { playbackPreparationIndicator.stopAnimating() }
     }
 
     func updatePlaybackState(isCurrent: Bool, isActive: Bool, samples: @escaping () -> [Float]) {

@@ -49,8 +49,9 @@ import XCTest
     func testRoamingKeepsPlayingPastTheFirstBatch() async throws {
         let later = #"{"code":200,"data":[{"id":11,"name":"Third","ar":[{"name":"Artist"}],"al":{"name":"Album"},"dt":10000}]}"#
         defer { HomeLoginProtocol.radioScript.withLock { $0 = [] } }
-        try await withQuickActionIntegration { account, _, integration, player in
+        try await withQuickActionIntegration { account, home, integration, player in
             try await account.completeLogin(credential: .init(musicU: "test"))
+            await home.refresh(force: false)
             HomeLoginProtocol.radioScript.withLock { $0 = [later, later, later] }
             integration.requestQuickAction(.privateRoaming)
             for _ in 0..<80 where player.pendingPlay == nil && player.sourceTitle != "私人漫游" {
@@ -220,6 +221,7 @@ import XCTest
     func testChoosingFeedSongCancelsDelayedQuickActionAndPreservesNewSelection() async throws {
         try await withQuickActionIntegration { account, home, integration, player in
             try await account.completeLogin(credential: .init(musicU: "test"))
+            await home.refresh(force: false)
             try await consumePreparedRoamingBatch(home)
             integration.requestQuickAction(.privateRoaming)
             for _ in 0..<60 where home.quickActionStates[.privateRoaming] != .loading { try await Task.sleep(for: .milliseconds(5)) }
@@ -254,8 +256,9 @@ import XCTest
         home.consumeRoamingBatch(id: id)
     }
     func testHomeNavigationSeedsVisibleArtworkBeforeResolvingFirstSongCover() async throws {
-        try await withQuickActionIntegration { account, _, integration, _ in
+        try await withQuickActionIntegration { account, home, integration, _ in
             try await account.completeLogin(credential: .init(musicU: "test"))
+            await home.refresh(force: false)
             let route = LibraryRoute.playlist("home:playlist:12")
             let file = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".jpg")
             try Data([1]).write(to: file)
@@ -277,8 +280,9 @@ import XCTest
         }
     }
     func testDailyNavigationSeedsDisplayedCoverAndLoadsRealSnapshotArtwork() async throws {
-        try await withQuickActionIntegration { account, _, integration, _ in
+        try await withQuickActionIntegration { account, home, integration, _ in
             try await account.completeLogin(credential: .init(musicU: "test"))
+            await home.refresh(force: false)
             let dailyIndex = try XCTUnwrap(integration.model.quickActions.firstIndex { $0.action == .dailySongs })
             XCTAssertNotNil(integration.model.quickActions[dailyIndex].artwork)
             let visible = Artwork.file(URL(fileURLWithPath: "/tmp/visible-daily-cover.jpg"))

@@ -25,6 +25,53 @@ final class LocalLyricsTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(result.activeLine(at: 0.25), 3)
     }
 
+    func testUnrepresentableLyricTimesAndOffsetsLeaveOtherLinesPlayable() {
+        let original = """
+        [offset:+500]
+        [offset:-inf]
+        [00:01.500]Original
+        [inf:01]Invalid time
+        [1e15:02.500]Unrepresentable milliseconds
+        """
+        let translation = "[00:01.000]译文\n[1e15:02.500]无效时间"
+        let stored = LyricsDocument.storedText(original: original, translation: translation)
+        let result = LyricsDocument.decodeStored(stored)
+        XCTAssertEqual(result.lines.map(\.time), [1])
+        XCTAssertEqual(result.lines.map(\.text), ["Original"])
+        XCTAssertEqual(result.lines.map(\.translation), ["译文"])
+
+        let offsetOutsideTimeline = LyricsDocument.decodeStored("""
+        [offset:-4000000000000000000]
+        [00:01]First
+        [100000000000000:00]Last
+        """)
+        XCTAssertEqual(offsetOutsideTimeline.lines.map(\.time), [1, 6e15])
+    }
+
+    func testTranslationTimeWindowPreservesExactMatchesTiesAndTolerance() {
+        let original = """
+        [00:01.000]First
+        [00:01.100]Second
+        [00:02.000]Boundary
+        [00:03.000]Outside
+        [00:04.000]Exact
+        [00:05.000]Same text
+        [00:05.040]Different text
+        """
+        let translation = """
+        [00:01.050]Ambiguous
+        [00:02.050]Within tolerance
+        [00:03.051]Outside tolerance
+        [00:04.000]Exact translation
+        [00:04.009]Nearby duplicate
+        [00:05.020]Same text
+        """
+        XCTAssertEqual(
+            LyricsDocument.merge(original: original, translation: translation).lines.map(\.translation),
+            ["", "", "Within tolerance", "", "Exact translation", "", "Same text"]
+        )
+    }
+
     func testPlainAndEmpty() {
         XCTAssertEqual(LyricsDocument.parse("one\ntwo").plainText, "one\ntwo")
         XCTAssertTrue(LyricsDocument.parse("[ar:Artist]\n ").isEmpty)
@@ -140,6 +187,21 @@ final class LocalLyricsTests: XCTestCase, @unchecked Sendable {
         let imported = try await reader.load(songID: "song", audioURL: audio, root: root)
         XCTAssertEqual(imported.lines.first?.text, "imported")
         XCTAssertEqual(try String(contentsOf: sidecar, encoding: .utf8), "[00:01]sidecar")
+    }
+
+    func testDownloadedLyricFilePreservesTranslationWithoutAnAccount() async throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let text = LyricsDocument.storedText(
+            original: "[00:01.10]Original",
+            translation: "[00:01.11]译文"
+        )
+        try Data(text.utf8).write(to: file)
+
+        let result = try await LyricsReader.loadDownloadedFile(file)
+
+        XCTAssertEqual(result.lines.map(\.text), ["Original"])
+        XCTAssertEqual(result.lines.map(\.translation), ["译文"])
     }
 
     @MainActor func testLateResultCannotOverwriteNewSong() async {

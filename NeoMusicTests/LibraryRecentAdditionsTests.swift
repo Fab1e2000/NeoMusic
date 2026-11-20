@@ -15,13 +15,14 @@ final class LibraryRecentAdditionsTests: XCTestCase {
         let older = Date(timeIntervalSince1970: 1_700_000_000)
         let newer = Date(timeIntervalSince1970: 1_800_000_000)
         let albums = (1...7).map { collection("album-\($0)", order: 1_700_000_000 + $0, route: .album("album-\($0)")) }
-        let items = LibraryRecentAdditions.ordered(
-            collections: albums.map { ($0, LibraryRecentAdditions.date(forAddedOrder: $0.addedOrder)) } + [(collection("playlist", order: 3, route: .playlist("playlist")), newer)],
-            songs: [(song("liked", favorite: older), older)]
-        )
+        let collections = albums.map { ($0, LibraryRecentAdditions.date(forAddedOrder: $0.addedOrder)) }
+            + [(collection("playlist", order: 3, route: .playlist("playlist")), newer)]
+        let songs: [(LibrarySongItem, Date?)] = [(song("liked", favorite: older), older)]
+        let items = LibraryRecentAdditions.ordered(collections: collections, songs: songs)
         XCTAssertEqual(items.map(\.id), ["playlist", "album-7", "album-6", "album-5", "album-4", "album-3", "album-2", "album-1", "recent-song:liked"])
         XCTAssertEqual(items.first { $0.songID == "liked" }?.route, nil)
         XCTAssertEqual(items.first { $0.songID == "liked" }?.subtitle, "艺人")
+        XCTAssertEqual(LibraryRecentAdditions.ordered(collections: collections, songs: songs, limit: 6), Array(items.prefix(6)))
     }
 
     func testLikedSongAddedToPlaylistAppearsOnceAtTheLaterTime() {

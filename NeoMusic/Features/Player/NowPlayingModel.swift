@@ -304,13 +304,14 @@ final class NowPlayingModel {
 
     private func appendToEnd(_ songs: [LibrarySongItem], userQueued: Bool) {
         guard !songs.isEmpty else { return }
+        let previousNextEntry = nextPlaybackIndex.map { entryIDs[$0] }
         queueRestorationFailed = false
         let ids = songs.map { _ in UUID() }
         queue.append(contentsOf: songs)
         entryIDs.append(contentsOf: ids)
         originalOrder.append(contentsOf: ids)
         if userQueued { userQueuedIDs.formUnion(ids) }
-        prepareNext()
+        if nextPlaybackIndex.map({ entryIDs[$0] }) != previousNextEntry { prepareNext() }
         saveQueue()
     }
 
@@ -680,8 +681,9 @@ final class NowPlayingModel {
 
     private func seek(to position: Double, source: LocalPlaybackEngine.SeekSource) {
         guard position.isFinite else { return }
-        updatingTime = true; elapsed = max(0, position); updatingTime = false
-        audio?.seek(to: elapsed, source: source)
+        let target = max(0, position)
+        storedElapsed = target
+        audio?.seek(to: target, source: source)
         saveQueue(); updateNowPlaying()
     }
     func startCurrent(at position: Double = 0) {

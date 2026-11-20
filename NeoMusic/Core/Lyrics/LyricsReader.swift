@@ -66,6 +66,15 @@ actor LyricsReader {
         try data.write(to: importedURL(songID), options: .atomic)
     }
 
+    @concurrent static func loadDownloadedFile(_ url: URL) async throws -> LyricsDocument {
+        try Task.checkCancellation()
+        let text = try String(contentsOf: url, encoding: .utf8)
+        try Task.checkCancellation()
+        let document = LyricsDocument.decodeStored(text)
+        try Task.checkCancellation()
+        return document
+    }
+
     private func importedURL(_ id: String) -> URL {
         let key = SHA256.hash(data: Data(id.utf8)).map { String(format: "%02x", $0) }.joined()
         return storageDirectory.appendingPathComponent(key).appendingPathExtension("lrc")

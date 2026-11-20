@@ -121,7 +121,6 @@ final class SearchPageModel {
     @ObservationIgnored var onMore: (@MainActor () -> Void)?
     @ObservationIgnored var onRefresh: (@MainActor () async -> Void)?
     @ObservationIgnored var onCategory: (@MainActor (String) -> Void)?
-    @ObservationIgnored var onArtwork: (@MainActor (String) -> Void)?
     @ObservationIgnored var onOpen: (@MainActor (MusicSearchItem) -> Void)?
     @ObservationIgnored var onRemoveHistory: (@MainActor (String?) -> Void)?
 

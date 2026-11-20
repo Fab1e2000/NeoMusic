@@ -5,8 +5,11 @@ enum LibraryRecentAdditions {
     /// 本地文件用加入时间的 Unix 秒数作为 `addedOrder`；更小的值只表示相对顺序。
     static let datedOrderThreshold = 1_000_000_000
 
-    static func ordered(collections: [(LibraryShelfItem, Date?)], songs: [(LibrarySongItem, Date?)]) -> [LibraryShelfItem] {
-        var ranked: [(item: LibraryShelfItem, date: Date?, order: Int)] = collections.map { item, date in
+    private typealias Ranked = (item: LibraryShelfItem, date: Date?, order: Int)
+
+    static func ordered(collections: [(LibraryShelfItem, Date?)], songs: [(LibrarySongItem, Date?)],
+                        limit: Int? = nil) -> [LibraryShelfItem] {
+        var ranked: [Ranked] = collections.map { item, date in
             (item, date, item.addedOrder)
         }
         var songsByID: [String: (song: LibrarySongItem, addedAt: Date?)] = [:]
@@ -25,7 +28,7 @@ enum LibraryRecentAdditions {
             let item = songShelfItem(song, date: date)
             ranked.append((item, date, item.addedOrder))
         }
-        return ranked.sorted { lhs, rhs in
+        func precedes(_ lhs: Ranked, _ rhs: Ranked) -> Bool {
             switch (lhs.date, rhs.date) {
             case let (left?, right?) where left != right: return left > right
             case (nil, .some): return false
@@ -33,7 +36,18 @@ enum LibraryRecentAdditions {
             case (nil, nil) where lhs.order != rhs.order: return lhs.order > rhs.order
             default: return lhs.item.id < rhs.item.id
             }
-        }.map(\.item)
+        }
+        guard let limit, limit < ranked.count else { return ranked.sorted(by: precedes).map(\.item) }
+        guard limit > 0 else { return [] }
+        var shelf: [Ranked] = []
+        shelf.reserveCapacity(limit + 1)
+        for candidate in ranked {
+            let index = shelf.firstIndex { precedes(candidate, $0) } ?? shelf.endIndex
+            guard index < limit else { continue }
+            shelf.insert(candidate, at: index)
+            if shelf.count > limit { shelf.removeLast() }
+        }
+        return shelf.map(\.item)
     }
 
     static func date(forAddedOrder order: Int) -> Date? {

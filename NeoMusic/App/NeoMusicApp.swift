@@ -43,7 +43,7 @@ struct NeoMusicApp: App {
         }
         .onChange(of: account.restoredPlaybackIdentity) { _, _ in runtime.completeRestoredPlayback() }
         .onChange(of: account.profile?.userID) { _, _ in
-            if runtime.startupTask != nil { runtime.downloads.publishMetadata() }
+            if runtime.startupTask != nil { runtime.downloads.scheduleMetadataPublication() }
         }
         .onChange(of: LocalLibrary.runtime.hasRestoredPlayback) { _, _ in runtime.completeRestoredPlayback() }
         .onChange(of: LocalLibrary.player.hasCurrent) { _, _ in runtime.completeRestoredPlayback() }

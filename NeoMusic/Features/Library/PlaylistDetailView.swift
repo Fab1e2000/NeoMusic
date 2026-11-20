@@ -40,11 +40,12 @@ struct PlaylistDetailView: View {
     @State private var query = ""
     @State private var sort = DetailSort.order
     @State private var projection = AsyncListProjection<TrackFilterProjectionInput, TrackFilterProjectionResult>()
+    @State private var durationProjection = LibraryListProjection<[LibrarySongItem], Int>()
     @State private var showsAddMusic = false
     @State private var showsEditor = false
     @State private var showsDestinations = false
     @State private var loadedOnlinePlaylistID: String?
-    @State private var playbackTask: Task<Void, Never>?
+    @State private var pendingPlayback: PlaylistTrackSelection?
     @State private var actionFeedback = 0
 
     private var playlist: LibraryPlaylistItem? { library.playlist(playlistID) }
@@ -72,18 +73,20 @@ struct PlaylistDetailView: View {
     private var resolvedSecondaryColor: Color {
         palette.secondaryColor
     }
-    typealias ProjectionInput = TrackFilterProjectionInput
-    typealias Projection = TrackFilterProjectionResult
-
     private var tracks: [LibrarySongItem] { library.songs(in: playlistID) }
-    private var displayed: TrackFilterProjectionResult {
-        let input = TrackFilterProjectionInput(tracks: tracks, query: query, sort: sort)
-        return projection.currentValue(for: input, fastPath: TrackFilterProjection.fastPath,
-                                       placeholder: { _ in .empty })
+    private var projectionInput: TrackFilterProjectionInput {
+        TrackFilterProjectionInput(tracks: tracks, query: query, sort: sort)
     }
-    private var visibleTracks: [LibrarySongItem] { displayed.tracks }
+
+    private var displayedTracks: [LibrarySongItem] {
+        let input = projectionInput
+        if input.followsPlaylistOrder { return input.tracks }
+        return projection.currentValue(for: input, fastPath: TrackFilterProjection.fastPath, placeholder: { _ in .empty }).tracks
+    }
 
     var body: some View {
+        let input = projectionInput
+        let requestedPlayback = pendingPlayback
         Group {
             if let playlist {
                 content(playlist)
@@ -106,10 +109,21 @@ struct PlaylistDetailView: View {
                                         hasMore: library.onlineHasMore.contains(playlistID))) {
             if !query.isEmpty || sort != .order { _ = await library.prepareCompleteCollection(playlistID) }
         }
-        .task(id: TrackFilterProjectionInput(tracks: tracks, query: query, sort: sort)) {
-            await TrackFilterProjection.update(projection, for: TrackFilterProjectionInput(tracks: tracks, query: query, sort: sort))
+        .task(id: input) {
+            await TrackFilterProjection.update(projection, for: input)
         }
-        .onDisappear { playbackTask?.cancel(); playbackTask = nil }
+        .task(id: requestedPlayback) {
+            guard let requestedPlayback else { return }
+            let result = await requestedPlayback.prepare(in: library, projection: projection)
+            guard !Task.isCancelled, pendingPlayback == requestedPlayback,
+                  requestedPlayback.query == query, requestedPlayback.sort == sort else { return }
+            pendingPlayback = nil
+            finishPlayback(result)
+        }
+        .onChange(of: query) { _, _ in pendingPlayback = nil }
+        .onChange(of: sort) { _, _ in pendingPlayback = nil }
+        .onChange(of: playlistID) { _, _ in pendingPlayback = nil }
+        .onDisappear { pendingPlayback = nil }
         .playlistDeletionConfirmation(library)
         .onChange(of: playlist == nil) { _, missing in
             if missing {
@@ -143,9 +157,7 @@ struct PlaylistDetailView: View {
 
     private func content(_ playlist: LibraryPlaylistItem) -> some View {
         let tracks = tracks
-        let displayed = displayed
-        let visibleTracks = displayed.tracks
-        let hasQuery = !query.isEmpty
+        let hasMore = library.onlineHasMore.contains(playlistID)
         let scheme = preparedBackdrop?.colorScheme ?? colorScheme
         let errorBanner: AnyView? = library.onlineErrors[playlistID].map { error in
             AnyView(VStack(alignment: .leading, spacing: 8) {
@@ -157,9 +169,9 @@ struct PlaylistDetailView: View {
             .padding(.vertical, 8))
         }
         let summaryFooter: AnyView? = (query.isEmpty && !tracks.isEmpty) ? AnyView(
-            Text(library.onlineHasMore.contains(playlistID)
+            Text(hasMore
                  ? "\(library.onlineTrackCounts[playlistID] ?? tracks.count)首歌"
-                 : "\(tracks.count)首歌，\(displayed.totalDuration / 60)分钟")
+                 : "\(tracks.count)首歌，\(totalDuration(of: tracks) / 60)分钟")
                 .font(.subheadline)
                 .foregroundStyle(resolvedSecondaryColor)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -168,7 +180,7 @@ struct PlaylistDetailView: View {
                 .padding(.bottom, 30)
         ) : nil
         return NativePlaylistTrackList(
-            songs: visibleTracks,
+            songs: displayedTracks,
             title: playlist.title,
             header: AnyView(header(playlist)
                 .padding(.horizontal, 20)
@@ -184,17 +196,8 @@ struct PlaylistDetailView: View {
             swipeMode: playlist.isReadOnly
                 ? .standard(animateFavoriteRemoval: false)
                 : .editablePlaylist(remove: { song in withAnimation { library.removeSong(song.id, from: playlistID) } }),
-            onPlaySong: { song, _ in
-                playbackTask?.cancel()
-                if library.onlineHasMore.contains(playlistID) {
-                    playbackTask = Task {
-                        guard await library.prepareCompleteCollection(playlistID), !Task.isCancelled else { return }
-                        playVisibleSong(song.id, title: playlist.title)
-                    }
-                } else {
-                    playVisibleSong(song.id, title: playlist.title)
-                }
-            },
+            pendingPlaybackSongID: pendingPlayback?.songID,
+            onPlaySong: { song, _ in requestPlayback(of: song, in: playlist) },
             onAddMusic: { showsAddMusic = true },
             onReachedEnd: {
                 guard query.isEmpty, sort == .order,
@@ -257,6 +260,7 @@ struct PlaylistDetailView: View {
                 HStack(spacing: 14) {
                     Button {
                         guard !tracks.isEmpty else { return }
+                        pendingPlayback = nil
                         actionFeedback &+= 1
                         collectionActions.play(.playlist(playlistID), true)
                     } label: {
@@ -267,6 +271,7 @@ struct PlaylistDetailView: View {
                     .disabled(tracks.isEmpty)
                     Button {
                         guard !tracks.isEmpty else { return }
+                        pendingPlayback = nil
                         actionFeedback &+= 1
                         collectionActions.play(.playlist(playlistID), false)
                     } label: {
@@ -322,10 +327,34 @@ struct PlaylistDetailView: View {
         }
     }
 
-    private func playVisibleSong(_ songID: String, title: String) {
-        let list = visibleTracks
-        guard let index = list.firstIndex(where: { $0.id == songID }) else { return }
-        songActions.play(list, index, title)
+    private func totalDuration(of tracks: [LibrarySongItem]) -> Int {
+        durationProjection.value(for: tracks) { tracks.reduce(0) { $0 + $1.duration } }
+    }
+
+    private func requestPlayback(of song: LibrarySongItem, in playlist: LibraryPlaylistItem) {
+        let selection = PlaylistTrackSelection(playlistID: playlistID, ownerID: playlist.sourceOwnerID,
+                                               songID: song.id, query: query, sort: sort)
+        let input = projectionInput
+        if !library.onlineHasMore.contains(playlistID),
+           let ordered = selection.availableTracks(for: input, projection: projection) {
+            pendingPlayback = nil
+            finishPlayback(selection.outcome(in: ordered))
+        } else {
+            pendingPlayback = selection
+            AccessibilityNotification.Announcement("正在准备播放").post()
+        }
+    }
+
+    private func finishPlayback(_ result: PlaylistTrackSelection.Outcome) {
+        switch result {
+        case .ready(let tracks, let index):
+            guard let playlist else { return }
+            songActions.play(tracks, index, playlist.title)
+        case .failed(let error):
+            songActions.notify(.error(error))
+        case .cancelled:
+            break
+        }
     }
 
     @ViewBuilder private func detailMenu(_ playlist: LibraryPlaylistItem) -> some View {
@@ -445,6 +474,66 @@ struct PlaylistDetailView: View {
         if !playlist.isReadOnly || playlist.isSubscribed { Section {
             Button("从资料库删除", systemImage: "trash", role: .destructive) { library.pendingDeletion = playlist }
         } }
+    }
+}
+
+/// The row ID and ordering selected by one tap. Rendering can retain a previous
+/// projection while paging, so playback resolves against the completed collection.
+struct PlaylistTrackSelection: Equatable {
+    let id = UUID()
+    let playlistID: String
+    let ownerID: String?
+    let songID: String
+    let query: String
+    let sort: DetailSort
+
+    enum Outcome {
+        case ready([LibrarySongItem], index: Int)
+        case failed(String)
+        case cancelled
+    }
+
+    @MainActor
+    func prepare(
+        in library: PlaylistLibrary,
+        projection: AsyncListProjection<TrackFilterProjectionInput, TrackFilterProjectionResult>
+    ) async -> Outcome {
+        guard isCurrent(in: library) else { return .cancelled }
+        let complete = await library.prepareCompleteCollection(playlistID)
+        guard isCurrent(in: library) else { return .cancelled }
+        guard complete else {
+            return .failed(library.onlineErrors[playlistID] ?? "播放列表尚未完整加载，请重试")
+        }
+
+        let input = TrackFilterProjectionInput(tracks: library.songs(in: playlistID), query: query, sort: sort)
+        if let tracks = availableTracks(for: input, projection: projection) {
+            return outcome(in: tracks)
+        }
+        guard let result = await TrackFilterProjection.result(for: input),
+              isCurrent(in: library) else { return .cancelled }
+        return outcome(in: result.tracks)
+    }
+
+    @MainActor
+    private func isCurrent(in library: PlaylistLibrary) -> Bool {
+        guard !Task.isCancelled, let playlist = library.playlist(playlistID) else { return false }
+        return playlist.sourceOwnerID == ownerID
+    }
+
+    @MainActor
+    func availableTracks(
+        for input: TrackFilterProjectionInput,
+        projection: AsyncListProjection<TrackFilterProjectionInput, TrackFilterProjectionResult>
+    ) -> [LibrarySongItem]? {
+        if input.followsPlaylistOrder { return input.tracks }
+        return projection.resolvedValue(for: input)?.tracks ?? TrackFilterProjection.fastPath(input)?.tracks
+    }
+
+    func outcome(in tracks: [LibrarySongItem]) -> Outcome {
+        guard let index = tracks.firstIndex(where: { $0.id == songID }) else {
+            return .failed("歌曲已不在当前播放列表，请重试")
+        }
+        return .ready(tracks, index: index)
     }
 }
 

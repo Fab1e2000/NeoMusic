@@ -54,6 +54,7 @@ import Observation
     @ObservationIgnored private var actionSongs: [NeteaseMusicSong] = []
     @ObservationIgnored private var referencedSongs: [Int64: NeteaseMusicSong] = [:]
     @ObservationIgnored private var roamingTask: Task<RoamingCache, Error>?
+    @ObservationIgnored private var roamingContinuations: [UUID: Task<[NeteaseMusicSong], Error>] = [:]
     @ObservationIgnored private var roamingCache: RoamingCache?
     private struct RoamingCache: Codable, Sendable {
         let id: UUID
@@ -113,6 +114,9 @@ import Observation
             let oldActions = Array(quickActionTasks.values); quickActionTasks = [:]
             oldActions.forEach { $0.cancel() }
             let oldRoaming = roamingTask; roamingTask = nil; oldRoaming?.cancel(); roamingCache = nil
+            let oldContinuations = Array(roamingContinuations.values)
+            roamingContinuations.removeAll()
+            oldContinuations.forEach { $0.cancel() }
             quickActionStates = [:]; likedPlaylistID = nil; likedSongIDs = []; likedSeedID = nil; likedSongs = [:]; actionSongs = []; referencedSongs = [:]
             let oldDetails = Array(detailTasks.values); detailTasks = [:]
             oldDetails.forEach { $0.cancel() }
@@ -131,6 +135,7 @@ import Observation
             for task in oldSources { await task.value }
             for task in oldActions { _ = await task.result }
             _ = await oldRoaming?.result
+            for task in oldContinuations { _ = await task.result }
             for task in oldDetails { _ = await task.result }
             for task in oldArtwork { await task.value }
             for task in oldSaves { await task.value }
@@ -193,17 +198,17 @@ import Observation
         let task = Task { [self] in
             async let daily: Void = refreshDaily(credential: credential, revision: revision)
             async let feed: Void = refreshSource(.feed, credential: credential, revision: revision, force: force)
-            async let supplemental: Void = refreshSupplemental(credential: credential, revision: revision)
+            async let charts: Void = refreshSource(.charts, credential: credential, revision: revision, force: force)
+            async let followed: Void = refreshSource(.followedReleases, credential: credential, revision: revision, force: force)
             async let roaming: Void = refreshRoaming(force: force)
-            _ = await (daily, feed, supplemental, roaming)
-            guard revision == generation, !Task.isCancelled else {
-                if refreshID == id { refreshTask = nil; refreshID = nil }
-                return
-            }
-            async let recommendations: Void = refreshSource(.recommendations, credential: credential, revision: revision, force: force)
             async let newSongs: Void = refreshSource(.newSongs, credential: credential, revision: revision, force: force)
-            async let covers: Void = refreshQuickActionCovers(force: force)
-            _ = await (newSongs, recommendations, covers)
+            await feed
+            async let recommendations: Void = refreshSource(.recommendations, credential: credential, revision: revision, force: force)
+            await charts
+            if revision == generation, !Task.isCancelled {
+                await refreshQuickActionCovers(force: force)
+            }
+            _ = await (daily, newSongs, recommendations, followed, roaming)
             if revision == generation, refreshID == id {
                 refreshTask = nil; refreshID = nil
                 if !Task.isCancelled, recommendationsError == nil, dailyError == nil, feedError == nil,
@@ -410,9 +415,14 @@ import Observation
     /// 播放中的私人漫游再取一批。不改首页卡片状态，也不换掉还没开始播的预备批次。
     func nextRoamingSongs() async throws -> [NeteaseMusicSong] {
         try Task.checkCancellation()
-        guard let credential else { throw NeteaseHomeActionError.loginRequired }
-        let revision = generation
-        let songs = try await client.personalFM(credential: credential, mode: "EXPLORE", limit: 30)
+        guard restored, let credential else { throw NeteaseHomeActionError.loginRequired }
+        let revision = generation, id = UUID()
+        let task = Task { [client] in
+            try await client.personalFM(credential: credential, mode: "EXPLORE", limit: 30)
+        }
+        roamingContinuations[id] = task
+        defer { roamingContinuations[id] = nil }
+        let songs = try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
         try Task.checkCancellation()
         guard generation == revision else { throw CancellationError() }
         var seen = Set<Int64>()
@@ -519,11 +529,6 @@ import Observation
               creatorID: 0, artworkURL: resource.artworkURL, trackCount: 0, isFavorites: false)
     }
 
-    private func refreshSupplemental(credential: NeteaseCredential?, revision: UUID) async {
-        async let charts: Void = refreshSource(.charts, credential: credential, revision: revision, force: true)
-        async let followed: Void = refreshSource(.followedReleases, credential: credential, revision: revision, force: true)
-        _ = await (charts, followed)
-    }
     private func refreshCharts(credential: NeteaseCredential?, revision: UUID) async {
         do {
             let value = try await client.homeCharts(credential: credential)
@@ -551,6 +556,13 @@ import Observation
     private func refreshFeed(credential: NeteaseCredential?, revision: UUID, force: Bool) async {
         do {
             var value = try await client.homeFeed(credential: credential, refresh: force)
+            try Task.checkCancellation()
+            guard generation == revision else { return }
+            // Keep a complete warm snapshot until the replacement finishes. A cold page
+            // can display its first valid response while later pages are still loading.
+            if feed == nil, value.hasMore == true, !value.blocks.isEmpty {
+                publishFeed(value)
+            }
             var cursors = Set<String>()
             var resources = Set(value.blocks.flatMap { $0.resources.map(\.id) })
             while value.hasMore == true, let cursor = value.cursor, !cursor.isEmpty, cursors.insert(cursor).inserted {
@@ -565,14 +577,18 @@ import Observation
             try Task.checkCancellation()
             guard generation == revision else { return }
             value = .init(blocks: value.blocks, hasMore: false, cursor: nil)
-            feed = value; feedError = nil
-            rebuildSongCatalog()
             save(value, key: "feed")
-            onChange?()
-            requestDisplayedArtwork()
+            publishFeed(value)
         } catch is CancellationError {} catch {
             if generation == revision, !Task.isCancelled { feedError = error.localizedDescription; onChange?() }
         }
+    }
+
+    private func publishFeed(_ value: NeteaseHomeFeed) {
+        feed = value; feedError = nil
+        rebuildSongCatalog()
+        onChange?()
+        requestDisplayedArtwork()
     }
 
     private func refreshRecommendations(credential: NeteaseCredential?, revision: UUID) async {

@@ -117,7 +117,10 @@ enum LocalLibrary {
     }
 
     /// 最近添加：播放列表、专辑，以及喜爱或加入播放列表的单曲。按加入时间从新到旧。
-    static var allRecentlyAdded: [LibraryShelfItem] {
+    static var allRecentlyAdded: [LibraryShelfItem] { recentAdditions() }
+    static var recentlyAdded: [LibraryShelfItem] { recentAdditions(limit: 6) }
+
+    private static func recentAdditions(limit: Int? = nil) -> [LibraryShelfItem] {
         let playlists = playlistLibrary.playlists.filter { !$0.isSystem }.map { playlist in
             var shown = playlist
             shown.artwork = playlistLibrary.displayArtwork(of: playlist)
@@ -126,22 +129,22 @@ enum LocalLibrary {
             return (item, playlist.addedAt)
         }
         let albumItems = albums.map { album in
-            let shown = withPinState(album)
-            return (shown, LibraryRecentAdditions.date(forAddedOrder: shown.addedOrder))
+            (album, LibraryRecentAdditions.date(forAddedOrder: album.addedOrder))
         }
-        let playlistDates = playlistLibrary.playlistSongAddedDates()
-        var songs: [String: LibrarySongItem] = [:]
-        for song in playlistLibrary.songsAddedToPlaylists() { songs[song.id] = song }
-        for song in allSongs { songs[song.id] = song }
-        let songItems = songs.values.compactMap { song -> (LibrarySongItem, Date?)? in
-            guard song.isFavorite || playlistDates[song.id] != nil else { return nil }
-            return (song, [song.favoriteAddedAt, playlistDates[song.id]].compactMap { $0 }.max())
+        let added = playlistLibrary.recentlyAddedSongs()
+        let hiddenAlbums = deletedAlbums.ids
+        var songItems = songLibrary.favoriteSongs.compactMap { song -> (LibrarySongItem, Date?)? in
+            guard added[song.id] == nil, song.isOnline || !hiddenAlbums.contains(song.albumID) else { return nil }
+            return (song, song.favoriteAddedAt)
         }
-        return LibraryRecentAdditions.ordered(collections: playlists + albumItems, songs: songItems)
-    }
-
-    static var recentlyAdded: [LibraryShelfItem] {
-        Array(allRecentlyAdded.prefix(6))
+        for (id, entry) in added {
+            let visible = songLibrary.visibleSong(id: id).flatMap {
+                $0.isOnline || !hiddenAlbums.contains($0.albumID) ? $0 : nil
+            }
+            let song = visible ?? entry.song
+            songItems.append((song, song.favoriteAddedAt.map { max($0, entry.addedAt) } ?? entry.addedAt))
+        }
+        return LibraryRecentAdditions.ordered(collections: playlists + albumItems, songs: songItems, limit: limit)
     }
 
     static var musicPickerSource: MusicPickerSource {
@@ -431,7 +434,7 @@ enum LocalLibrary {
                 case .album(let id):
                     let removed = albumSongs(id)
                     deletedAlbums.insert(id)
-                    for song in removed { playlistLibrary.removeSongEverywhere(song.id) }
+                    playlistLibrary.removeSongsEverywhere(Set(removed.map(\.id)))
                     pinnedAlbums.remove(id)
                 default: break
                 }
@@ -470,7 +473,7 @@ enum LocalLibrary {
             playLater: { player.appendLater([$0]) },
             delete: { song in
                 songLibrary.delete(song.id)
-                playlistLibrary.removeSongEverywhere(song.id)
+                playlistLibrary.removeSongsEverywhere([song.id])
             },
             // 对照 Apple Music：播放中显示“随后播放”与来源；暂停时为“添加到队列”。
             playbackSource: { player.isPlaying ? player.sourceTitle : nil },

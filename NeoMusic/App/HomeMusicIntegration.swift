@@ -172,23 +172,25 @@ import Observation
         return .deferred(id: DeferredArtworkKey(domain: .home, session: home.sessionRevision, url: remote).rawValue, placeholder: placeholder)
     }
     func requestArtwork(for id: String) {
-        guard let home = account.home, home.userID == account.profile?.userID,
+        guard let home = account.home, home.userID == account.sessionOwnerID,
               let key = DeferredArtworkKey(rawValue: id),
               key.matches(domain: .home, session: home.sessionRevision),
               let url = key.remoteURL else { return }
         home.requestArtwork([url])
     }
     func cachedArtworkFile(for id: String) async -> URL? {
-        guard let home = account.home, home.userID == account.profile?.userID, !Task.isCancelled else { return nil }
+        guard let home = account.home, home.userID == account.sessionOwnerID, !Task.isCancelled else { return nil }
         let revision = home.sessionRevision, owner = home.userID
         guard let key = DeferredArtworkKey(rawValue: id), key.session == revision.uuidString else { return nil }
         if key.domain == .homePlaylist, let number = key.playlistID {
-            return try? await home.playlistArtworkFile(id: number)
+            let file = try? await home.playlistArtworkFile(id: number)
+            guard revision == home.sessionRevision, account.sessionOwnerID == owner, !Task.isCancelled else { return nil }
+            return file
         }
         guard key.domain == .home, let url = key.remoteURL else { return nil }
         let file = await home.cachedArtworkFile(url)
         guard revision == home.sessionRevision, home.userID == owner,
-              account.profile?.userID == owner, !Task.isCancelled else { return nil }
+              account.sessionOwnerID == owner, !Task.isCancelled else { return nil }
         return file
     }
     private func publish() {

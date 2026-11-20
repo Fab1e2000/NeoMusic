@@ -956,6 +956,7 @@ extension AudioPlayer: AudioStreamSourceDelegate {
         readingEntry.lock.lock()
         readingEntry.framesState.lastFrameQueued = readingEntry.framesState.queued
         readingEntry.lock.unlock()
+        fileStreamProcessor.completePausedSeek()
 
         readingEntry.delegate = nil
         readingEntry.close()

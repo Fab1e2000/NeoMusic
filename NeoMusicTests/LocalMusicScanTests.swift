@@ -122,6 +122,24 @@ final class LocalMusicScanTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(removed.tracks.count, 1)
     }
 
+    func testDirectoryCoverChangeUpdatesEveryTrackInThatDirectory() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        for filename in ["a.wav", "b.wav"] { try writeWave(root.appending(path: filename)) }
+        let cover = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRz8AAAAASUVORK5CYII=")!
+        let scanner = LocalMusicScanner()
+        let withoutCover = try await scanner.scan(root: root)
+        XCTAssertEqual(withoutCover.tracks.map(\.artworkData), [nil, nil])
+
+        let coverURL = root.appending(path: "FOLDER.PNG")
+        try cover.write(to: coverURL)
+        let withCover = try await scanner.scan(root: root, previousTracks: withoutCover.tracks)
+        XCTAssertEqual(withCover.tracks.map(\.artworkData), [cover, cover])
+        try FileManager.default.removeItem(at: coverURL)
+        let removed = try await scanner.scan(root: root, previousTracks: withCover.tracks)
+        XCTAssertEqual(removed.tracks.map(\.artworkData), [nil, nil])
+    }
+
     func testCorruptAudioReportedAndMissingRootThrows() async throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

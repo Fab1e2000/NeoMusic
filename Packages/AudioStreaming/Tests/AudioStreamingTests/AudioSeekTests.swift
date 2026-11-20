@@ -12,6 +12,7 @@ final class AudioSeekTests: XCTestCase {
         decoder.context.resumeAfterSeek.write { $0 = false }
         decoder.processor.processSeek()
         try decoder.feed(data.dropFirst(decoder.source.position))
+        XCTAssertEqual(decoder.context.state.value, .paused, "Readiness must not wait for an active output device")
         let render = AudioPlayerRenderProcessor(playerContext: decoder.context,
             rendererContext: decoder.renderer,
             outputAudioFormat: AVAudioFormat(commonFormat: .pcmFormatFloat32,

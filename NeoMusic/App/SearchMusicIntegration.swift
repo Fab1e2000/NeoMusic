@@ -49,7 +49,6 @@ final class SearchMusicIntegration {
             await store?.openCategory(name, force: true)
         }
         model.onCategoryMore = { [weak self] in Task { await self?.store?.loadMoreCategory() } }
-        model.onArtwork = { [weak self] in self?.requestArtwork(for: $0) }
         model.onPrepareNavigation = { [weak self] in self?.prepareNavigation?($0) }
         model.onOpen = { [weak self] in self?.play($0) }
         model.onRemoveHistory = { [weak self] query in
@@ -64,7 +63,6 @@ final class SearchMusicIntegration {
 
     private func observeSearch() {
         withObservationTracking {
-            _ = account.profile
             _ = store?.sessionID; _ = store?.page; _ = store?.suggestions; _ = store?.history
             _ = store?.isLoading; _ = store?.isLoadingMore; _ = store?.error; _ = store?.moreError; _ = store?.suggestionError
             _ = store?.categories; _ = store?.isLoadingCategories; _ = store?.categoriesError
@@ -89,6 +87,9 @@ final class SearchMusicIntegration {
     private func observeSongState() {
         withObservationTracking {
             _ = account.downloads?.records
+            if let downloads = account.downloads, !downloads.availableFileIDs.isEmpty {
+                _ = LocalLibrary.songLibrary.songs
+            }
             _ = account.music?.likedIDs
         } onChange: { [weak self] in Task { @MainActor in self?.observeSongState() } }
         publish()
@@ -106,7 +107,8 @@ final class SearchMusicIntegration {
                     .flatMap { playlistLibrary.songs(in: $0.id) }
                 let referenced = player.queue + playlistSongs
                 let ids = Set(referenced.map(\.id))
-                let onlineIDs = Set(referenced.filter { $0.onlineOwnerID == account.profile.map({ String($0.userID) }) }.compactMap(\.onlineSongID))
+                let owner = store?.sessionOwnerID ?? "search-guest"
+                let onlineIDs = Set(referenced.filter { $0.onlineOwnerID == owner }.compactMap(\.onlineSongID))
                 publishedSongs = publishedSongs.filter { ids.contains($0.key) }
                 resources = resources.filter { $0.value.song.map { onlineIDs.contains($0.id) } == true }
             }
@@ -140,7 +142,7 @@ final class SearchMusicIntegration {
 
     private func publish() {
         guard let store else { return }
-        assign(\.ownerID, account.profile.map { String($0.userID) })
+        assign(\.ownerID, store.sessionOwnerID)
         assign(\.categories, Self.categoryItems(store.categories))
         assign(\.history, store.recent())
         if model.submitted {
@@ -194,7 +196,7 @@ final class SearchMusicIntegration {
         let cover = resource.kind == .playlist ? HomeMusicIntegration.playlistArtwork(id: resource.resourceID, home: account.home) : artwork(resource.artworkURL, id: resource.id)
         var song: LibrarySongItem?
         if let value = resource.song {
-            let id = OnlineSongIdentity.format(ownerID: account.profile.map { String($0.userID) } ?? "search-guest", song: value.id)
+            let id = OnlineSongIdentity.format(ownerID: store?.sessionOwnerID ?? "search-guest", song: value.id)
             song = OnlineSongProjector.makeSong(
                 value,
                 id: id,
@@ -206,7 +208,8 @@ final class SearchMusicIntegration {
             if retainingPreviousArtwork {
                 song = song?.retainingArtwork(from: publishedSongs[id] ?? LocalLibrary.songLibrary.song(id: id))
             }
-            if let record = account.downloads?.records[value.id], account.downloads?.resource(songID: value.id) != nil,
+            if let downloads = account.downloads, downloads.availableFileIDs.contains(value.id),
+               let record = downloads.records[value.id],
                let local = LocalLibrary.songLibrary.song(id: record.relativePath) { song = local }
             if let song { publishedSongs[song.id] = song }
         }
@@ -267,15 +270,20 @@ final class SearchMusicIntegration {
         let candidates = model.submitted ? model.groups.flatMap(\.items) : model.suggestions
         let songs = candidates.compactMap(\.song)
         guard let index = songs.firstIndex(where: { $0.id == target.id }) else { return }
-        if target.isOnline, account.profile == nil { showsLogin = true; return }
+        if requiresLogin(for: target) { showsLogin = true; return }
         player.requestPlay(songs, startingAt: index, from: model.query)
+    }
+
+    private func requiresLogin(for song: LibrarySongItem) -> Bool {
+        guard let owner = song.onlineOwnerID else { return false }
+        return account.restoredPlaybackIdentity != .signedIn(owner)
     }
 
     var songActions: SongMenuActions {
         var actions = LocalLibrary.songActions(for: .category(.songs))
         let next = actions.playNext, later = actions.playLater, favorite = actions.toggleFavorite, add = actions.addToPlaylist
         func authorized(_ song: LibrarySongItem, _ action: (LibrarySongItem) -> Void) {
-            if song.isOnline, account.profile == nil { showsLogin = true } else { action(song) }
+            if requiresLogin(for: song) { showsLogin = true } else { action(song) }
         }
         actions.playNext = { authorized($0, next) }; actions.playLater = { authorized($0, later) }
         actions.toggleFavorite = { authorized($0, favorite) }; actions.addToPlaylist = { authorized($0, add) }

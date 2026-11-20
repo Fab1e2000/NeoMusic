@@ -7,6 +7,7 @@ final class NeteaseDownloadStore {
     typealias Processor = @Sendable (URL, String, DownloadedAudioTags.Metadata, URL) async throws -> URL
     private(set) var states: [Int64: NeteaseDownloadState] = [:]
     private(set) var records: [Int64: NeteaseDownloadRecord] = [:]
+    private(set) var availableFileIDs: Set<Int64> = []
     private(set) var collections: [String: NeteaseDownloadCollection] = [:]
     private(set) var isRestored = false
     private(set) var error: String?
@@ -112,7 +113,9 @@ final class NeteaseDownloadStore {
                 if job.cancelled { continue }
                 states[job.metadata.song.id] = job.error.map(NeteaseDownloadState.failed) ?? .queued
             }
-            for id in records.keys where resource(songID: id) != nil { states[id] = .downloaded }
+            let available = await Self.availableSongIDs(records: records, musicDirectory: musicDirectory)
+            availableFileIDs = available
+            for id in available { states[id] = .downloaded }
             // A download delegate may have moved its file just before the process exited.
             for id in jobs.keys where jobs[id]?.stagedFilename == nil {
                 let file = transport.spool.appending(path: id.uuidString + ".transfer")
@@ -121,7 +124,6 @@ final class NeteaseDownloadStore {
             isRestored = true
             let buffered = eventsBeforeRestore; eventsBeforeRestore = []
             for event in buffered { receive(event) }
-            await reconcileFiles()
             onRecordsChanged?(); onChange?()
         } catch { self.error = "读取下载记录失败：\(error.localizedDescription)" }
     }
@@ -165,10 +167,14 @@ final class NeteaseDownloadStore {
 
     func enqueue(songIDs: [Int64]) async throws {
         let ids = Array(Set(songIDs)).sorted()
-        try await plan(key: "songs:" + ids.map(String.init).joined(separator: ",")) { saved in
+        try await plan(key: Self.songPlanKey(ids)) { saved in
             let values = try await self.client.downloadSongs(ids: ids, credential: saved.credential)
             return (values, nil)
         }
+    }
+
+    private static func songPlanKey(_ sortedIDs: [Int64]) -> String {
+        "songs:" + sortedIDs.map(String.init).joined(separator: ",")
     }
 
     func enqueueAlbum(id: Int64) async throws {
@@ -194,6 +200,7 @@ final class NeteaseDownloadStore {
     }
 
     private func plan(key: String, build: @escaping @MainActor (NeteaseSavedSession) async throws -> ([NeteaseDownloadSong], NeteaseDownloadCollection?)) async throws {
+        try Task.checkCancellation()
         if let plan = plans[key] { return try await plan.task.value }
         guard let saved = session, !changingSession else { throw NeteaseAccountError.authenticationRequired }
         let revision = sessionRevision, selectedQuality = quality, planID = UUID()
@@ -204,10 +211,15 @@ final class NeteaseDownloadStore {
             guard self.sessionRevision == revision else { throw NeteaseDownloadError.accountChanged }
             guard !songs.isEmpty else { throw NeteaseDownloadError.unavailable }
             let oldCollections = self.collections, oldJobs = self.jobs, oldStates = self.states
+            var existingFiles = Set<Int64>()
             if let collection { self.collections[collection.key] = collection }
             for metadata in songs {
                 let songID = metadata.song.id
-                if self.resource(songID: songID) != nil { self.states[songID] = .downloaded; continue }
+                if self.resource(songID: songID) != nil {
+                    self.states[songID] = .downloaded
+                    existingFiles.insert(songID)
+                    continue
+                }
                 if self.jobs.values.contains(where: { $0.metadata.song.id == songID && !$0.cancelled && $0.error == nil }) { continue }
                 self.jobs = self.jobs.filter { $0.value.metadata.song.id != songID }
                 let job = NeteaseDownloadJob(id: UUID(), ownerID: saved.profile.userID, metadata: metadata,
@@ -232,6 +244,7 @@ final class NeteaseDownloadStore {
             for (id, previous) in oldJobs where self.jobs[id] == nil { self.cleanupTransfer(previous) }
             try Task.checkCancellation()
             guard self.sessionRevision == revision else { throw NeteaseDownloadError.accountChanged }
+            if !existingFiles.isSubset(of: self.availableFileIDs) { self.availableFileIDs.formUnion(existingFiles) }
             self.error = nil; self.onRecordsChanged?(); self.onChange?(); self.pump()
         }
         plans[key] = PlanningTask(id: planID, task: task)
@@ -246,13 +259,25 @@ final class NeteaseDownloadStore {
         }
     }
 
+    private func cancelPlan(key: String) async {
+        guard let plan = plans[key] else { return }
+        plan.task.cancel()
+        _ = await plan.task.result
+        if plans[key]?.id == plan.id { plans.removeValue(forKey: key) }
+    }
+
     func stopCollection(key: String) async {
-        if let plan = plans[key] {
-            plan.task.cancel()
-            _ = await plan.task.result
-            if plans[key]?.id == plan.id { plans.removeValue(forKey: key) }
-        }
-        if let collection = collections[key] { await stop(songIDs: collection.orderedSongIDs) }
+        let revision = sessionRevision
+        await cancelPlan(key: key)
+        guard sessionRevision == revision, let collection = collections[key] else { return }
+        await stop(songIDs: collection.orderedSongIDs)
+    }
+
+    func stopSongSelection(songIDs: [Int64]) async {
+        let revision = sessionRevision
+        await cancelPlan(key: Self.songPlanKey(Array(Set(songIDs)).sorted()))
+        guard sessionRevision == revision else { return }
+        await stop(songIDs: songIDs)
     }
 
     func stop(songIDs: [Int64]) async {
@@ -269,7 +294,9 @@ final class NeteaseDownloadStore {
     func remove(songIDs: [Int64]) async throws {
         await stop(songIDs: songIDs)
         defer {
-            for id in Set(songIDs) where resource(songID: id) == nil { states.removeValue(forKey: id) }
+            let missing = Set(songIDs).filter { resource(songID: $0) == nil }
+            for id in missing { states.removeValue(forKey: id) }
+            if !availableFileIDs.isDisjoint(with: missing) { availableFileIDs.subtract(missing) }
             onRecordsChanged?(); onChange?()
         }
         for id in Set(songIDs) {
@@ -301,10 +328,41 @@ final class NeteaseDownloadStore {
     }
 
     func reconcileFiles() async {
-        let missing = records.keys.filter { states[$0] == .downloaded && resource(songID: $0) == nil }
-        guard !missing.isEmpty else { return }
+        let snapshot = records
+        let available = await Self.availableSongIDs(records: snapshot, musicDirectory: musicDirectory)
+        guard !Task.isCancelled, records == snapshot else { return }
+        if reconcileFileAvailability(available) { onRecordsChanged?() }
+    }
+
+    @discardableResult
+    func reconcileFileAvailability(_ availableSongIDs: Set<Int64>) -> Bool {
+        // The media file can already exist while its durable index write is in flight.
+        let checked = availableSongIDs.filter {
+            records[$0] != nil && (states[$0] != .processing || availableFileIDs.contains($0))
+        }
+        let availabilityChanged = availableFileIDs != checked
+        if availabilityChanged { availableFileIDs = checked }
+        let missing = records.keys.filter { states[$0] == .downloaded && !checked.contains($0) }
+        let returned = checked.filter { states[$0] == nil }
+        guard availabilityChanged || !missing.isEmpty || !returned.isEmpty else { return false }
         for id in missing { states.removeValue(forKey: id) }
-        onRecordsChanged?(); onChange?()
+        for id in returned { states[id] = .downloaded }
+        onChange?()
+        return true
+    }
+
+    @concurrent private static func availableSongIDs(records: [Int64: NeteaseDownloadRecord],
+                                                     musicDirectory: URL) async -> Set<Int64> {
+        let root = musicDirectory.standardizedFileURL.resolvingSymlinksInPath()
+        var available = Set<Int64>()
+        for record in records.values {
+            if Task.isCancelled { return [] }
+            if let url = try? ownedFile(record.relativePath, resolvedRoot: root),
+               FileManager.default.fileExists(atPath: url.path) {
+                available.insert(record.songID)
+            }
+        }
+        return available
     }
 
     private func pump() {
@@ -398,7 +456,13 @@ final class NeteaseDownloadStore {
         let destination = try ownedFile(relative)
         try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
         // Repeated requests reuse a committed file; only a fully prepared file can replace an orphan.
-        if resource(songID: song.id) != nil { jobs.removeValue(forKey: job.id); cleanupTransfer(job); return }
+        if resource(songID: song.id) != nil {
+            jobs.removeValue(forKey: job.id)
+            cleanupTransfer(job)
+            if !availableFileIDs.contains(song.id) { availableFileIDs.insert(song.id) }
+            set(.downloaded, for: song.id)
+            return
+        }
         let recoveringCommit = job.destinationRelativePath == relative && FileManager.default.fileExists(atPath: destination.path)
         if FileManager.default.fileExists(atPath: destination.path), !recoveringCommit { throw CocoaError(.fileWriteFileExists) }
         // Persist ownership before the move so a process exit between file and index commits is recoverable.
@@ -425,7 +489,10 @@ final class NeteaseDownloadStore {
             _ = enqueuePersistence()
             throw error
         }
-        cleanupTransfer(job); set(.downloaded, for: song.id); if let onFileCommitted { onFileCommitted(relative) } else { onRecordsChanged?() }
+        cleanupTransfer(job)
+        if !availableFileIDs.contains(song.id) { availableFileIDs.insert(song.id) }
+        set(.downloaded, for: song.id)
+        if let onFileCommitted { onFileCommitted(relative) } else { onRecordsChanged?() }
     }
 
     private func optionalLyrics(_ id: Int64, credential: NeteaseCredential) async -> String? {
@@ -493,6 +560,9 @@ final class NeteaseDownloadStore {
     }
     private func ownedFile(_ path: String) throws -> URL {
         let root = musicDirectory.standardizedFileURL.resolvingSymlinksInPath()
+        return try Self.ownedFile(path, resolvedRoot: root)
+    }
+    nonisolated static func ownedFile(_ path: String, resolvedRoot root: URL) throws -> URL {
         let url = root.appending(path: path).standardizedFileURL.resolvingSymlinksInPath()
         guard path.hasPrefix("网易云/"), url.path.hasPrefix(root.path + "/"), !path.split(separator: "/").contains("..") else {
             throw CocoaError(.fileReadInvalidFileName)

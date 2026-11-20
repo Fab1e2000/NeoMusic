@@ -54,7 +54,7 @@ final class AudioPlayerRenderProcessor: NSObject {
         let readingEntry = playerContext.audioReadingEntry
         playerContext.entriesLock.unlock()
         let isMuted = playerContext.muted.value
-        var state = playerContext.internalState
+        let state = playerContext.internalState
 
         rendererContext.lock.lock()
         var waitForBuffer = false
@@ -102,15 +102,11 @@ final class AudioPlayerRenderProcessor: NSObject {
         }
         rendererContext.lock.unlock()
 
-        // A paused seek is complete when target samples are buffered, before any
-        // target audio is consumed by the render callback.
-        if state == .waitingForDataAfterSeek, !waitForBuffer, used > 0,
-           !playerContext.resumeAfterSeek.value {
-            playerContext.setInternalState(to: .paused)
-            state = .paused
-        }
+        // A paused seek keeps its target samples until the host resumes.
+        let preparingPausedSeek = state == .waitingForDataAfterSeek && !playerContext.resumeAfterSeek.value
         var totalFramesCopied: UInt32 = 0
-        if used > 0 && !waitForBuffer && playingEntry != nil && state.contains(.running) && state != .paused {
+        if used > 0 && !waitForBuffer && !preparingPausedSeek && playingEntry != nil
+            && state.contains(.running) && state != .paused {
             if end > start {
                 let framesToCopy = min(inNumberFrames, used)
                 bufferList.mBuffers.mNumberChannels = outputAudioFormat.mChannelsPerFrame

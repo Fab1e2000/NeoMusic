@@ -28,6 +28,7 @@ final class NeteaseAccount {
     }
 
     private(set) var profile: NeteaseProfile?
+    var sessionOwnerID: Int64? { session?.profile.userID }
     private(set) var avatarData: Data?
     var startupAvatarData: Data? { startupAvatar?.data }
     private(set) var validationState = ValidationState.signedOut
@@ -55,6 +56,7 @@ final class NeteaseAccount {
     @ObservationIgnored private var loginID: UUID?
     @ObservationIgnored private var loginTask: Task<Void, Error>?
     @ObservationIgnored private var loginRecoveryTask: Task<Void, Never>?
+    @ObservationIgnored private var postLoginRefresh: Task<Void, Never>?
     @ObservationIgnored private var logoutID: UUID?
     @ObservationIgnored private var logoutTask: Task<Void, Error>?
     @ObservationIgnored private var avatarID: UUID?
@@ -236,6 +238,8 @@ final class NeteaseAccount {
                     PerformanceDiagnostics.restoration("account.read.failed category=\(status)")
                 }
                 if error as? NeteaseAccountError == .authenticationRequired {
+                    let oldRefresh = postLoginRefresh
+                    oldRefresh?.cancel()
                     await home?.activate(nil, refresh: false)
                     guard validationID == id, generation == revision, !Task.isCancelled else { return }
                     await artists?.activate(nil, refresh: false)
@@ -243,6 +247,7 @@ final class NeteaseAccount {
                     await downloads?.activate(nil)
                     await activateSearch(nil)
                     await music?.invalidate()
+                    await oldRefresh?.value
                     guard validationID == id, generation == revision, !Task.isCancelled else { return }
                     session = nil
                     validationState = .requiresLogin
@@ -298,6 +303,18 @@ final class NeteaseAccount {
         await search?.setSession(owner: session?.profile.userID, credential: session?.credential)
     }
 
+    private func refreshAfterLogin() {
+        let revision = generation
+        postLoginRefresh = Task { [self] in
+            defer { if generation == revision { postLoginRefresh = nil } }
+            guard generation == revision, !Task.isCancelled else { return }
+            async let homeRefresh: Void? = home?.refresh(force: false)
+            async let libraryRefresh: Void? = music?.refresh()
+            async let artistRefresh: Void? = artists?.refresh()
+            _ = await (homeRefresh, libraryRefresh, artistRefresh)
+        }
+    }
+
     func completeLogin(credential: NeteaseCredential) async throws {
         if let logoutTask { try await logoutTask.value }
         try Task.checkCancellation()
@@ -322,6 +339,8 @@ final class NeteaseAccount {
                 try checkLogin(id)
 
                 generation += 1
+                let oldRefresh = postLoginRefresh
+                oldRefresh?.cancel()
                 let oldValidation = validationTask, oldAvatar = avatarTask
                 validationID = nil
                 avatarID = nil
@@ -338,7 +357,9 @@ final class NeteaseAccount {
                 await music?.invalidate()
                 await oldValidation?.value
                 await oldAvatar?.value
+                await oldRefresh?.value
                 try checkLogin(id)
+                postLoginRefresh = nil
                 validationTask = nil
                 avatarTask = nil
                 let saved = NeteaseSavedSession(profile: candidate, credential: credential)
@@ -350,8 +371,9 @@ final class NeteaseAccount {
                 validationState = .valid
                 error = nil
                 refreshAvatar()
-                await activateContent(saved)
+                await activateContent(saved, refresh: false)
                 try checkLogin(id)
+                refreshAfterLogin()
             } catch {
                 if loginID == id {
                     // Credential rollback must also restore content when the presenting
@@ -425,6 +447,8 @@ final class NeteaseAccount {
         isLoggingOut = true
         isAuthenticating = false
         error = nil
+        let oldRefresh = postLoginRefresh
+        oldRefresh?.cancel()
         let oldLogin = loginTask, oldValidation = validationTask, oldAvatar = avatarTask
         oldLogin?.cancel()
         loginRecoveryTask?.cancel()
@@ -444,6 +468,8 @@ final class NeteaseAccount {
             _ = await oldLogin?.result
             await oldValidation?.value
             await oldAvatar?.value
+            await oldRefresh?.value
+            postLoginRefresh = nil
             loginTask = nil
             loginRecoveryTask = nil
             validationTask = nil

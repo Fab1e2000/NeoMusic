@@ -200,6 +200,52 @@ final class PlaybackTests: XCTestCase {
         XCTAssertEqual(restored.unavailableIDs, [track.id])
     }
 
+    func testPreviousRestartsLoadedTrackFromBeginning() async throws {
+        let root = URL.temporaryDirectory.appending(path: UUID().uuidString)
+        let url = try PlayerTestFixtures.silentAudio(at: root.appending(path: "track.wav"), seconds: 10)
+        let model = NowPlayingModel(queue: [song("previous"), song("current")], currentIndex: 1, isPlaying: false)
+        defer { model.shutdownPlayback(); try? FileManager.default.removeItem(at: root) }
+        model.configurePlayback(resolveURL: { _ in url }, persistenceURL: root.appending(path: "queue.json"))
+        model.startCurrent(at: 5)
+        for _ in 0..<100 where model.isLoading { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertFalse(model.isLoading)
+        XCTAssertNil(model.errorMessage)
+        XCTAssertEqual(model.liveElapsed, 5, accuracy: 0.002)
+
+        model.skipBackward()
+        for _ in 0..<100 where model.isLoading { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertEqual(model.current.id, "current")
+        XCTAssertFalse(model.isPlaying)
+        XCTAssertFalse(model.isLoading)
+        XCTAssertEqual(model.liveElapsed, 0, accuracy: 0.002)
+        let position = MPNowPlayingInfoCenter.default().nowPlayingInfo?[MPNowPlayingInfoPropertyElapsedPlaybackTime] as? Double
+        XCTAssertEqual(position, 0)
+        await model.flushQueuePersistence()
+    }
+
+    func testAppendingToQueuePreservesInProgressCrossfade() async throws {
+        let root = URL.temporaryDirectory.appending(path: UUID().uuidString)
+        let first = try PlayerTestFixtures.silentAudio(at: root.appending(path: "first.wav"), seconds: 4)
+        let second = try PlayerTestFixtures.silentAudio(at: root.appending(path: "second.wav"), seconds: 6)
+        let engine = LocalPlaybackEngine()
+        let model = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false, makeAudioEngine: { engine })
+        defer { model.shutdownPlayback(); try? FileManager.default.removeItem(at: root) }
+        model.configurePlayback(resolveResource: { id in PlaybackResource(url: id == "first" ? first : second) },
+                                persistenceURL: root.appending(path: "queue.json"))
+        model.toggleCrossfade()
+        model.play([song("first"), song("second")], from: "test", shuffled: false)
+        for _ in 0..<200 where !engine.isCrossfading { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertTrue(engine.isCrossfading)
+
+        model.appendLater([song("third")])
+        XCTAssertTrue(engine.isCrossfading)
+        for _ in 0..<200 where model.current.id == "first" { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertEqual(model.current.id, "second")
+        XCTAssertEqual(model.upcoming.map(\.id), ["third"])
+        XCTAssertGreaterThan(model.liveElapsed, 1)
+        await model.flushQueuePersistence()
+    }
+
     func testCorruptAudioAndCorruptRestorationReportFailure() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

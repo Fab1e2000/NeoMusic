@@ -12,10 +12,8 @@ import Observation
         if let cachedSource { return cachedSource }
         let reader = reader
         let source = PlayerLyricsSource(revision: { [weak self] in self?.contentRevision ?? 0 },
-            load: { id in
-                let document = try await reader.load(trackID: id)
-                return document.playerLyrics
-            }, importFile: { url, id in try await reader.importFile(url, trackID: id) })
+            load: { id in try await reader.loadPlayerLyrics(trackID: id) },
+            importFile: { url, id in try await reader.importFile(url, trackID: id) })
         cachedSource = source
         return source
     }
@@ -43,6 +41,11 @@ actor PlayerLyricsStoreAdapter {
         guard let audioURL = await resolve(trackID) else { return LyricsDocument() }
         return try await reader.load(songID: trackID, audioURL: audioURL, root: root)
     }
+    func loadPlayerLyrics(trackID: String) async throws -> PlayerLyrics {
+        let document = try await load(trackID: trackID)
+        try Task.checkCancellation()
+        return document.playerLyrics
+    }
     func importFile(_ url: URL, trackID: String) async throws {
         try await reader.importFile(url, songID: trackID)
     }
@@ -51,8 +54,11 @@ actor PlayerLyricsStoreAdapter {
 typealias ReferenceLyricsReader = PlayerLyricsStoreAdapter
 
 extension LyricsDocument {
-    static func onlineLyrics(original: String, translation: String) -> Self {
-        merge(original: original, translation: translation, source: "网易云音乐")
+    @concurrent static func onlineLyrics(original: String, translation: String) async throws -> Self {
+        try Task.checkCancellation()
+        let document = merge(original: original, translation: translation, source: "网易云音乐")
+        try Task.checkCancellation()
+        return document
     }
 }
 

@@ -10,6 +10,7 @@ struct TrackFilterProjectionInput: Equatable {
     let tracks: [LibrarySongItem]
     let query: String
     let sort: DetailSort
+    var followsPlaylistOrder: Bool { query.isEmpty && sort == .order }
 
     init(tracks: [LibrarySongItem], query: String, sort: DetailSort = .order) {
         self.tracks = tracks
@@ -46,7 +47,7 @@ enum TrackFilterProjection {
     }
 
     static func fastPath(_ input: TrackFilterProjectionInput) -> TrackFilterProjectionResult? {
-        if input.query.isEmpty && input.sort == .order {
+        if input.followsPlaylistOrder {
             return TrackFilterProjectionResult(
                 tracks: input.tracks,
                 totalDuration: input.tracks.reduce(0) { $0 + $1.duration }
@@ -80,35 +81,44 @@ enum TrackFilterProjection {
         _ projection: AsyncListProjection<TrackFilterProjectionInput, TrackFilterProjectionResult>,
         for input: TrackFilterProjectionInput
     ) async {
-        guard fastPath(input) == nil else { return }
+        guard !input.followsPlaylistOrder, input.tracks.count > fastPathThreshold else { return }
+        await projection.computeIfNeeded(for: input) { await result(for: input) }
+    }
+
+    /// Resolve exactly this input for a playback action. A retained render snapshot may still
+    /// describe the partial page or an earlier query and must not be used for queuing.
+    @MainActor
+    static func result(for input: TrackFilterProjectionInput) async -> TrackFilterProjectionResult? {
+        guard !Task.isCancelled else { return nil }
+        if let immediate = fastPath(input) { return immediate }
+
         let entries = input.tracks.enumerated().map { index, track in
             Entry(index: index, title: track.title, artist: track.artist,
                   album: track.album, duration: track.duration)
         }
-        let currentQuery = input.query
-        let currentSort = input.sort
-        await projection.computeIfNeeded(
-            for: input,
-            fastPath: fastPath,
-            background: { computeIndices(entries: entries, query: currentQuery, sort: currentSort) },
-            finish: { result in
-                TrackFilterProjectionResult(
-                    tracks: result.indices.map { input.tracks[$0] },
-                    totalDuration: result.totalDuration
-                )
-            }
+        guard let result = await computeIndices(entries: entries, query: input.query, sort: input.sort),
+              !Task.isCancelled else { return nil }
+        return TrackFilterProjectionResult(
+            tracks: result.indices.map { input.tracks[$0] },
+            totalDuration: result.totalDuration
         )
     }
 
-    private nonisolated static func computeIndices(
+    @concurrent
+    private static func computeIndices(
         entries: [Entry],
         query: String,
         sort: DetailSort
-    ) -> IndexedResult {
-        let filtered = query.isEmpty ? entries : entries.filter {
-            $0.title.localizedStandardContains(query)
-                || $0.artist.localizedStandardContains(query)
-                || $0.album.localizedStandardContains(query)
+    ) async -> IndexedResult? {
+        var filtered: [Entry] = []
+        var totalDuration = 0
+        for entry in entries {
+            guard !Task.isCancelled else { return nil }
+            totalDuration += entry.duration
+            if query.isEmpty || entry.title.localizedStandardContains(query)
+                || entry.artist.localizedStandardContains(query) || entry.album.localizedStandardContains(query) {
+                filtered.append(entry)
+            }
         }
         let ordered: [Entry]
         switch sort {
@@ -117,10 +127,8 @@ enum TrackFilterProjection {
         case .artist: ordered = filtered.sorted(byName: \.artist)
         case .album: ordered = filtered.sorted(byName: \.album)
         }
-        return IndexedResult(
-            indices: ordered.map(\.index),
-            totalDuration: entries.reduce(0) { $0 + $1.duration }
-        )
+        guard !Task.isCancelled else { return nil }
+        return IndexedResult(indices: ordered.map(\.index), totalDuration: totalDuration)
     }
 }
 

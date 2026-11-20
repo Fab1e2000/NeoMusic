@@ -27,7 +27,8 @@ final class LocalAudioMetadataReaderTests: XCTestCase {
         try Data("not an image".utf8).write(to: root.appendingPathComponent("Cover.jpg"))
         let fallback = root.appendingPathComponent("Folder.PNG")
         try Self.png.write(to: fallback)
-        XCTAssertEqual(LocalAudioMetadataReader.coverURL(in: root), fallback)
+        let candidates = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+        XCTAssertEqual(LocalAudioMetadataReader.coverArtwork(from: candidates), Self.png)
     }
 
     func testCaseInsensitiveCoverSelectionRejectsSymlink() throws {
@@ -36,7 +37,9 @@ final class LocalAudioMetadataReaderTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let image = root.appendingPathComponent("Folder.PNG")
         try Self.png.write(to: image)
-        try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("Cover.jpg"), withDestinationURL: image)
-        XCTAssertEqual(LocalAudioMetadataReader.coverURL(in: root), image)
+        let cover = root.appendingPathComponent("Cover.jpg")
+        try FileManager.default.createSymbolicLink(at: cover, withDestinationURL: image)
+        XCTAssertNil(LocalAudioMetadataReader.coverArtwork(from: [cover]))
+        XCTAssertEqual(LocalAudioMetadataReader.coverArtwork(from: [cover, image]), Self.png)
     }
 }

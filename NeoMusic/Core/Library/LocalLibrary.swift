@@ -155,6 +155,7 @@ final class SongLibrary {
     private(set) var allSongs: [LibrarySongItem] = []
     private(set) var favoriteSongs: [LibrarySongItem] = []
     private var songsByID: [String: LibrarySongItem] = [:]
+    @ObservationIgnored private var visibleSongIDs: Set<String> = []
     @ObservationIgnored private(set) var catalogRevision = 0
     private var isBatching = false
     @ObservationIgnored var downloadedFileID: (@MainActor (String) -> String?)?
@@ -201,6 +202,11 @@ final class SongLibrary {
 
     func song(id: String) -> LibrarySongItem? { songsByID[id] }
 
+    func visibleSong(id: String) -> LibrarySongItem? {
+        _ = allSongs
+        return visibleSongIDs.contains(id) ? songsByID[id] : nil
+    }
+
     private func rebuildCatalog() {
         guard !isBatching else { return }
         var existing = Set<String>()
@@ -230,6 +236,7 @@ final class SongLibrary {
         }
         if allSongs != updated {
             catalogRevision &+= 1
+            visibleSongIDs = Set(updated.map(\.id))
             allSongs = updated
             let updatedFavorites = Self.orderedFavorites(updated)
             if favoriteSongs != updatedFavorites { favoriteSongs = updatedFavorites }

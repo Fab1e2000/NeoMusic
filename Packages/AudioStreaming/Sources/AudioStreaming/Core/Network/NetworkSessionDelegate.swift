@@ -44,7 +44,7 @@ final class NetworkSessionDelegate: NSObject, URLSessionDataDelegate {
             completionHandler(.cancel)
             return
         }
-        stream.didReceive(response: response as? HTTPURLResponse)
         completionHandler(.allow)
+        stream.didReceive(response: response as? HTTPURLResponse)
     }
 }

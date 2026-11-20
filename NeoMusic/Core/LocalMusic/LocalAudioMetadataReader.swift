@@ -74,8 +74,6 @@ enum LocalAudioMetadataReader {
         if let values = comments["ALBUMARTIST"], !values.isEmpty { albumArtists = []; values.forEach { appendCredits($0, to: &albumArtists) } }
         output.artist = artists.joined(separator: " / ")
         output.albumArtist = albumArtists.joined(separator: " / ")
-        if output.artworkData == nil, let cover = coverURL(in: url.deletingLastPathComponent()),
-           let data = try? Data(contentsOf: cover), validArtwork(data) { output.artworkData = data }
         return output
     }
 
@@ -90,18 +88,22 @@ enum LocalAudioMetadataReader {
         }
     }
 
-    static func coverURL(in directory: URL) -> URL? {
-        let candidates = (try? FileManager.default.contentsOfDirectory(at: directory,
-            includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey], options: [.skipsHiddenFiles])) ?? []
-        return candidates.filter { url in
-            guard ["cover", "folder"].contains(url.deletingPathExtension().lastPathComponent.lowercased()),
-                  ["jpg", "jpeg", "png", "heic", "webp"].contains(url.pathExtension.lowercased()),
-                  let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]) else { return false }
-            return values.isRegularFile == true && values.isSymbolicLink != true
-        }.sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }.first { url in
-            guard let data = try? Data(contentsOf: url) else { return false }
-            return validArtwork(data)
+    static func isCoverCandidate(_ url: URL) -> Bool {
+        ["cover", "folder"].contains(url.deletingPathExtension().lastPathComponent.lowercased())
+            && ["jpg", "jpeg", "png", "heic", "webp"].contains(url.pathExtension.lowercased())
+    }
+
+    static func coverArtwork(from candidates: [URL]) -> Data? {
+        let ordered = candidates.filter(isCoverCandidate).sorted {
+            $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending
         }
+        for url in ordered {
+            guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]),
+                  values.isRegularFile == true, values.isSymbolicLink != true,
+                  let data = try? Data(contentsOf: url), validArtwork(data) else { continue }
+            return data
+        }
+        return nil
     }
 
     // FLAC's Vorbis-comment block stores repeated credits which AVFoundation can collapse.

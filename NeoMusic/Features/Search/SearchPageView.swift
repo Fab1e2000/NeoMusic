@@ -17,7 +17,6 @@ struct SearchPageView: View {
         .libraryNavigationTitle("搜索")
         .libraryHomeNavigation(title: "搜索")
         .toolbarTitleDisplayMode(.inlineLarge)
-        .environment(\.artworkLoadAction, ArtworkLoadAction(handler: { model.onArtwork?($0) }))
     }
 
     private var browse: some View {
@@ -438,7 +437,6 @@ struct SearchCategoryContent: View {
         }
         .refreshable { await model.onCategoryRefresh?() }
         .libraryNavigationTitle(category).libraryTitleDisplayMode(.large)
-        .environment(\.artworkLoadAction, ArtworkLoadAction(handler: { model.onArtwork?($0) }))
     }
 }
 

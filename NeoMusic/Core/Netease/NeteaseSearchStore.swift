@@ -23,6 +23,7 @@ final class NeteaseSearchStore {
     private(set) var categoryError: String?
     private(set) var categoryMoreError: String?
     private(set) var sessionID = UUID()
+    var sessionOwnerID: String? { owner == "guest" ? nil : owner }
     @ObservationIgnored var onArtworkChange: ((Set<URL>) -> Void)?
     @ObservationIgnored private let artworkCache: NeteaseArtworkCache
     @ObservationIgnored private var artworkTasks: [URL: Task<Void, Never>] = [:]

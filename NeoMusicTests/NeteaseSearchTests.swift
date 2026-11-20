@@ -286,6 +286,40 @@ import XCTest
         XCTAssertEqual(player.queue.map(\.id), queued)
     }
 
+    func testExpiredSearchSessionRequiresLoginEvenWithRetainedProfile() async throws {
+        let profile = NeteaseProfile(userID: 42, nickname: "Fixture", avatarURL: nil)
+        let saved = NeteaseSavedSession(profile: profile, credential: try .init(musicU: "fixture"))
+        let account = NeteaseAccount(readSession: { saved }, saveSession: { _ in }, deleteSession: {},
+            validateCredential: { _ in throw NeteaseAccountError.authenticationRequired },
+            cachedAvatar: { _ in nil }, loadAvatar: { _ in Data() }, clearAvatarCache: {})
+        await account.restoreCachedContent()
+        XCTAssertEqual(account.restoredPlaybackIdentity, .signedIn("42"))
+        await account.revalidate()
+        XCTAssertEqual(account.profile, profile)
+        XCTAssertEqual(account.validationState, .requiresLogin)
+
+        func item(_ id: String) -> MusicSearchItem {
+            let song = LibrarySongItem(id: id, title: id, artist: "Artist", album: "Album", albumArtist: "Artist",
+                                       trackNumber: 1, artwork: .missing)
+            return .init(id: id, kind: .song, title: id, subtitle: song.artist, artwork: .missing, song: song)
+        }
+        let online = item("netease:42:1"), offline = item("网易云/downloaded.flac")
+        let player = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false)
+        let integration = SearchMusicIntegration(account: account, player: player)
+        integration.model.submitted = true
+        integration.model.groups = [.init(kind: .song, items: [online, offline])]
+        integration.play(online)
+        XCTAssertTrue(integration.showsLogin)
+        XCTAssertTrue(player.queue.isEmpty)
+
+        integration.showsLogin = false
+        integration.model.groups = [.init(kind: .song, items: [offline])]
+        integration.play(offline)
+        XCTAssertFalse(integration.showsLogin)
+        XCTAssertEqual(player.current.id, offline.id)
+        player.shutdownPlayback()
+    }
+
     func testClosedSearchPublishesLateArtworkToQueueAndRetainedPlaylistThenEvictsIt() async throws {
         let remote = URL(string: "https://example.com/a.jpg")!
         let replacement = URL(string: "https://example.com/next.jpg")!

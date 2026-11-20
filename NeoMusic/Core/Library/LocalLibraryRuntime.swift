@@ -368,12 +368,15 @@ actor LocalLibraryTrackCache {
         }
         let directory = url.appendingPathExtension("startup")
         let restoredColors = try await backdropPreparer!.cachedColors(for: artworkKeys)
-        for track in tracks where track.artworkData == nil {
-            guard let key = track.artworkKey, restoredColors.index(forKey: key) == nil else { continue }
+        var restoredArtwork: [String: Data] = [:]
+        // A stale palette still needs the original pixels, shared by its content key.
+        for key in artworkKeys where restoredColors.index(forKey: key) == nil {
             try Task.checkCancellation()
-            // The source pixels are already externalized; an old derived palette
-            // must be refreshed here before the restored library becomes visible.
-            if let data = try? Data(contentsOf: directory.appending(path: key + ".image")) { pending[track.id] = data }
+            restoredArtwork[key] = try? Data(contentsOf: directory.appending(path: key + ".image"))
+        }
+        for track in tracks where track.artworkData == nil {
+            try Task.checkCancellation()
+            if let key = track.artworkKey, let data = restoredArtwork[key] { pending[track.id] = data }
         }
         let colors = try await backdropPreparer!.prepareAdditionalArtwork(pending)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

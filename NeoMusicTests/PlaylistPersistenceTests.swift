@@ -202,6 +202,27 @@ final class PlaylistPersistenceTests: XCTestCase {
         XCTAssertNil(library.persistenceError)
     }
 
+    func testBatchSongRemovalPreservesOtherSongOrderAfterRestore() async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("playlists.json")
+        let songs = [song("a"), song("b"), song("c"), song("d")]
+        let library = PlaylistLibrary(playlists: [])
+        XCTAssertTrue(library.configurePersistence(url: url, songs: songs))
+        let first = try XCTUnwrap(library.createPlaylist(named: "First", artwork: .playlist, in: nil))
+        let second = try XCTUnwrap(library.createPlaylist(named: "Second", artwork: .playlist, in: nil))
+        library.addSongs(songs, to: first.id)
+        library.addSongs(songs.reversed(), to: second.id)
+        library.removeSongsEverywhere(["a", "c"])
+        await library.flushPersistence()
+
+        let restored = PlaylistLibrary(playlists: [])
+        XCTAssertTrue(restored.configurePersistence(url: url, songs: songs))
+        XCTAssertEqual(restored.songs(in: first.id).map(\.id), ["b", "d"])
+        XCTAssertEqual(restored.songs(in: second.id).map(\.id), ["d", "b"])
+        XCTAssertEqual(Set(restored.recentlyAddedSongs().keys), ["b", "d"])
+    }
+
     func testUnflushedAccountSwitchKeepsPreferencesScoped() async throws {
         let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -412,7 +433,7 @@ final class CoverSelectionTests: XCTestCase {
 
         let bytes = png(.blue)
         try bytes.write(to: url)
-        selection.importFile(.success(url))
+        await selection.importFile(.success(url))
         let fileDraft = try XCTUnwrap(selection.image)
         XCTAssertEqual(fileDraft.pngData(), UIImage(data: bytes)?.pngData())
         gate.finish(.success(png(.red)))
@@ -422,14 +443,14 @@ final class CoverSelectionTests: XCTestCase {
         XCTAssertFalse(selection.photoError)
 
         try Data("not an image".utf8).write(to: url)
-        selection.importFile(.success(url))
+        await selection.importFile(.success(url))
         XCTAssertTrue(selection.image === fileDraft)
         XCTAssertTrue(selection.photoError)
-        selection.importFile(.failure(CocoaError(.fileReadNoPermission)))
+        await selection.importFile(.failure(CocoaError(.fileReadNoPermission)))
         XCTAssertTrue(selection.image === fileDraft)
         XCTAssertTrue(selection.photoError)
 
-        selection.importFile(.failure(CocoaError(.userCancelled)))
+        await selection.importFile(.failure(CocoaError(.userCancelled)))
         XCTAssertTrue(selection.image === fileDraft)
         XCTAssertFalse(selection.photoError)
         XCTAssertFalse(selection.isLoading)

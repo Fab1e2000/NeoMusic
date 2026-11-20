@@ -124,7 +124,8 @@ actor LocalMusicScanner {
         result.failedDirectoryPaths = unreadableDirectories.map { $0.pathComponents.dropFirst(rootComponents.count).joined(separator: "/") }
         result.issues = directoryIssues
         result.failures = listingFailures
-        var coverSignatures: [String: [String]] = [:]
+        var directoryCovers: [String: (candidates: [URL], signature: [String])] = [:]
+        var checkedCoverArtwork: [String: Data?] = [:]
         for url in listed {
             try Task.checkCancellation()
             let components = url.standardizedFileURL.resolvingSymlinksInPath().pathComponents
@@ -145,34 +146,46 @@ actor LocalMusicScanner {
                 let values = try url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey, .creationDateKey])
                 let directory = url.deletingLastPathComponent()
                 let directoryID = components.dropFirst(rootComponents.count).dropLast().joined(separator: "/")
-                let coverSignature: [String]
-                if let cached = coverSignatures[directoryID] { coverSignature = cached }
+                let cover: (candidates: [URL], signature: [String])
+                if let cached = directoryCovers[directoryID] { cover = cached }
                 else {
                     let coverFiles: [URL]
                     var coverLookupFailed = false
-                    do { coverFiles = try manager.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey, .isSymbolicLinkKey]) }
+                    do {
+                        coverFiles = try manager.contentsOfDirectory(at: directory,
+                            includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey, .isSymbolicLinkKey, .isRegularFileKey])
+                            .filter(LocalAudioMetadataReader.isCoverCandidate)
+                    }
                     catch {
                         coverFiles = []
                         coverLookupFailed = true
                         result.issues.append("\(directoryID)：封面目录暂不可读（\(error.localizedDescription)）")
                     }
-                    coverSignature = (coverLookupFailed ? ["unavailable"] : []) + coverFiles.filter {
-                        ["cover", "folder"].contains($0.deletingPathExtension().lastPathComponent.lowercased()) && ["jpg", "jpeg", "png", "heic", "webp"].contains($0.pathExtension.lowercased())
-                    }.sorted { $0.lastPathComponent < $1.lastPathComponent }.compactMap { url -> String? in
+                    let signature = (coverLookupFailed ? ["unavailable"] : []) + coverFiles.sorted { $0.lastPathComponent < $1.lastPathComponent }.compactMap { url -> String? in
                         guard let attributes = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey, .isSymbolicLinkKey]), attributes.isSymbolicLink != true else { return nil }
                         return "\(url.lastPathComponent)|\(attributes.fileSize ?? 0)|\(attributes.contentModificationDate?.timeIntervalSince1970 ?? 0)|\(attributes.isSymbolicLink == true)"
                     }
-                    coverSignatures[directoryID] = coverSignature
+                    cover = (coverFiles, signature)
+                    directoryCovers[directoryID] = cover
                 }
-                let fingerprint = LocalFileFingerprint(version: 1, size: values.fileSize ?? 0, modified: values.contentModificationDate, covers: coverSignature)
+                let fingerprint = LocalFileFingerprint(version: 1, size: values.fileSize ?? 0, modified: values.contentModificationDate, covers: cover.signature)
                 if let old = previous[relative], old.fingerprint == fingerprint {
                     result.tracks.append(old)
                     result.reusedCount += 1
                     continue
                 }
-                let metadata = try await LocalAudioMetadataReader.read(url)
+                var metadata = try await LocalAudioMetadataReader.read(url)
                 try Task.checkCancellation()
                 guard generation == scanGeneration else { throw CancellationError() }
+                if metadata.artworkData == nil {
+                    // A present entry with nil records an unsuccessful lookup for this directory too.
+                    if let checked = checkedCoverArtwork[directoryID] {
+                        metadata.artworkData = checked
+                    } else {
+                        metadata.artworkData = LocalAudioMetadataReader.coverArtwork(from: cover.candidates)
+                        checkedCoverArtwork.updateValue(metadata.artworkData, forKey: directoryID)
+                    }
+                }
                 result.tracks.append(LocalTrack(id: relative, title: metadata.title.isEmpty ? url.deletingPathExtension().lastPathComponent : metadata.title,
                     artist: metadata.artist.isEmpty ? "未知艺人" : metadata.artist, album: directory.lastPathComponent,
                     albumArtist: metadata.albumArtist.isEmpty ? (metadata.artist.isEmpty ? "未知艺人" : metadata.artist) : metadata.albumArtist,

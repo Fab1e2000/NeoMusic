@@ -461,11 +461,18 @@ final class PlaylistLibrary {
     private(set) var persistenceError: String?
     @ObservationIgnored private let persistence = PlaylistPersistence()
     @ObservationIgnored private var persistenceTask: Task<Void, Never>?
-    @ObservationIgnored private var persistenceRevision = 0
+    @ObservationIgnored private var needsLocalSnapshot = false
+    @ObservationIgnored private var pendingWrites: [URL: PendingWrite] = [:]
     @ObservationIgnored private var persistenceFailures: [URL: String] = [:]
     @ObservationIgnored private var persistenceBackgroundTask: UIBackgroundTaskIdentifier = .invalid
     /// Metadata edits reuse the exact stored PNG instead of rasterizing every cover again.
     @ObservationIgnored private var savedArtwork: [String: (image: Image, data: Data)] = [:]
+
+    private struct PendingWrite {
+        let metadataRevision: Int
+        let failureMessage: String
+        let save: @Sendable (PlaylistPersistence, URL) async throws -> Void
+    }
 
     struct SavedPlaylist: Codable, Sendable {
         let id: String
@@ -578,8 +585,14 @@ final class PlaylistLibrary {
     }
 
     private func persist() {
-        guard !loadingPersistence, let url = persistenceURL else { return }
+        guard !loadingPersistence, persistenceURL != nil else { return }
         saveOnlinePreferences()
+        markRestoredMetadataChanged()
+        needsLocalSnapshot = true
+        startPersistence()
+    }
+
+    private func saveLocalSnapshot(to url: URL) {
         captureReferencedOnlineSongs()
         var nextArtwork: [String: (image: Image, data: Data)] = [:]
         let items = playlists.filter { !$0.isReadOnly }.map { item -> SavedPlaylist in
@@ -603,29 +616,40 @@ final class PlaylistLibrary {
         let snapshot = Snapshot(playlists: items, folders: folders, placement: placement.filter { localPlaylistIDs.contains($0.key) },
                                 nextOrder: nextOrder, onlineSongs: savedOnlineSongs, songAddedAt: songAddedAt.filter { presentSongs.contains($0.key) })
         savedArtwork = nextArtwork
-        markRestoredMetadataChanged()
         enqueuePersistence(snapshot, to: url, failureMessage: "无法保存播放列表")
     }
 
     private func enqueuePersistence<Value: Encodable & Sendable>(_ value: Value, to url: URL, failureMessage: String) {
-        let previous = persistenceTask
-        let persistence = persistence
-        persistenceRevision += 1
-        let revision = persistenceRevision
-        let metadataRevision = restoredMetadataRevision
+        pendingWrites[url] = PendingWrite(metadataRevision: restoredMetadataRevision, failureMessage: failureMessage) {
+            try await $0.save(value, to: $1)
+        }
+        startPersistence()
+    }
+
+    private func startPersistence() {
+        guard persistenceTask == nil else { return }
         persistenceTask = Task {
-            await previous?.value
-            do {
-                try await persistence.save(value, to: url)
-                persistenceFailures[url] = nil
-                if url == persistenceURL, metadataRevision == restoredMetadataRevision {
-                    restoredMetadataNeedsSave = false
+            // Build a local snapshot only when ready to write. Save each owner's
+            // captured preferences separately and replace only pending writes.
+            while needsLocalSnapshot || !pendingWrites.isEmpty {
+                if needsLocalSnapshot, let url = persistenceURL {
+                    needsLocalSnapshot = false
+                    saveLocalSnapshot(to: url)
                 }
-            } catch {
-                persistenceFailures[url] = "\(failureMessage)：\(error.localizedDescription)"
+                guard let url = pendingWrites.keys.min(by: { $0.path < $1.path }),
+                      let write = pendingWrites.removeValue(forKey: url) else { break }
+                do {
+                    try await write.save(persistence, url)
+                    persistenceFailures[url] = nil
+                    if url == persistenceURL, write.metadataRevision == restoredMetadataRevision {
+                        restoredMetadataNeedsSave = false
+                    }
+                } catch {
+                    persistenceFailures[url] = "\(write.failureMessage)：\(error.localizedDescription)"
+                }
+                persistenceError = persistenceFailures.sorted { $0.key.path < $1.key.path }.first?.value
             }
-            persistenceError = persistenceFailures.sorted { $0.key.path < $1.key.path }.first?.value
-            if persistenceRevision == revision { persistenceTask = nil }
+            persistenceTask = nil
         }
     }
 
@@ -658,21 +682,16 @@ final class PlaylistLibrary {
     }
     func songs(in id: String) -> [LibrarySongItem] { contents[id] ?? [] }
 
-    /// 仍在某个自建播放列表中的歌曲，及其最近一次被加入的时间。
-    func playlistSongAddedDates() -> [String: Date] {
-        let present = Set(playlists.filter { !$0.isSystem }.flatMap { contents[$0.id, default: []].map(\.id) })
-        return songAddedAt.filter { present.contains($0.key) }
-    }
-
-    func songsAddedToPlaylists() -> [LibrarySongItem] {
-        let dates = playlistSongAddedDates()
-        var songs: [String: LibrarySongItem] = [:]
+    /// Still referenced by a playlist, with the latest time a user added each song.
+    func recentlyAddedSongs() -> [String: (song: LibrarySongItem, addedAt: Date)] {
+        guard !songAddedAt.isEmpty else { return [:] }
+        var songs: [String: (song: LibrarySongItem, addedAt: Date)] = [:]
         for playlist in playlists where !playlist.isSystem {
-            for song in contents[playlist.id, default: []] where dates[song.id] != nil {
-                songs[song.id] = song
+            for song in contents[playlist.id, default: []] {
+                if let date = songAddedAt[song.id] { songs[song.id] = (song, date) }
             }
         }
-        return Array(songs.values)
+        return songs
     }
 
     func containedSong(_ id: String) -> LibrarySongItem? {
@@ -709,12 +728,18 @@ final class PlaylistLibrary {
     }
 
     /// 歌曲从资料库删除时，也从所有播放列表移除。
-    func removeSongEverywhere(_ songID: String) {
-        defer { persist() }
-        for id in contents.keys where playlist(id)?.isReadOnly != true && contents[id]?.contains(where: { $0.id == songID }) == true {
-            contents[id]?.removeAll { $0.id == songID }
+    func removeSongsEverywhere(_ songIDs: Set<String>) {
+        guard !songIDs.isEmpty else { return }
+        var changed = false
+        let readOnlyIDs = Set((playlists + downloadedSnapshotItems).filter(\.isReadOnly).map(\.id))
+        for (id, songs) in contents where !readOnlyIDs.contains(id) {
+            let remaining = songs.filter { !songIDs.contains($0.id) }
+            guard remaining.count != songs.count else { continue }
+            contents[id] = remaining
+            changed = true
             markUpdated(id)
         }
+        if changed { persist() }
     }
 
     func removeSong(_ songID: String, from id: String) {
@@ -773,7 +798,8 @@ final class PlaylistLibrary {
         playlists[index].lastPlayedAt = Date()
         nextOrder += 1
         playlists[index].lastPlayedOrder = nextOrder
-        persist()
+        if playlists[index].sourceOwnerID != nil { saveOnlinePreferences() }
+        else { persist() }
     }
 
     private func markUpdated(_ id: String) {

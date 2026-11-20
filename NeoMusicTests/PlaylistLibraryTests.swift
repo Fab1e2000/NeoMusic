@@ -178,12 +178,12 @@ final class PlaylistLibraryTests: XCTestCase {
                                    albumArtist: "Zed", trackNumber: 1, artwork: .missing, duration: 125)
         let second = LibrarySongItem(id: "b", title: "Beta", artist: "Ada", album: "Record one",
                                     albumArtist: "Ada", trackNumber: 2, artwork: .missing, duration: 65)
-        let projection = LibraryListProjection<PlaylistDetailView.ProjectionInput, PlaylistDetailView.Projection>()
+        let projection = LibraryListProjection<TrackFilterProjectionInput, TrackFilterProjectionResult>()
         var calculations = 0
-        func result(_ input: PlaylistDetailView.ProjectionInput) -> PlaylistDetailView.Projection {
+        func result(_ input: TrackFilterProjectionInput) -> TrackFilterProjectionResult {
             projection.value(for: input) { calculations += 1; return input.calculate() }
         }
-        let input = PlaylistDetailView.ProjectionInput(tracks: [second, first], query: "", sort: .order)
+        let input = TrackFilterProjectionInput(tracks: [second, first], query: "", sort: .order)
         XCTAssertEqual(result(input).tracks.map(\.id), ["b", "a"])
         XCTAssertEqual(result(input).totalDuration, 190)
         XCTAssertEqual(calculations, 1)
@@ -239,14 +239,14 @@ final class PlaylistLibraryTests: XCTestCase {
         await original.flushPersistence()
         original.addSongs([song("a")], to: "one")
         await original.flushPersistence()
-        let added = try XCTUnwrap(original.playlistSongAddedDates()["a"])
+        let added = try XCTUnwrap(original.recentlyAddedSongs()["a"]?.addedAt)
         XCTAssertGreaterThanOrEqual(added, before)
         let restored = library()
         XCTAssertTrue(restored.configurePersistence(url: url, songs: [song("a")]))
-        XCTAssertEqual(restored.playlistSongAddedDates()["a"], added)
+        XCTAssertEqual(restored.recentlyAddedSongs()["a"]?.addedAt, added)
         restored.removeSong("a", from: "one")
         await restored.flushPersistence()
-        XCTAssertNil(restored.playlistSongAddedDates()["a"])
+        XCTAssertNil(restored.recentlyAddedSongs()["a"])
     }
 
     func testAddDeduplicatesAndPreservesOrderWithoutChangingOtherPlaylist() {

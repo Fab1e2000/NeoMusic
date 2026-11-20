@@ -212,17 +212,17 @@ final class OnlinePlaybackTests: XCTestCase {
         XCTAssertTrue(model.unavailableIDs.contains("netease:12:34"))
     }
 
-    func testTranslationSharesOriginalLineAndRespectsIndependentOffsets() {
-        let value = LyricsDocument.onlineLyrics(original: "[offset:+1000]\n[00:03.00]Original",
-                                               translation: "[offset:-500]\n[00:01.50]译文")
+    func testTranslationSharesOriginalLineAndRespectsIndependentOffsets() async throws {
+        let value = try await LyricsDocument.onlineLyrics(original: "[offset:+1000]\n[00:03.00]Original",
+                                                         translation: "[offset:-500]\n[00:01.50]译文")
         XCTAssertEqual(value.lines.count, 1)
         XCTAssertEqual(value.lines.first?.time, 2)
         XCTAssertEqual(value.lines.first?.text, "Original")
         XCTAssertEqual(value.lines.first?.translation, "译文")
     }
 
-    func testOnlineLyricsRecognizesEmbeddedBilingualLinesAndMinorTimestampRounding() {
-        let embedded = LyricsDocument.onlineLyrics(
+    func testOnlineLyricsRecognizesEmbeddedBilingualLinesAndMinorTimestampRounding() async throws {
+        let embedded = try await LyricsDocument.onlineLyrics(
             original: """
             [00:01.081] 鮮やかなる色彩の
             [00:01.081] 那绚烂夺目的色彩
@@ -235,7 +235,7 @@ final class OnlinePlaybackTests: XCTestCase {
         XCTAssertEqual(embedded.lines.map(\.text), ["鮮やかなる色彩の", "その意味など 君はもう Can’t know"])
         XCTAssertEqual(embedded.lines.map(\.translation), ["那绚烂夺目的色彩", "其所蕴藏的真意 你已无从知晓"])
 
-        let rounded = LyricsDocument.onlineLyrics(
+        let rounded = try await LyricsDocument.onlineLyrics(
             original: """
             [00:01.081] 鮮やかなる色彩の
             [00:41.098]

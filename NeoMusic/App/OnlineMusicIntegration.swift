@@ -208,15 +208,23 @@ final class OnlineLibraryIntegration {
         guard let music = account.music else { return }
         let downloads = account.downloads
         await LocalLibrary.referenceLibrary.reader.configureRemoteLyrics { [weak music, weak downloads] id in
-            if let parts = OnlineSongIdentity.parse(id), let file = downloads?.lyricsURL(songID: parts.song),
-               let lyrics = try? String(contentsOf: file, encoding: .utf8) {
-                return LyricsDocument.decodeStored(lyrics)
-            }
-            guard let music, let parts = OnlineSongIdentity.parse(id), music.userID == parts.owner else {
+            try Task.checkCancellation()
+            guard let parts = OnlineSongIdentity.parse(id) else {
                 throw NeteaseAccountError.authenticationRequired
             }
+            if let file = downloads?.lyricsURL(songID: parts.song),
+               let lyrics = try? await LyricsReader.loadDownloadedFile(file) {
+                return lyrics
+            }
+            try Task.checkCancellation()
+            guard let music, music.userID == parts.owner else {
+                throw NeteaseAccountError.authenticationRequired
+            }
+            let revision = music.sessionRevision
             let lyrics = try await music.lyrics(songID: parts.song)
-            return LyricsDocument.onlineLyrics(original: lyrics.original, translation: lyrics.translation)
+            let document = try await LyricsDocument.onlineLyrics(original: lyrics.original, translation: lyrics.translation)
+            guard revision == music.sessionRevision else { throw CancellationError() }
+            return document
         }
     }
 

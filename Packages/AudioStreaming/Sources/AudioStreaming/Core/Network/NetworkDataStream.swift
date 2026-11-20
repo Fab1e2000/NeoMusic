@@ -35,14 +35,13 @@ final class NetworkDataStream {
 
     private var streamCallback: StreamCompletion?
 
-    /// The serial queue for all internal async actions.
-    private let underlyingQueue: DispatchQueue
+    private let stateLock = UnfairLock()
     private let id: UUID
 
     private var state: State
 
     var isCancelled: Bool {
-        state == .cancelled
+        stateLock.withLock { state == .cancelled }
     }
 
     /// the underlying task of the network request
@@ -52,9 +51,8 @@ final class NetworkDataStream {
         task?.response as? HTTPURLResponse
     }
 
-    init(id: UUID, underlyingQueue: DispatchQueue) {
+    init(id: UUID) {
         self.id = id
-        self.underlyingQueue = underlyingQueue
         state = .initialised
     }
 
@@ -66,61 +64,64 @@ final class NetworkDataStream {
 
     @discardableResult
     func responseStream(completion: @escaping StreamCompletion) -> Self {
-        streamCallback = completion
+        stateLock.withLock { streamCallback = completion }
         return self
     }
 
     @discardableResult
     func resume() -> Self {
-        guard state.canBecome(.resumed) else { return self }
-        state = .resumed
-        task?.resume()
+        stateLock.withLock {
+            guard state.canBecome(.resumed) else { return }
+            state = .resumed
+            task?.resume()
+        }
         return self
     }
 
     func cancel() {
-        guard state.canBecome(.cancelled) else { return }
-        state = .cancelled
-        streamCallback = nil
-        task?.cancel()
-        task = nil
+        stateLock.withLock {
+            guard state.canBecome(.cancelled) else { return }
+            state = .cancelled
+            streamCallback = nil
+            task?.cancel()
+            task = nil
+        }
     }
 
     func suspend() {
-        guard state.canBecome(.suspended) else { return }
-        state = .suspended
-        task?.suspend()
+        stateLock.withLock {
+            // A newly created URLSessionTask is already suspended.
+            guard state == .resumed else { return }
+            state = .suspended
+            task?.suspend()
+        }
     }
 
-    // MARK: Internal
+    // These calls arrive on the serial URLSession delegate queue. Deliver before
+    // returning so backpressure can stop more data from reaching the decoder queue.
 
     func didReceive(response: HTTPURLResponse?) {
-        underlyingQueue.async { [weak self] in
-            guard let self = self else { return }
-            guard let streamCallback = self.streamCallback else { return }
-            streamCallback(.response(response))
-        }
+        let callback = stateLock.withLock { streamCallback }
+        callback?(.response(response))
     }
 
     func didReceive(data: Data, response: HTTPURLResponse?) {
-        underlyingQueue.async { [weak self] in
-            guard let self = self else { return }
-            guard let streamCallback = self.streamCallback else { return }
-            let streamResponse = Response(response: response, data: data)
-            streamCallback(.stream(.success(streamResponse)))
-        }
+        let callback = stateLock.withLock { streamCallback }
+        callback?(.stream(.success(Response(response: response, data: data))))
     }
 
     func didComplete(with error: Error?, response: HTTPURLResponse?) {
-        underlyingQueue.async { [weak self] in
-            guard let self = self else { return }
-            guard let stream = self.streamCallback else { return }
-            if let error = error {
-                stream(.stream(.failure(error)))
-            } else {
-                let completion = Completion(response: response, error: error)
-                stream(.complete(completion))
-            }
+        let callback: StreamCompletion? = stateLock.withLock {
+            guard state.canBecome(.finished) else { return nil }
+            state = .finished
+            let callback = streamCallback
+            streamCallback = nil
+            return callback
+        }
+        if let error {
+            callback?(.stream(.failure(error)))
+        } else {
+            callback?(.complete(Completion(response: response, error: nil)))
         }
     }
 }

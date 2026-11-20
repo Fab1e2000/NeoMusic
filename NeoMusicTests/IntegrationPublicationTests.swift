@@ -397,9 +397,9 @@ import XCTest
         let catalog = makeSongLibrary()
         catalog.replaceExternalSongs(tracks, source: "home")
         let listChanges = Mutex(0), imageChanges = Mutex(0)
-        let projection = LibraryListProjection<PlaylistDetailView.ProjectionInput, PlaylistDetailView.Projection>()
+        let projection = LibraryListProjection<TrackFilterProjectionInput, TrackFilterProjectionResult>()
         withObservationTracking {
-            let input = PlaylistDetailView.ProjectionInput(tracks: playlists.songs(in: item.id), query: "", sort: .title)
+            let input = TrackFilterProjectionInput(tracks: playlists.songs(in: item.id), query: "", sort: .title)
             _ = projection.value(for: input, calculate: input.calculate)
             _ = catalog.allSongs
             _ = catalog.song(id: tracks[0].id)?.title
@@ -669,7 +669,7 @@ import XCTest
         }.value
 
         XCTAssertEqual(plan.availableSongIDs, [1])
-        XCTAssertEqual(Set(plan.missingPaths), [missingPath, traversalPath])
+        XCTAssertEqual(plan.missingPaths, [missingPath], "Unsafe paths must never be passed to the local scanner")
         XCTAssertEqual(Set(plan.unavailableRecordIDs), [2, 3])
         XCTAssertEqual(plan.byPath[presentPath], 1)
         XCTAssertEqual(plan.albumGroups.map(\.albumID), [20])
@@ -716,6 +716,24 @@ import XCTest
         player.reconcileAvailability(songs: catalog)
         XCTAssertEqual(player.queue.count, 1)
         XCTAssertEqual(player.queue.first?.title, "Catalog 1")
+    }
+
+    func testDownloadRemovalRelinksOnlyLocalPathsToTheOriginalOwner() {
+        let original = song(12)
+        let online = NeteaseMusicSong(id: 12, title: original.title, artist: original.artist, album: original.album,
+                                     artworkURL: nil, duration: 180, albumID: nil)
+        let metadata = NeteaseDownloadSong(song: online, albumArtist: original.albumArtist, trackNumber: 1, discNumber: 1)
+        let path = "网易云/Album/12.flac"
+        let record = NeteaseDownloadRecord(metadata: metadata, relativePath: path, lyricsRelativePath: nil,
+                                           quality: .lossless, downloadedAt: Date(), ownerID: 42)
+        let legacy = NeteaseDownloadRecord(metadata: metadata, relativePath: "网易云/Album/legacy.flac", lyricsRelativePath: nil,
+                                           quality: .lossless, downloadedAt: Date())
+        let replacements = DownloadMusicIntegration.removedFileReplacements(records: [record, legacy]) { record, id in
+            .init(id: id, title: record.song.title, artist: record.song.artist, album: record.song.album,
+                  albumArtist: record.metadata.albumArtist, trackNumber: record.metadata.trackNumber, artwork: .missing)
+        }
+        XCTAssertEqual(replacements.mapValues(\.id), [path: original.id])
+        XCTAssertNil(replacements["netease:99:12"], "An existing online entry keeps its own account identity")
     }
 
     private func song(_ id: Int) -> LibrarySongItem {

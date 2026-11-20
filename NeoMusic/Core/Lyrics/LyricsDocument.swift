@@ -31,6 +31,7 @@ struct LyricsDocument: Equatable, Sendable {
     }
 
     private static let translationMatchToleranceMS = 50
+    private typealias TimedText = (index: Int, ms: Int, text: String)
 
     /// Parse bracket prefixes rather than interpreting text after the timestamp as markup.
     static func parse(_ text: String) -> Self {
@@ -119,6 +120,11 @@ struct LyricsDocument: Equatable, Sendable {
             }
             return lhs.element.time < rhs.element.time
         }
+        // Keep the original timing if the offset would put any line outside the
+        // representable range. Validate the greatest time because the shift is monotonic.
+        if let last = sortedLines.last, milliseconds(max(0, last.element.time - offsetSeconds)) == nil {
+            offsetSeconds = 0
+        }
         let entries = sortedLines.map { _, entry in
             // Positive LRC offsets advance lyrics; negative offsets delay them.
             ParsedEntry(rawTime: entry.time, time: max(0, entry.time - offsetSeconds), text: entry.text)
@@ -134,9 +140,11 @@ struct LyricsDocument: Equatable, Sendable {
         while remainder.first == "[", let end = remainder.firstIndex(of: "]") {
             let token = String(remainder[remainder.index(after: remainder.startIndex)..<end])
             let parts = token.split(separator: ":", maxSplits: 1).map(String.init)
-            if parts.count == 2, parts[0].lowercased() == "offset",
-               let value = Double(parts[1].trimmingCharacters(in: .whitespaces)) {
-                offsetSeconds = value / 1000
+            if parts.count == 2, parts[0].lowercased() == "offset" {
+                if let value = Double(parts[1].trimmingCharacters(in: .whitespaces)),
+                   Int(exactly: value.rounded()) != nil {
+                    offsetSeconds = value / 1000
+                }
                 metadataOnly = true
             } else if parts.count == 2, let timestamp = parseTimestamp(minutesPart: parts[0], secondsPart: parts[1]) {
                 times.append(timestamp)
@@ -149,24 +157,51 @@ struct LyricsDocument: Equatable, Sendable {
     }
 
     private static func parseTimestamp(minutesPart: String, secondsPart: String) -> TimeInterval? {
-        guard let minutes = Double(minutesPart), minutes >= 0 else { return nil }
-        if let seconds = Double(secondsPart), seconds >= 0, seconds < 60 {
-            return minutes * 60 + seconds
+        guard let minutes = Double(minutesPart), minutes >= 0, minutes.isFinite else { return nil }
+        let seconds: Double
+        if let value = Double(secondsPart) {
+            seconds = value
+        } else {
+            let subparts = secondsPart.split(separator: ":", omittingEmptySubsequences: false)
+            guard subparts.count == 2,
+                  !subparts[0].isEmpty, !subparts[1].isEmpty, subparts[1].count <= 3,
+                  subparts[0].allSatisfy({ $0.isASCII && $0.isNumber }),
+                  subparts[1].allSatisfy({ $0.isASCII && $0.isNumber }),
+                  let value = Double("\(subparts[0]).\(subparts[1])") else { return nil }
+            seconds = value
         }
-        let subparts = secondsPart.split(separator: ":", omittingEmptySubsequences: false)
-        if subparts.count == 2,
-           !subparts[0].isEmpty, !subparts[1].isEmpty, subparts[1].count <= 3,
-           subparts[0].allSatisfy({ $0.isASCII && $0.isNumber }),
-           subparts[1].allSatisfy({ $0.isASCII && $0.isNumber }),
-           let seconds = Double("\(subparts[0]).\(subparts[1])"),
-           seconds >= 0, seconds < 60 {
-            return minutes * 60 + seconds
-        }
-        return nil
+        guard seconds >= 0, seconds < 60 else { return nil }
+        let time = minutes * 60 + seconds
+        return milliseconds(time) == nil ? nil : time
     }
 
-    private static func milliseconds(_ time: TimeInterval) -> Int {
-        Int((time * 1000).rounded())
+    private static func milliseconds(_ time: TimeInterval) -> Int? {
+        Int(exactly: (time * 1000).rounded())
+    }
+
+    private static func timedText(_ lines: [LyricsLine]) -> [TimedText] {
+        lines.enumerated().compactMap { index, line in
+            guard !line.text.isEmpty, let ms = milliseconds(line.time) else { return nil }
+            return (index, ms, line.text)
+        }
+    }
+
+    /// Parsed lines are ordered by timestamp. Limit matching to the tolerance
+    /// window while retaining order and allowing equal-distance ties.
+    private static func nearbyText(in lines: [TimedText], at ms: Int) -> ArraySlice<TimedText> {
+        var lower = 0
+        var upper = lines.count
+        let earliest = ms - translationMatchToleranceMS
+        while lower < upper {
+            let middle = lower + (upper - lower) / 2
+            if lines[middle].ms < earliest {
+                lower = middle + 1
+            } else {
+                upper = middle
+            }
+        }
+        // Compare a difference so the upper bound cannot overflow near Int.max.
+        return lines[lower...].prefix { $0.ms - ms <= translationMatchToleranceMS }
     }
 
     private static func deduplicated(_ values: [String]) -> [String] {
@@ -176,17 +211,15 @@ struct LyricsDocument: Equatable, Sendable {
 
     private static func attachTranslations(_ baseLines: [LyricsLine], from translatedLines: [LyricsLine]) -> [LyricsLine] {
         var exactByMS: [Int: [String]] = [:]
-        var nonEmptyTranslated: [(ms: Int, text: String)] = []
-        for line in translatedLines where !line.text.isEmpty {
-            let ms = milliseconds(line.time)
-            exactByMS[ms, default: []].append(line.text)
-            nonEmptyTranslated.append((ms, line.text))
+        let nonEmptyTranslated = timedText(translatedLines)
+        for line in nonEmptyTranslated {
+            exactByMS[line.ms, default: []].append(line.text)
         }
 
         var matchedByBaseIndex: [[String]] = Array(repeating: [], count: baseLines.count)
         var matchedMS = Set<Int>()
         for (index, line) in baseLines.enumerated() {
-            let ms = milliseconds(line.time)
+            guard let ms = milliseconds(line.time) else { continue }
             let exact = exactByMS[ms, default: []].filter { !$0.isEmpty && $0 != line.text }
             if !exact.isEmpty {
                 matchedByBaseIndex[index] = deduplicated(exact)
@@ -196,17 +229,13 @@ struct LyricsDocument: Equatable, Sendable {
 
         let unmatchedTranslated = nonEmptyTranslated.filter { !matchedMS.contains($0.ms) }
         if !unmatchedTranslated.isEmpty {
-            let eligibleBase: [(index: Int, ms: Int, text: String)] = baseLines.enumerated().compactMap { index, line in
-                guard !line.text.isEmpty, matchedByBaseIndex[index].isEmpty else { return nil }
-                return (index, milliseconds(line.time), line.text)
-            }
+            let eligibleBase = timedText(baseLines).filter { matchedByBaseIndex[$0.index].isEmpty }
             for item in unmatchedTranslated {
                 var bestIndex: Int?
                 var bestDistance = translationMatchToleranceMS + 1
                 var ambiguous = false
-                for candidate in eligibleBase where candidate.text != item.text {
+                for candidate in nearbyText(in: eligibleBase, at: item.ms) where candidate.text != item.text {
                     let distance = abs(candidate.ms - item.ms)
-                    guard distance <= translationMatchToleranceMS else { continue }
                     if distance < bestDistance {
                         bestDistance = distance
                         bestIndex = candidate.index
@@ -262,28 +291,20 @@ struct LyricsDocument: Equatable, Sendable {
             let secondText = rawLines[splitStart...].joined(separator: "\n")
             let base = parse(firstText)
             let second = parse(secondText)
-            let baseNonEmpty = base.lines.filter { !$0.text.isEmpty }
-            let secondNonEmpty = second.lines.filter { !$0.text.isEmpty }
+            let baseNonEmpty = timedText(base.lines)
+            let secondNonEmpty = timedText(second.lines)
             guard !baseNonEmpty.isEmpty, !secondNonEmpty.isEmpty else { continue }
-
-            let baseTimesByMS = Dictionary(grouping: baseNonEmpty, by: { milliseconds($0.time) })
-            let baseMSList = baseNonEmpty.map { (ms: milliseconds($0.time), text: $0.text) }
 
             var matched = 0
             var nonZeroMatched = 0
             for candidate in secondNonEmpty {
-                let ms = milliseconds(candidate.time)
-                let exactHit = baseTimesByMS[ms]?.contains(where: { $0.text != candidate.text }) == true
-                let nearHit = exactHit || baseMSList.contains {
-                    abs($0.ms - ms) <= translationMatchToleranceMS && $0.text != candidate.text
-                }
-                if nearHit {
+                if nearbyText(in: baseNonEmpty, at: candidate.ms).contains(where: { $0.text != candidate.text }) {
                     matched += 1
-                    if ms > 0 { nonZeroMatched += 1 }
+                    if candidate.ms > 0 { nonZeroMatched += 1 }
                 }
             }
 
-            let baseUniqueNonEmptyTimes = Set(baseNonEmpty.map { milliseconds($0.time) }).count
+            let baseUniqueNonEmptyTimes = Set(baseNonEmpty.map(\.ms)).count
             let qualifies = matched * 4 >= secondNonEmpty.count * 3
                 && (nonZeroMatched >= 2 || (nonZeroMatched == 1 && secondNonEmpty.count == 1 && baseUniqueNonEmptyTimes == 1))
             if qualifies {
@@ -303,7 +324,7 @@ struct LyricsDocument: Equatable, Sendable {
         var groups: [Group] = []
         groups.reserveCapacity(entries.count)
         for entry in entries {
-            let rawMS = milliseconds(entry.rawTime)
+            guard let rawMS = milliseconds(entry.rawTime) else { continue }
             if let lastIndex = groups.indices.last, groups[lastIndex].rawMS == rawMS {
                 groups[lastIndex].texts.append(entry.text)
             } else {

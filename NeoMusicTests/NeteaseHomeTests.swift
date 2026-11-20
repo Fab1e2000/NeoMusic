@@ -235,6 +235,102 @@ import Synchronization
         XCTAssertNil(store.feedError)
     }
 
+    func testColdFeedPublishesFirstPageBeforeLaterFailure() async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let network = try paginationNetwork(count: 1)
+        defer { network.invalidateAndCancel() }
+        let path = "/eapi/homepage/block/page"
+        let secondPage = expectation(description: "The second page is waiting")
+        HomePaginationProtocol.state.withLock {
+            $0.sequences[path] = [feedResponse("FIRST", id: 1, cursor: "one")]
+            $0.responses[path] = Data(#"{"code":503}"#.utf8)
+            $0.started = { request in
+                guard request == path else { return }
+                if HomePaginationProtocol.count(path) == 1 {
+                    HomePaginationProtocol.state.withLock { $0.blocked.insert(path) }
+                } else {
+                    secondPage.fulfill()
+                }
+            }
+        }
+        let store = NeteaseHomeStore(client: NeteaseMusicClient(transport: NeteaseAccountClient(session: network)), directory: root)
+        await store.activate(try savedSession(), refresh: false)
+        let refresh = Task { await store.refresh() }
+        await fulfillment(of: [secondPage], timeout: 3)
+        XCTAssertEqual(store.feed?.blocks.map(\.blockCode), ["FIRST"])
+        XCTAssertNil(store.feedError)
+        HomePaginationProtocol.release(path)
+        await refresh.value
+        XCTAssertEqual(store.feed?.blocks.map(\.blockCode), ["FIRST"])
+        XCTAssertNotNil(store.feedError)
+        await store.flush()
+    }
+
+    func testLoginCompletesAndLogoutCancelsBlockedHomeRefresh() async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let network = try paginationNetwork(count: 1)
+        defer { network.invalidateAndCancel() }
+        let path = "/eapi/homepage/block/page"
+        let started = expectation(description: "Home starts refreshing")
+        let newSongsStarted = expectation(description: "New songs request begins while Home awaits the feed")
+        let stopped = expectation(description: "Home stops on logout")
+        let completed = expectation(description: "Login finishes while Home awaits the response")
+        HomePaginationProtocol.state.withLock {
+            $0.blocked.insert(path)
+            $0.started = { request in
+                if request == path { started.fulfill() }
+                if request == "/eapi/v1/discovery/new/songs" { newSongsStarted.fulfill() }
+            }
+            $0.stopped = { if $0 == path { stopped.fulfill() } }
+        }
+        let home = NeteaseHomeStore(client: NeteaseMusicClient(transport: NeteaseAccountClient(session: network)), directory: root)
+        let session = try savedSession()
+        let account = NeteaseAccount(readSession: { nil }, saveSession: { _ in }, deleteSession: {},
+            validateCredential: { _ in session.profile }, cachedAvatar: { _ in nil },
+            loadAvatar: { _ in Data() }, clearAvatarCache: {}, home: home)
+        let login = Task {
+            try await account.completeLogin(credential: session.credential)
+            completed.fulfill()
+        }
+        await fulfillment(of: [completed, started, newSongsStarted], timeout: 3)
+        XCTAssertEqual(account.restoredPlaybackIdentity, .signedIn("42"))
+        XCTAssertFalse(account.isAuthenticating)
+        XCTAssertNil(home.feed)
+        try await account.logout()
+        await fulfillment(of: [stopped], timeout: 3)
+        try await login.value
+        XCTAssertNil(home.userID)
+        XCTAssertNil(home.feed)
+    }
+
+    func testChangingCredentialCancelsRoamingContinuation() async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let network = try paginationNetwork(count: 1)
+        defer { network.invalidateAndCancel() }
+        let path = "/eapi/v1/radio/get"
+        let started = expectation(description: "Continuation started")
+        let stopped = expectation(description: "Continuation cancelled")
+        HomePaginationProtocol.state.withLock {
+            $0.blocked.insert(path)
+            $0.started = { if $0 == path { started.fulfill() } }
+            $0.stopped = { if $0 == path { stopped.fulfill() } }
+        }
+        let store = NeteaseHomeStore(client: NeteaseMusicClient(transport: NeteaseAccountClient(session: network)), directory: root)
+        let initial = try savedSession()
+        await store.activate(initial, refresh: false)
+        let continuation = Task { try await store.nextRoamingSongs() }
+        await fulfillment(of: [started], timeout: 3)
+        let replacement = NeteaseSavedSession(profile: initial.profile, credential: try .init(musicU: "replacement"))
+        await store.activate(replacement, refresh: false)
+        await fulfillment(of: [stopped], timeout: 3)
+        HomePaginationProtocol.release(path)
+        if case .success = await continuation.result { XCTFail("The old continuation should be cancelled") }
+        XCTAssertEqual(store.userID, initial.profile.userID)
+    }
+
     func testExplicitRefreshCancelsPassiveRequestThenPerformsNewRefresh() async throws {
         let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
