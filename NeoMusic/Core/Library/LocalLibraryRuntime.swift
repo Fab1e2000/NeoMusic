@@ -304,15 +304,6 @@ final class LocalLibraryRuntime {
 
 /// One metadata index with shared immutable image files; no image bytes are read on a normal launch.
 actor LocalLibraryTrackCache {
-    private struct Fingerprint: Codable, Equatable {
-        let size: Int?
-        let modified: Date?
-        init(_ url: URL) throws {
-            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
-            size = attributes[.size] as? Int
-            modified = attributes[.modificationDate] as? Date
-        }
-    }
     private var saved: (url: URL, tracks: [LocalTrack])?
     private var backdropPreparer: AlbumArtworkBackdropPreparer?
 

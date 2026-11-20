@@ -24,6 +24,7 @@ mkdir -p build/release dist
 xcodebuild -project NeoMusic.xcodeproj -scheme NeoMusic -configuration Release \
   -destination 'generic/platform=iOS' -derivedDataPath "$derived_data" \
   CODE_SIGNING_ALLOWED=NO SWIFT_ACTIVE_COMPILATION_CONDITIONS= \
+  EXCLUDED_SOURCE_FILE_NAMES='$(inherited) HomePreviewAssets.xcassets' \
   build 2>&1 | tee build/release/xcodebuild.log
 
 app="$derived_data/Build/Products/Release-iphoneos/NeoMusic.app"

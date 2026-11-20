@@ -1232,7 +1232,7 @@ final class LibraryDetailNavigationTests: XCTestCase {
         XCTAssertNil(second.navigationItem.searchController)
     }
 
-    func testSearchHidesScopeBarAndKeepsOnlineScopeInPrompt() throws {
+    func testSearchUsesOnlinePromptWithoutScopeBar() throws {
         let page = UIViewController()
         let chrome = LibraryNavigationChrome(isRoot: true)
         chrome.attach(page)
@@ -1240,11 +1240,9 @@ final class LibraryDetailNavigationTests: XCTestCase {
         model.query = "Song"
         model.isSearching = true
         model.submitted = true
-        model.selectScope(.library)
         chrome.setSearchPage(model)
         let search = try XCTUnwrap(page.navigationItem.searchController)
         XCTAssertNil(search.searchBar.scopeButtonTitles)
-        XCTAssertEqual(model.scope, .online)
         XCTAssertEqual(search.searchBar.placeholder, "网易云音乐中的歌曲、艺人、专辑及歌单")
         XCTAssertEqual(search.searchBar.text, "Song")
         XCTAssertTrue(model.submitted)

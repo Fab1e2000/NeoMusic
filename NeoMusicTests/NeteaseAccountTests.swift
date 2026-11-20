@@ -975,7 +975,7 @@ final class NeteaseAccountTests: XCTestCase {
             validateCredential: { _ in self.first }, cachedAvatar: { _ in nil },
             loadAvatar: { _ in Data() }, clearAvatarCache: {}, music: music, search: search)
         await account.restoreCachedContent()
-        search.record("Account query", scope: "online")
+        search.record("Account query")
         storage.deleteError = NeteaseAccountError.keychain(-1)
 
         do { try await account.logout(); XCTFail("Expected failed logout") }

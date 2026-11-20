@@ -138,22 +138,6 @@ struct SearchPageView: View {
                 }.padding(.horizontal, 20).padding(.vertical, 8)
             }.scrollIndicators(.hidden)
             Divider()
-            if let status = model.syncStatus, model.scope == .library {
-                HStack(spacing: 8) {
-                    if !model.syncFailed { ProgressView().controlSize(.mini) }
-                    Text(status).font(.footnote).foregroundStyle(.secondary)
-                    Spacer(minLength: 0)
-                    if model.syncFailed {
-                        Button { model.onRetry?() } label: {
-                            Text("重试")
-                                .font(.footnote)
-                                .frame(minWidth: 44, minHeight: 36, alignment: .trailing)
-                                .contentShape(.rect)
-                        }
-                        .padding(.vertical, -8)
-                    }
-                }.padding(.horizontal, 20).padding(.vertical, 9)
-            }
             ZStack {
                 ForEach(MusicSearchKind.allCases) { kind in
                     if kind == model.kind || mountedResultKinds.contains(kind) {
@@ -177,14 +161,10 @@ struct SearchPageView: View {
                     }
                 }
             }
-            .id(model.scope)
             .onChange(of: model.kind, initial: true) { _, nextKind in
                 mountedResultKinds.insert(nextKind)
             }
             .onChange(of: model.query) { _, _ in
-                mountedResultKinds = [model.kind]
-            }
-            .onChange(of: model.scope) { _, _ in
                 mountedResultKinds = [model.kind]
             }
             .onChange(of: model.submitted) { _, submitted in

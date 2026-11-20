@@ -34,7 +34,6 @@
 		13A2BD49B9865CFB4F46871D /* PlaybackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07A35E37115ED209278C6479 /* PlaybackTests.swift */; };
 		13F357850C98C14613C9E418 /* NowPlayingPageTransition.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14B7D37374583642C0FD59A9 /* NowPlayingPageTransition.swift */; };
 		15D096B2A34FCA9BEC89FC9A /* PlayerSourceNotices.txt in Resources */ = {isa = PBXBuildFile; fileRef = E0BE1837F92268E064FDA4B5 /* PlayerSourceNotices.txt */; };
-		16A3ACEA70740A4D020B3532 /* NeteaseLibrarySearchStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 342E73C7D6D55591AC314D75 /* NeteaseLibrarySearchStore.swift */; };
 		1835E60E65963B1E198BAEE7 /* NeteaseHomeSupplemental.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC28E0C2E23FC68413C9A2B7 /* NeteaseHomeSupplemental.swift */; };
 		190F6BD16F1A19104BA85187 /* PlaylistPersistenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BD83D3BFFE6E6FF3EB5DAE9 /* PlaylistPersistenceTests.swift */; };
 		19D8DB7B29D00F4DED56BA80 /* PlayerPalette.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8A49DBCCD5939198C97C03C /* PlayerPalette.swift */; };
@@ -124,9 +123,9 @@
 		615EA8523C1503A8C618E169 /* CollectionSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9824A028BBBD5C48C35A08D8 /* CollectionSupport.swift */; };
 		63588AEB5FF115384496403C /* HomeContentModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 100FB82722AA850FDBC1B6E7 /* HomeContentModel.swift */; };
 		654FA2609D0C7C3D5C1F977A /* NowPlayingTransportButtonStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA7F60493607ED80A560C5F9 /* NowPlayingTransportButtonStyle.swift */; };
+		659A434BE48B4AC19998E5DF /* HomePreviewAssets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 93D7EDB6C0484F5FF91AA0D2 /* HomePreviewAssets.xcassets */; };
 		6636B34A4BA719E9412FA340 /* LibraryListAccessibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6AF6C55AEDF41D02F4F3E49 /* LibraryListAccessibilityTests.swift */; };
 		6837A8AC6D744EA45F2D0062 /* TrackSwipeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD3BFA40C3CE3DD3BDB2AABE /* TrackSwipeTests.swift */; };
-		6A0C4D03CF43E41A1B1B685A /* HomeFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = B57AAA77F8F80F26E688BA36 /* HomeFixtures.swift */; };
 		6A226F35571222EBAFFAFCDD /* LocalLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93D0F1FA60D02AC5C67F45EA /* LocalLibrary.swift */; };
 		6A6513EA225C78CE42E48206 /* LibraryListControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33E7874D5F1CF3E66D9A88AD /* LibraryListControls.swift */; };
 		6C96F54FB83842874788C93D /* NowPlayingArtistButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9B92B010E9269CC9CA1913F /* NowPlayingArtistButton.swift */; };
@@ -146,7 +145,6 @@
 		723907F854FDC1160C0246C0 /* HomeArtwork.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96B01BBD09E2583BD707E4EE /* HomeArtwork.swift */; };
 		72C9615499B2FA90515309F2 /* LibraryCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD06C56A4B3BD39A3F16C3B9 /* LibraryCatalog.swift */; };
 		749C5C1B5FEC7E42F2399296 /* NeteaseDownloadClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77744BE81A8BF29E1817F296 /* NeteaseDownloadClient.swift */; };
-		75AE73EE8FA72667EE3D0E83 /* NeteaseLibrarySearchIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86C8BB314ABF1A84B5B75466 /* NeteaseLibrarySearchIndex.swift */; };
 		76F5CC677AEF61CFFEA86123 /* LocalMusicScanTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33453536B51BC82AA9B65AD6 /* LocalMusicScanTests.swift */; };
 		771835E110DB7DC48F31C427 /* PlaybackCollectionHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34AF70F49498A883FCE904D4 /* PlaybackCollectionHistory.swift */; };
 		7722905168EB83A3E126DAAA /* NativeLyricCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = A900A87E7094FF2CB6CEA3C9 /* NativeLyricCell.swift */; };
@@ -465,7 +463,6 @@
 		33453536B51BC82AA9B65AD6 /* LocalMusicScanTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalMusicScanTests.swift; sourceTree = "<group>"; };
 		33E7874D5F1CF3E66D9A88AD /* LibraryListControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryListControls.swift; sourceTree = "<group>"; };
 		33E8D0E766F82FEE0ED0FCA2 /* HomePlaylistArtworkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomePlaylistArtworkTests.swift; sourceTree = "<group>"; };
-		342E73C7D6D55591AC314D75 /* NeteaseLibrarySearchStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NeteaseLibrarySearchStore.swift; sourceTree = "<group>"; };
 		34AF70F49498A883FCE904D4 /* PlaybackCollectionHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackCollectionHistory.swift; sourceTree = "<group>"; };
 		35AAC462C02C5ED3A7B1CAE3 /* HomeMusicIntegration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeMusicIntegration.swift; sourceTree = "<group>"; };
 		35DC8AEBE2CB8CA0DC628A5F /* FullScreenPlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FullScreenPlayerView.swift; sourceTree = "<group>"; };
@@ -557,7 +554,6 @@
 		839C017C97A4D997BD36DD19 /* NowPlayingArtworkPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlayingArtworkPage.swift; sourceTree = "<group>"; };
 		8668187F76F02EAC36270529 /* NeteaseDownloadedAudioTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NeteaseDownloadedAudioTests.swift; sourceTree = "<group>"; };
 		866DCD491D0E94865EBE36C5 /* NowPlayingPageSelector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlayingPageSelector.swift; sourceTree = "<group>"; };
-		86C8BB314ABF1A84B5B75466 /* NeteaseLibrarySearchIndex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NeteaseLibrarySearchIndex.swift; sourceTree = "<group>"; };
 		88ABCA429A26C91D1E6AC3D9 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 		891260FD64E3389158119451 /* AlbumArtworkBackdropTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlbumArtworkBackdropTests.swift; sourceTree = "<group>"; };
 		8972820767976A47EEB29FCC /* PlaylistEditorViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaylistEditorViews.swift; sourceTree = "<group>"; };
@@ -571,6 +567,7 @@
 		924F9002A28972944C344EB7 /* NeteaseAccountErrorPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NeteaseAccountErrorPresentationTests.swift; sourceTree = "<group>"; };
 		937F6EC408829314FF850B81 /* ReferenceNowPlayingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceNowPlayingView.swift; sourceTree = "<group>"; };
 		93D0F1FA60D02AC5C67F45EA /* LocalLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalLibrary.swift; sourceTree = "<group>"; };
+		93D7EDB6C0484F5FF91AA0D2 /* HomePreviewAssets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = HomePreviewAssets.xcassets; sourceTree = "<group>"; };
 		96B01BBD09E2583BD707E4EE /* HomeArtwork.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeArtwork.swift; sourceTree = "<group>"; };
 		97CE48CD90FD8D0292760FE3 /* LocalLibraryRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalLibraryRuntime.swift; sourceTree = "<group>"; };
 		9824A028BBBD5C48C35A08D8 /* CollectionSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CollectionSupport.swift; sourceTree = "<group>"; };
@@ -610,7 +607,6 @@
 		B421FB58C932A350DBDE21AD /* DebugLaunchRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugLaunchRouter.swift; sourceTree = "<group>"; };
 		B42C22F7D0E15BD226E18C22 /* GPL-3.0.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "GPL-3.0.txt"; sourceTree = "<group>"; };
 		B48BD3C18CF5A28D2C4FAF42 /* LocalArtworkImages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalArtworkImages.swift; sourceTree = "<group>"; };
-		B57AAA77F8F80F26E688BA36 /* HomeFixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeFixtures.swift; sourceTree = "<group>"; };
 		B6442DFC786C09F414BA1468 /* PlaylistPersistence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaylistPersistence.swift; sourceTree = "<group>"; };
 		B736BBAB008478DE24EA9DA1 /* NeteaseAvatarSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NeteaseAvatarSnapshot.swift; sourceTree = "<group>"; };
 		B8E3C4DF91406523072F9BFB /* NeteaseArtistStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NeteaseArtistStoreTests.swift; sourceTree = "<group>"; };
@@ -754,7 +750,6 @@
 				100FB82722AA850FDBC1B6E7 /* HomeContentModel.swift */,
 				A46CE89CD41334B2305FB41B /* HomeFeedPreview.swift */,
 				EF189A792FEA4018A5E84C9D /* HomeFeedView.swift */,
-				B57AAA77F8F80F26E688BA36 /* HomeFixtures.swift */,
 				A9E567C68E1E693F60CD185F /* HomePlaylistArtwork.swift */,
 				E4310CC0996E20D2C6BE3364 /* HomeRecommendationPreview.swift */,
 			);
@@ -822,6 +817,7 @@
 				1F21EB9DA2130C1267909177 /* AudioTagsLicenses.txt */,
 				78C0B07E0112BE535B5135BA /* DownloadSourceNotices.txt */,
 				45ECE53C4993FA8C505E12D7 /* HomeAssets.xcassets */,
+				93D7EDB6C0484F5FF91AA0D2 /* HomePreviewAssets.xcassets */,
 				17EE6ABD104CF3F8244A7632 /* NeteaseSourceNotices.txt */,
 				93CE1FD8C87AC078FBEADD50 /* AppIcons */,
 			);
@@ -878,8 +874,6 @@
 				9F2072B4AEA914C60411EDE5 /* NeteaseHomeModels.swift */,
 				54708696C941619C81403A4B /* NeteaseHomeStore.swift */,
 				AC28E0C2E23FC68413C9A2B7 /* NeteaseHomeSupplemental.swift */,
-				86C8BB314ABF1A84B5B75466 /* NeteaseLibrarySearchIndex.swift */,
-				342E73C7D6D55591AC314D75 /* NeteaseLibrarySearchStore.swift */,
 				0A1A558B9B9E8549A375D13E /* NeteaseMusicClient.swift */,
 				8C461799B9C134DD088E8174 /* NeteaseMusicModels.swift */,
 				D949EB41FFBC932FD4344430 /* NeteaseMusicStore.swift */,
@@ -1503,6 +1497,7 @@
 				038129A503990CFA988D808B /* DownloadSourceNotices.txt in Resources */,
 				B1D2581F8D790B49BB7D0B8A /* GPL-3.0.txt in Resources */,
 				7D34E1F6580D61ED7EAEB252 /* HomeAssets.xcassets in Resources */,
+				659A434BE48B4AC19998E5DF /* HomePreviewAssets.xcassets in Resources */,
 				20FE7A851146EA7E546E2F6A /* NeoMusicIcon.icon in Resources */,
 				9427E66BCEC453AD02C7107F /* NeteaseSourceNotices.txt in Resources */,
 				4C43D8639F1B848574E1F834 /* Nuke-LICENSE.txt in Resources */,
@@ -1723,7 +1718,6 @@
 				63588AEB5FF115384496403C /* HomeContentModel.swift in Sources */,
 				8FED669A355862E7B888CDD0 /* HomeFeedPreview.swift in Sources */,
 				080421C70C6F87860FC8DC74 /* HomeFeedView.swift in Sources */,
-				6A0C4D03CF43E41A1B1B685A /* HomeFixtures.swift in Sources */,
 				ABE55AB9A45960612A1ED8CE /* HomeMusicIntegration.swift in Sources */,
 				481DB8990BC40E9ACAD9C94A /* HomePlaylistArtwork.swift in Sources */,
 				C3782E27B3AF3A27DF7139D1 /* HomeRecommendationPreview.swift in Sources */,
@@ -1777,8 +1771,6 @@
 				3A10A056F207231545A82237 /* NeteaseHomeModels.swift in Sources */,
 				8597D6D50BBA56D73A8BF534 /* NeteaseHomeStore.swift in Sources */,
 				1835E60E65963B1E198BAEE7 /* NeteaseHomeSupplemental.swift in Sources */,
-				75AE73EE8FA72667EE3D0E83 /* NeteaseLibrarySearchIndex.swift in Sources */,
-				16A3ACEA70740A4D020B3532 /* NeteaseLibrarySearchStore.swift in Sources */,
 				CD073A426342194E4945C7B0 /* NeteaseLoginPage.swift in Sources */,
 				256DB072E7B52E043A76CE75 /* NeteaseMusicClient.swift in Sources */,
 				450053980E7359BE8F5260D6 /* NeteaseMusicModels.swift in Sources */,

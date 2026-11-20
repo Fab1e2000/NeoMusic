@@ -171,30 +171,6 @@ final class NeteaseDownloadStore {
         }
     }
 
-    #if DEBUG
-    /// Diagnostics use the active business-layer credential and leave account and playback state untouched.
-    func readProbeCandidate(progress: (Int) -> Void) async throws -> (id: Int64, attempts: Int, declaredType: String) {
-        guard let saved = session else { throw NeteaseAccountError.authenticationRequired }
-        let revision = sessionRevision
-        let daily = try await client.dailyRecommendations(credential: saved.credential)
-        let candidates = daily.filter { !$0.unavailable && resource(songID: $0.id) == nil }.prefix(3)
-        var attempts = 0
-        for song in candidates {
-            attempts += 1; progress(attempts)
-            do {
-                let source = try await client.downloadSource(id: song.id, quality: .lossless, credential: saved.credential)
-                try Task.checkCancellation()
-                guard revision == sessionRevision else { throw NeteaseDownloadError.accountChanged }
-                return (song.id, attempts, source.type)
-            } catch is CancellationError { throw CancellationError() }
-            catch {
-                guard revision == sessionRevision else { throw NeteaseDownloadError.accountChanged }
-            }
-        }
-        throw NeteaseDownloadError.unavailable
-    }
-    #endif
-
     func enqueueAlbum(id: Int64) async throws {
         try await plan(key: "album:\(id)") { saved in
             let detail = try await self.client.albumDetail(id: id, credential: saved.credential)

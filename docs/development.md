@@ -19,7 +19,7 @@
 | Nuke | 13.2.0 | Swift Package Manager |
 | LNSwiftUIUtils | 1.1.5 | Swift Package Manager |
 | LNSystemMarqueeLabel | 0.1.2 | Swift Package Manager |
-| AudioStreaming（播放试验） | 上游 1.2.8，MeloX `3b937b3` 的准确定位修订；来源与许可见包内 NOTICE | `Packages/AudioStreaming` |
+| AudioStreaming（在线音频解码） | 上游 1.2.8，包含 MeloX `3b937b3` 的准确定位修订。来源与许可见包内 NOTICE | `Packages/AudioStreaming` |
 | AudioTags / TagLib | TagLib 2.3.2 的 MP3／FLAC 标签封装 | `Packages/AudioTags` |
 
 远程依赖版本由 `project.yml` 和工程内的 `Package.resolved` 锁定，首次构建需要解析远程包。播放器来源、导入基线与哈希保留在 [来源清单](../NeoMusic/Features/Player/Resources/PlayerSourceManifest.json)；其哈希记录上游导入来源，不是当前文件完整性校验值。
@@ -29,7 +29,7 @@
 - **应用启动**由 `NeoMusicApp` 持有账户和在线资料库、主页、艺人、搜索、下载装配实例，并立即显示 `LocalLibrary` 装配的界面。本地缓存恢复后预热首屏封面并释放资料库显示，账号缓存与历史独立恢复。迷你播放器在已读取的账号身份和本地队列就绪后恢复暂停进度。随后并行扫描目录、加载其余在线缓存、验证账号及准备在线封面。恢复中的稳定引用继续保留，后台扫描失败或取消保留已显示内容，回到前台继续扫描与账户重验。
 - **网易云账户**：`NeoMusicApp` 持有唯一 `NeteaseAccount`，初始化时读取已保存的最大 192 px 头像显示快照，供首帧使用；Keychain 恢复与网络校验继续异步执行，与本地资料库恢复并行。读取 Keychain 后发布账户资料，核对快照所属用户，并后台刷新头像；同一用户的头像 URL 变化时保留现有显示，直到新图加载成功。从后台返回时重新校验账户。`LibraryAppTabs` 与资料库导航创建 SwiftUI hosting root 时显式传递同一账户实例；五个主标签的头像共用账户状态。恢复和校验独立于账户页面是否打开。
 - **启动呈现**：页面完成首次显示且状态恢复后，整块置顶区作为一行插入原生列表，推动分类与最近添加向下移动；页面显示状态来自 UIKit 的 `viewDidAppear`，返回资料库保留置顶布局。内容填入不替换导航容器。各标签页面通过原生 `UITab` 内容提供闭包按需创建。
-- **启动缓存与封面**：`tracks.json` 是唯一曲目索引，只保存元数据、封面键与背景色；`tracks.json.startup` 保存按内容去重的原始封面文件。既有启动索引首次导入后移除，原来内嵌的封面在缓存 actor 中分离；背景色继续复用 `artwork-backdrops.json`，新封面才计算。界面通过文件 URL 引用封面，按实际显示尺寸用 ImageIO 在后台生成缩略图，并共享内存缓存；播放器适配直接使用同一文件。后台扫描修复缺失的派生封面。这些缓存均可重建，音乐文件、歌单与队列的格式保持不变。
+- **启动缓存与封面**由 `tracks.json` 保存曲目元数据、封面键与背景色。`tracks.json.startup` 保存按内容去重的原始封面文件，`artwork-backdrops.json` 用于复用背景色。界面和播放器使用同一份封面文件，按显示尺寸用 ImageIO 在后台生成缩略图并共享内存缓存。后台扫描修复缺失的派生封面，这些缓存均可重建。
 - **在线装配**通过 `OnlineMusicIntegration`、`HomeMusicIntegration`、`ArtistMusicIntegration`、`SearchMusicIntegration` 和 `DownloadMusicIntegration` 连接既有页面、资料库及播放器。网络、凭据、请求与账号状态归 `Core/Netease`。页面缓存按账号与资源键保存到 SQLite，封面管线合并请求并按账号隔离。本地持久化恢复后发布在线镜像，保留按账号保存的整理偏好。
 - **混合引用**将在线歌曲保存为 `netease:<账号 ID>:<歌曲 ID>`，临时音源 URL 在播放前解析。本地歌单可引用在线歌曲。在线歌单曲目保持只读，歌曲喜欢及歌单、艺人、专辑收藏通过业务入口同步网易云。本应用的置顶及文件夹归属另行保存，本地扫描只清理本地引用。
 - **下载与离线播放**由 `NeteaseDownloadStore` 管理原生后台传输和记录，`DownloadBackgroundDelegate` 接收系统后台会话事件。完成文件校验、NCM 解码及标签写入后保存到“音乐／网易云”，下载装配发布状态并连接通用离线资源解析。已下载文件在退出账号后继续可用，移除下载保留歌单和队列引用。
@@ -66,9 +66,9 @@ NeoMusic 的 [接入层](../NeoMusic/Features/Player/Integration) 将 `NowPlayin
 
 快捷入口、大卡和三行歌曲推荐使用 Apple 的 `scrollTargetLayout` 与 `scrollTargetBehavior(.viewAligned)`，方形栏目采用自由横向滚动。主页保留 248×330 pt 大卡、161 pt 专辑封面及 20 pt 边距，导航、封面 zoom 和底部真实播放器共用正式应用入口。[Apple 滚动对齐 API](https://developer.apple.com/documentation/swiftui/view/scrolltargetbehavior(_:))
 
-`Features/Search` 通过 `SearchMusicIntegration` 使用网易云搜索业务，提供分类歌单、最近搜索、输入联想及歌曲／艺人／专辑／歌单结果，也支持资料库范围查询。分类和搜索结果分页、缓存、去重、最近查询及账号隔离归业务层，页面复用正式详情、播放与歌曲菜单。
+底部「搜索」通过 `SearchMusicIntegration` 提供网易云分类歌单、最近搜索、输入联想及歌曲／艺人／专辑／歌单结果。业务层负责分页、缓存和去重，搜索历史按访客和账号分别保存。页面复用正式详情、播放与歌曲菜单。资料库的歌曲、专辑和歌单列表各自提供搜索。
 
-`Resources/HomeAssets.xcassets` 保留实验主页图标和封面样本，供既有隔离预览使用。样本来自用户提供截图的裁切，作品版权归原权利人。正式内容封面使用真实资源，电台和心情图案由 SwiftUI 绘制。
+`Resources/HomeAssets.xcassets` 提供正式主页图标。`Resources/HomePreviewAssets.xcassets` 的封面样本供开发预览和测试使用，发布脚本通过 Xcode 的资源排除设置去掉这些样本。样本来自用户提供截图的裁切，作品版权归原权利人。
 
 ## 触控反馈（Haptics）规范
 
@@ -219,8 +219,6 @@ xcrun simctl launch <模拟器 UUID> com.elsterlee.NeoMusic -neteaseAccountPrevi
 ```
 
 每次切换状态先结束上一次应用进程。隔离预览使用合成账户资料，登录和切换入口不发起认证，不访问真实 Keychain 或网络。正常启动进入正式应用，并执行账户恢复和前台重验。
-
-`NeteaseAssessmentReadProbe` 在带 `DEBUG` 编译条件的签名构建中提供真实账号只读核查。使用现有主页隔离预览的 `-homeRecommendationPreview guest -assessmentReadProbe` 启动参数，直接通过 Keychain 和正式 Client 读取。报告保存至 Application Support 下的 `AssessmentReadProbe/result.json`，只包含计数、布尔值、枚举和错误码。真机核查使用原应用与 Keychain 签名身份，正常 Release 编译条件为空。
 
 定向回归按影响选择 `NeteaseAccountTests`、`NeteaseAvatarSnapshotTests`、`NeteaseAvatarClientTests`、`NeteaseAccountClientTests` 与 `NeteaseCredentialStoreTests`；边界规则回归运行 `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/tests`。
 

@@ -34,7 +34,6 @@ final class NeteaseMusicStore {
     private var playbackQuality: NeteaseMusicQuality { isCellular ? cellularQuality : wifiQuality }
     @ObservationIgnored var onAuthenticationRequired: (() -> Void)?
     @ObservationIgnored var onChange: (() -> Void)?
-    @ObservationIgnored var onLibraryChange: (() -> Void)?
     @ObservationIgnored var onArtworkChange: ((Set<URL>) -> Void)?
     var sessionRevision: UUID { generation }
     @ObservationIgnored var onSessionInvalidated: (() -> Void)?
@@ -182,9 +181,7 @@ final class NeteaseMusicStore {
     private func refreshPlaylists(userID: Int64, revision: UUID) async -> Bool {
         do {
             let value = try await run { [client] in try await client.playlists(userID: userID, credential: $0) }
-            let changed = playlists != value
             playlists = value; saveSummary(); onChange?()
-            if changed { onLibraryChange?() }
             requestArtwork(value.prefix(6).compactMap(\.artworkURL))
             PerformanceDiagnostics.event("NetworkContentReady")
             return true
@@ -195,9 +192,7 @@ final class NeteaseMusicStore {
     private func refreshLikes(userID: Int64, revision: UUID) async -> Bool {
         do {
             let value = try await run { [client] in try await client.likedIDs(userID: userID, credential: $0) }
-            let changed = likedIDs != value
             likedIDs = value; saveSummary(); onChange?()
-            if changed { onLibraryChange?() }
             return true
         } catch is CancellationError { return false }
         catch { if generation == revision { self.error = error.localizedDescription; onChange?() }; return false }
@@ -428,7 +423,7 @@ final class NeteaseMusicStore {
         let value = try await run { [client] in try await client.playlists(userID: userID, credential: $0) }
         guard generation == revision, !Task.isCancelled else { throw CancellationError() }
         playlists = value
-        saveSummary(); onChange?(); onLibraryChange?()
+        saveSummary(); onChange?()
         let collected = value.contains { $0.id == id && $0.isSubscribed == true }
         guard collected == subscribed else { throw failure ?? NeteaseAccountError.invalidResponse }
     }
@@ -453,7 +448,7 @@ final class NeteaseMusicStore {
             onChange?()
             throw error
         }
-        guard let favorites = playlists.first(where: \.isFavorites) else { saveSummary(); onLibraryChange?(); return }
+        guard let favorites = playlists.first(where: \.isFavorites) else { saveSummary(); return }
         if liked, songs[songID]?.unavailable != false {
             let single = NeteasePlaylistDetail(playlist: favorites, songs: [], addedTimes: [:], trackIDs: [songID], loadedTrackCount: 0)
             if let resolved = try? await run({ [client] in try await client.complete(single, credential: $0) }),
@@ -468,7 +463,6 @@ final class NeteaseMusicStore {
         }
         guard revision == generation, !Task.isCancelled else { return }
         reviseLiked(songID, liked: liked, persist: true)
-        onLibraryChange?()
         onChange?()
     }
 
@@ -519,7 +513,6 @@ final class NeteaseMusicStore {
               revision == generation, ids.contains(songID) == liked else { return false }
         likedIDs = ids
         reviseLiked(songID, liked: liked, persist: true)
-        onLibraryChange?()
         onChange?()
         return true
     }
@@ -628,9 +621,6 @@ actor NeteaseCacheIO {
     func load<Value: Decodable & Sendable>(_ type: Value.Type, from url: URL) -> Value? {
         guard !Task.isCancelled, let data = try? Data(contentsOf: url) else { return nil }
         return try? JSONDecoder().decode(type, from: data)
-    }
-    func existingFiles(_ urls: [URL]) -> Set<URL> {
-        Set(urls.filter { FileManager.default.fileExists(atPath: $0.path) })
     }
     func remove(_ url: URL) throws {
         try Task.checkCancellation()

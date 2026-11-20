@@ -1,7 +1,7 @@
 #if DEBUG
 import SwiftUI
 
-/// Centralizes debug preview launch routing and read-probe triggers outside the production app entry point.
+/// Routes debug previews separately from normal app startup.
 @MainActor
 enum DebugLaunchRouter {
     static var isPreviewLaunch: Bool {

@@ -61,11 +61,10 @@ struct SearchPreviewRoot: View {
 @MainActor @Observable
 private final class SearchPreviewPresentation {
     enum Mode: String, CaseIterable {
-        case browse, recent, suggestions, results, songs, category, syncing, error
+        case browse, recent, suggestions, results, songs, category
         var title: String {
             switch self { case .browse: "分类首页"; case .recent: "最近搜索"; case .suggestions: "输入联想"
-            case .results: "综合结果"; case .songs: "歌曲结果"; case .category: "分类歌单"
-            case .syncing: "资料库同步"; case .error: "同步失败" }
+            case .results: "综合结果"; case .songs: "歌曲结果"; case .category: "分类歌单" }
         }
     }
     let model = SearchPageModel()
@@ -97,12 +96,8 @@ private final class SearchPreviewPresentation {
             guard let self else { return }
             self.model.keywords = self.model.query.isEmpty ? [] : [self.model.query, "洛天依", "洛天依 热门歌曲"].reduce(into: []) { if !$0.contains($1) { $0.append($1) } }
         }
-        model.onScope = { [weak self] in
-            guard let self else { return }
-            self.model.syncStatus = !self.isDisplayFixture && self.model.scope == .library ? "正在同步资料库 · 12 / 18 个集合" : nil
-        }
         model.onRemoveHistory = { [weak self] word in self?.model.history.removeAll { word == nil || $0 == word } }
-        model.onRetry = { [weak self] in self?.show(.syncing) }
+        model.onRetry = { [weak self] in Task { await self?.load() } }
         model.onRefresh = { [weak self] in await self?.load() }
         model.onCategory = { [weak self] category in
             guard let self else { return }
@@ -126,7 +121,8 @@ private final class SearchPreviewPresentation {
     }
     func load() async {
         guard !isDisplayFixture else { return }
-        guard model.categories.isEmpty else { return }
+        guard model.categories.isEmpty, !model.isLoading else { return }
+        model.error = nil
         model.isLoading = true
         defer { model.isLoading = false }
         do {
@@ -160,11 +156,8 @@ private final class SearchPreviewPresentation {
         selectedMode = mode
         model.isSearching = mode != .browse && mode != .category
         model.query = [.browse, .recent, .category].contains(mode) ? "" : (isDisplayFixture ? "晨光" : "洛天依")
-        model.submitted = [.results, .songs, .syncing, .error].contains(mode)
+        model.submitted = mode == .results || mode == .songs
         model.kind = mode == .songs ? .song : .combined
-        model.scope = [.syncing, .error].contains(mode) ? .library : .online
-        model.syncStatus = mode == .syncing ? "正在同步资料库 · 12 / 18 个集合" : (mode == .error ? "还有 2 个集合未同步，已保留现有结果" : nil)
-        model.syncFailed = mode == .error
         model.history = mode == .recent ? ["洛天依", "初音未来", "周杰伦"] : []
         model.keywords = ["洛天依", "洛天依 权御天下", "洛天依 普通DISCO"]
         filter()

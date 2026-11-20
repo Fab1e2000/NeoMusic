@@ -84,7 +84,7 @@ final class NeteaseSearchStore {
             self.owner = nextOwner; self.credential = credential
             request = nil; page = nil; cache = [:]; isLoading = false; isLoadingMore = false
             suggestions = .init(keywords: [], resources: []); error = nil; moreError = nil; suggestionError = nil
-            history = defaults.stringArray(forKey: historyKey("online")) ?? []
+            history = defaults.stringArray(forKey: historyKey) ?? []
             categories = []; categoriesError = nil; isLoadingCategories = false
             category = nil; categoryPage = nil; categoryCache = [:]
             isLoadingCategory = false; isLoadingMoreCategory = false; categoryError = nil; categoryMoreError = nil
@@ -126,25 +126,25 @@ final class NeteaseSearchStore {
             } catch { }
         }
     }
-    func recent(scope: String) -> [String] {
+    func recent() -> [String] {
         guard sessionTask == nil else { return [] }
-        return defaults.stringArray(forKey: historyKey(scope)) ?? []
+        return defaults.stringArray(forKey: historyKey) ?? []
     }
-    func record(_ query: String, scope: String) {
+    func record(_ query: String) {
         guard sessionTask == nil else { return }
         let value = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return }
-        let updated = Array(([value] + recent(scope: scope).filter { $0 != value }).prefix(20))
-        defaults.set(updated, forKey: historyKey(scope))
-        if scope == "online" { history = updated }
+        let updated = Array(([value] + recent().filter { $0 != value }).prefix(20))
+        defaults.set(updated, forKey: historyKey)
+        history = updated
     }
-    func removeHistory(_ query: String?, scope: String) {
+    func removeHistory(_ query: String?) {
         guard sessionTask == nil else { return }
-        let updated = query.map { word in recent(scope: scope).filter { $0 != word } } ?? []
-        defaults.set(updated, forKey: historyKey(scope))
-        if scope == "online" { history = updated }
+        let updated = query.map { word in recent().filter { $0 != word } } ?? []
+        defaults.set(updated, forKey: historyKey)
+        history = updated
     }
-    private func historyKey(_ scope: String) -> String { "search.history.\(owner).\(scope)" }
+    private var historyKey: String { "search.history.\(owner).online" }
 
     func loadCategories(force: Bool = false) async {
         guard await waitForSession() else { return }

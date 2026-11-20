@@ -9,7 +9,6 @@ final class NeteaseAccount {
     let artists: NeteaseArtistStore?
     let downloads: NeteaseDownloadStore?
     let search: NeteaseSearchStore?
-    let librarySearch: NeteaseLibrarySearchStore?
 
     enum ValidationState: Equatable {
         case signedOut, validating, valid, unverified, requiresLogin
@@ -76,14 +75,12 @@ final class NeteaseAccount {
          artists: NeteaseArtistStore? = nil,
          downloads: NeteaseDownloadStore? = nil,
          search: NeteaseSearchStore? = nil,
-         librarySearch: NeteaseLibrarySearchStore? = nil,
          saveAvatarSnapshot: @escaping @MainActor (Data, NeteaseProfile) async -> Void = { _, _ in }) {
         self.music = music
         self.home = home
         self.artists = artists
         self.downloads = downloads
         self.search = search
-        self.librarySearch = librarySearch
         self.readSession = readSession
         self.saveSession = saveSession
         self.deleteSession = deleteSession
@@ -95,8 +92,6 @@ final class NeteaseAccount {
         self.avatarData = startupAvatar?.data
         self.avatarDataURL = startupAvatar?.avatarURL
         self.saveAvatarSnapshot = saveAvatarSnapshot
-        music?.onLibraryChange = { [weak librarySearch] in librarySearch?.scheduleSynchronization(changed: true) }
-        artists?.onLibraryChange = { [weak librarySearch] in librarySearch?.scheduleSynchronization(changed: true) }
     }
 
     convenience init(client: NeteaseAccountClient, credentialStore: NeteaseCredentialStore,
@@ -118,7 +113,6 @@ final class NeteaseAccount {
                   artists: NeteaseArtistStore(),
                   downloads: NeteaseDownloadStore(),
                   search: NeteaseSearchStore(),
-                  librarySearch: NeteaseLibrarySearchStore(),
                   saveAvatarSnapshot: { await avatarSnapshotStore.save($0, for: $1) })
         music?.onAuthenticationRequired = { [weak self] in
             guard let self else { return }
@@ -286,26 +280,22 @@ final class NeteaseAccount {
     private func activateContent(_ session: NeteaseSavedSession?, refresh: Bool = true) async {
         guard !Task.isCancelled else { return }
         async let homeContent: Void? = home?.activate(session, refresh: refresh)
-        await activateLibraryContent(session, refresh: refresh, synchronizeSearch: refresh)
+        await activateLibraryContent(session, refresh: refresh)
         _ = await homeContent
     }
 
-    private func activateLibraryContent(_ session: NeteaseSavedSession?, refresh: Bool, synchronizeSearch: Bool = true) async {
+    private func activateLibraryContent(_ session: NeteaseSavedSession?, refresh: Bool) async {
         guard !Task.isCancelled else { return }
         await downloads?.activate(session)
-        await activateSearch(session, synchronize: synchronizeSearch)
+        await activateSearch(session)
         guard !Task.isCancelled else { return }
         async let artistContent: Void? = artists?.activate(session, refresh: refresh)
         if let session { await music?.activate(session, refresh: refresh) }
         _ = await artistContent
     }
 
-    private func activateSearch(_ session: NeteaseSavedSession?, synchronize: Bool = true) async {
+    private func activateSearch(_ session: NeteaseSavedSession?) async {
         await search?.setSession(owner: session?.profile.userID, credential: session?.credential)
-        guard !Task.isCancelled else { return }
-        await librarySearch?.setSession(owner: session?.profile.userID, credential: session?.credential)
-        guard !Task.isCancelled else { return }
-        if synchronize { librarySearch?.scheduleSynchronization() }
     }
 
     func completeLogin(credential: NeteaseCredential) async throws {

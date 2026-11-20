@@ -1,6 +1,5 @@
 import SwiftUI
 
-enum MusicSearchScope: String, CaseIterable, Identifiable { case online = "网易云音乐", library = "资料库"; var id: Self { self } }
 enum MusicSearchKind: Int, CaseIterable, Identifiable {
     case combined = 1018, song = 1, artist = 100, album = 10, playlist = 1000
     var id: Self { self }
@@ -90,7 +89,6 @@ struct SearchCategoryColor {
 @MainActor @Observable
 final class SearchPageModel {
     var query = ""
-    var scope = MusicSearchScope.online
     var kind = MusicSearchKind.combined
     var isSearching = false
     var submitted = false
@@ -106,8 +104,6 @@ final class SearchPageModel {
     var hasMore = false
     var error: String?
     var moreError: String?
-    var syncStatus: String?
-    var syncFailed = false
     var category: String?
     var categoryItems: [MusicSearchItem] = []
     var categoryLoading = false
@@ -120,7 +116,6 @@ final class SearchPageModel {
     @ObservationIgnored var onPrepareNavigation: (@MainActor (LibraryNavigationPreview) -> Void)?
     @ObservationIgnored var onQuery: (@MainActor () -> Void)?
     @ObservationIgnored var onSubmit: (@MainActor () -> Void)?
-    @ObservationIgnored var onScope: (@MainActor () -> Void)?
     @ObservationIgnored var onKind: (@MainActor () -> Void)?
     @ObservationIgnored var onRetry: (@MainActor () -> Void)?
     @ObservationIgnored var onMore: (@MainActor () -> Void)?
@@ -141,7 +136,6 @@ final class SearchPageModel {
         submitted = true; onSubmit?()
     }
     func select(_ value: MusicSearchKind) { guard kind != value else { return }; kind = value; onKind?() }
-    func selectScope(_ value: MusicSearchScope) { guard scope != value else { return }; scope = value; onScope?() }
     func resumeEditing() {
         guard submitted else { return }
         submitted = false; onQuery?()

@@ -25,7 +25,7 @@ struct FrontendReviewPreview: View {
         Page(id: "home", title: "主页浅色与深色"),
         Page(id: "home-waiting", title: "首页等待文案"),
         Page(id: "home-errors", title: "首页分区错误与恢复"),
-        Page(id: "search-scope", title: "搜索范围与结果"),
+        Page(id: "search-results", title: "网易云搜索结果"),
         Page(id: "type", title: "文字缩放与重排"),
         Page(id: "contrast", title: "分类与专辑对比度"),
         Page(id: "status", title: "资料库状态承托"),
@@ -123,7 +123,7 @@ struct FrontendReviewPreview: View {
             HomeFeedPreview(feedbackMode: "waiting")
         case "home-errors":
             HomeFeedPreview(feedbackMode: "errors")
-        case "search-scope":
+        case "search-results":
             SearchPreviewRoot(page: "results")
         case "home", "type", "contrast", "status", "toast":
             FrontendReadabilityPreview(page: page)

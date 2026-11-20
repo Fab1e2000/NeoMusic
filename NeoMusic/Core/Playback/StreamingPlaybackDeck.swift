@@ -97,7 +97,6 @@
             return
         }
         preparation = Task { [weak self] in
-            let format = await Self.readFormat(url: url)
             guard !Task.isCancelled, let self, self.itemID == identity else { return }
             self.preparation = nil
             let player = AudioStreaming.AudioPlayer(
@@ -106,7 +105,6 @@
                     secondsRequiredToStartPlaying: 0.15,
                     gracePeriodAfterSeekInSeconds: 0.02
                 ),
-                outputFormat: format,
                 externalRenderOutput: true
             )
             let renderFormat = player.renderAudioFormat
@@ -136,10 +134,6 @@
         }
     }
 
-    @concurrent private static func readFormat(url: URL) async -> AVAudioFormat? {
-        guard url.isFileURL, !Task.isCancelled else { return nil }
-        return (try? AVAudioFile(forReading: url))?.processingFormat
-    }
     func play(atHostTime hostTime: UInt64? = nil) {
         wantsPlayback = true
         if let localNode {
