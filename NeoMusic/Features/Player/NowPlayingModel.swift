@@ -325,7 +325,8 @@ final class NowPlayingModel {
     @ObservationIgnored private let makeAudioEngine: @MainActor () -> LocalPlaybackEngine
     var hasAudioEngine: Bool { audio != nil }
     @ObservationIgnored private var mediaSession: PlaybackMediaSession?
-    @ObservationIgnored private var loadedEntry: UUID?
+    // Clock readers must reattach to the engine when an asynchronously resolved track is loaded.
+    private var loadedEntry: UUID?
     @ObservationIgnored private var preparedEntry: UUID? { didSet { preparedQuality = nil } }
     @ObservationIgnored private var preparedQuality: String?
     @ObservationIgnored private var configuringAudio = false

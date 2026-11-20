@@ -575,31 +575,13 @@ final class LyricsFocusTests: XCTestCase {
 
     func testFullScreenPlayerBrowseRevealControlsAndIdleDoesNotHang() async throws {
         let playback = HangReproPlaybackSource()
-        let player = PlayerState(source: playback)
         let lyrics = LyricsFocusTestState.makeLyrics(count: 80)
-        let services = PlayerServices(
-            actions: PlayerActions(isFavorite: { _ in false }, toggleFavorite: { _ in },
-                                   addToPlaylist: { _ in }, openAlbum: { _ in }, openArtist: { _ in }),
-            lyrics: PlayerLyricsSource(load: { _ in lyrics }),
-            artwork: PlayerArtworkProvider(cached: { _ in nil }, load: { _ in throw URLError(.fileDoesNotExist) })
-        )
-        let host = UIHostingController(
-            rootView: FullScreenPlayerView(player: player, services: services, initialPage: .lyrics)
-                .environment(\.scenePhase, .active)
-        )
-        let scene = try await applicationWindowScene()
-        let window = UIWindow(windowScene: scene)
-        window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
-        window.rootViewController = host
-        window.isHidden = false
+        let window = try await mountFullScreenPlayer(PlayerState(source: playback)) { _ in lyrics }
         defer { window.isHidden = true }
-        host.view.layoutIfNeeded()
 
-        let foundTable = try await waitUntil {
-            !self.scrollViews(in: window).compactMap { $0 as? NativeLyricsScrollView }.isEmpty
-        }
+        let foundTable = try await waitUntil { self.activeLyricsTable(in: window) != nil }
         XCTAssertTrue(foundTable)
-        let table = try XCTUnwrap(scrollViews(in: window).compactMap { $0 as? NativeLyricsScrollView }.first)
+        let table = try XCTUnwrap(activeLyricsTable(in: window))
 
         // Wait until lyrics load and settle, and controls auto-hide after 3s
         try await Task.sleep(for: .milliseconds(3400))
@@ -616,6 +598,132 @@ final class LyricsFocusTests: XCTestCase {
             try await Task.sleep(for: .milliseconds(200))
         }
         XCTAssertTrue(table.isScrollEnabled)
+    }
+
+    func testAutomaticAdvanceDisplaysIntroAndFollowsTheNewLyrics() async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = try PlayerTestFixtures.silentAudio(at: root.appendingPathComponent("first.wav"), seconds: 2)
+        let second = try PlayerTestFixtures.silentAudio(at: root.appendingPathComponent("second.wav"), seconds: 9)
+        let nextID = OnlineSongIdentity.format(owner: 1, song: 2)
+        let model = PlayerTestFixtures.owner(tracks: [track("first", duration: 2), track(nextID, duration: 9)])
+        defer { model.shutdownPlayback() }
+        let (audioReady, allowPlayback) = AsyncStream<Void>.makeStream()
+        defer { allowPlayback.finish() }
+        model.configurePlayback(resolveResource: { id in
+            guard id == nextID else { return PlaybackResource(url: first) }
+            // The new lyrics finish loading while the online audio URL is still pending.
+            var waiting = audioReady.makeAsyncIterator()
+            _ = await waiting.next()
+            try Task.checkCancellation()
+            return PlaybackResource(url: second)
+        }, persistenceURL: root.appendingPathComponent("queue.json"))
+        model.repeatMode = .off
+        let firstLyrics = LyricsFocusTestState.makeLyrics(count: 2)
+        let secondLyrics = PlayerLyrics(lines: [
+            .init(id: 0, time: 4.5, text: "第一句"),
+            .init(id: 1, time: 5.8, text: "第二句"),
+            .init(id: 2, time: 7.1, text: "第三句")
+        ])
+        let window = try await mountFullScreenPlayer(PlayerState(model: model)) {
+            $0 == "first" ? firstLyrics : secondLyrics
+        }
+        defer { window.isHidden = true }
+        let firstReady = try await waitUntil { self.activeLyricsTable(in: window)?.isRowFocused(forRow: 0) == true }
+        XCTAssertTrue(firstReady)
+        model.togglePlayback()
+
+        let introReady = try await waitUntil(timeout: .seconds(6)) {
+            guard model.current.id == nextID, model.isLoading,
+                  let table = self.activeLyricsTable(in: window), table.expandedInterludeRowIndex == 0 else { return false }
+            return table.isRowFocused(forRow: 0) == true
+        }
+        XCTAssertTrue(introReady)
+        let table = try XCTUnwrap(activeLyricsTable(in: window))
+        let introTop = try XCTUnwrap(table.presentationViewportTop(forRow: 0))
+        allowPlayback.finish()
+
+        let showedIntro = try await waitUntil {
+            guard model.liveElapsed >= 0.4,
+                  let cell = table.cellForRow(at: IndexPath(row: 0, section: 0)) as? NativeLyricCell,
+                  let interval = cell.appearance.interludeInterval else { return false }
+            let anchor = cell.appearance.timelineAnchor
+            let dots = LyricsInterludeTimeline.evaluate(at: anchor.elapsed(), interval: interval, reducesMotion: false)
+            return cell.appearance.focused && !cell.isContentHidden && dots.groupOpacity > 0
+        }
+        XCTAssertTrue(showedIntro, "The visible intro must follow the new audio clock once it starts")
+
+        let followedLyrics = try await waitUntil(timeout: .seconds(7)) {
+            table.expandedInterludeRowIndex == nil && table.isRowFocused(forRow: 2) == true
+                && !table.isRowTransitionAnimating
+        }
+        XCTAssertTrue(followedLyrics, "Progress \(model.liveElapsed), rate \(model.timelineAnchor.rate)")
+        let lyricTop = try XCTUnwrap(table.presentationViewportTop(forRow: 2))
+        XCTAssertGreaterThan(lyricTop, 100)
+        XCTAssertEqual(lyricTop, introTop, accuracy: 4)
+    }
+
+    func testAutomaticRepeatMovesTheExistingLyricsBackToTheBeginning() async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let audio = try PlayerTestFixtures.silentAudio(at: root.appendingPathComponent("repeat.wav"), seconds: 9)
+        let model = PlayerTestFixtures.owner(tracks: [track("repeat", duration: 9)])
+        defer { model.shutdownPlayback() }
+        model.configurePlayback(resolveURL: { _ in audio }, persistenceURL: root.appendingPathComponent("queue.json"))
+        model.repeatMode = .one
+        model.startCurrent(at: 7.5)
+        let lyrics = PlayerLyrics(lines: (0..<30).map {
+            PlayerLyricLine(id: $0, time: 4.6 + Double($0) * 0.09, text: "第\($0 + 1)句")
+        })
+        let window = try await mountFullScreenPlayer(PlayerState(model: model)) { _ in lyrics }
+        defer { window.isHidden = true }
+        let endingReady = try await waitUntil { self.activeLyricsTable(in: window)?.isRowFocused(forRow: 30) == true }
+        XCTAssertTrue(endingReady)
+        let table = try XCTUnwrap(activeLyricsTable(in: window))
+        let endingTop = try XCTUnwrap(table.presentationViewportTop(forRow: 30))
+        let endingOffset = table.contentOffset.y
+        let generation = model.playbackGeneration
+        model.togglePlayback()
+
+        let scrolledBack = try await waitUntil(timeout: .seconds(5)) {
+            guard model.playbackGeneration != generation, table.isScrollSpringAnimating,
+                  table.contentOffset.y < endingOffset - 30,
+                  table.contentOffset.y > -table.contentInset.top + 30 else { return false }
+            return table.visibleLineIDs.contains { id in
+                guard (6..<23).contains(id),
+                      let cell = table.cellForRow(at: IndexPath(row: id + 1, section: 0)) as? NativeLyricCell else {
+                    return false
+                }
+                return !cell.isContentHidden
+            }
+        }
+        XCTAssertTrue(scrolledBack, "The same table must display intermediate lyrics during the repeat spring")
+        XCTAssertTrue(activeLyricsTable(in: window) === table)
+        let introAligned = try await waitUntil {
+            guard !table.isScrollSpringAnimating, table.expandedInterludeRowIndex == 0,
+                  table.isRowFocused(forRow: 0) == true,
+                  let top = table.presentationViewportTop(forRow: 0) else { return false }
+            return abs(top - endingTop) <= 4
+        }
+        XCTAssertTrue(introAligned, "The replay intro must reach the established lyric focus position")
+    }
+
+    func testSwitchingToATrackWithoutLyricsReturnsToArtwork() async throws {
+        let model = PlayerTestFixtures.owner(tracks: [track("timed", duration: 30), track("instrumental", duration: 30)])
+        let lyrics = LyricsFocusTestState.makeLyrics(count: 3)
+        let window = try await mountFullScreenPlayer(PlayerState(model: model)) {
+            $0 == "timed" ? lyrics : PlayerLyrics()
+        }
+        defer { window.isHidden = true }
+        let timedReady = try await waitUntil { self.activeLyricsTable(in: window)?.isRowFocused(forRow: 0) == true }
+        XCTAssertTrue(timedReady)
+
+        model.select(1)
+        let showedCover = try await waitUntil {
+            self.accessibilityLabels(in: window, minimumWidth: 200).contains("instrumental的封面")
+        }
+        XCTAssertTrue(showedCover)
+        XCTAssertFalse(accessibilityLabels(in: window).contains("暂无歌词"))
     }
 
     func testRapidConsecutiveForwardChangesKeepTheCommittedViewport() async throws {
@@ -895,7 +1003,7 @@ final class LyricsFocusTests: XCTestCase {
         return heights
     }
 
-    func testFarSeekHandsOffVisibleSourceRowsAndReleasesSnapshots() async throws {
+    func testFarSeekScrollsOneTableAndAlignsTheTargetLine() async throws {
         let state = LyricsFocusTestState()
         let window = try await mount(state, size: .large)
         defer { window.isHidden = true }
@@ -903,20 +1011,19 @@ final class LyricsFocusTests: XCTestCase {
         let table = try XCTUnwrap(
             scrollViews(in: window).compactMap { $0 as? NativeLyricsScrollView }.first
         )
-        XCTAssertEqual(table.sourceSnapshotCount, 0)
-        let sourceVisible = table.visibleCells.count
-        let handoffsBefore = table.sourceSnapshotHandoffCount
+        let start = table.contentOffset.y
 
         state.activeID = 62
-        let handedOff = try await waitUntil { table.sourceSnapshotHandoffCount > handoffsBefore }
-        XCTAssertTrue(handedOff, "A far seek must hand off the leaving source rows")
-        XCTAssertLessThanOrEqual(table.sourceSnapshotHandoffCount - handoffsBefore, sourceVisible,
-                                 "Snapshots must stay bounded by the visible source rows")
-        XCTAssertLessThanOrEqual(table.sourceSnapshotCount, sourceVisible)
+        let scrolled = try await waitUntil {
+            table.isScrollSpringAnimating && table.contentOffset.y > start + 30 && state.geometry.top(for: 62) == nil
+                && (48..<62).contains(where: { state.geometry.top(for: $0) != nil })
+        }
+        XCTAssertTrue(scrolled, "The table should move continuously before the target enters the viewport")
+        XCTAssertFalse(table.isRowTransitionAnimating)
 
+        let landed = try await waitUntil { !table.isScrollSpringAnimating }
+        XCTAssertTrue(landed)
         try await assertFocus(62, in: state)
-        let released = try await waitUntil { table.sourceSnapshotCount == 0 }
-        XCTAssertTrue(released, "Source snapshots must be released after the spring")
         XCTAssertLessThan(table.visibleCells.count, 40)
     }
 
@@ -937,12 +1044,9 @@ final class LyricsFocusTests: XCTestCase {
         XCTAssertFalse(state.isInterfaceHidden, "Tapping a lyric must reveal the controls")
         XCTAssertTrue(table.isInterfaceFadeAnimating,
                       "The visible boundary must animate with the seek instead of jumping immediately")
-        XCTAssertTrue(table.isRowTransitionAnimating,
-                      "The lyric rows themselves must use their UIKit transition, not jump to the destination")
-        XCTAssertGreaterThan(table.sourceSnapshotCount, 0,
-                             "A far seek from the hidden state must hand off the leaving source rows")
-        let rowStillAnimating = try await waitUntil { !table.isRowTransitionAnimating }
-        XCTAssertTrue(rowStillAnimating)
+        XCTAssertTrue(table.isScrollSpringAnimating, "The table must scroll as the controls reappear")
+        let scrollSettled = try await waitUntil { !table.isScrollSpringAnimating }
+        XCTAssertTrue(scrollSettled)
         let settled = try await waitUntil { !table.isInterfaceFadeAnimating }
         XCTAssertTrue(settled)
         XCTAssertEqual(table.interfaceFadeHeight, hiddenHeight - 120, accuracy: 2,
@@ -950,7 +1054,7 @@ final class LyricsFocusTests: XCTestCase {
         try await assertFocus(62, in: state)
     }
 
-    func testFirstSeekWhileInterfaceHiddenLandsAtExpectedTopWithoutInterruptingSpring() async throws {
+    func testFirstFarSeekWhileInterfaceHiddenKeepsScrollingAsControlsAppear() async throws {
         let state = LyricsFocusTestState()
         state.isInterfaceHidden = true
         let window = try await mount(state, size: .large)
@@ -963,18 +1067,10 @@ final class LyricsFocusTests: XCTestCase {
         let startingOffset = table.contentOffset.y
 
         table.performSeek(row: targetRow)
-        let lockedTargetOffset = table.contentOffset.y
-        XCTAssertNotEqual(lockedTargetOffset, startingOffset, accuracy: 10)
-
-        // Allow SwiftUI to propagate isInterfaceHidden = false and player.seek -> activeID = 62.
-        try await Task.sleep(for: .milliseconds(50))
-        XCTAssertEqual(table.contentOffset.y, lockedTargetOffset, accuracy: 1,
-                       "Interface reveal during a seek must not re-run alignment or jump the target offset")
-
-        let rowSettled = try await waitUntil { !table.isRowTransitionAnimating }
-        XCTAssertTrue(rowSettled)
-        XCTAssertEqual(table.contentOffset.y, lockedTargetOffset, accuracy: 2,
-                       "First seek must converge to the exact destination before animating instead of snapping after settling")
+        let scrolledAfterReveal = try await waitUntil {
+            state.renderedActiveID == targetRow && table.isScrollSpringAnimating && table.contentOffset.y > startingOffset + 30
+        }
+        XCTAssertTrue(scrolledAfterReveal, "Showing the controls and publishing the new active line must preserve the scroll")
         try await assertFocus(targetRow, in: state)
     }
 
@@ -1053,7 +1149,7 @@ final class LyricsFocusTests: XCTestCase {
         try await assertFocus(tappedRow, in: state)
     }
 
-    func testFastTrackReplacementRemovesSourceSnapshots() async throws {
+    func testFastTrackReplacementCancelsFarScroll() async throws {
         let state = LyricsFocusTestState()
         let window = try await mount(state, size: .large)
         defer { window.isHidden = true }
@@ -1061,11 +1157,9 @@ final class LyricsFocusTests: XCTestCase {
         let table = try XCTUnwrap(
             scrollViews(in: window).compactMap { $0 as? NativeLyricsScrollView }.first
         )
-        let handoffsBefore = table.sourceSnapshotHandoffCount
         state.activeID = 62
-        let handedOff = try await waitUntil { table.sourceSnapshotHandoffCount > handoffsBefore }
-        XCTAssertTrue(handedOff)
-        XCTAssertGreaterThan(table.sourceSnapshotCount, 0)
+        let started = try await waitUntil { table.isScrollSpringAnimating }
+        XCTAssertTrue(started)
 
         state.lyrics = LyricsFocusTestState.makeLyrics(count: 80, idOffset: 10_000)
         state.activeID = 10_040
@@ -1073,15 +1167,13 @@ final class LyricsFocusTests: XCTestCase {
             state.renderedActiveID == 10_040 && table.renderedLineCount == 80
         }
         XCTAssertTrue(replaced)
-        XCTAssertEqual(table.sourceSnapshotCount, 0,
-                       "Track replacement must drop the old source snapshots")
+        XCTAssertFalse(table.isScrollSpringAnimating, "Track replacement must stop the earlier scroll")
         try await assertFocus(10_040, in: state)
         XCTAssertTrue(table.visibleLineIDs.allSatisfy { $0 >= 10_000 },
-                      "Old lyric snapshots must not cover the new lyrics")
-        XCTAssertEqual(table.sourceSnapshotCount, 0)
+                      "Every visible line must belong to the replacement lyrics")
     }
 
-    func testReduceMotionDoesNotHandOffSourceSnapshots() async throws {
+    func testReduceMotionPositionsFarTargetsImmediately() async throws {
         let state = LyricsFocusTestState()
         state.reducesMotion = true
         let window = try await mount(state, size: .large)
@@ -1090,11 +1182,12 @@ final class LyricsFocusTests: XCTestCase {
         let table = try XCTUnwrap(
             scrollViews(in: window).compactMap { $0 as? NativeLyricsScrollView }.first
         )
-        let handoffsBefore = table.sourceSnapshotHandoffCount
         state.activeID = 79
+        let targetApplied = try await waitUntil { state.renderedActiveID == 79 }
+        XCTAssertTrue(targetApplied)
+        XCTAssertFalse(table.isScrollSpringAnimating)
+        XCTAssertFalse(table.isRowTransitionAnimating)
         try await assertFocus(79, in: state)
-        XCTAssertEqual(table.sourceSnapshotHandoffCount, handoffsBefore)
-        XCTAssertEqual(table.sourceSnapshotCount, 0)
     }
 
     func testThousandLineLyricsKeepRowMaterializationBounded() async throws {
@@ -1128,8 +1221,6 @@ final class LyricsFocusTests: XCTestCase {
         table.performSeek(row: target)
         XCTAssertEqual(state.seekCount, seeks + 1)
         try await assertFocus(target, in: state)
-        let released = try await waitUntil { table.sourceSnapshotCount == 0 }
-        XCTAssertTrue(released)
         assertBoundedRows(table, total: 1200)
 
         // Rapid song replacement must not leave any row from the previous lyrics.
@@ -1146,7 +1237,6 @@ final class LyricsFocusTests: XCTestCase {
                       "Visible rows must never contain the previous song's lyrics")
         XCTAssertEqual(Set(table.visibleLineIDs).count, table.visibleCells.count,
                        "Each visible cell must carry exactly one current lyric line")
-        XCTAssertEqual(table.sourceSnapshotCount, 0)
         assertBoundedRows(table, total: 1200)
     }
 
@@ -1194,14 +1284,19 @@ final class LyricsFocusTests: XCTestCase {
         XCTAssertFalse(accessibilityLabels(in: table).contains { $0.contains("译文2") })
     }
 
-    private func accessibilityLabels(in view: UIView) -> [String] {
+    private func accessibilityLabels(in view: UIView, minimumWidth: CGFloat = 0) -> [String] {
         var labels: [String] = []
-        if let label = view.accessibilityLabel, !label.isEmpty { labels.append(label) }
-        for element in view.accessibilityElements ?? [] {
-            guard let object = element as? NSObject, let label = object.accessibilityLabel, !label.isEmpty else { continue }
+        if let label = view.accessibilityLabel, !label.isEmpty, view.accessibilityFrame.width >= minimumWidth {
             labels.append(label)
         }
-        for subview in view.subviews { labels.append(contentsOf: accessibilityLabels(in: subview)) }
+        for element in view.accessibilityElements ?? [] {
+            guard let object = element as? NSObject, let label = object.accessibilityLabel, !label.isEmpty,
+                  object.accessibilityFrame.width >= minimumWidth else { continue }
+            labels.append(label)
+        }
+        for subview in view.subviews {
+            labels.append(contentsOf: accessibilityLabels(in: subview, minimumWidth: minimumWidth))
+        }
         return labels
     }
 
@@ -1237,8 +1332,35 @@ final class LyricsFocusTests: XCTestCase {
         XCTAssertEqual(top, state.expectedTop(forRowHeight: height), accuracy: 2)
     }
 
-    private func waitUntil(_ condition: @MainActor () -> Bool) async throws -> Bool {
-        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+    private func track(_ id: String, duration: Double) -> PlayerTrack {
+        PlayerTrack(id: id, title: id, artists: "Artist", albumTitle: "Album", coverURL: nil, duration: duration)
+    }
+
+    private func mountFullScreenPlayer(_ player: PlayerState,
+                                       loadLyrics: @escaping (String) async throws -> PlayerLyrics) async throws -> UIWindow {
+        let services = PlayerServices(
+            actions: PlayerTestFixtures.actions(),
+            lyrics: PlayerLyricsSource(load: loadLyrics),
+            artwork: PlayerArtworkProvider(cached: { _ in nil }, load: { _ in throw URLError(.fileDoesNotExist) })
+        )
+        let host = UIHostingController(rootView:
+            FullScreenPlayerView(player: player, services: services, initialPage: .lyrics)
+                .environment(\.scenePhase, .active)
+        )
+        let window = UIWindow(windowScene: try await applicationWindowScene())
+        window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        window.rootViewController = host
+        window.isHidden = false
+        host.view.layoutIfNeeded()
+        return window
+    }
+
+    private func activeLyricsTable(in window: UIWindow) -> NativeLyricsScrollView? {
+        scrollViews(in: window).compactMap { $0 as? NativeLyricsScrollView }.first { $0.isScrollEnabled }
+    }
+
+    private func waitUntil(timeout: Duration = .seconds(3), _ condition: @MainActor () -> Bool) async throws -> Bool {
+        let deadline = ContinuousClock.now.advanced(by: timeout)
         while !condition(), ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(20))
         }

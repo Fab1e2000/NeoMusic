@@ -7,7 +7,7 @@ import Observation
     private(set) var error: String?
     private(set) var revision = 0
     enum Availability: Equatable {
-        case loading, available, unavailable
+        case loading, available, empty, failed
     }
 
     private var currentTrackID: String?
@@ -38,14 +38,21 @@ import Observation
             try Task.checkCancellation()
             guard generation == loadGeneration else { return }
             lyrics = result
-            let hasText = !result.plainText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                || result.lines.contains { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-            availability = hasText ? .available : .unavailable
+            let hasText: Bool
+            if result.isTimed {
+                let credits = LyricsCreditFilter.creditLineIndices(in: result.lines)
+                hasText = result.lines.enumerated().contains { index, line in
+                    !credits.contains(index) && !line.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                }
+            } else {
+                hasText = !result.plainText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+            availability = hasText ? .available : .empty
         } catch is CancellationError { }
         catch {
             guard !Task.isCancelled, generation == loadGeneration else { return }
             self.error = error.localizedDescription
-            availability = .unavailable
+            availability = .failed
         }
     }
     func importFile(_ url: URL, trackID: String, reader: PlayerLyricsSource) async {

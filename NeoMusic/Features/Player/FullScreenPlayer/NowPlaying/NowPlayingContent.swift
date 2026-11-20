@@ -119,6 +119,9 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
             lyricsControlTouchCount = 0
             progressInteraction.resetForTrackChange()
         }
+        .onChange(of: lyricsAvailability, initial: true) { _, availability in
+            if page == .lyrics, availability == .empty { selectPage(.artwork) }
+        }
         .onChange(of: accessibilityVoiceOverEnabled) { _, enabled in
             if enabled, page == .lyrics { showsLyricsControls = true }
         }
@@ -433,7 +436,7 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
     private func residentAppleMusicLyricsPage(for song: PlayerTrack, bottomExtension: CGFloat) -> some View {
         let isVisible = page == .lyrics
         return portraitLyricsPage(for: song, bottomExtension: bottomExtension)
-            .id(player.currentTrackTransitionKey)
+            .id(song.id)
             .padding(.horizontal, portraitHorizontalPadding)
             .modifier(NowPlayingPagePresentation(
                 isVisible: isVisible, page: .lyrics, selectedPage: page, change: pageChange,

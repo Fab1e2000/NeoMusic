@@ -352,16 +352,20 @@ private struct HitTarget: UIViewRepresentable {
         XCTAssertEqual(loaded.lyrics?.lines.first?.text, "old")
     }
 
-    func testLyricsContentPreservesEmptyAndFailedStates() async {
+    func testLyricsContentDistinguishesEmptyResultsFromReadFailures() async {
         let model = NowPlayingLyricsModel()
         await model.load(trackID: "empty") { LyricsDocument.parse("").playerLyrics }
-        let empty = NowPlayingLyricsContent(availability: model.availability(for: "empty"),
-                                           lyrics: model.lyrics, error: model.error)
-        XCTAssertTrue(empty.lyrics?.isEmpty == true)
+        let emptyAvailability = model.availability(for: "empty")
+        XCTAssertEqual(emptyAvailability, .empty)
+        let empty = NowPlayingLyricsContent(availability: emptyAvailability, lyrics: model.lyrics, error: model.error)
+        XCTAssertNil(empty.lyrics)
         XCTAssertNil(empty.error)
+        await model.load(trackID: "credits-only") { LyricsDocument.parse("[00:00]作曲：示例").playerLyrics }
+        XCTAssertEqual(model.availability(for: "credits-only"), .empty)
         await model.load(trackID: "failed") { throw URLError(.notConnectedToInternet) }
-        let failed = NowPlayingLyricsContent(availability: model.availability(for: "failed"),
-                                            lyrics: model.lyrics, error: model.error)
+        let failedAvailability = model.availability(for: "failed")
+        XCTAssertEqual(failedAvailability, .failed)
+        let failed = NowPlayingLyricsContent(availability: failedAvailability, lyrics: model.lyrics, error: model.error)
         XCTAssertNil(failed.lyrics)
         XCTAssertNotNil(failed.error)
     }

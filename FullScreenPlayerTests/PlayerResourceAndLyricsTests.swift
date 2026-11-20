@@ -26,7 +26,7 @@ import MetalKit
         XCTAssertNil(model.lyrics)
         XCTAssertNotNil(error)
         XCTAssertEqual(model.error, error)
-        XCTAssertEqual(model.availability(for: "new"), .unavailable)
+        XCTAssertEqual(model.availability(for: "new"), .failed)
     }
 
     func testCancelledLyricsDoNotPublishAndImportReloadsOnlyCurrentTrack() async {

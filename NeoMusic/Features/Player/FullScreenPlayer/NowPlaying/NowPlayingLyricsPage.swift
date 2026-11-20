@@ -13,7 +13,7 @@ struct NowPlayingLyricsContent {
     let error: String?
 
     init(availability: NowPlayingLyricsModel.Availability, lyrics: PlayerLyrics?, error: String?) {
-        self.lyrics = availability == .loading ? nil : lyrics
+        self.lyrics = availability == .available ? lyrics : nil
         self.error = availability == .loading ? nil : error
     }
 }
@@ -126,12 +126,7 @@ struct NowPlayingLyricsPage: View {
                     .contentShape(Rectangle())
                     .onTapGesture { onInterfaceInteraction?() }
             } else if let lyrics {
-                if lyrics.isEmpty {
-                    ContentUnavailableView("暂无歌词", systemImage: "quote.bubble")
-                        .padding(.top, sharedSongHeaderInset)
-                        .contentShape(Rectangle())
-                        .onTapGesture { onInterfaceInteraction?() }
-                } else if lyrics.isTimed {
+                if lyrics.isTimed {
                     AppleMusicLocalLyricsView(
                         lyrics: lyrics, activeID: lastActiveLineID,
                         bottomOverlayHeight: appleMusicBottomOverlayHeight,
