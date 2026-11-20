@@ -142,7 +142,7 @@ struct NowPlayingArtworkPage: View {
                 let titleCenterY = layout.pageY(488.833) - 39.5 * (textScale - 1) - controlsOverflow
                 let artistCenterY = layout.pageY(512.5) - 13 * (textScale - 1) - controlsOverflow
                 let slotTop = titleCenterY - (27 * textScale) / 2 - 6
-                let slotBottom = artistCenterY + (26 * textScale) / 2 + 6
+                let slotBottom = artistCenterY + max((26 * textScale) / 2 + 6, 22)
                 let slotHeight = max(slotBottom - slotTop, 1)
                 let slotCenterY = (slotTop + slotBottom) / 2
                 let swipeInsets = TrackSwipeViewportInsets(

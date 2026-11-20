@@ -436,6 +436,15 @@ final class PinnedCollectionCell: UICollectionViewCell {
         updateWobble()
     }
 
+    /// 编辑态下左上角「取消置顶」按钮向 cell 外延伸，扩展命中范围使其完整 44×44pt 可点。
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        if editing {
+            let expanded = bounds.inset(by: UIEdgeInsets(top: -16, left: -16, bottom: 0, right: 0))
+            return expanded.contains(point)
+        }
+        return super.point(inside: point, with: event)
+    }
+
     private func updateWobble() {
         guard editing, !reduceMotion, displayed, window != nil else {
             contentView.layer.removeAnimation(forKey: Self.wobbleKey)
@@ -512,14 +521,18 @@ private struct PinnedCellContent: View {
         .accessibilityAddTraits(isEditing ? [] : .isButton)
         .overlay(alignment: .topLeading) {
             if isEditing {
-                Button("取消置顶", systemImage: "minus", action: remove)
-                    .buttonStyle(.plain)
-                    .labelStyle(.iconOnly)
-                    .font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 28, height: 28)
-                    .background(Color(.systemGray), in: .circle)
-                    .offset(x: -8, y: -8)
+                Button(action: remove) {
+                    Image(systemName: "minus")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 28, height: 28)
+                        .background(Color(.systemGray), in: .circle)
+                        .frame(width: 44, height: 44)
+                        .contentShape(.circle)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("取消置顶")
+                .offset(x: -16, y: -16)
             }
         }
     }

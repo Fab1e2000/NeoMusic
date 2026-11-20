@@ -1160,6 +1160,14 @@ private final class PlaylistDownloadBadgeView: UIView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    /// 交互态下向左扩展 12pt 热区（总宽 40pt × 44pt），不挤压歌名宽度。
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        if button.isUserInteractionEnabled {
+            return bounds.inset(by: UIEdgeInsets(top: 0, left: -12, bottom: 0, right: 0)).contains(point)
+        }
+        return super.point(inside: point, with: event)
+    }
+
     func configure(state: LibraryDownloads.SongState?, visible: Bool, onTap: (() -> Void)?) {
         tapHandler = onTap
         imageView.isHidden = true

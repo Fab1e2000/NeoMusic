@@ -40,6 +40,13 @@ struct CollectionPagePalette: Equatable {
     var controlFill: Color { Color(uiColor: shifted(0.075)) }
     var separator: UIColor { shifted(Self.separatorShift) }
     var highlight: UIColor { shifted(0.075) }
+    /// Blend 6% toward white on dark pages, toward black on light pages.
+    var swiped: UIColor {
+        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+        guard background.getRed(&red, green: &green, blue: &blue, alpha: &alpha) else { return background }
+        let lift: CGFloat = isDark ? 0.06 : 0
+        return UIColor(red: red * 0.94 + lift, green: green * 0.94 + lift, blue: blue * 0.94 + lift, alpha: alpha)
+    }
     var playForeground: Color { Color(uiColor: background) }
     var secondaryColor: Color { Color(uiColor: secondary) }
 }

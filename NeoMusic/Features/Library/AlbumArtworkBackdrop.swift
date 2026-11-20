@@ -29,30 +29,41 @@ struct AlbumArtworkBackdrop: Codable, Equatable, Sendable {
     /// Runs away from the UI actor and chooses the most populated Core Image color cluster.
     static func extract(from data: Data) -> AlbumArtworkBackdrop? {
         autoreleasepool {
-            guard let input = CIImage(data: data), let space = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
-            let scale = min(1, 128 / max(input.extent.width, input.extent.height))
-            let reduced = input.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-            let filter = CIFilter.kMeans()
-            filter.inputImage = reduced
-            filter.extent = reduced.extent
-            filter.count = 8
-            filter.passes = 10
-            filter.perceptual = false
-            guard let output = filter.outputImage else { return nil }
-            let context = imageContext
-            var weighted = [Float](repeating: 0, count: 32)
-            context.render(output, toBitmap: &weighted, rowBytes: 128,
-                           bounds: output.extent, format: .RGBAf, colorSpace: space)
-            guard let dominant = (0..<8).max(by: { weighted[$0 * 4 + 3] < weighted[$1 * 4 + 3] }),
-                  weighted[dominant * 4 + 3] > 0 else { return nil }
-            // Core Image stores each cluster's population in alpha; the palette's
-            // color is rendered opaque before choosing the largest cluster.
-            var colors = [Float](repeating: 0, count: 32)
-            context.render(output.settingAlphaOne(in: output.extent), toBitmap: &colors, rowBytes: 128,
-                           bounds: output.extent, format: .RGBAf, colorSpace: space)
-            let index = dominant * 4
-            return AlbumArtworkBackdrop(red: Double(colors[index]), green: Double(colors[index + 1]), blue: Double(colors[index + 2]))
+            guard let input = CIImage(data: data) else { return nil }
+            return extract(from: input)
         }
+    }
+
+    static func extract(from cgImage: CGImage) -> AlbumArtworkBackdrop? {
+        autoreleasepool {
+            extract(from: CIImage(cgImage: cgImage))
+        }
+    }
+
+    private static func extract(from input: CIImage) -> AlbumArtworkBackdrop? {
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
+        let scale = min(1, 128 / max(input.extent.width, input.extent.height))
+        let reduced = input.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        let filter = CIFilter.kMeans()
+        filter.inputImage = reduced
+        filter.extent = reduced.extent
+        filter.count = 8
+        filter.passes = 10
+        filter.perceptual = false
+        guard let output = filter.outputImage else { return nil }
+        let context = imageContext
+        var weighted = [Float](repeating: 0, count: 32)
+        context.render(output, toBitmap: &weighted, rowBytes: 128,
+                       bounds: output.extent, format: .RGBAf, colorSpace: space)
+        guard let dominant = (0..<8).max(by: { weighted[$0 * 4 + 3] < weighted[$1 * 4 + 3] }),
+              weighted[dominant * 4 + 3] > 0 else { return nil }
+        // Core Image stores each cluster's population in alpha; the palette's
+        // color is rendered opaque before choosing the largest cluster.
+        var colors = [Float](repeating: 0, count: 32)
+        context.render(output.settingAlphaOne(in: output.extent), toBitmap: &colors, rowBytes: 128,
+                       bounds: output.extent, format: .RGBAf, colorSpace: space)
+        let index = dominant * 4
+        return AlbumArtworkBackdrop(red: Double(colors[index]), green: Double(colors[index + 1]), blue: Double(colors[index + 2]))
     }
 }
 

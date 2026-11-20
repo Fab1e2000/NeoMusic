@@ -71,14 +71,33 @@ struct SearchPageView: View {
                         ForEach(model.history, id: \.self) { value in
                             HStack(spacing: 14) {
                                 Button { model.submit(value) } label: {
-                                    Label(value, systemImage: "clock").frame(maxWidth: .infinity, alignment: .leading)
+                                    Label(value, systemImage: "clock")
+                                        .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+                                        .contentShape(.rect)
                                 }.buttonStyle(.plain)
-                                Button { model.onRemoveHistory?(value) } label: { Image(systemName: "xmark").foregroundStyle(.secondary) }
-                                    .buttonStyle(.plain).accessibilityLabel("移除\(value)")
+                                Button { model.onRemoveHistory?(value) } label: {
+                                    Image(systemName: "xmark")
+                                        .foregroundStyle(.secondary)
+                                        .frame(width: 44, height: 44)
+                                        .contentShape(.rect)
+                                }
+                                .buttonStyle(.plain)
+                                .padding(.vertical, -8)
+                                .padding(.trailing, -12)
+                                .accessibilityLabel("移除\(value)")
                             }.padding(.vertical, 6)
                         }
                     } header: {
-                        HStack { Text("最近搜索").font(.title3.bold()); Spacer(); Button("清除") { model.onRemoveHistory?(nil) } }
+                        HStack {
+                            Text("最近搜索").font(.title3.bold())
+                            Spacer()
+                            Button { model.onRemoveHistory?(nil) } label: {
+                                Text("清除")
+                                    .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
+                                    .contentShape(.rect)
+                            }
+                            .padding(.vertical, -10)
+                        }
                             .textCase(nil)
                     }
                 }.listStyle(.plain)
@@ -90,7 +109,11 @@ struct SearchPageView: View {
         List {
             ForEach(model.keywords, id: \.self) { word in
                 Button { model.submit(word) } label: {
-                    Label(word, systemImage: "magnifyingglass").foregroundStyle(.primary).padding(.vertical, 7)
+                    Label(word, systemImage: "magnifyingglass")
+                        .foregroundStyle(.primary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 7)
+                        .contentShape(.rect)
                 }.buttonStyle(.plain)
             }
             ForEach(model.suggestions) { item in SearchResultRow(item: item, model: model) }
@@ -120,7 +143,15 @@ struct SearchPageView: View {
                     if !model.syncFailed { ProgressView().controlSize(.mini) }
                     Text(status).font(.footnote).foregroundStyle(.secondary)
                     Spacer(minLength: 0)
-                    if model.syncFailed { Button("重试") { model.onRetry?() }.font(.footnote) }
+                    if model.syncFailed {
+                        Button { model.onRetry?() } label: {
+                            Text("重试")
+                                .font(.footnote)
+                                .frame(minWidth: 44, minHeight: 36, alignment: .trailing)
+                                .contentShape(.rect)
+                        }
+                        .padding(.vertical, -8)
+                    }
                 }.padding(.horizontal, 20).padding(.vertical, 9)
             }
             ZStack {
@@ -195,8 +226,14 @@ private struct SearchResultList: View {
                             Text(group.kind.title).font(.title3.bold()).foregroundStyle(Color.primary)
                             Spacer()
                             if group.hasMore || group.items.count > 3 {
-                                Button("查看全部") { model.select(group.kind) }.font(.subheadline)
-                                    .accessibilityLabel("查看全部\(group.kind.title)")
+                                Button { model.select(group.kind) } label: {
+                                    Text("查看全部")
+                                        .font(.subheadline)
+                                        .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
+                                        .contentShape(.rect)
+                                }
+                                .padding(.vertical, -10)
+                                .accessibilityLabel("查看全部\(group.kind.title)")
                             }
                         }.textCase(nil).padding(.top, 8)
                     }
@@ -329,8 +366,9 @@ struct SearchResultRow: View {
                     content: AnyView(ResourceArtworkView(resource: item.$artwork, contentID: item.id, cornerRadius: 0)),
                     sources: sources,
                     sourceID: item.id,
-                    cornerRadius: 5
+                    cornerRadius: DesignTokens.Radius.songRowCover
                 )
+                .songPlaybackOverlay(songID: song.id, cornerRadius: DesignTokens.Radius.songRowCover)
                 .frame(width: 56, height: 56)
             }
         } else {
@@ -428,7 +466,16 @@ private struct SearchInlineError: View {
     let message: String
     let retry: () -> Void
     var body: some View {
-        HStack { Text(message).font(.footnote).foregroundStyle(.secondary); Spacer(); Button("重试", action: retry) }
+        HStack {
+            Text(message).font(.footnote).foregroundStyle(.secondary)
+            Spacer()
+            Button(action: retry) {
+                Text("重试")
+                    .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
+                    .contentShape(.rect)
+            }
+            .padding(.vertical, -8)
+        }
     }
 }
 

@@ -286,17 +286,19 @@ struct SongDownloadStatus: View {
                     feedback &+= 1; downloads?.download([song])
                 } label: {
                     SongDownloadIndicator(state: state, secondaryStyle: secondaryStyle)
-                        .frame(width: 28, height: 44, alignment: .trailing)
+                        .frame(width: 40, height: 44, alignment: .trailing)
                         .contentShape(.rect)
                 }
+                .padding(.leading, -12)
                 .accessibilityLabel("下载失败，轻点重试")
             } else if state?.isActive == true {
                 Button { feedback &+= 1; downloads?.stop([song]) } label: {
                     SongDownloadIndicator(state: state, secondaryStyle: secondaryStyle)
-                        .frame(width: 28, height: 44, alignment: .trailing)
+                        .frame(width: 40, height: 44, alignment: .trailing)
                         .contentShape(.rect)
                 }
-                    .accessibilityLabel(state == .waiting ? "等待 Wi-Fi，轻点停止下载" : "停止下载")
+                .padding(.leading, -12)
+                .accessibilityLabel(state == .waiting ? "等待 Wi-Fi，轻点停止下载" : "停止下载")
             } else { SongDownloadIndicator(state: state, secondaryStyle: secondaryStyle) }
             }
         }

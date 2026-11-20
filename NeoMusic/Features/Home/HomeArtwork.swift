@@ -1,5 +1,28 @@
 import SwiftUI
 
+enum HomeArtworkSource: Sendable {
+    case image(String)
+    case favorites
+    case newMusic
+    case station(Int)
+    case collage(Int)
+    case mood(HomeMood)
+}
+
+enum HomeMood: String, CaseIterable, Sendable {
+    case happy, heart, love, night, focus, relax
+    var title: String {
+        switch self {
+        case .happy: "开心能量棒"
+        case .heart: "心碎"
+        case .love: "爱情"
+        case .night: "深夜放松"
+        case .focus: "凝神专注"
+        case .relax: "乐享悠闲"
+        }
+    }
+}
+
 /// Album covers are existing bundled samples. Editorial artwork is drawn natively.
 struct HomeArtwork: View {
     let artwork: HomeArtworkSource
@@ -19,7 +42,7 @@ struct HomeArtwork: View {
                             .overlay {
                                 Image(systemName: "star.fill")
                                     .font(.system(size: 116, weight: .regular))
-                                    .foregroundStyle(Color(red: 1, green: 0.16, blue: 0.27))
+                                    .foregroundStyle(DesignTokens.Colors.favoritesRed)
                             }
                             .frame(width: size.width - 32, height: size.width - 32)
                             .padding(.top, 16)

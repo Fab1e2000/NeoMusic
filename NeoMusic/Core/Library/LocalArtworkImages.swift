@@ -53,6 +53,16 @@ import ImageIO
         return images.object(forKey: url as NSURL)?.backdrop
     }
 
+    static func loadBackdrop(for url: URL) async -> AlbumArtworkBackdrop? {
+        guard !Task.isCancelled else { return nil }
+        if let cached = images.object(forKey: url as NSURL)?.backdrop { return cached }
+        guard let backdrop = await decoder.loadBackdrop(url), !Task.isCancelled else { return nil }
+        let variants = images.object(forKey: url as NSURL) ?? Variants()
+        variants.backdrop = backdrop
+        images.setObject(variants, forKey: url as NSURL, cost: variants.cost)
+        return backdrop
+    }
+
     /// Prepare a bounded set of local thumbnails before the first shelf is shown.
     /// Folder tiles use their smaller display size; repeated files share one load.
     static func prepare(_ artworks: [Artwork], pixels: Int = 512, limit: Int = 10) async {
@@ -122,6 +132,14 @@ private actor LocalArtworkDecoder {
     }
     private let backdrops = AlbumArtworkBackdropPreparer(
         cacheURL: URL.cachesDirectory.appending(path: "ArtworkBackdrops.json"))
+
+    func loadBackdrop(_ url: URL) async -> AlbumArtworkBackdrop? {
+        guard !Task.isCancelled else { return nil }
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        let colors = try? await backdrops.prepareAdditionalArtwork([url.absoluteString: data])
+        guard !Task.isCancelled else { return nil }
+        return colors?[url.absoluteString]
+    }
 
     func load(_ url: URL, pixels: Int, prepareBackdrop: Bool) async -> Prepared? {
         guard !Task.isCancelled else { return nil }

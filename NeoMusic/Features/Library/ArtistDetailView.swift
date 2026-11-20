@@ -159,7 +159,11 @@ struct ArtistDetailView: View {
                 Text(section.title).font(.system(size: headingSize, weight: .bold))
                 Image(systemName: "chevron.right").font(.system(size: 16, weight: .semibold))
             }
-        }.buttonStyle(.plain)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .contentShape(.rect)
+        }
+        .padding(.vertical, -8)
+        .buttonStyle(.plain)
     }
     @ViewBuilder private func shelf(_ section: ArtistSection, items: [LibraryShelfItem]) -> some View {
         if !items.isEmpty {

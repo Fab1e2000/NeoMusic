@@ -338,13 +338,12 @@ struct SongRow: View {
             ),
             play: play
         ) {
-            ArtworkView(artwork: song.artwork, cornerRadius: 6)
-                .environment(\.nativeArtworkSurfaceEnabled, false)
-                .frame(width: 48)
+            PlaylistSongArtwork(song: song, cornerRadius: DesignTokens.Radius.songRowCover)
+                .frame(width: DesignTokens.Artwork.rowCoverSize)
         }
         .songListRow(song, mode: .libraryDownloads, swipeBackground: Color(.systemBackground))
-        .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
-        .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] + 60 }
+        .listRowInsets(EdgeInsets(top: 0, leading: DesignTokens.Spacing.pageMargin, bottom: 0, trailing: DesignTokens.Spacing.pageMargin))
+        .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] + DesignTokens.Spacing.rowDividerInset }
         .alignmentGuide(.listRowSeparatorTrailing) { $0.width }
     }
 }

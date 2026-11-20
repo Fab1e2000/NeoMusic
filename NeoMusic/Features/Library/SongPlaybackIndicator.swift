@@ -39,18 +39,28 @@ struct AlbumSongPosition: View {
 /// Playlist rows share the album's audio-driven indicator, over the current cover.
 struct PlaylistSongArtwork: View {
     let song: LibrarySongItem
-    var cornerRadius: CGFloat = 6
-    @Environment(\.songRowPlayback) private var playback
-    @Environment(\.scenePhase) private var scenePhase
-    @Environment(\.songPlaybackIndicatorsActive) private var indicatorsActive
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var cornerRadius: CGFloat = DesignTokens.Radius.songRowCover
 
     var body: some View {
         ArtworkView(artwork: song.artwork, cornerRadius: cornerRadius)
             // Track thumbnails are not collection zoom sources.
             .environment(\.nativeArtworkSurfaceEnabled, false)
+            .songPlaybackOverlay(songID: song.id, cornerRadius: cornerRadius)
+    }
+}
+
+private struct SongPlaybackOverlay: ViewModifier {
+    let songID: String
+    let cornerRadius: CGFloat
+    @Environment(\.songRowPlayback) private var playback
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.songPlaybackIndicatorsActive) private var indicatorsActive
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content
             .overlay {
-                if let playback, playback.hasCurrent, playback.current.id == song.id {
+                if let playback, playback.hasCurrent, playback.current.id == songID {
                     RoundedRectangle(cornerRadius: cornerRadius)
                         .fill(.black.opacity(0.4))
                         .overlay {
@@ -62,10 +72,16 @@ struct PlaylistSongArtwork: View {
                             .frame(width: 16, height: 20)
                         }
                         .accessibilityLabel(playback.isPlaying ? "正在播放" : "已暂停")
-                        .accessibilityIdentifier("playlist.playback.\(song.id)")
+                        .accessibilityIdentifier("playlist.playback.\(songID)")
+                        .allowsHitTesting(false)
                 }
             }
-            .allowsHitTesting(false)
+    }
+}
+
+extension View {
+    func songPlaybackOverlay(songID: String, cornerRadius: CGFloat = DesignTokens.Radius.songRowCover) -> some View {
+        modifier(SongPlaybackOverlay(songID: songID, cornerRadius: cornerRadius))
     }
 }
 

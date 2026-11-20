@@ -464,34 +464,6 @@ final class AlbumArtworkBackdropTests: XCTestCase {
 
 @MainActor
 final class PlayerTextMetricsTests: XCTestCase {
-    func testScaledGlyphFontUsesTheProvidedSizeExactlyOnce() {
-        let traits = UITraitCollection(preferredContentSizeCategory: .accessibilityExtraExtraExtraLarge)
-        let white = NowPlayingVisualHierarchy.textFont(fontSize: 54, weight: .semibold, isWhite: true,
-                                                       fontSizeIsScaled: true, traits: traits)
-        let artist = NowPlayingVisualHierarchy.textFont(fontSize: 54, weight: .regular, isWhite: false,
-                                                        fontSizeIsScaled: true, traits: traits)
-        XCTAssertEqual(white.pointSize, 54)
-        XCTAssertEqual(artist.pointSize, 54)
-    }
-
-    func testBaseGlyphFontsRetainTheirExistingTextStyleScaling() {
-        let traits = UITraitCollection(preferredContentSizeCategory: .accessibilityExtraExtraExtraLarge)
-        let artist = NowPlayingVisualHierarchy.textFont(fontSize: 13, weight: .regular, isWhite: false,
-                                                        fontSizeIsScaled: false, traits: traits)
-        let expectedArtist = UIFontMetrics(forTextStyle: .footnote)
-            .scaledFont(for: .systemFont(ofSize: 13), compatibleWith: traits)
-        XCTAssertEqual(artist.pointSize, expectedArtist.pointSize)
-
-        let title = NowPlayingVisualHierarchy.textFont(fontSize: 17, weight: .semibold, isWhite: true,
-                                                       fontSizeIsScaled: false, traits: traits)
-        let expectedTitle = UIFontMetrics(forTextStyle: .headline)
-            .scaledFont(for: .systemFont(ofSize: 17, weight: .semibold), compatibleWith: traits)
-        XCTAssertEqual(title.pointSize, expectedTitle.pointSize)
-        let fixed = NowPlayingVisualHierarchy.textFont(fontSize: 20, weight: .regular, isWhite: false,
-                                                       fontSizeIsScaled: false, traits: traits)
-        XCTAssertEqual(fixed.pointSize, 20)
-    }
-
     func testArtworkReservesTheAdditionalInformationHeight() {
         let layout = ReferenceNowPlayingLayout()
         XCTAssertEqual(NowPlayingArtworkPage.artworkSide(layout: layout, textScale: 1), layout.artworkSide)

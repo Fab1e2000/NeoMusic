@@ -28,14 +28,6 @@ enum NowPlayingVisualHierarchy {
     static let lyricBrowsingOpacity: Double = 0.48
     static let lyricInactiveBlurredOpacity: Double = 0.34
     static let queueReorderTintAlpha: CGFloat = 0.45
-
-    static func textFont(fontSize: CGFloat, weight: UIFont.Weight, isWhite: Bool,
-                         fontSizeIsScaled: Bool, traits: UITraitCollection) -> UIFont {
-        let base = UIFont.systemFont(ofSize: fontSize, weight: weight)
-        guard !fontSizeIsScaled, fontSize != 20 else { return base }
-        let style: UIFont.TextStyle = isWhite ? .headline : (fontSize == 13 ? .footnote : .subheadline)
-        return UIFontMetrics(forTextStyle: style).scaledFont(for: base, compatibleWith: traits)
-    }
 }
 
 extension View {

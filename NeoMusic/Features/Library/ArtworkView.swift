@@ -4,8 +4,8 @@ import Observation
 /// 专辑、播放列表或歌曲的封面。
 enum Artwork: Equatable {
     /// Apple Music“喜爱歌曲”星标的实测颜色。
-    static let favoritesRed = Color(red: 251 / 255, green: 35 / 255, blue: 60 / 255)
-    static let favoritesBackground = Color(red: 233 / 255, green: 237 / 255, blue: 238 / 255)
+    static let favoritesRed = DesignTokens.Colors.favoritesRed
+    static let favoritesBackground = DesignTokens.Colors.favoritesBackground
 
     case image(Image)
     case file(URL)
@@ -43,6 +43,7 @@ struct ArtworkView: View {
     var contentID: String?
     var previewArtwork: Artwork? = nil
     var cornerRadius: CGFloat = 8
+    var showsBorder = true
     var isZoomAlignmentTarget = false
     var loadImage: @MainActor (URL, Int) async -> UIImage? = LocalArtworkImages.load
     @Environment(\.displayScale) private var displayScale
@@ -63,8 +64,10 @@ struct ArtworkView: View {
             .overlay { content }
             .clipShape(.rect(cornerRadius: cornerRadius))
             .overlay {
-                RoundedRectangle(cornerRadius: cornerRadius)
-                    .strokeBorder(.black.opacity(0.06), lineWidth: 1 / displayScale)
+                if showsBorder {
+                    RoundedRectangle(cornerRadius: cornerRadius)
+                        .strokeBorder(.black.opacity(DesignTokens.Artwork.hairlineStrokeOpacity), lineWidth: 1 / displayScale)
+                }
             }
             .accessibilityHidden(true)
     }

@@ -1,27 +1,5 @@
+#if DEBUG
 import Foundation
-
-enum HomeArtworkSource: Sendable {
-    case image(String)
-    case favorites
-    case newMusic
-    case station(Int)
-    case collage(Int)
-    case mood(HomeMood)
-}
-
-enum HomeMood: String, CaseIterable, Sendable {
-    case happy, heart, love, night, focus, relax
-    var title: String {
-        switch self {
-        case .happy: "开心能量棒"
-        case .heart: "心碎"
-        case .love: "爱情"
-        case .night: "深夜放松"
-        case .focus: "凝神专注"
-        case .relax: "乐享悠闲"
-        }
-    }
-}
 
 struct HomeItem: Identifiable, Sendable {
     let id: String
@@ -97,3 +75,4 @@ enum HomeFixtures {
         shelf("2010s", "2010 年代", [14, 18, 12, 21, 10, 7])
     ]
 }
+#endif

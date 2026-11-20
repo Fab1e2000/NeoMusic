@@ -187,17 +187,15 @@ final class TrackSwipeController {
         applyDrag(translation: translation, distance: max(distance, 1), previous: previous, next: next)
     }
 
-    func panEnded(
+    static func resolveCommit(
+        rawDragOffset: CGFloat,
+        dragBaseOffset: CGFloat,
         translation: CGFloat,
         velocity: CGFloat,
         distance: CGFloat,
-        song: PlayerTrack,
         previous: PlayerAdjacentTrack?,
-        next: PlayerAdjacentTrack?,
-        reduceMotion: Bool,
-        select: (Int) -> Void
-    ) {
-        guard isDragging else { return }
+        next: PlayerAdjacentTrack?
+    ) -> (entry: PlayerAdjacentTrack, direction: CGFloat)? {
         let safeDistance = max(distance, 1)
         let threshold = safeDistance * Self.thresholdFraction
         let rearm = safeDistance * Self.hapticRearmFraction
@@ -215,20 +213,40 @@ final class TrackSwipeController {
             rawDragOffset < -safeDistance * 0.5
         )
 
-        var chosenEntry: PlayerAdjacentTrack?
-        var direction: CGFloat = 0
-
         if let next, canCommitNext,
            rawDragOffset <= -threshold || (velocity < -Self.thresholdVelocity && (rawDragOffset <= 0 || translation < -12)) {
-            chosenEntry = next
-            direction = -1
+            return (next, -1)
         } else if let previous, canCommitPrevious,
                   rawDragOffset >= threshold || (velocity > Self.thresholdVelocity && (rawDragOffset >= 0 || translation > 12)) {
-            chosenEntry = previous
-            direction = 1
+            return (previous, 1)
         }
+        return nil
+    }
 
-        if let entry = chosenEntry {
+    func panEnded(
+        translation: CGFloat,
+        velocity: CGFloat,
+        distance: CGFloat,
+        song: PlayerTrack,
+        previous: PlayerAdjacentTrack?,
+        next: PlayerAdjacentTrack?,
+        reduceMotion: Bool,
+        select: (Int) -> Void
+    ) {
+        guard isDragging else { return }
+        let safeDistance = max(distance, 1)
+
+        if let chosen = Self.resolveCommit(
+            rawDragOffset: rawDragOffset,
+            dragBaseOffset: dragBaseOffset,
+            translation: translation,
+            velocity: velocity,
+            distance: safeDistance,
+            previous: previous,
+            next: next
+        ) {
+            let entry = chosen.entry
+            let direction = chosen.direction
             let expectedArm = direction == 1 ? 1 : -1
             if hapticArmedDirection != expectedArm {
                 feedbackHandler()
@@ -716,7 +734,7 @@ struct NowPlayingTrackSwipe<Title: View, Artist: View>: View {
         return result
     }
 
-    /// Commits at release for unit-level threshold/velocity verification.
+    /// Commits at release for unit-level threshold/velocity verification, sharing the single source of truth with `panEnded`.
     static func selectTarget(
         translation: CGFloat,
         velocity: CGFloat,
@@ -725,19 +743,15 @@ struct NowPlayingTrackSwipe<Title: View, Artist: View>: View {
         distance: CGFloat,
         select: (Int) -> Void
     ) -> CGFloat? {
-        let threshold = distance * TrackSwipeController.thresholdFraction
-        let target: (entry: PlayerAdjacentTrack, direction: CGFloat)?
-        if (translation < -threshold || velocity < -TrackSwipeController.thresholdVelocity),
-           translation <= 0, let next {
-            target = (next, -1)
-        } else if (translation > threshold || velocity > TrackSwipeController.thresholdVelocity),
-                  translation >= 0, let previous {
-            target = (previous, 1)
-        } else {
-            target = nil
-        }
-
-        guard let target else { return nil }
+        guard let target = TrackSwipeController.resolveCommit(
+            rawDragOffset: translation,
+            dragBaseOffset: 0,
+            translation: translation,
+            velocity: velocity,
+            distance: distance,
+            previous: previous,
+            next: next
+        ) else { return nil }
         select(target.entry.index)
         return translation - target.direction * distance
     }
@@ -796,12 +810,19 @@ private struct NowPlayingHorizontalPan: UIGestureRecognizerRepresentable {
         }
     }
 
+    /// 第三方 LNPopupController 手势私有类名前缀契约；上游升级时集中在此核对。
+    private enum LNPopupGestureClassName {
+        static let longPress = "LNPopupLongPress"
+        static let interactionPan = "LNPopupInteractionPan"
+        static let openTap = "LNPopupOpenTap"
+    }
+
     private static func cancelPopupBarHighlight(from view: UIView?) {
         var cursor = view
         while let current = cursor {
             for recognizer in current.gestureRecognizers ?? []
             where recognizer is UILongPressGestureRecognizer
-                && NSStringFromClass(type(of: recognizer)).contains("LNPopupLongPress")
+                && NSStringFromClass(type(of: recognizer)).contains(LNPopupGestureClassName.longPress)
                 && recognizer.isEnabled {
                 recognizer.isEnabled = false
                 recognizer.isEnabled = true
@@ -830,14 +851,15 @@ private struct NowPlayingHorizontalPan: UIGestureRecognizerRepresentable {
         ) -> Bool {
             guard otherGestureRecognizer !== gestureRecognizer else { return false }
             let otherClass = NSStringFromClass(type(of: otherGestureRecognizer))
-            return otherClass.contains("LNPopupInteractionPan") || otherClass.contains("LNPopupOpenTap")
+            return otherClass.contains(LNPopupGestureClassName.interactionPan)
+                || otherClass.contains(LNPopupGestureClassName.openTap)
         }
 
         func gestureRecognizer(
             _ gestureRecognizer: UIGestureRecognizer,
             shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
         ) -> Bool {
-            NSStringFromClass(type(of: otherGestureRecognizer)).contains("LNPopupLongPress")
+            NSStringFromClass(type(of: otherGestureRecognizer)).contains(LNPopupGestureClassName.longPress)
         }
     }
 }

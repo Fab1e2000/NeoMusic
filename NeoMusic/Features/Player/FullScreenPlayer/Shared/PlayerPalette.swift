@@ -7,5 +7,4 @@ enum DizzyPalette {
     static let artworkPlaceholderSymbol = Color(UIColor { $0.userInterfaceStyle == .dark
         ? UIColor(red: 145/255, green: 154/255, blue: 161/255, alpha: 1)
         : UIColor(red: 106/255, green: 115/255, blue: 123/255, alpha: 1) })
-    static let accentOnDark = Color.white
 }

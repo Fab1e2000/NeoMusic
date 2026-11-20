@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 enum HomeMetrics {
-    static let margin: CGFloat = 20
+    static let margin: CGFloat = DesignTokens.Spacing.pageMargin
     static let cardSpacing: CGFloat = 12
     static let sectionSpacing: CGFloat = 32
     static let headingHeight: CGFloat = 24
@@ -341,7 +341,10 @@ private struct HomeSongRecommendationRow: View {
             }
         } label: {
             HStack(spacing: 12) {
-                ArtworkView(artwork: item.artwork, contentID: "\(ownerID ?? "public"):\(item.id)", cornerRadius: 6).frame(width: 48, height: 48)
+                ArtworkView(artwork: item.artwork, contentID: "\(ownerID ?? "public"):\(item.id)", cornerRadius: DesignTokens.Radius.songRowCover)
+                    .environment(\.nativeArtworkSurfaceEnabled, false)
+                    .songPlaybackOverlay(songID: item.id, cornerRadius: DesignTokens.Radius.songRowCover)
+                    .frame(width: DesignTokens.Artwork.rowCoverSize, height: DesignTokens.Artwork.rowCoverSize)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(item.title).font(.subheadline).foregroundStyle(.primary).lineLimit(textSize.isAccessibilitySize ? nil : 1)
                     Text(item.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(textSize.isAccessibilitySize ? nil : 1)
@@ -430,7 +433,7 @@ private struct HomeContentCard: View {
                 if large {
                     HomePlaylistArtwork(artwork: item.artwork).id(sourceID)
                 } else {
-                    ArtworkView(artwork: item.artwork, contentID: sourceID, cornerRadius: 0)
+                    ArtworkView(artwork: item.artwork, contentID: sourceID, cornerRadius: 0, showsBorder: false)
                         .environment(\.nativeArtworkSurfaceEnabled, false)
                 }
             }

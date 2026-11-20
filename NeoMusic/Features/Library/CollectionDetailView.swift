@@ -42,37 +42,12 @@ struct CollectionDetailView: View {
     @State private var query = ""
     @State private var isConfirmingAlbumDeletion = false
     @State private var favoritesScrollDistance = PlaylistScrollDistance()
-    @State private var searchProjection = AsyncListProjection<SearchProjectionInput, [LibrarySongItem]>()
-
-    private struct SearchProjectionInput: Equatable {
-        let songs: [LibrarySongItem]
-        let query: String
-
-        func calculate() -> [LibrarySongItem] {
-            guard !query.isEmpty else { return songs }
-            return songs.filter {
-                $0.title.localizedStandardContains(query)
-                    || $0.artist.localizedStandardContains(query)
-                    || $0.album.localizedStandardContains(query)
-            }
-        }
-    }
-
-    private struct SearchEntry: Sendable {
-        let index: Int
-        let title: String
-        let artist: String
-        let album: String
-    }
-
-    private static func searchFastPath(_ input: SearchProjectionInput) -> [LibrarySongItem]? {
-        (input.query.isEmpty || input.songs.count <= 120) ? input.calculate() : nil
-    }
+    @State private var searchProjection = AsyncListProjection<TrackFilterProjectionInput, TrackFilterProjectionResult>()
 
     private var displayedSongs: [LibrarySongItem] {
         guard detail.kind != .album else { return detail.songs }
-        let input = SearchProjectionInput(songs: detail.songs, query: query)
-        return searchProjection.currentValue(for: input, fastPath: Self.searchFastPath, placeholder: { _ in [] })
+        let input = TrackFilterProjectionInput(tracks: detail.songs, query: query)
+        return searchProjection.currentValue(for: input, fastPath: TrackFilterProjection.fastPath, placeholder: { _ in .empty }).tracks
     }
 
     private var isFavorites: Bool {
@@ -208,25 +183,8 @@ struct CollectionDetailView: View {
         .task(id: CompleteCollectionSearchRequest(active: !query.isEmpty, hasMore: hasMoreSongs)) {
             if !query.isEmpty && hasMoreSongs { await onPrepareCompleteCollection?() }
         }
-        .task(id: SearchProjectionInput(songs: detail.songs, query: query)) {
-            let input = SearchProjectionInput(songs: detail.songs, query: query)
-            guard Self.searchFastPath(input) == nil else { return }
-            let entries = input.songs.enumerated().map { index, song in
-                SearchEntry(index: index, title: song.title, artist: song.artist, album: song.album)
-            }
-            let currentQuery = input.query
-            await searchProjection.computeIfNeeded(
-                for: input,
-                fastPath: Self.searchFastPath,
-                background: {
-                    entries.filter {
-                        $0.title.localizedStandardContains(currentQuery)
-                            || $0.artist.localizedStandardContains(currentQuery)
-                            || $0.album.localizedStandardContains(currentQuery)
-                    }.map(\.index)
-                },
-                finish: { indices in indices.map { input.songs[$0] } }
-            )
+        .task(id: TrackFilterProjectionInput(tracks: detail.songs, query: query)) {
+            await TrackFilterProjection.update(searchProjection, for: TrackFilterProjectionInput(tracks: detail.songs, query: query))
         }
     }
 
@@ -532,12 +490,7 @@ struct SwipedSongBackground: UIViewRepresentable {
                 $0.userInterfaceStyle = isDark ? .dark : .light
             }
             let base = pageColor.resolvedColor(with: traits)
-            var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
-            let hasRGB = base.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
-            // Blend 6% toward white on dark pages, toward black on light pages.
-            let lift: CGFloat = isDark ? 0.06 : 0
-            let swiped = hasRGB ? UIColor(red: red * 0.94 + lift, green: green * 0.94 + lift,
-                                         blue: blue * 0.94 + lift, alpha: alpha) : base
+            let swiped = CollectionPagePalette(background: base, isDark: isDark).swiped
             var background = cell.defaultBackgroundConfiguration().updated(for: state)
             if state.isSwiped { background.backgroundColor = swiped }
             else if !state.isHighlighted && !state.isSelected { background.backgroundColor = base }
@@ -725,6 +678,7 @@ private final class AlbumSongsController: UICollectionViewController {
                 reconfigured.append(.header)
                 reconfigured.append(.footer)
             }
+            let activeSongID = environment.songRowPlayback?.hasCurrent == true ? environment.songRowPlayback?.current.id : nil
             for song in model.songs {
                 guard let old = previous[song.id] else { continue }
                 let separatorChanged = (song.id == previousLastID) != (song.id == lastID)
