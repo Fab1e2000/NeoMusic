@@ -38,6 +38,7 @@ struct ArtistDetailView: View {
     @ScaledMetric(relativeTo: .callout) private var releaseTitleSize = 16.0
     @ScaledMetric(relativeTo: .title3) private var headingSize = 20.0
     @State private var biography = false
+    @State private var artworkBackground: (url: URL, color: ArtistBackdropColor)?
     private var identity: String { detail.id.isEmpty ? detail.name : detail.id }
     var body: some View {
         ScrollView {
@@ -123,9 +124,13 @@ struct ArtistDetailView: View {
                             .contentMargins(.horizontal, 20).scrollTargetBehavior(.viewAligned).scrollIndicators(.hidden)
                     }.padding(.top, 24)
                 }
-            }.padding(.bottom, 24).background { ArtistDetailBackdrop(artwork: detail.artwork, preview: matchingPreview?.artwork) }
+            }.padding(.bottom, 24).background {
+                ArtistDetailBackdrop(artwork: detail.artwork, preview: matchingPreview?.artwork) { url, color in
+                    artworkBackground = (url, color)
+                }
+            }
         }
-        .modifier(ArtistPageShade())
+        .modifier(ArtistPageShade(color: pageBackground))
         .ignoresSafeArea(edges: .top).scrollEdgeEffectHidden(true, for: .top).foregroundStyle(.white)
         .toolbarColorScheme(.dark, for: .navigationBar, .tabBar)
         .libraryTitleDisplayMode(.inline)
@@ -143,6 +148,11 @@ struct ArtistDetailView: View {
     private var matchingPreview: LibraryNavigationPreview? {
         guard let navigationPreview, navigationPreview.route == .artist(identity) else { return nil }
         return navigationPreview
+    }
+
+    private var pageBackground: ArtistBackdropColor? {
+        guard let artworkBackground, detail.artwork == .file(artworkBackground.url) else { return nil }
+        return artworkBackground.color
     }
     private func favorite() {
         if let toggleFavorite {
@@ -179,6 +189,7 @@ struct ArtistDetailView: View {
 
 /// Continuous scrolling updates only this background, leaving the page's content stable.
 private struct ArtistPageShade: ViewModifier {
+    let color: ArtistBackdropColor?
     @State private var shade: CGFloat = 96
 
     func body(content: Content) -> some View {
@@ -191,7 +202,9 @@ private struct ArtistPageShade: ViewModifier {
                 if shade != value { shade = value }
             }
             .background {
-                Color(red: shade / 255, green: (shade - 1) / 255, blue: (shade - 2) / 255).ignoresSafeArea()
+                (color?.dimmed(by: shade / 96)
+                    ?? Color(red: shade / 255, green: (shade - 1) / 255, blue: (shade - 2) / 255))
+                    .ignoresSafeArea()
             }
     }
 }
