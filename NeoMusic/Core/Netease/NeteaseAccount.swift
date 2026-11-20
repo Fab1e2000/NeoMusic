@@ -30,6 +30,7 @@ final class NeteaseAccount {
 
     private(set) var profile: NeteaseProfile?
     private(set) var avatarData: Data?
+    var startupAvatarData: Data? { startupAvatar?.data }
     private(set) var validationState = ValidationState.signedOut
     private(set) var error: String? {
         didSet { errorTechnicalDetails = nil }
@@ -516,10 +517,10 @@ final class NeteaseAccount {
         // displayed avatar until its replacement arrives; the URL scopes requests.
         let sameUser = avatarOwner?.userID == profile.userID || startupAvatar?.belongs(to: profile) == true
         if !sameUser || profile.avatarURL == nil {
+            startupAvatar = nil
             avatarData = nil
             avatarDataURL = nil
         }
-        startupAvatar = nil
         avatarOwner = profile
         let id = UUID(), revision = generation
         avatarID = id
@@ -532,6 +533,7 @@ final class NeteaseAccount {
             if let cached = await cachedAvatar(url) {
                 guard !Task.isCancelled, avatarID == id, generation == revision,
                       self.profile?.userID == profile.userID, self.profile?.avatarURL == url else { return }
+                startupAvatar = nil
                 avatarData = cached
                 avatarDataURL = url
                 await saveAvatarSnapshot(cached, profile)
@@ -541,6 +543,7 @@ final class NeteaseAccount {
                 let data = try await loadAvatar(url)
                 guard !Task.isCancelled, avatarID == id, generation == revision,
                       self.profile?.userID == profile.userID, self.profile?.avatarURL == url else { return }
+                startupAvatar = nil
                 avatarData = data
                 avatarDataURL = url
                 await saveAvatarSnapshot(data, profile)

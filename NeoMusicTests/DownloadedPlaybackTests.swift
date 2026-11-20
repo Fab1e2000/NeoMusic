@@ -246,17 +246,18 @@ final class DownloadedPlaybackTests: XCTestCase {
         let persisted = try JSONDecoder().decode(NowPlayingModel.SavedQueue.self, from: Data(contentsOf: file))
         XCTAssertEqual(persisted.songs?.first?.title, track.title)
         XCTAssertNil(persisted.songs?.first?.unavailabilityReason)
+        XCTAssertEqual(persisted.elapsed, 13)
     }
 
-    func testRuntimeUsesOfflineFileBeforeOnlineResolverAndResumesSavedProgress() async throws {
+    func testRuntimeUsesOfflineFileBeforeOnlineResolverAndResumesPastEstimatedDuration() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let audioURL = directory.appendingPathComponent("download.wav")
-        try PlayerTestFixtures.silentAudio(at: audioURL, seconds: 10)
+        try PlayerTestFixtures.silentAudio(at: audioURL, seconds: 30)
         let track = song("netease:12:34")
         let store = directory.appendingPathComponent("state", isDirectory: true)
         try FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
-        let saved = NowPlayingModel.SavedQueue(ids: [track.id], index: 0, elapsed: 3,
+        let saved = NowPlayingModel.SavedQueue(ids: [track.id], index: 0, elapsed: 17,
             repeatMode: .off, shuffled: false, songs: [PlaybackSongSnapshot(track)])
         try JSONEncoder().encode(saved).write(to: store.appendingPathComponent("playback.json"))
         let model = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false)
@@ -289,18 +290,20 @@ final class DownloadedPlaybackTests: XCTestCase {
         await runtime.restoreCachedState()
         XCTAssertEqual(publications, 1)
         XCTAssertTrue(model.hasOfflineCurrentSong)
-        XCTAssertEqual(model.elapsed, 3)
+        XCTAssertEqual(model.duration, 10)
+        XCTAssertEqual(model.elapsed, 17)
         XCTAssertFalse(model.isPlaying)
         XCTAssertFalse(model.hasAudioEngine)
 
         model.togglePlayback()
         await model.waitForResourceResolution()
-        for _ in 0..<40 where model.elapsed <= 3.1 { try await Task.sleep(for: .milliseconds(100)) }
+        for _ in 0..<40 where model.elapsed <= 17.1 { try await Task.sleep(for: .milliseconds(100)) }
         XCTAssertEqual(onlineCalls, 0)
         XCTAssertNil(model.errorMessage)
         XCTAssertTrue(model.isPlaying)
-        XCTAssertGreaterThan(model.elapsed, 3.1)
-        XCTAssertLessThan(model.elapsed, 6)
+        XCTAssertEqual(model.duration, 30, accuracy: 0.01)
+        XCTAssertGreaterThan(model.elapsed, 17.1)
+        XCTAssertLessThan(model.elapsed, 21)
         XCTAssertEqual(model.actualQuality, "lossless")
         model.restoreOnlineIdentity(ownerID: nil)
         XCTAssertTrue(model.isPlaying)

@@ -20,9 +20,10 @@ struct AccountAvatar: View {
     }
 
     private var displayedImage: UIImage? {
-        if let data = account.avatarData,
-           let cached = AccountAvatarImages.cachedImage(data, pixels: pixels) {
-            return cached
+        guard let data = account.avatarData else { return nil }
+        if let cached = AccountAvatarImages.cachedImage(data, pixels: pixels) { return cached }
+        if account.startupAvatarData != nil {
+            return AccountAvatarImages.startupImage(data, pixels: pixels)
         }
         return decodedTaskKey == taskKey ? decodedImage : nil
     }
@@ -77,6 +78,14 @@ struct AccountAvatar: View {
         cache.object(forKey: Key(data: data, pixels: pixels))
     }
 
+    static func startupImage(_ data: Data, pixels: Int) -> UIImage? {
+        // Only the bounded disk snapshot is decoded before the first frame.
+        guard let decoded = decodeThumbnail(data, pixels: min(pixels, NeteaseAvatarSnapshot.maximumPixelSize)) else { return nil }
+        let image = UIImage(cgImage: decoded.cgImage)
+        cache.setObject(image, forKey: Key(data: data, pixels: pixels), cost: decoded.cost)
+        return image
+    }
+
     static func loadImage(_ data: Data, pixels: Int) async -> UIImage? {
         let key = Key(data: data, pixels: pixels)
         if let image = cache.object(forKey: key) { return image }
@@ -119,8 +128,6 @@ struct AccountButton: View {
     var body: some View {
         Button { isPresented = true } label: {
             AccountAvatar(account: account, size: 36)
-                .frame(minWidth: 44, minHeight: 44)
-                .contentShape(.circle)
         }
         .buttonStyle(.plain)
         .accessibilityLabel("账户")

@@ -2,6 +2,8 @@ import Foundation
 import ImageIO
 
 struct NeteaseAvatarSnapshot: Codable, Equatable, Sendable {
+    static let maximumPixelSize = 192
+
     let userID: Int64
     let avatarURL: URL
     let data: Data
@@ -40,7 +42,7 @@ struct NeteaseAvatarSnapshotStore: Sendable {
                     kCGImageSourceCreateThumbnailFromImageAlways: true,
                     kCGImageSourceCreateThumbnailWithTransform: true,
                     kCGImageSourceShouldCacheImmediately: true,
-                    kCGImageSourceThumbnailMaxPixelSize: 192
+                    kCGImageSourceThumbnailMaxPixelSize: NeteaseAvatarSnapshot.maximumPixelSize
                   ] as CFDictionary), !Task.isCancelled else { return nil }
             let png = NSMutableData()
             guard let destination = CGImageDestinationCreateWithData(png, "public.png" as CFString, 1, nil) else {

@@ -408,10 +408,12 @@ final class AlbumMenuTests: XCTestCase {
             download: {}, removeDownload: {}, notify: { events.append($0.title) },
             open: { opened.append($0) }).flatMap { $0 }
         XCTAssertFalse(items.contains { $0.title == "前往专辑" })
-        for title in ["喜爱", "插播", "添加到队列", "Artist"] {
+        try XCTUnwrap(items.first { $0.title == "喜爱" }).perform()
+        XCTAssertEqual(events, ["favorite"], "在线喜爱必须等待请求结果，不能由菜单先报成功")
+        for title in ["插播", "添加到队列", "Artist"] {
             try XCTUnwrap(items.first { $0.title == title }).perform()
         }
-        XCTAssertEqual(events, ["favorite", LibraryToast.favorited.title, "next", "下个播放", "later", "已添加到队列"])
+        XCTAssertEqual(events, ["favorite", "next", "下个播放", "later", "已添加到队列"])
         XCTAssertEqual(opened, [.artist("catalog:artist:5")])
     }
 

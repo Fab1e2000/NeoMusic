@@ -93,29 +93,22 @@ final class NowPlayingModel {
     /// Discrete playback clock anchor so UI surfaces derive live progress locally
     /// via `TimelineView` without 60Hz `@MainActor` writes.
     var timelineAnchor: PlaybackTimelineAnchor {
-        let knownDuration: Double = if let audioDuration = audio?.duration, audioDuration > 0 {
-            audioDuration
-        } else if current.duration > 0 {
-            Double(current.duration)
-        } else {
-            0
-        }
         if let audio, hasCurrent, loadedEntry == entryIDs[currentIndex] {
             let anchor = audio.timelineAnchor
-            let resolvedDuration = anchor.duration > 0 ? anchor.duration : knownDuration
             let effectiveRate = (isPlaying && !audio.isLoading && audio.error == nil) ? anchor.rate : 0
             return PlaybackTimelineAnchor(
                 baseElapsed: anchor.baseElapsed,
                 hostTimestamp: anchor.hostTimestamp,
                 rate: effectiveRate,
-                duration: resolvedDuration
+                duration: anchor.duration
             )
         }
+        // Catalog duration is only an estimate until an audio resource is loaded.
         return PlaybackTimelineAnchor(
             baseElapsed: storedElapsed,
             hostTimestamp: idleAnchorTimestamp,
             rate: 0,
-            duration: knownDuration
+            duration: 0
         )
     }
     /// Current playback time derived on demand from `timelineAnchor`.
