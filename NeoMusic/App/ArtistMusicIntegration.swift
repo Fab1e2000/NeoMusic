@@ -52,6 +52,7 @@ import Observation
     func connect() {
         guard !connected else { return }; connected = true
         store?.onContentChange = { [weak self] in self?.publish($0) }
+        store?.onArtworkFailure = { [weak self] in self?.publishArtistArtworkFailure($0) }
         store?.onArtworkChange = { [weak self] in self?.publishArtwork($0) }
         LocalLibrary.catalog.openSongAlbum = { [weak self] song, open in self?.openSong(song, artist: nil, album: true, open: open) }
         LocalLibrary.catalog.openSongArtist = { [weak self] song, artist, open in self?.openSong(song, artist: artist, album: false, open: open) }
@@ -364,6 +365,16 @@ import Observation
         if route.isCatalogAlbum { return await store.prepareAlbumPlayback(id: id) }
         return await store.prepareArtistPlayback(id: id)
     }
+    private func publishArtistArtworkFailure(_ remote: URL) {
+        guard let store, store.userID == owner, store.sessionRevision == sessionRevision else { return }
+        let id = DeferredArtworkKey(domain: .artists, session: store.sessionRevision, url: remote).rawValue
+        for route in artworkRoutes[remote] ?? [] {
+            guard let detail = state(route).artist else { continue }
+            if detail.artwork?.loadID == id { detail.$artwork.update(nil) }
+            if let latest = detail.latest, latest.artwork.loadID == id { latest.$artwork.update(.missing) }
+        }
+    }
+
     private func publishArtwork(_ urls: Set<URL>) {
         guard let store, store.userID == owner, store.sessionRevision == sessionRevision else { return }
         if discardUnreferencedSongs() { publishSongs() }
@@ -606,8 +617,8 @@ private struct ArtistCatalogDestination: View {
                     artistPage(detail)
                 } else if let error = integration.error(route) {
                     ContentUnavailableView { Label("暂时无法读取", systemImage: "exclamationmark.circle") } description: { Text(error) } actions: { Button("重试") { Task { await integration.load(route) } } }
-                } else if case .artist = route, let placeholder = artistPlaceholder(id) {
-                    artistPage(placeholder)
+                } else if case .artist = route {
+                    Color.black.ignoresSafeArea()
                 } else { CatalogLoadingFeedback(title: "正在载入艺人") }
             }
         }.environment(\.songMenuActions, integration.songActions(route))
@@ -624,16 +635,6 @@ private struct ArtistCatalogDestination: View {
                 integration.collectRelease(item)
             }, retry: { _ in Task { await integration.load(route) } })
         }
-    }
-
-    private func artistPlaceholder(_ id: Int64) -> ArtistDetail? {
-        guard case .artist(let routeID) = route else { return nil }
-        if let preview = navigationPreview, preview.route == route {
-            return ArtistDetail(name: preview.title, artwork: preview.artwork, albums: [], id: routeID)
-        }
-        let catalogID = "catalog:artist:\(id)"
-        guard let item = LocalLibrary.catalog.artists.first(where: { $0.id == catalogID || $0.id == routeID }) else { return nil }
-        return ArtistDetail(name: item.name, artwork: item.artwork, albums: [], id: routeID)
     }
 
     @ViewBuilder private func album(_ id: Int64) -> some View {

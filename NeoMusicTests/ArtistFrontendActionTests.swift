@@ -28,6 +28,19 @@ import Synchronization
         return (ArtistMusicIntegration(account: account), store, directory)
     }
 
+    func testArtistEntryUsesOnlyTheCurrentArtworksTheme() {
+        let current = Artwork.file(URL(fileURLWithPath: "/current.png"))
+        let previous = Artwork.file(URL(fileURLWithPath: "/previous.png"))
+        let theme = ArtistBackdropColor(red: 0.14, green: 0.03, blue: 0.03)
+        guard case .loading = ArtistPageBackground(artwork: current, result: (previous, theme)),
+              case .loading = ArtistPageBackground(artwork: .deferred(id: "artist", placeholder: .missing), result: nil),
+              case .ready = ArtistPageBackground(artwork: current, result: (current, theme)),
+              case .unavailable = ArtistPageBackground(artwork: current, result: (current, nil)),
+              case .unavailable = ArtistPageBackground(artwork: .missing, result: nil) else {
+            return XCTFail("Pending artwork, a matching theme, and confirmed failure require different backgrounds")
+        }
+    }
+
     func testAddingReleaseTwiceDoesNotToggleSubscriptionOff() async throws {
         let (integration, store, directory) = try await fixture()
         defer { try? FileManager.default.removeItem(at: directory) }

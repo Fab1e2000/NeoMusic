@@ -68,7 +68,9 @@ final class LibraryDetailNavigation: NSObject, UINavigationControllerDelegate {
             )
         }
         page.updateEnvironment?(environment)
-        if let preview, preview.route == route,
+        if case .artist = route {
+            page.view.backgroundColor = .black
+        } else if let preview, preview.route == route,
            preview.ownerID == nil || preview.ownerID == environment[NeteaseAccount.self]?.profile.map({ String($0.userID) }),
            let backdrop = preview.albumBackdrop {
             page.chrome.setAlbumBackdrop(backdrop)

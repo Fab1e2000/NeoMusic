@@ -31,14 +31,13 @@ struct ArtistDetailView: View {
     var retry: ((String) -> Void)?
     @Environment(\.collectionMenuActions) private var actions
     @Environment(\.libraryNavigationChrome) private var chrome
-    @Environment(\.libraryNavigationPreview) private var navigationPreview
     @Environment(\.dynamicTypeSize) private var textSize
     @ScaledMetric(relativeTo: .largeTitle) private var nameSize = 34.0
     @ScaledMetric(relativeTo: .subheadline) private var captionSize = 14.0
     @ScaledMetric(relativeTo: .callout) private var releaseTitleSize = 16.0
     @ScaledMetric(relativeTo: .title3) private var headingSize = 20.0
     @State private var biography = false
-    @State private var artworkBackground: (url: URL, color: ArtistBackdropColor)?
+    @State private var artworkBackground: (artwork: Artwork?, color: ArtistBackdropColor?)?
     private var identity: String { detail.id.isEmpty ? detail.name : detail.id }
     var body: some View {
         ScrollView {
@@ -49,7 +48,18 @@ struct ArtistDetailView: View {
                         .multilineTextAlignment(.center).padding(.horizontal, 20).padding(.top, -43)
                     HStack(spacing: 24) {
                         Button { biography = true } label: { Image(systemName: "info").font(.system(size: 22, weight: .semibold)).frame(width: 48, height: 48).background(.white.opacity(0.1), in: Circle()) }.disabled(detail.biography.isEmpty).accessibilityLabel("艺人简介")
-                        Button { if let first = detail.songs.first, let playSong { playSong(first) } else { actions.play(.artist(identity), false) } } label: { Image(systemName: "play.fill").font(.system(size: 36)).foregroundStyle(Color(white: 0.49)).frame(width: 72, height: 72).background(.white, in: Circle()) }.accessibilityLabel("播放")
+                        Button { if let first = detail.songs.first, let playSong { playSong(first) } else { actions.play(.artist(identity), false) } } label: {
+                            Circle()
+                                .fill(.white)
+                                .overlay {
+                                    Image(systemName: "play.fill")
+                                        .font(.system(size: 36))
+                                        .blendMode(.destinationOut)
+                                }
+                                .compositingGroup()
+                                .frame(width: 72, height: 72)
+                                .contentShape(Circle())
+                        }.accessibilityLabel("播放")
                         Button(action: favorite) { Image(systemName: detail.isFavorite ? "star.fill" : "star").font(.system(size: 20)).frame(width: 48, height: 48).background(.white.opacity(0.1), in: Circle()) }.accessibilityLabel(detail.isFavorite ? "取消喜爱" : "喜爱")
                     }.buttonStyle(.plain).padding(.top, 34.0 / 3)
                 }
@@ -58,7 +68,7 @@ struct ArtistDetailView: View {
                         ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12))
                         : AnyLayout(HStackLayout(spacing: 12))
                     layout {
-                        CollectionCardLink(item: latest) { ArtworkView(artwork: latest.artwork).frame(width: 96, height: 96) }
+                        CollectionCardLink(item: latest) { ArtworkView(artwork: latest.artwork, hidesLoadingPlaceholder: true).frame(width: 96, height: 96) }
                         CollectionCardLink(item: latest) {
                             VStack(alignment: .leading, spacing: 2) {
                                 if let caption = detail.latestCaption { Text(caption).font(.system(size: captionSize)) }
@@ -125,12 +135,14 @@ struct ArtistDetailView: View {
                     }.padding(.top, 24)
                 }
             }.padding(.bottom, 24).background {
-                ArtistDetailBackdrop(artwork: detail.artwork, preview: matchingPreview?.artwork) { url, color in
-                    artworkBackground = (url, color)
+                let artwork = detail.artwork
+                ArtistDetailBackdrop(artwork: artwork, theme: pageBackground.color) { color in
+                    guard detail.artwork == artwork else { return }
+                    artworkBackground = (artwork, color)
                 }
             }
         }
-        .modifier(ArtistPageShade(color: pageBackground))
+        .modifier(ArtistPageShade(background: pageBackground))
         .ignoresSafeArea(edges: .top).scrollEdgeEffectHidden(true, for: .top).foregroundStyle(.white)
         .toolbarColorScheme(.dark, for: .navigationBar, .tabBar)
         .libraryTitleDisplayMode(.inline)
@@ -145,15 +157,12 @@ struct ArtistDetailView: View {
             NavigationStack { ScrollView { Text(detail.biography).frame(maxWidth: .infinity, alignment: .leading).padding(20) }.navigationTitle(detail.name).toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { biography = false } } } }.presentationDetents([.large])
         }
     }
-    private var matchingPreview: LibraryNavigationPreview? {
-        guard let navigationPreview, navigationPreview.route == .artist(identity) else { return nil }
-        return navigationPreview
+    private var pageBackground: ArtistPageBackground {
+        if artworkBackground?.artwork != detail.artwork,
+           let cached = ArtistDetailBackdrop.cachedTheme(for: detail.artwork) { return .ready(cached) }
+        return ArtistPageBackground(artwork: detail.artwork, result: artworkBackground)
     }
 
-    private var pageBackground: ArtistBackdropColor? {
-        guard let artworkBackground, detail.artwork == .file(artworkBackground.url) else { return nil }
-        return artworkBackground.color
-    }
     private func favorite() {
         if let toggleFavorite {
             toggleFavorite()
@@ -187,8 +196,34 @@ struct ArtistDetailView: View {
     }
 }
 
+enum ArtistPageBackground {
+    case loading, unavailable, ready(ArtistBackdropColor)
+
+    init(artwork: Artwork?, result: (artwork: Artwork?, color: ArtistBackdropColor?)?) {
+        switch artwork {
+        case .file, .image, .deferred:
+            guard let result, result.artwork == artwork else { self = .loading; return }
+            self = result.color.map(Self.ready) ?? .unavailable
+        default:
+            self = .unavailable
+        }
+    }
+
+    var color: ArtistBackdropColor? {
+        if case .ready(let color) = self { color } else { nil }
+    }
+
+    func fill(shade: CGFloat) -> Color {
+        switch self {
+        case .loading: .black
+        case .unavailable: Color(red: shade / 255, green: (shade - 1) / 255, blue: (shade - 2) / 255)
+        case .ready(let color): color.dimmed(by: shade / 96)
+        }
+    }
+}
+
 private struct ArtistPageShade: ViewModifier {
-    let color: ArtistBackdropColor?
+    let background: ArtistPageBackground
     @State private var shade: CGFloat = 96
 
     func body(content: Content) -> some View {
@@ -201,8 +236,7 @@ private struct ArtistPageShade: ViewModifier {
                 if shade != value { shade = value }
             }
             .background {
-                (color?.dimmed(by: shade / 96)
-                    ?? Color(red: shade / 255, green: (shade - 1) / 255, blue: (shade - 2) / 255))
+                background.fill(shade: shade)
                     .ignoresSafeArea()
             }
     }

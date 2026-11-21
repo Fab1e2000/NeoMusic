@@ -36,6 +36,7 @@ struct ArtworkView: View {
     var contentID: String?
     var previewArtwork: Artwork? = nil
     var cornerRadius: CGFloat = 8
+    var hidesLoadingPlaceholder = false
     var showsBorder = true
     var isZoomAlignmentTarget = false
     var loadImage: @MainActor (URL, Int) async -> UIImage? = LocalArtworkImages.load
@@ -70,7 +71,7 @@ struct ArtworkView: View {
         case .image(let image):
             image.resizable().scaledToFill()
         case .file, .deferred:
-            LoadedArtworkView(artwork: artwork, previewArtwork: previewArtwork, retainsImageAcrossSources: contentID != nil, loadImage: loadImage)
+            LoadedArtworkView(artwork: artwork, previewArtwork: previewArtwork, retainsImageAcrossSources: contentID != nil, hidesLoadingPlaceholder: hidesLoadingPlaceholder, loadImage: loadImage)
                 .id(contentID)
         case .favorites:
             GeometryReader { proxy in
@@ -147,6 +148,8 @@ private struct ArtworkPlaceholderView: View {
 
 private struct LoadedArtworkView: View {
     let artwork: Artwork
+    let hidesLoadingPlaceholder: Bool
+    @State private var failedURL: URL?
     let retainsImageAcrossSources: Bool
     let loadImage: @MainActor (URL, Int) async -> UIImage?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -158,9 +161,10 @@ private struct LoadedArtworkView: View {
     @State private var placeholderKind: ArtworkPlaceholder
     @State private var initialArtwork: Artwork?
 
-    init(artwork: Artwork, previewArtwork: Artwork?, retainsImageAcrossSources: Bool,
+    init(artwork: Artwork, previewArtwork: Artwork?, retainsImageAcrossSources: Bool, hidesLoadingPlaceholder: Bool,
          loadImage: @escaping @MainActor (URL, Int) async -> UIImage?) {
         self.artwork = artwork
+        self.hidesLoadingPlaceholder = hidesLoadingPlaceholder
         self.retainsImageAcrossSources = retainsImageAcrossSources
         self.loadImage = loadImage
         let kind: ArtworkPlaceholder
@@ -211,14 +215,18 @@ private struct LoadedArtworkView: View {
                 } else if let initialArtwork {
                     ArtworkView(artwork: initialArtwork, cornerRadius: 0, loadImage: loadImage)
                         .environment(\.nativeArtworkSurfaceEnabled, false)
-                } else { ArtworkPlaceholderView(kind: currentPlaceholder) }
+                } else if !hidesLoadingPlaceholder || (url != nil && failedURL == url) {
+                    ArtworkPlaceholderView(kind: currentPlaceholder)
+                }
             }
             .animation(!reduceMotion && (displayedImage(pixels: pixels) != nil || hasPreviewImage) ? .easeInOut(duration: 0.2) : nil,
                        value: displayedImage(pixels: pixels) != nil || hasPreviewImage)
             .task(id: (url?.absoluteString ?? "") + ":" + String(pixels)) {
                 guard let url, pixels > 0 else { return }
+                failedURL = nil
                 let loaded = await loadImage(url, pixels)
-                guard !Task.isCancelled, let loaded else { return }
+                guard !Task.isCancelled else { return }
+                guard let loaded else { failedURL = url; return }
                 image = loaded
                 imageURL = url
             }

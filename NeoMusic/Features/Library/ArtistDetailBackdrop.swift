@@ -2,14 +2,28 @@ import SwiftUI
 import UIKit
 import CoreImage.CIFilterBuiltins
 
+private enum ArtistBackdropFade {
+    static let start: CGFloat = 155.0 / 520
+    static let end: CGFloat = 518.0 / 520
+}
+
 struct ArtistDetailBackdrop: View {
     let artwork: Artwork?
-    var preview: Artwork? = nil
-    let onBackgroundReady: (URL, ArtistBackdropColor) -> Void
-    @State private var shownImage: UIImage?
-    @State private var shownRequest: ArtistBackdropRequest?
-    @State private var shownIsPrepared = false
+    let theme: ArtistBackdropColor?
+    let onBackgroundReady: (ArtistBackdropColor?) -> Void
+    @State private var shown: (artwork: Artwork?, backdrop: PreparedArtistBackdrop)?
     @State private var fadeMask: UIImage?
+    private static let cache: NSCache<NSURL, PreparedArtistBackdrop> = {
+        let cache = NSCache<NSURL, PreparedArtistBackdrop>()
+        cache.totalCostLimit = 24 * 1_024 * 1_024
+        return cache
+    }()
+
+    static func cachedTheme(for artwork: Artwork?) -> ArtistBackdropColor? {
+        guard case .file(let url) = artwork else { return nil }
+        return cache.object(forKey: url as NSURL)?.color
+    }
+
     private static let preparer = ArtistBackdropPreparer()
     @Environment(\.displayScale) private var displayScale
     @Environment(\.artworkLoadAction) private var loadArtwork
@@ -19,6 +33,8 @@ struct ArtistDetailBackdrop: View {
     var body: some View {
         GeometryReader { geometry in
             let request = ArtistBackdropRequest(url: artworkURL, width: geometry.size.width, scale: displayScale)
+            let cached = request.url.flatMap { Self.cache.object(forKey: $0 as NSURL) }
+            let ready = cached?.request == request ? cached : nil
             let y = geometry.frame(in: .scrollView).minY
             let upward = max(0, -y)
             let imageProgress = min(1, max(0, (upward - 150) / 330))
@@ -28,20 +44,13 @@ struct ArtistDetailBackdrop: View {
             let magnification = 1 + pull / 500
 
             ZStack(alignment: .top) {
-                if let image = immediateImage {
-                    image.resizable().scaledToFill()
-                        .frame(width: geometry.size.width, height: extent)
-                        .clipped()
-                }
-                if let shownImage, shownRequest == request {
-                    if shownIsPrepared {
-                        Image(uiImage: shownImage).resizable()
-                            .frame(width: geometry.size.width, height: extent)
-                    } else {
-                        Image(uiImage: shownImage).resizable().scaledToFill()
-                            .frame(width: geometry.size.width, height: extent)
-                            .clipped()
-                    }
+                if let ready {
+                    Image(uiImage: ready.image).resizable()
+                } else if let shown, shown.backdrop.request == request, shown.artwork == artwork {
+                    Image(uiImage: shown.backdrop.image).resizable()
+                } else if let theme {
+                    LinearGradient(colors: [theme.dimmed(by: 1.4), theme.dimmed(by: 1)],
+                                   startPoint: .top, endPoint: .bottom)
                 }
             }
             .frame(width: geometry.size.width, height: extent, alignment: .top)
@@ -51,7 +60,9 @@ struct ArtistDetailBackdrop: View {
                 if let fadeMask {
                     Image(uiImage: fadeMask).resizable()
                 } else {
-                    LinearGradient(colors: [.black, .clear], startPoint: .init(x: 0.5, y: 0.52), endPoint: .bottom)
+                    LinearGradient(colors: [.black, .clear],
+                                   startPoint: .init(x: 0.5, y: ArtistBackdropFade.start),
+                                   endPoint: .init(x: 0.5, y: ArtistBackdropFade.end))
                 }
             }
             .scaleEffect(reducesMotion ? 1 : magnification, anchor: .top)
@@ -62,32 +73,52 @@ struct ArtistDetailBackdrop: View {
                 guard !Task.isCancelled else { return }
                 fadeMask = mask
             }
-            .task(id: request) {
-                guard let url = request.url else { return }
-                let image = await LocalArtworkImages.load(url, pixels: LocalArtworkImages.pixelSize(max(geometry.size.width, 520) * displayScale))
-                guard !Task.isCancelled, let image else { return }
-                shownImage = image
-                shownRequest = request
-                shownIsPrepared = false
-                let prepared = await Self.preparer.prepare(image, request: request)
-                guard !Task.isCancelled, let prepared else { return }
-                shownImage = prepared.image
-                shownRequest = request
-                shownIsPrepared = true
-                if let color = prepared.color { onBackgroundReady(url, color) }
+            .task(id: ArtistBackdropInput(artwork: artwork, request: request)) {
+                guard request.width > 0 else { return }
+                if let url = request.url {
+                    if let cached = ready {
+                        guard !Task.isCancelled else { return }
+                        shown = (artwork, cached)
+                        onBackgroundReady(cached.color)
+                        return
+                    }
+                    let color = await Self.preparer.theme(at: url)
+                    guard !Task.isCancelled else { return }
+                    onBackgroundReady(color)
+                    let pixels = LocalArtworkImages.pixelSize(max(request.width, extent) * displayScale)
+                    let image = await LocalArtworkImages.loadThumbnail(url, pixels: pixels)
+                    await display(image, color: color, request: request)
+                } else if case .image(let image) = artwork {
+                    let source = ImageRenderer(content: image).uiImage
+                    let color = await Self.preparer.theme(in: source)
+                    guard !Task.isCancelled else { return }
+                    onBackgroundReady(color)
+                    await display(source, color: color, request: request)
+                }
             }
         }
         .allowsHitTesting(false)
         .task(id: artwork?.loadID) { loadArtwork(artwork?.loadID) }
-        .task(id: preview?.loadID) { loadArtwork(preview?.loadID) }
     }
 
-    private var immediateImage: Image? {
-        if case .image(let image) = preview { return image }
-        if artworkURL == nil, case .image(let image) = artwork { return image }
-        return nil
+    @MainActor private func display(_ image: UIImage?, color: ArtistBackdropColor?, request: ArtistBackdropRequest) async {
+        guard !Task.isCancelled else { return }
+        if let image, let prepared = await Self.preparer.prepare(image, request: request, color: color) {
+            guard !Task.isCancelled else { return }
+            if let url = request.url, let cgImage = prepared.image.cgImage {
+                Self.cache.setObject(prepared, forKey: url as NSURL, cost: cgImage.bytesPerRow * cgImage.height)
+            }
+            shown = (artwork, prepared)
+        } else if !Task.isCancelled {
+            onBackgroundReady(nil)
+        }
     }
 
+}
+
+private struct ArtistBackdropInput: Equatable {
+    let artwork: Artwork?
+    let request: ArtistBackdropRequest
 }
 
 private struct ArtistBackdropRequest: Hashable, Sendable {
@@ -101,6 +132,18 @@ struct ArtistBackdropColor: Sendable {
     let green: Double
     let blue: Double
 
+    static func theme(from candidates: [AlbumArtworkBackdrop.Candidate]) -> Self? {
+        // Ignore nearly neutral clusters and accents covering less than 4% of the image.
+        let accents = candidates.filter { $0.weight >= 0.04 && $0.chroma >= 0.10 }
+        let selected = accents.max { $0.weight * $0.chroma < $1.weight * $1.chroma }
+            ?? candidates.max { $0.weight < $1.weight }
+        guard let color = selected?.color else { return nil }
+        let (r, g, b) = color.linearRGB
+        let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
+        let scale = luminance > 0.14 ? 0.14 / luminance : 1
+        return Self(red: r * scale, green: g * scale, blue: b * scale)
+    }
+
     func dimmed(by factor: Double) -> Color {
         let linearFactor = pow(factor, 2.2)
         return Color(.sRGBLinear, red: red * linearFactor, green: green * linearFactor, blue: blue * linearFactor)
@@ -111,7 +154,10 @@ private final class PreparedArtistBackdrop: Sendable {
     let image: UIImage
     let color: ArtistBackdropColor?
 
-    init(image: UIImage, color: ArtistBackdropColor?) {
+    let request: ArtistBackdropRequest
+
+    init(image: UIImage, color: ArtistBackdropColor?, request: ArtistBackdropRequest) {
+        self.request = request
         self.image = image
         self.color = color
     }
@@ -119,18 +165,16 @@ private final class PreparedArtistBackdrop: Sendable {
 
 private actor ArtistBackdropPreparer {
     private let context = CIContext()
-    private let cache = NSCache<NSString, PreparedArtistBackdrop>()
+    private let artworkContext = CIContext(options: [.workingColorSpace: CGColorSpace(name: CGColorSpace.sRGB)!])
     private var cachedFadeMask: (size: CGSize, image: UIImage)?
-
-    init() { cache.totalCostLimit = 24 * 1_024 * 1_024 }
 
     func fadeMask(pixelSize: CGSize) -> UIImage? {
         guard pixelSize.width > 0, pixelSize.height > 0, !Task.isCancelled else { return nil }
         if let cachedFadeMask, cachedFadeMask.size == pixelSize { return cachedFadeMask.image }
 
         let gradient = CIFilter.smoothLinearGradient()
-        gradient.point0 = .zero
-        gradient.point1 = CGPoint(x: 0, y: pixelSize.height * 0.48)
+        gradient.point0 = CGPoint(x: 0, y: pixelSize.height * (1 - ArtistBackdropFade.end))
+        gradient.point1 = CGPoint(x: 0, y: pixelSize.height * (1 - ArtistBackdropFade.start))
         gradient.color0 = .black
         gradient.color1 = .white
 
@@ -147,11 +191,17 @@ private actor ArtistBackdropPreparer {
         return image
     }
 
-    func prepare(_ image: UIImage, request: ArtistBackdropRequest) -> PreparedArtistBackdrop? {
+    func theme(at url: URL) -> ArtistBackdropColor? {
+        CIImage(contentsOf: url).flatMap { ArtistBackdropColor.theme(from: AlbumArtworkBackdrop.candidates(from: $0)) }
+    }
+
+    func theme(in image: UIImage?) -> ArtistBackdropColor? {
+        image?.cgImage.flatMap { ArtistBackdropColor.theme(from: AlbumArtworkBackdrop.candidates(from: CIImage(cgImage: $0))) }
+    }
+
+    func prepare(_ image: UIImage, request: ArtistBackdropRequest, color: ArtistBackdropColor?) -> PreparedArtistBackdrop? {
         let width = request.width, displayScale = request.scale
         guard width > 0, !Task.isCancelled else { return nil }
-        let key = "\(request.url?.absoluteString ?? ""):\(width):\(displayScale)" as NSString
-        if let cached = cache.object(forKey: key) { return cached }
         let format = UIGraphicsImageRendererFormat()
         format.scale = displayScale
         format.opaque = true
@@ -180,50 +230,44 @@ private actor ArtistBackdropPreparer {
         }
         guard let cgImage = extended.cgImage else { return nil }
         let input = CIImage(cgImage: cgImage)
-        let gradient = CIFilter.smoothLinearGradient()
-        gradient.point0 = CGPoint(x: 0, y: (520 - 400) * displayScale)
-        gradient.point1 = CGPoint(x: 0, y: (520 - 288) * displayScale)
-        gradient.color0 = .white
-        gradient.color1 = .black
-        let blur = CIFilter.maskedVariableBlur()
-        blur.inputImage = input.clampedToExtent()
-        blur.mask = gradient.outputImage
-        blur.radius = Float(22 * displayScale)
-        guard let output = blur.outputImage,
-              let rendered = context.createCGImage(output, from: input.extent) else { return nil }
+        guard let output = layeredBlur(input, scale: displayScale),
+              let rendered = artworkContext.createCGImage(output, from: input.extent) else { return nil }
         guard !Task.isCancelled else { return nil }
-        let result = PreparedArtistBackdrop(
+        return PreparedArtistBackdrop(
             image: UIImage(cgImage: rendered, scale: displayScale, orientation: .up),
-            color: source.cgImage.flatMap { backgroundColor(from: $0) }
+            color: color, request: request
         )
-        cache.setObject(result, forKey: key, cost: rendered.bytesPerRow * rendered.height)
-        return result
     }
 
-    private func backgroundColor(from source: CGImage) -> ArtistBackdropColor? {
-        guard let colorSpace = CGColorSpace(name: CGColorSpace.linearSRGB) else { return nil }
-        let image = CIImage(cgImage: source)
-        let average = CIFilter.areaAverage()
-        average.inputImage = image
-        average.extent = CGRect(x: 0, y: 0, width: image.extent.width, height: floor(image.extent.height / 4))
-        guard let output = average.outputImage else { return nil }
+    private func layeredBlur(_ image: CIImage, scale: CGFloat) -> CIImage? {
+        func ramp(from start: CGFloat, to end: CGFloat) -> CIImage? {
+            let gradient = CIFilter.smoothLinearGradient()
+            gradient.point0 = CGPoint(x: 0, y: image.extent.maxY - start * scale)
+            gradient.point1 = CGPoint(x: 0, y: image.extent.maxY - end * scale)
+            gradient.color0 = .black
+            gradient.color1 = .white
+            return gradient.outputImage
+        }
+        func blend(_ background: CIImage, toward foreground: CIImage, mask: CIImage) -> CIImage {
+            foreground.applyingFilter("CIBlendWithMask", parameters: [
+                kCIInputBackgroundImageKey: background, kCIInputMaskImageKey: mask
+            ])
+        }
+        let extended = image.clampedToExtent()
+        func blurred(radius: CGFloat) -> CIImage {
+            extended.applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: radius * scale])
+                .cropped(to: image.extent)
+        }
 
-        var pixel = [Float](repeating: 0, count: 4)
-        context.render(output, toBitmap: &pixel, rowBytes: 4 * MemoryLayout<Float>.size,
-                       bounds: output.extent, format: .RGBAf, colorSpace: colorSpace)
-        guard pixel[3] > 0, pixel.allSatisfy(\.isFinite) else { return nil }
-        let red = Double(max(0, pixel[0]))
-        let green = Double(max(0, pixel[1]))
-        let blue = Double(max(0, pixel[2]))
-        let luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue
-        let target = min(0.10, max(0.035, luminance))
-        let chroma = max(red, green, blue) - min(red, green, blue)
-        let chromaScale = target / max(luminance, chroma / 0.8, 0.0001)
-        return ArtistBackdropColor(
-            red: target + (red - luminance) * chromaScale,
-            green: target + (green - luminance) * chromaScale,
-            blue: target + (blue - luminance) * chromaScale
-        )
+        guard let depth = ramp(from: 337, to: 390),
+              let transition = ramp(from: 304, to: 348) else { return nil }
+        let blurredLayer = blend(blurred(radius: 3), toward: blurred(radius: 10), mask: depth)
+        let dimmedLayer = blurredLayer.applyingFilter("CIColorMatrix", parameters: [
+            "inputRVector": CIVector(x: 0.94, y: 0, z: 0, w: 0),
+            "inputGVector": CIVector(x: 0, y: 0.94, z: 0, w: 0),
+            "inputBVector": CIVector(x: 0, y: 0, z: 0.94, w: 0)
+        ])
+        let background = blend(blurredLayer, toward: dimmedLayer, mask: depth)
+        return blend(image, toward: background, mask: transition).cropped(to: image.extent)
     }
 }
-

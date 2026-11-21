@@ -476,3 +476,44 @@ final class PlayerTextMetricsTests: XCTestCase {
         XCTAssertEqual(NowPlayingArtworkPage.artworkSide(layout: layout, textScale: 3, controlsOverflow: 400), 0)
     }
 }
+
+extension AlbumArtworkBackdropTests {
+    private func cluster(_ r: Double, _ g: Double, _ b: Double, weight: Double) -> AlbumArtworkBackdrop.Candidate {
+        .init(color: .init(red: r, green: g, blue: b), weight: weight)
+    }
+
+    func testArtistSelectsRepresentativeAccentByWeightedChroma() throws {
+        let clusters = [cluster(0.2, 0.2, 0.2, weight: 0.65),
+                        cluster(0.4, 0.2, 0.2, weight: 0.20),
+                        cluster(0, 0, 1, weight: 0.15)]
+        let color = try XCTUnwrap(ArtistBackdropColor.theme(from: clusters))
+        XCTAssertEqual(color.red, 0)
+        XCTAssertEqual(color.green, 0)
+        XCTAssertEqual(color.blue, 1)
+    }
+
+    func testArtistFallsBackToDominantGrayForNeutralPhotosAndTinyAccents() throws {
+        let gray = cluster(0.25, 0.25, 0.25, weight: 0.75)
+        for minority in [[cluster(0.05, 0.05, 0.05, weight: 0.25)],
+                         [cluster(0.4, 0.39, 0.38, weight: 0.24), cluster(1, 0, 0, weight: 0.01)]] {
+            let color = try XCTUnwrap(ArtistBackdropColor.theme(from: [gray] + minority))
+            XCTAssertEqual(color.red, 0.050876, accuracy: 0.000001)
+            XCTAssertEqual(color.green, color.red)
+            XCTAssertEqual(color.blue, color.red)
+        }
+        XCTAssertNil(ArtistBackdropColor.theme(from: []))
+    }
+
+    func testArtistCapsWhiteAndNeonInLinearRGBAndPreservesBlack() throws {
+        for sample in [cluster(1, 1, 1, weight: 1), cluster(0.5, 1, 0, weight: 1)] {
+            let color = try XCTUnwrap(ArtistBackdropColor.theme(from: [sample]))
+            let luminance = 0.2126 * color.red + 0.7152 * color.green + 0.0722 * color.blue
+            XCTAssertEqual(luminance, 0.14, accuracy: 1e-12)
+            let (r, g, b) = sample.color.linearRGB
+            XCTAssertEqual(color.red / color.green, r / g, accuracy: 1e-12)
+            XCTAssertEqual(color.blue / color.green, b / g, accuracy: 1e-12)
+        }
+        let black = try XCTUnwrap(ArtistBackdropColor.theme(from: [cluster(0, 0, 0, weight: 1)]))
+        XCTAssertEqual([black.red, black.green, black.blue], [0, 0, 0])
+    }
+}

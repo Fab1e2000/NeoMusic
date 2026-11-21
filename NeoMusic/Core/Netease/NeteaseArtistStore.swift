@@ -18,6 +18,7 @@ final class NeteaseArtistStore {
     private(set) var errors: [String: String] = [:]
     @ObservationIgnored var onChange: (() -> Void)?
     @ObservationIgnored var onContentChange: ((Change) -> Void)?
+    @ObservationIgnored var onArtworkFailure: ((URL) -> Void)?
     @ObservationIgnored var onArtworkChange: ((Set<URL>) -> Void)?
     var sessionRevision: UUID { revision }
     @ObservationIgnored private let client: NeteaseMusicClient
@@ -419,7 +420,10 @@ final class NeteaseArtistStore {
                     try check(token)
                     PerformanceDiagnostics.event("ArtworkReady")
                     onArtworkChange?([remote])
-                } catch { }
+                } catch {
+                    guard token == revision, !Task.isCancelled, cachedArtworkURL(remote) == nil else { return }
+                    onArtworkFailure?(remote)
+                }
             }
         }
     }

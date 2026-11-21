@@ -11,14 +11,16 @@ struct AlbumArtworkBackdrop: Codable, Equatable, Sendable {
     var uiColor: UIColor { UIColor(red: red, green: green, blue: blue, alpha: 1) }
     private static let imageContext = CIContext()
     var colorScheme: ColorScheme {
-        let r = linear(red)
-        let g = linear(green)
-        let b = linear(blue)
+        let (r, g, b) = linearRGB
         let l = 0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b
         let m = 0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b
         let s = 0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b
         let okL = 0.2104542553 * cbrt(l) + 0.7936177850 * cbrt(m) - 0.0040720468 * cbrt(s)
         return okL <= 0.65 ? .dark : .light
+    }
+
+    var linearRGB: (Double, Double, Double) {
+        (linear(red), linear(green), linear(blue))
     }
 
     private func linear(_ channel: Double) -> Double {
@@ -39,7 +41,20 @@ struct AlbumArtworkBackdrop: Codable, Equatable, Sendable {
     }
 
     private static func extract(from input: CIImage) -> AlbumArtworkBackdrop? {
-        guard let space = CGColorSpace(name: CGColorSpace.sRGB) else { return nil }
+        candidates(from: input).max { $0.weight < $1.weight }?.color
+    }
+
+    struct Candidate: Sendable {
+        let color: AlbumArtworkBackdrop
+        let weight: Double
+
+        var chroma: Double {
+            max(color.red, color.green, color.blue) - min(color.red, color.green, color.blue)
+        }
+    }
+
+    static func candidates(from input: CIImage) -> [Candidate] {
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB) else { return [] }
         let scale = min(1, 128 / max(input.extent.width, input.extent.height))
         let reduced = input.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
         let filter = CIFilter.kMeans()
@@ -48,18 +63,21 @@ struct AlbumArtworkBackdrop: Codable, Equatable, Sendable {
         filter.count = 8
         filter.passes = 10
         filter.perceptual = false
-        guard let output = filter.outputImage else { return nil }
+        guard let output = filter.outputImage else { return [] }
         let context = imageContext
         var weighted = [Float](repeating: 0, count: 32)
         context.render(output, toBitmap: &weighted, rowBytes: 128,
                        bounds: output.extent, format: .RGBAf, colorSpace: space)
-        guard let dominant = (0..<8).max(by: { weighted[$0 * 4 + 3] < weighted[$1 * 4 + 3] }),
-              weighted[dominant * 4 + 3] > 0 else { return nil }
         var colors = [Float](repeating: 0, count: 32)
         context.render(output.settingAlphaOne(in: output.extent), toBitmap: &colors, rowBytes: 128,
                        bounds: output.extent, format: .RGBAf, colorSpace: space)
-        let index = dominant * 4
-        return AlbumArtworkBackdrop(red: Double(colors[index]), green: Double(colors[index + 1]), blue: Double(colors[index + 2]))
+        return (0..<8).compactMap { cluster in
+            let i = cluster * 4
+            let weight = Double(weighted[i + 3])
+            guard weight > 0 else { return nil }
+            let color = AlbumArtworkBackdrop(red: Double(colors[i]), green: Double(colors[i + 1]), blue: Double(colors[i + 2]))
+            return Candidate(color: color, weight: weight)
+        }
     }
 }
 
