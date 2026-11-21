@@ -108,7 +108,15 @@ final class LibraryDetailNavigation: NSObject, UINavigationControllerDelegate {
 
     func navigationController(_ navigationController: UINavigationController, didShow viewController: UIViewController, animated: Bool) {
         updateColorScheme((viewController as? LibraryDetailHostingController)?.chrome.colorScheme)
-        displayedChrome = (viewController as? LibraryDetailHostingController)?.chrome
+        // An interrupted zoom can finish its incoming transition while UIKit is starting the pop.
+        // Resolve the displayed page after this navigation callback has unwound.
+        Task { @MainActor [weak self, weak navigationController, weak viewController] in
+            guard let navigationController, let page = viewController as? LibraryDetailHostingController,
+                  navigationController.topViewController === page else { return }
+            if let destination = navigationController.transitionCoordinator?.viewController(forKey: .to),
+               destination !== page { return }
+            self?.displayedChrome = page.chrome
+        }
         for case let page as LibraryDetailHostingController in navigationController.viewControllers {
             page.chrome.isActive = page === viewController
         }

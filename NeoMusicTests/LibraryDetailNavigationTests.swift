@@ -676,7 +676,13 @@ final class LibraryDetailNavigationTests: XCTestCase {
             bridge.open(.album("rapid-\(index)"), source: source)
             XCTAssertNotNil(nav.topViewController?.preferredTransition)
             try await Task.sleep(for: .milliseconds(100))
+            let incoming = try XCTUnwrap(nav.topViewController as? LibraryDetailHostingController)
+            incoming.chrome.setColorScheme(.dark)
+            // UIKit can finish the push and start the reverse transition in the same event.
+            bridge.navigationController(nav, didShow: incoming, animated: true)
             nav.popViewController(animated: true)
+            await Task.yield()
+            XCTAssertTrue(bridge.displayedChrome === (root as? LibraryDetailHostingController)?.chrome)
             try await settle()
             XCTAssertTrue(nav.topViewController === root)
             XCTAssertEqual(bridge.depth, 0)
