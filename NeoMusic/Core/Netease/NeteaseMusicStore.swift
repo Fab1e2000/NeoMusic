@@ -196,6 +196,11 @@ final class NeteaseMusicStore {
         catch { if generation == revision { self.error = error.localizedDescription; onChange?() }; return false }
     }
 
+    func hasReceivedPlaylistPage(id: Int64) -> Bool {
+        guard let detail = details[id] else { return false }
+        return detail.hasInitialPage
+    }
+
     func hasMorePlaylist(id: Int64) -> Bool {
         if let detail = details[id] { return !detail.isComplete }
         return playlists.first(where: { $0.id == id }).map { $0.trackCount > 0 } ?? false
@@ -226,7 +231,7 @@ final class NeteaseMusicStore {
         guard !Task.isCancelled else { return }
         if let existing = detailTasks[id] { _ = await existing.value; return }
         if !force, let failed = failedLoads[id] { _ = await load(id: id, mode: failed); return }
-        if !force, details[id] != nil, let date = detailDates[id], Date().timeIntervalSince(date) < 300 { return }
+        if !force, hasReceivedPlaylistPage(id: id), let date = detailDates[id], Date().timeIntervalSince(date) < 300 { return }
         _ = await load(id: id, mode: .refresh)
     }
 
@@ -336,7 +341,7 @@ final class NeteaseMusicStore {
             let detail = try await run { [client] credential in
                 switch mode {
                 case .refresh:
-                    return try await client.detail(id: id, credential: credential, trackLimit: max(100, existing?.nextOffset ?? 0), prefetched: existing?.songs ?? [])
+                    return try await client.detail(id: id, credential: credential, trackLimit: max(NeteasePlaylistDetail.initialPageSize, existing?.nextOffset ?? 0), prefetched: existing?.songs ?? [])
                 case .more:
                     guard let existing else { throw NeteaseAccountError.invalidResponse }
                     return try await client.loadMore(existing, credential: credential)
@@ -369,7 +374,7 @@ final class NeteaseMusicStore {
     }
 
     private func firstPage(_ detail: NeteasePlaylistDetail) -> NeteasePlaylistDetail {
-        let count = min(100, detail.nextOffset)
+        let count = min(NeteasePlaylistDetail.initialPageSize, detail.nextOffset)
         let ids = Set(detail.orderedTrackIDs.prefix(count))
         return .init(playlist: detail.playlist, songs: Array(detail.songs.prefix(count)),
                      addedTimes: detail.addedTimes.filter { ids.contains($0.key) },

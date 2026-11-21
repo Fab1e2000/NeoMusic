@@ -148,6 +148,19 @@ final class PlaylistLibrary {
             && playlist(id)?.sourceOwnerID == sourceOwner && !onlineHasMore.contains(id)
     }
 
+    private var receivedPlaylistDetails: Set<String> = []
+
+    func isAwaitingInitialOnlineDetail(for item: LibraryPlaylistItem) -> Bool {
+        item.isReadOnly && !item.isDownloadedSnapshot
+            && onlineErrors[item.id] == nil && !receivedPlaylistDetails.contains(item.id)
+    }
+
+    func setPlaylistDetailReceived(_ received: Bool, for id: String) {
+        guard receivedPlaylistDetails.contains(id) != received else { return }
+        if received { receivedPlaylistDetails.insert(id) }
+        else { receivedPlaylistDetails.remove(id) }
+    }
+
     func setExternalCollection(item: LibraryPlaylistItem, songs: [LibrarySongItem], error: String? = nil) {
         guard persistenceURL == nil else { return }
         if let index = playlists.firstIndex(where: { $0.id == item.id }) {
@@ -190,6 +203,7 @@ final class PlaylistLibrary {
                 } else if let url = onlinePreferencesURL, let data = try? Data(contentsOf: url),
                    let saved = try? JSONDecoder().decode([String: OnlinePreference].self, from: data) { onlinePreferences = saved }
                 loadedOnlinePlaylistIDs = []
+                receivedPlaylistDetails = []
                 loadingPlaylistIDs = []
                 onlineErrors = [:]
                 onlineHasMore = []

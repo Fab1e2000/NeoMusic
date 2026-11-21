@@ -733,14 +733,13 @@ import Observation
         _ = try await restoreCachedDetail(id: id)
         let joined = try await joinDetail(id)
         if let cached = cache.details[id], joined != nil || (!force && refreshedDetails[id].map { Date().timeIntervalSince($0) < 300 } == true) {
-            let firstPageCount = min(100, cached.orderedTrackIDs.count)
-            if cached.nextOffset >= firstPageCount { return cached }
+            if cached.hasInitialPage { return cached }
             let credential = credential
             return try await fetchDetail(id: id, refresh: true) { [client] in
-                try await client.loadMore(cached, credential: credential, limit: firstPageCount - cached.nextOffset)
+                try await client.loadMore(cached, credential: credential, limit: cached.initialPageCount - cached.nextOffset)
             }
         }
-        let limit = max(100, cache.details[id]?.nextOffset ?? 0)
+        let limit = max(NeteasePlaylistDetail.initialPageSize, cache.details[id]?.nextOffset ?? 0)
         let credential = credential
         return try await fetchDetail(id: id, refresh: true) { [client] in
             try await client.detail(id: id, credential: credential, trackLimit: limit)

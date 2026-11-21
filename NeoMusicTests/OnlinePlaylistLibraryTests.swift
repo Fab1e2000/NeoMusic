@@ -2,6 +2,49 @@ import XCTest
 @testable import NeoMusic
 
 @MainActor final class OnlinePlaylistLibraryTests: XCTestCase {
+    func testAwaitingInitialOnlineDetailUsesPageAvailabilityIndependentlyOfArtwork() {
+        let library = PlaylistLibrary(playlists: [])
+        let item = LibraryPlaylistItem(id: "home:playlist:7", title: "Playlist", artwork: .playlist, sourceOwnerID: "1")
+        library.setExternalCollection(item: item, songs: [])
+        XCTAssertTrue(library.isAwaitingInitialOnlineDetail(for: item))
+
+        func detail(total: Int, loaded: Int) -> NeteasePlaylistDetail {
+            let ids = (1...total).map(Int64.init)
+            let songs = ids.prefix(loaded).map {
+                NeteaseMusicSong(id: $0, title: "Song", artist: "Artist", album: "Album", artworkURL: nil, duration: 60)
+            }
+            return NeteasePlaylistDetail(playlist: .init(id: 7, title: "Playlist", creator: "Owner", creatorID: 1,
+                                                  artworkURL: nil, trackCount: total, isFavorites: false),
+                                  songs: songs, addedTimes: [:], trackIDs: ids,
+                                  loadedTrackCount: loaded)
+        }
+
+        library.setExternalCollection(item: item, songs: [.unavailable("cached")])
+        for total in [81, 108] {
+            let probe = detail(total: total, loaded: 1)
+            library.setPlaylistDetailReceived(probe.hasInitialPage, for: item.id)
+            XCTAssertTrue(library.isAwaitingInitialOnlineDetail(for: item))
+        }
+        XCTAssertFalse(detail(total: 108, loaded: 99).hasInitialPage)
+        for total in [1, 81, 108] {
+            let firstPage = detail(total: total, loaded: min(total, 100))
+            library.setPlaylistDetailReceived(firstPage.hasInitialPage, for: item.id)
+            XCTAssertFalse(library.isAwaitingInitialOnlineDetail(for: item))
+        }
+
+        library.setPlaylistDetailReceived(false, for: item.id)
+
+        library.setExternalCollection(item: item, songs: [], error: "Offline")
+        XCTAssertFalse(library.isAwaitingInitialOnlineDetail(for: item))
+
+        library.setPlaylistDetailReceived(true, for: item.id)
+        library.setExternalCollection(item: item, songs: [])
+        XCTAssertFalse(library.isAwaitingInitialOnlineDetail(for: item))
+
+        let local = LibraryPlaylistItem(id: "local", title: "Local", artwork: .playlist)
+        XCTAssertFalse(library.isAwaitingInitialOnlineDetail(for: local))
+    }
+
     func testOnlineMirrorIsReadOnlyAndLocalReferencesSurviveScan() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

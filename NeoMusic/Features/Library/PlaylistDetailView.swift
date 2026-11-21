@@ -24,6 +24,7 @@ struct PlaylistDetailView: View {
     var externalArtwork: AnyView? = nil
     var recentlyPlayedSongs: [LibrarySongItem] = []
     @Environment(\.artworkLoadAction) private var loadArtwork
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.displayScale) private var displayScale
     @Environment(\.dismiss) private var dismiss
     @Environment(\.closeLibraryDetail) private var closeLibraryDetail
@@ -44,6 +45,9 @@ struct PlaylistDetailView: View {
     @State private var loadedOnlinePlaylistID: String?
     @State private var pendingPlayback: PlaylistTrackSelection?
     @State private var actionFeedback = 0
+
+    private static let coverSize: CGFloat = 266
+    private static let coverTopInset: CGFloat = 14
 
     private var playlist: LibraryPlaylistItem? { library.playlist(playlistID) }
     private var backgroundArtwork: Artwork {
@@ -86,7 +90,10 @@ struct PlaylistDetailView: View {
         let requestedPlayback = pendingPlayback
         Group {
             if let playlist {
-                content(playlist)
+                let awaitingDetail = library.isAwaitingInitialOnlineDetail(for: playlist)
+                content(playlist, awaitingDetail: awaitingDetail)
+                    .libraryTitleDisplayMode(.inline)
+                    .toolbarColorScheme(preparedBackdrop?.colorScheme, for: .navigationBar)
             } else {
                 ContentUnavailableView("播放列表已删除", systemImage: "music.note.list")
             }
@@ -152,7 +159,7 @@ struct PlaylistDetailView: View {
         let hasMore: Bool
     }
 
-    private func content(_ playlist: LibraryPlaylistItem) -> some View {
+    private func content(_ playlist: LibraryPlaylistItem, awaitingDetail: Bool) -> some View {
         let tracks = tracks
         let hasMore = library.onlineHasMore.contains(playlistID)
         let scheme = preparedBackdrop?.colorScheme ?? colorScheme
@@ -177,7 +184,7 @@ struct PlaylistDetailView: View {
                 .padding(.bottom, 30)
         ) : nil
         return NativePlaylistTrackList(
-            songs: displayedTracks,
+            songs: awaitingDetail ? [] : displayedTracks,
             title: playlist.title,
             header: AnyView(header(playlist)
                 .padding(.horizontal, 20)
@@ -205,26 +212,36 @@ struct PlaylistDetailView: View {
         )
         .ignoresSafeArea(.container, edges: .vertical)
         .background(pageBackground)
+        .allowsHitTesting(!awaitingDetail)
+        .accessibilityHidden(awaitingDetail)
+        .overlay {
+            // Keep the scroll view and its cover zoom target laid out beneath the loading color.
+            pageBackground.ignoresSafeArea()
+                .opacity(awaitingDetail ? 1 : 0)
+                .animation(reduceMotion || awaitingDetail ? nil : .easeInOut, value: awaitingDetail)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
         .environment(\.colorScheme, scheme)
         .environment(\.collectionPagePalette, palette)
-        .toolbarColorScheme(preparedBackdrop?.colorScheme, for: .navigationBar)
-        .libraryTitleDisplayMode(.inline)
         .modifier(PlaylistRootChrome(isRoot: chrome?.isRoot == true))
         .libraryRootAccountButton()
-        .modifier(PlaylistDetailSearch(query: $query, enabled: !tracks.isEmpty))
+        .modifier(PlaylistDetailSearch(query: $query, enabled: awaitingDetail || !tracks.isEmpty))
         .toolbar {
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                Button("开始协作", systemImage: "person.fill.badge.plus") {}.disabled(true)
-                Button("共享", systemImage: "square.and.arrow.up") {}.disabled(true)
-            }
-            ToolbarSpacer(.fixed, placement: .topBarTrailing)
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    detailMenu(playlist)
-                } label: {
-                    Label("更多", systemImage: "ellipsis")
+            if !awaitingDetail {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button("开始协作", systemImage: "person.fill.badge.plus") {}.disabled(true)
+                    Button("共享", systemImage: "square.and.arrow.up") {}.disabled(true)
                 }
-                .menuOrder(.fixed)
+                ToolbarSpacer(.fixed, placement: .topBarTrailing)
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        detailMenu(playlist)
+                    } label: {
+                        Label("更多", systemImage: "ellipsis")
+                    }
+                    .menuOrder(.fixed)
+                }
             }
         }
     }
@@ -238,9 +255,9 @@ struct PlaylistDetailView: View {
                     detailArtwork(playlist)
                 }
             }.environment(\.nativeArtworkSurfaceEnabled, false), cornerRadius: 10, isZoomAlignmentTarget: true)
-                .frame(width: 266, height: 266)
+                .frame(width: Self.coverSize, height: Self.coverSize)
                 .shadow(color: .black.opacity(0.06), radius: 12, y: 6)
-                .padding(.top, 14)
+                .padding(.top, Self.coverTopInset)
                 .padding(.bottom, 22)
                 .modifier(RootArtworkName(title: chrome?.isRoot == true ? playlist.title : nil))
             if chrome?.isRoot != true {

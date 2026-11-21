@@ -38,6 +38,9 @@ struct NeteasePlaylistDetail: Codable, Sendable {
         guard let first = orderedTrackIDs.first else { return nil }
         return songs.first(where: { $0.id == first })?.artworkURL
     }
+    static let initialPageSize = 100
+    var initialPageCount: Int { min(Self.initialPageSize, orderedTrackIDs.count) }
+    var hasInitialPage: Bool { nextOffset >= initialPageCount }
     var nextOffset: Int { min(loadedTrackCount ?? songs.count, orderedTrackIDs.count) }
     var isComplete: Bool { nextOffset >= orderedTrackIDs.count }
 }

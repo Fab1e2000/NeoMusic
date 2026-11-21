@@ -238,6 +238,7 @@ import Observation
                 var item = LibraryPlaylistItem(id: id, title: "播放列表", artwork: .playlist, sourceOwnerID: currentOwner)
                 item.isReadOnlyContent = true
                 detailLibrary.setExternalCollection(item: item, songs: [])
+                detailLibrary.setPlaylistDetailReceived(false, for: id)
                 detailLibrary.setOnlineHasMore(id, false)
             }
             loaded = [:]
@@ -282,7 +283,7 @@ import Observation
         feedPlaylistCovers.update(playlist: number, remote: detail.displayArtworkURL(ownerID: home.userID),
                                   session: home.sessionRevision, cover: feedPlaylistArtwork(id: number, home: home))
         let route = "home:playlist:\(number)"
-        if detailLibrary.playlist(route) != nil { applyDetail(detail, id: route, clearError: true) }
+        if detailLibrary.playlist(route) != nil { applyDetail(detail, id: route, clearError: detail.hasInitialPage) }
         retainReferencedSongs()
         syncCachedSongs(home.cachedSongs, home: home, preferAsync: home.cachedSongs.count > 120)
         refreshRetainedArtwork(contentChanged: true)
@@ -854,6 +855,7 @@ import Observation
         var item = LibraryPlaylistItem(id: id, title: detail.playlist.title, artwork: cover, sourceOwnerID: owner, subtitle: detail.playlist.creator)
         item.isReadOnlyContent = true
         loaded[id] = (item, detail.songs)
+        detailLibrary.setPlaylistDetailReceived(detail.hasInitialPage, for: id)
         detailLibrary.setOnlineHasMore(id, !detail.isComplete, totalCount: detail.orderedTrackIDs.count)
         updateDetail(id, item: item, songs: detail.songs, clearError: clearError)
     }
@@ -889,6 +891,7 @@ import Observation
                     ?? detailLibrary.playlist(id)?.artwork ?? .playlist
                 var item = LibraryPlaylistItem(id: id, title: "每日推荐", artwork: cover, sourceOwnerID: owner, subtitle: snapshot.date)
                 item.isReadOnlyContent = true
+                detailLibrary.setPlaylistDetailReceived(true, for: id)
                 loaded[id] = (item, snapshot.songs)
                 updateDetail(id, item: item, songs: snapshot.songs, clearError: true)
             default:

@@ -511,6 +511,7 @@ final class OnlineLibraryIntegration {
                 LocalLibrary.playlistLibrary.setOnlineHasMore(item.id, false)
                 continue
             }
+            LocalLibrary.playlistLibrary.setPlaylistDetailReceived(music.hasReceivedPlaylistPage(id: id), for: item.id)
             let localCount = item.id == "favorites" ? localFavoritesCount : 0
             LocalLibrary.playlistLibrary.setOnlineHasMore(item.id, music.hasMorePlaylist(id: id), totalCount: music.playlistTotalCount(id: id) + localCount)
             LocalLibrary.playlistLibrary.updateOnlineSongs(playlistID: item.id, songs: LocalLibrary.playlistLibrary.songs(in: item.id),
