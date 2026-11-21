@@ -1,6 +1,6 @@
 # LNPopupController baseline and minimal patches
 
-Upstream 4.6.1, commit `18847353e7cbec66e53a89edb1aec6d00967281c`.
+Upstream 4.6.3, commit `fe0d1b8ce3c6464a63f0dc5e82d4c1b641adb8cc`.
 Source and LICENSE copied from upstream; no NeoDizzy project/configuration imported.
 
 Runtime modifications extracted from NeoDizzy current source:

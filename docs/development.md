@@ -15,7 +15,7 @@
 | 依赖 | 当前版本或基线 | 位置 |
 | --- | --- | --- |
 | LNPopupUI | `60853564423524c9ed15cc74c5969d3e1ca666f1`，含已记录的本地修改 | `Packages/LNPopupUI` |
-| LNPopupController | 4.6.1，含已记录的本地修改 | `Packages/LNPopupController` |
+| LNPopupController | 4.6.3，含已记录的本地修改 | `Packages/LNPopupController` |
 | Nuke | 13.2.0 | Swift Package Manager |
 | LNSwiftUIUtils | 1.1.5 | Swift Package Manager |
 | LNSystemMarqueeLabel | 0.1.2 | Swift Package Manager |

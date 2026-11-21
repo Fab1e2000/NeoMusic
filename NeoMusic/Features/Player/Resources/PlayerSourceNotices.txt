@@ -19,7 +19,7 @@ Baseline 60853564423524c9ed15cc74c5969d3e1ca666f1, MIT.
 NeoMusic forwards optional custom-title accessibility metadata to LNPopupItem's
 public accessibilityLabel and accessibilityHint properties for the mini-player.
 LNPopupController: https://github.com/LeoNatan/LNPopupController
-Baseline 4.6.1 / 18847353e7cbec66e53a89edb1aec6d00967281c, MIT.
+Baseline 4.6.3 / fe0d1b8ce3c6464a63f0dc5e82d4c1b641adb8cc, MIT.
 Currently used artwork-host, binding synchronization and title gesture patches
 from NeoDizzy are applied, along with NeoMusic appearance and local bar-placement
 trait forwarding corrections. There is no external-accessory portal fork

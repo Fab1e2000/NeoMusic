@@ -1,14 +1,14 @@
 // swift-tools-version:6.2
-// LNPopupController:4.6.1
+// LNPopupController:4.6.3
 
 import PackageDescription
 import Foundation
 
-let packageBase = URL(filePath: Context.packageDirectory, directoryHint: .isDirectory)
+let packageBase = URL(filePath: Context.packageDirectory, directoryHint: .isDirectory).resolvingSymlinksInPath()
 
 extension URL {
 	var targetRelativePath: String {
-		var rv = path
+		var rv = resolvingSymlinksInPath().path
 		rv.replace(packageBase.path, with: "")
 		rv = rv.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
 		return String(rv.dropFirst("LNPopupController/".count))

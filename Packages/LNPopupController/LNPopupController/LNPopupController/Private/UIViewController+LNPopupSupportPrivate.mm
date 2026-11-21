@@ -3,7 +3,7 @@
 //  LNPopupController
 //
 //  Created by Léo Natan on 2015-08-23.
-//  Copyright © 2015-2025 Léo Natan. All rights reserved.
+//  Copyright © 2015-2026 Léo Natan. All rights reserved.
 //
 
 #import "UIViewController+LNPopupSupportPrivate.h"
@@ -18,6 +18,7 @@
 #import "LNForwardingDelegate.h"
 #import "LNPopupContentView+Private.h"
 #import "UIScreen+LNPopupSupportPrivate.h"
+#import "LNPopupVerticalBarSupport.h"
 
 #import <objc/runtime.h>
 #import <os/log.h>
@@ -672,10 +673,11 @@ void __LNViewControllerCopySystemSafeAreaGeometry(UIViewController* source, UIVi
 		static __LNIvarBitfield vBEEBitfield = __LNIvarBitfieldNamed(UIViewController.class, LNPopupHiddenString("_viewControllerFlags"), LNPopupHiddenString("verticalBarEligibleEdges"));
 		if(vBEEBitfield.bitOffset >= 0 && [source respondsToSelector:vBEESEL])
 		{
-			NSUInteger sourceEdges = vBEEFunc(source, vBEESEL);
+			BOOL forcingHorizontalStatusBarAxis = _LNPopupIsForcingHorizontalStatusBarAxis();
+			NSUInteger sourceEdges = forcingHorizontalStatusBarAxis ? 0 : vBEEFunc(source, vBEESEL);
 			NSUInteger targetEdges = vBEEFunc(target, vBEESEL);
 			
-			if(sourceEdges != targetEdges && __LNIvarBitfieldRead(source, vBEEBitfield) == sourceEdges && __LNIvarBitfieldRead(target, vBEEBitfield) == targetEdges)
+			if(sourceEdges != targetEdges && (forcingHorizontalStatusBarAxis || __LNIvarBitfieldRead(source, vBEEBitfield) == sourceEdges) && __LNIvarBitfieldRead(target, vBEEBitfield) == targetEdges)
 			{
 				__LNIvarBitfieldWrite(target, vBEEBitfield, sourceEdges);
 				geometryChanged = YES;
@@ -722,10 +724,10 @@ void __LNViewControllerCopySystemSafeAreaGeometry(UIViewController* source, UIVi
 		{
 			__LNClippedSafeAreaCornerInsets sourceCornerInsets;
 			UIWindow* window = sourceView.window;
-			if(window != nil && [targetView respondsToSelector:cSACIFFISIVCSEL])
+			if(window != nil && [sourceView respondsToSelector:cSACIFFISIVCSEL])
 			{
 				CGRect sourceFrameInWindow = [window convertRect:sourceView.bounds fromView:sourceView];
-				sourceCornerInsets = cSACIFFISIVCFunc(targetView, cSACIFFISIVCSEL, sourceFrameInWindow, window, YES);
+				sourceCornerInsets = cSACIFFISIVCFunc(sourceView, cSACIFFISIVCSEL, sourceFrameInWindow, window, YES);
 			}
 			else
 			{
@@ -802,10 +804,24 @@ void __LNViewControllerCopySystemSafeAreaGeometry(UIViewController* source, UIVi
 			insets = __LNEdgeInsetsSum(self.popupPresentationContainerViewController.view.safeAreaInsets, UIEdgeInsetsMake(0, 0, - _LNPopupSafeAreaInsets(self.popupPresentationContainerViewController).bottom, 0));
 		}
 
+#if defined(__IPHONE_27_1)
+		BOOL forcesHorizontalStatusBarAxis = NO;
+		if(@available(iOS 27.1, *))
+		{
+			forcesHorizontalStatusBarAxis = _LNPopupResolvedVerticalBarBehavior(self) == UIVerticalBarBehaviorDisabled;
+			if(forcesHorizontalStatusBarAxis)
+			{
+				insets = _LNPopupInsetsAdjustedForHorizontalStatusBarAxis(insetsSourceController.view, insets);
+			}
+		}
+#endif
+		
 		_setContentOverlayInsets_andLeftMargin_rightMarginFunc(self, _setContentOverlayInsets_andLeftMargin_rightMarginSEL, insets, contentMargins.left, contentMargins.right);
 		__LNViewControllerSetContentMargins(self, contentMargins);
 #if defined(__IPHONE_27_1)
-        __LNViewControllerCopySystemSafeAreaGeometry(insetsSourceController, self);
+		_LNPopupPerformForcingHorizontalStatusBarAxis(forcesHorizontalStatusBarAxis, ^{
+			__LNViewControllerCopySystemSafeAreaGeometry(insetsSourceController, self);
+		});
 #endif
 
 		self.view.insetsLayoutMarginsFromSafeArea = YES;
@@ -817,7 +833,9 @@ void __LNViewControllerCopySystemSafeAreaGeometry(UIViewController* source, UIVi
 		_setContentOverlayInsets_andLeftMargin_rightMarginFunc(containingContentView.layoutController, _setContentOverlayInsets_andLeftMargin_rightMarginSEL, insets, contentMargins.left, contentMargins.right);
 		__LNViewControllerSetContentMargins(containingContentView.layoutController, contentMargins);
 #if defined(__IPHONE_27_1)
-		__LNViewControllerCopySystemSafeAreaGeometry(insetsSourceController, containingContentView.layoutController);
+		_LNPopupPerformForcingHorizontalStatusBarAxis(forcesHorizontalStatusBarAxis, ^{
+			__LNViewControllerCopySystemSafeAreaGeometry(insetsSourceController, containingContentView.layoutController);
+		});
 #endif
 		
 		containingContentView.layoutController.view.insetsLayoutMarginsFromSafeArea = YES;
@@ -2428,6 +2446,47 @@ static void* LNTabBarControllerWantsForcedAnimatedPopupBarLayout = &LNTabBarCont
 
 #pragma mark - UINavigationController
 
+//Ensure the the popup content view remains on top, over the column container.
+@interface __LNPopupColumnContainerViewSupport : NSObject @end
+@implementation __LNPopupColumnContainerViewSupport
+
+static BOOL __ln_isPromotingPopupContentViews = NO;
+
+- (void)didAddSubview:(UIView*)subview
+{
+	Class superclass = LNDynamicSubclassSuper(self, __LNPopupColumnContainerViewSupport.class);
+	struct objc_super super = {.receiver = self, .super_class = superclass};
+	void (*super_class)(struct objc_super*, SEL, UIView*) = reinterpret_cast<decltype(super_class)>(objc_msgSendSuper);
+	super_class(&super, _cmd, subview);
+
+	if(__ln_isPromotingPopupContentViews || [subview isKindOfClass:LNPopupContentView.class])
+	{
+		return;
+	}
+
+	__ln_isPromotingPopupContentViews = YES;
+
+	UIView* _self = (UIView*)self;
+	for(UIView* view in _self.subviews.copy)
+	{
+		if([view isKindOfClass:LNPopupContentView.class] == NO)
+		{
+			continue;
+		}
+
+		LNPopupContentView* popupContentView = (LNPopupContentView*)view;
+		[_self bringSubviewToFront:popupContentView];
+		if(popupContentView.transitionView.superview == _self)
+		{
+			[_self bringSubviewToFront:popupContentView.transitionView];
+		}
+	}
+
+	__ln_isPromotingPopupContentViews = NO;
+}
+
+@end
+
 @implementation UINavigationController (LNPopupSupportPrivate)
 
 - (void)_layoutModernNavigationControllerFloatingPopupWithSuperFallback:(void(^)(void))superFallback
@@ -2457,6 +2516,8 @@ static void* LNTabBarControllerWantsForcedAnimatedPopupBarLayout = &LNTabBarCont
 					return [NSStringFromClass(viewToTest.class) hasSuffix:columnContainerView];
 				} includingSelf:YES];
 				target = newTarget;
+
+				LNDynamicSubclass(target, __LNPopupColumnContainerViewSupport.class);
 			}
 			
 			[target addSubview:self._ln_popupController_nocreate.popupContentView];

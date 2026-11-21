@@ -3,7 +3,7 @@
 //  LNPopupController
 //
 //  Created by Léo Natan on 2020-08-04.
-//  Copyright © 2015-2025 Léo Natan. All rights reserved.
+//  Copyright © 2015-2026 Léo Natan. All rights reserved.
 //
 
 #import <LNPopupController/LNPopupContentView.h>
@@ -49,6 +49,7 @@
 - (void)_applyBackgroundEffectWithContentViewController:(UIViewController*)vc popupBar:(LNPopupBar*)popupBar;
 
 - (void)_repositionPopupCloseButton;
+- (void)_updateLayoutAxisBehaviorFromContentController;
 - (void)_repositionPopupCloseButtonAnimated:(BOOL)animated;
 
 @property (nonatomic, getter=_applyScreenCorners, setter=_setApplyScreenCorners:) BOOL applyScreenCorners;
