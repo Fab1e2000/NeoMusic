@@ -66,6 +66,55 @@ import XCTest
         XCTAssertEqual(HomeMusicIntegration.feedSections(reordered, artwork: { _ in .missing }).map(\.id), sections.map(\.id))
     }
 
+    func testHomePlaylistCoverChangeUpdatesEveryCardAndIgnoresLateOldFile() {
+        let session = UUID()
+        let remoteA = URL(string: "https://example.com/a.jpg")!
+        let remoteB = URL(string: "https://example.com/b.jpg")!
+        let fileA = Artwork.file(URL(fileURLWithPath: "/cache/a"))
+        let fileB = Artwork.file(URL(fileURLWithPath: "/cache/b"))
+        let pending = Artwork.deferred(id: DeferredArtworkKey(domain: .home, session: session, url: remoteB).rawValue,
+                                       placeholder: .playlist)
+        for alreadyCached in [true, false] {
+            var index = HomeFeedPlaylistCovers(session: session)
+            let radar = ArtworkResourceState(fileA)
+            let recommendations = ArtworkResourceState(fileA)
+            let other = ArtworkResourceState<Artwork>(.playlist)
+            index.register(radar, playlist: 7, remote: remoteA)
+            index.register(recommendations, playlist: 7, remote: remoteA)
+            index.register(other, playlist: 8, remote: remoteA)
+
+            let replacement = alreadyCached ? fileB : pending
+            index.update(playlist: 7, remote: remoteB, session: session, cover: replacement)
+            index.publish(filesFor: [remoteA], session: session) { _ in fileA }
+            XCTAssertEqual([radar.value, recommendations.value, other.value], [replacement, replacement, fileA])
+
+            index.publish(filesFor: [remoteB], session: session) { _ in fileB }
+            XCTAssertEqual([radar.value, recommendations.value, other.value], [fileB, fileB, fileA])
+            index.update(playlist: 7, remote: nil, session: session, cover: .playlist)
+            index.publish(filesFor: [remoteB], session: session) { _ in fileB }
+            XCTAssertEqual([radar.value, recommendations.value], [.playlist, .playlist])
+        }
+    }
+
+    func testRebuiltHomePlaylistCoverIndexRejectsPreviousAccountSession() {
+        let previous = UUID(), current = UUID()
+        let remote = URL(string: "https://example.com/shared.jpg")!
+        let oldFile = Artwork.file(URL(fileURLWithPath: "/old-account/shared"))
+        let currentFile = Artwork.file(URL(fileURLWithPath: "/current-account/shared"))
+        let oldCard = ArtworkResourceState(oldFile)
+        let newCard = ArtworkResourceState<Artwork>(.playlist)
+        var index = HomeFeedPlaylistCovers(session: previous)
+        index.register(oldCard, playlist: 7, remote: remote)
+        index = HomeFeedPlaylistCovers(session: current)
+        index.register(newCard, playlist: 7, remote: remote)
+        index.update(playlist: 7, remote: nil, session: previous, cover: oldFile)
+        index.publish(filesFor: [remote], session: previous) { _ in oldFile }
+        XCTAssertEqual(newCard.value, .playlist)
+        index.publish(filesFor: [remote], session: current) { _ in currentFile }
+        XCTAssertEqual(newCard.value, currentFile)
+        XCTAssertEqual(oldCard.value, oldFile)
+    }
+
     func testSimilarActionAcceptsOnlyCurrentAccountsPlayableOnlineIdentity() {
         func item(_ id: String, unavailable: Bool = false) -> LibrarySongItem {
             .init(id: id, title: "Song", artist: "Artist", album: "Album", albumArtist: "Artist", trackNumber: 1,

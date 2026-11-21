@@ -1,6 +1,34 @@
 import SwiftUI
 import Observation
 
+@MainActor struct HomeFeedPlaylistCovers {
+    let session: UUID?
+    private var cards: [Int64: [ArtworkResourceState<Artwork>]] = [:]
+    private var remoteByPlaylist: [Int64: URL] = [:]
+
+    init(session: UUID?) { self.session = session }
+
+    mutating func register(_ card: ArtworkResourceState<Artwork>, playlist: Int64, remote: URL?) {
+        cards[playlist, default: []].append(card)
+        remoteByPlaylist[playlist] = remote
+    }
+
+    mutating func update(playlist: Int64, remote: URL?, session: UUID, cover: @autoclosure () -> Artwork) {
+        guard self.session == session, let targets = cards[playlist] else { return }
+        remoteByPlaylist[playlist] = remote
+        let replacement = cover()
+        for card in targets { card.update(replacement) }
+    }
+
+    func publish(filesFor urls: Set<URL>, session: UUID, artwork: (URL) -> Artwork) {
+        guard self.session == session else { return }
+        for (id, remote) in remoteByPlaylist where urls.contains(remote) {
+            let cover = artwork(remote)
+            for card in cards[id] ?? [] { card.update(cover) }
+        }
+    }
+}
+
 @MainActor @Observable final class HomeMusicIntegration {
     let model = HomeContentModel()
     let detailLibrary = PlaylistLibrary(playlists: [], folders: [])
@@ -22,6 +50,7 @@ import Observation
     private var pendingFeedPlayback: (songs: [NeteaseMusicSong], index: Int, title: String)?
     private(set) var pendingQuickAction: HomeQuickAction?
     @ObservationIgnored private var artworkSongs: [URL: [NeteaseMusicSong]] = [:]
+    @ObservationIgnored private var feedPlaylistCovers = HomeFeedPlaylistCovers(session: nil)
     @ObservationIgnored private var feedArtwork: [URL: [ArtworkResourceState<Artwork>]] = [:]
     @ObservationIgnored private var retainedArtworkIDs: Set<String> = []
     @ObservationIgnored private var retainedArtworkSession: UUID?
@@ -250,6 +279,8 @@ import Observation
         guard let home = account.home, home.userID == account.profile?.userID,
               owner == account.profile.map({ String($0.userID) }),
               let detail = home.cachedDetail(id: number) else { return }
+        feedPlaylistCovers.update(playlist: number, remote: detail.displayArtworkURL(ownerID: home.userID),
+                                  session: home.sessionRevision, cover: feedPlaylistArtwork(id: number, home: home))
         let route = "home:playlist:\(number)"
         if detailLibrary.playlist(route) != nil { applyDetail(detail, id: route, clearError: true) }
         retainReferencedSongs()
@@ -375,6 +406,7 @@ import Observation
             }
         }
         player.updateArtwork(songs)
+        feedPlaylistCovers.publish(filesFor: urls, session: home.sessionRevision) { self.artwork($0) }
         for url in urls {
             for resource in feedArtwork[url] ?? [] { resource.update(artwork(url)) }
         }
@@ -429,23 +461,33 @@ import Observation
         }
     }
 
+    private func feedPlaylistArtwork(id: Int64, home: NeteaseHomeStore?) -> Artwork {
+        if let home, let detail = home.cachedDetail(id: id),
+           detail.playlist.creatorID == home.userID || detail.orderedTrackIDs.isEmpty || detail.nextOffset > 0 {
+            return artwork(detail.displayArtworkURL(ownerID: home.userID))
+        }
+        return Self.playlistArtwork(id: id, home: home)
+    }
+
     private func publishFeed() {
         let home = account.home
         let matches = home?.userID == account.profile?.userID
         let displayFeed = home.map { NeteaseHomeFeed(blocks: $0.displayFeedBlocks, hasMore: nil, cursor: nil) }
         let issues = matches ? Self.feedIssues(home) : []
-        let sections = Self.feedSections(matches ? displayFeed : nil, issues: issues, artwork: { self.artwork($0) }, playlistArtwork: { Self.playlistArtwork(id: $0, home: home) })
-        if model.sections != sections { model.sections = sections }
+        let sections = Self.feedSections(matches ? displayFeed : nil, issues: issues, artwork: { self.artwork($0) }, playlistArtwork: { self.feedPlaylistArtwork(id: $0, home: home) })
+        let session = matches ? home?.sessionRevision : nil
+        if feedPlaylistCovers.session != session || model.sections != sections { model.sections = sections }
+        feedPlaylistCovers = HomeFeedPlaylistCovers(session: session)
         feedArtwork = [:]
         if matches, let home {
             for block in home.displayFeedBlocks {
                 guard let section = model.sections.first(where: { $0.id == block.id }) else { continue }
                 for resource in block.resources {
-                    var remote = resource.artworkURL
-                    if ["list", "playlist"].contains(resource.resourceType ?? ""), let id = resource.numericID {
-                        remote = home.cachedDetail(id: id)?.displayArtworkURL(ownerID: home.userID)
-                    }
-                    if let remote, let item = section.items.first(where: { $0.id == resource.id }) {
+                    guard let item = section.items.first(where: { $0.id == resource.id }) else { continue }
+                    if case .navigate(.playlist) = item.action, let id = resource.numericID {
+                        let remote = home.cachedDetail(id: id)?.displayArtworkURL(ownerID: home.userID)
+                        feedPlaylistCovers.register(item.$artwork, playlist: id, remote: remote)
+                    } else if let remote = resource.artworkURL {
                         feedArtwork[remote, default: []].append(item.$artwork)
                     }
                 }
