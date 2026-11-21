@@ -52,9 +52,6 @@ struct PlayerPopup: ViewModifier {
                 }
             }
             .popupBarStyle(.floatingCompact)
-            .popupBarCustomizer { bar in
-                bar.overrideUserInterfaceStyle = barColorScheme.map { UIUserInterfaceStyle($0) } ?? .unspecified
-            }
             .popupContentViewCustomizer { view in
                 view.overrideUserInterfaceStyle = .dark
                 view.isTranslucent = false

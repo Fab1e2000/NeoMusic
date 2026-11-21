@@ -29,7 +29,6 @@ struct LibraryAppTabs<Library: View>: UIViewControllerRepresentable {
         let homeRoot = homeContent ?? AnyView(HomeFeedView(model: context.coordinator.emptyHome))
         let controller = UITabBarController()
         controller.delegate = context.coordinator
-        context.coordinator.preferredStyle = colorScheme.map { UIUserInterfaceStyle($0) }
         controller.tabBarMinimizeBehavior = .onScrollDown
         let search = UISearchTab { _ in
             if let searchNavigation, let searchContent {
@@ -73,16 +72,18 @@ struct LibraryAppTabs<Library: View>: UIViewControllerRepresentable {
             controller.selectedTab = tabs.first { $0.identifier == (selection == .search ? search.identifier : selection.rawValue) }
         }
         controller.registerForTraitChanges([UITraitUserInterfaceStyle.self]) { [weak coordinator = context.coordinator] (controller: UITabBarController, _) in
-            let style = coordinator?.preferredStyle ?? controller.traitCollection.userInterfaceStyle
             coordinator?.updateNavigationAppearance(systemStyle: controller.traitCollection.userInterfaceStyle)
-            Self.applyAppearance(style, to: controller.tabBar, navigationBar: nil)
+            Self.updatePageInheritance(in: controller)
+            let overrides = controller.view.traitOverrides
+            let style = overrides.contains(UITraitUserInterfaceStyle.self)
+                ? overrides.userInterfaceStyle : controller.traitCollection.userInterfaceStyle
+            Self.applySelectedItemAppearance(style, to: controller.tabBar)
         }
         updateAppearance(of: controller)
         return controller
     }
     func updateUIViewController(_ controller: UITabBarController, context: Context) {
         context.coordinator.selection = $selection
-        context.coordinator.preferredStyle = colorScheme.map { UIUserInterfaceStyle($0) }
         navigation.configure(environment: context.environment, destination: destination)
         searchNavigation?.configure(environment: context.environment, destination: searchDestination ?? destination)
         (homeNavigation ?? context.coordinator.homeNavigation).configure(environment: context.environment,
@@ -148,28 +149,42 @@ struct LibraryAppTabs<Library: View>: UIViewControllerRepresentable {
         coordinator.apply(desiredOrder(coordinator), to: controller, animated: coordinator.appliedOrder.isEmpty == false)
     }
     private func updateAppearance(of controller: UITabBarController) {
-        let style = colorScheme.map { UIUserInterfaceStyle($0) }
-            ?? controller.traitCollection.userInterfaceStyle
         let libraryStyle = navigation.colorScheme.map { UIUserInterfaceStyle($0) } ?? controller.traitCollection.userInterfaceStyle
         navigation.navigationController?.navigationBar.overrideUserInterfaceStyle = libraryStyle
         if let homeNavigation {
             homeNavigation.navigationController?.navigationBar.overrideUserInterfaceStyle = homeNavigation.colorScheme.map { UIUserInterfaceStyle($0) } ?? controller.traitCollection.userInterfaceStyle
         }
-        Self.applyAppearance(style, to: controller.tabBar, navigationBar: nil)
-    }
-    private static func applyAppearance(_ style: UIUserInterfaceStyle, to tabBar: UITabBar,
-                                        navigationBar: UINavigationBar?) {
-        navigationBar?.overrideUserInterfaceStyle = style
-        tabBar.overrideUserInterfaceStyle = style
-        if tabBar.standardAppearance.overrideUserInterfaceStyle != style {
-            let appearance = tabBar.standardAppearance.copy()
-            appearance.overrideUserInterfaceStyle = style
-            tabBar.standardAppearance = appearance
+        Self.updatePageInheritance(in: controller)
+        let style = colorScheme.map { UIUserInterfaceStyle($0) } ?? controller.traitCollection.userInterfaceStyle
+        Self.applySelectedItemAppearance(style, to: controller.tabBar)
+        if let colorScheme {
+            controller.view.traitOverrides.userInterfaceStyle = UIUserInterfaceStyle(colorScheme)
+        } else {
+            controller.view.traitOverrides.remove(UITraitUserInterfaceStyle.self)
         }
-        if tabBar.scrollEdgeAppearance?.overrideUserInterfaceStyle != style {
-            let appearance = (tabBar.scrollEdgeAppearance ?? tabBar.standardAppearance).copy()
+    }
+
+    private static func applySelectedItemAppearance(_ style: UIUserInterfaceStyle, to bar: UITabBar) {
+        // UIKit consults the selected item's edge appearance while zooming over scrolling content.
+        if bar.overrideUserInterfaceStyle != style { bar.overrideUserInterfaceStyle = style }
+        guard let item = bar.selectedItem else { return }
+        let standard = item.standardAppearance ?? bar.standardAppearance
+        if item.standardAppearance?.overrideUserInterfaceStyle != style {
+            let appearance = standard.copy()
             appearance.overrideUserInterfaceStyle = style
-            tabBar.scrollEdgeAppearance = appearance
+            item.standardAppearance = appearance
+        }
+        if item.scrollEdgeAppearance?.overrideUserInterfaceStyle != style {
+            let appearance = (item.scrollEdgeAppearance ?? bar.scrollEdgeAppearance ?? standard).copy()
+            appearance.overrideUserInterfaceStyle = style
+            item.scrollEdgeAppearance = appearance
+        }
+    }
+
+    private static func updatePageInheritance(in controller: UITabBarController) {
+        // Keep the pages behind the zoom in their own appearance while the two bars inherit the shell's.
+        for case let nav as UINavigationController in controller.children {
+            nav.traitOverrides.userInterfaceStyle = controller.traitCollection.userInterfaceStyle
         }
     }
     final class Coordinator: NSObject, UITabBarControllerDelegate {
@@ -180,7 +195,6 @@ struct LibraryAppTabs<Library: View>: UIViewControllerRepresentable {
         var storesOrder = true
         weak var controller: UITabBarController?
         private var observingOrder = false
-        var preferredStyle: UIUserInterfaceStyle?
         weak var libraryBridge: LibraryDetailNavigation?
         weak var homeBridge: LibraryDetailNavigation?
         var sectionBridges: [AppTab: LibraryDetailNavigation] = [:]

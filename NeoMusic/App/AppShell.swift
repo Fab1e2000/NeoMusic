@@ -127,7 +127,7 @@ final class AppTabNavigationRegistry {
     }
 
     func colorScheme(for tab: AppTab) -> ColorScheme? {
-        tabNavigations[tab]?.colorScheme
+        tabNavigations[tab]?.displayedChrome?.colorScheme
     }
 
     func prunePlaylists(keeping liveIDs: Set<String>) {

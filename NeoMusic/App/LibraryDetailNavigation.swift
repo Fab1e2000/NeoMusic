@@ -8,6 +8,7 @@ final class LibraryDetailNavigation: NSObject, UINavigationControllerDelegate {
         (navigationController?.topViewController as? LibraryDetailHostingController)?.chrome.route
     }
     private(set) var colorScheme: ColorScheme?
+    private(set) var displayedChrome: LibraryNavigationChrome?
     @ObservationIgnored weak var navigationController: UINavigationController?
     @ObservationIgnored private var environment = EnvironmentValues()
     @ObservationIgnored private var destination: ((LibraryRoute) -> AnyView)?
@@ -33,6 +34,7 @@ final class LibraryDetailNavigation: NSObject, UINavigationControllerDelegate {
         let nav = UINavigationController(rootViewController: page)
         nav.navigationBar.prefersLargeTitles = true
         navigationController = nav
+        displayedChrome = page.chrome
         nav.delegate = self
         NavigationDiagnostics.recorder.attach(nav)
         for route in initialPath { open(route, animated: false) }
@@ -106,6 +108,7 @@ final class LibraryDetailNavigation: NSObject, UINavigationControllerDelegate {
 
     func navigationController(_ navigationController: UINavigationController, didShow viewController: UIViewController, animated: Bool) {
         updateColorScheme((viewController as? LibraryDetailHostingController)?.chrome.colorScheme)
+        displayedChrome = (viewController as? LibraryDetailHostingController)?.chrome
         for case let page as LibraryDetailHostingController in navigationController.viewControllers {
             page.chrome.isActive = page === viewController
         }
@@ -262,7 +265,7 @@ final class LibraryNavigationChrome: NSObject, UISearchResultsUpdating, UISearch
     @ObservationIgnored var title = ""
     @ObservationIgnored var mode: UINavigationItem.LargeTitleDisplayMode
     @ObservationIgnored let isRoot: Bool
-    @ObservationIgnored private(set) var colorScheme: ColorScheme?
+    private(set) var colorScheme: ColorScheme?
     @ObservationIgnored private var search: UISearchController?
     @ObservationIgnored private var query: Binding<String>?
     @ObservationIgnored private var searchPrompt = ""

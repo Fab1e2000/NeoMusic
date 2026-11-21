@@ -222,7 +222,7 @@ final class LibraryDetailNavigationTests: XCTestCase {
         XCTAssertEqual(nav.navigationBar.overrideUserInterfaceStyle, .unspecified)
     }
 
-    func testAppShellBarsChangeDuringZoomAndRestoreOnTabChange() async throws {
+    func testBottomBarsFollowDisplayedPageAndRestoreOnTabChange() async throws {
         let scene = try await applicationWindowScene()
         let window = UIWindow(windowScene: scene)
         window.overrideUserInterfaceStyle = .light
@@ -247,6 +247,8 @@ final class LibraryDetailNavigationTests: XCTestCase {
         let libraryTab = try XCTUnwrap(tabs.selectedTab)
         let homeTab = try XCTUnwrap(tabs.tabs.first { $0.identifier == AppTab.home.rawValue })
         func assertAppearance(_ style: UIUserInterfaceStyle, file: StaticString = #filePath, line: UInt = #line) {
+            XCTAssertEqual(tabs.tabBar.selectedItem?.standardAppearance?.overrideUserInterfaceStyle, style, file: file, line: line)
+            XCTAssertEqual(tabs.tabBar.selectedItem?.scrollEdgeAppearance?.overrideUserInterfaceStyle, style, file: file, line: line)
             for bar in [nav.navigationBar, tabs.tabBar, mini] as [UIView] {
                 XCTAssertEqual(bar.traitCollection.userInterfaceStyle, style, "\(type(of: bar))", file: file, line: line)
             }
@@ -269,12 +271,10 @@ final class LibraryDetailNavigationTests: XCTestCase {
         }
         let tabRegistration = tabs.tabBar.registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (bar: UITabBar, _) in
             guard bar.traitCollection.userInterfaceStyle == .dark else { return }
-            XCTAssertNotNil(nav.transitionCoordinator, "Tab appearance must not wait for zoom completion")
             tabChanged.fulfill()
         }
         let miniRegistration = mini.registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (bar: LNPopupBar, _) in
             guard bar.traitCollection.userInterfaceStyle == .dark else { return }
-            XCTAssertNotNil(nav.transitionCoordinator, "Mini player must change during the same transition")
             miniChanged.fulfill()
         }
         bridge.open(.album("appearance"), source: source)
@@ -292,7 +292,9 @@ final class LibraryDetailNavigationTests: XCTestCase {
         XCTAssertEqual(page.traitCollection.userInterfaceStyle, .dark)
         bridge.navigationController(nav, willShow: root, animated: true)
         try await settle()
-        assertAppearance(.light)
+        XCTAssertEqual(nav.navigationBar.traitCollection.userInterfaceStyle, .light)
+        XCTAssertEqual(tabs.tabBar.traitCollection.userInterfaceStyle, .dark)
+        XCTAssertEqual(mini.traitCollection.userInterfaceStyle, .dark)
         bridge.navigationController(nav, didShow: page, animated: true)
         try await settle()
         assertAppearance(.dark)
@@ -306,12 +308,10 @@ final class LibraryDetailNavigationTests: XCTestCase {
         }
         let tabReturnRegistration = tabs.tabBar.registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (bar: UITabBar, _) in
             guard bar.traitCollection.userInterfaceStyle == .light else { return }
-            XCTAssertNotNil(nav.transitionCoordinator, "Restoring inherited appearance must not wait for zoom-out completion")
             tabReturned.fulfill()
         }
         let miniReturnRegistration = mini.registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (bar: LNPopupBar, _) in
             guard bar.traitCollection.userInterfaceStyle == .light else { return }
-            XCTAssertNotNil(nav.transitionCoordinator, "Mini player must restore during zoom-out")
             miniReturned.fulfill()
         }
         nav.popViewController(animated: true)
