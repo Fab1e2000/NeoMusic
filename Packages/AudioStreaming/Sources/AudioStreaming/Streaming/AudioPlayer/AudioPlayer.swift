@@ -457,7 +457,8 @@ open class AudioPlayer {
 
         playingEntry.seekRequest.version.write { $0 += 1 }
         if !alreadyRequestedToSeek {
-            playingEntry.suspend()
+            // The parser may still need incoming packets to learn the format and bitrate.
+            // processSource repositions the source once it has both.
             checkRenderWaitingAndNotifyIfNeeded()
             sourceQueue.async { [weak self] in
                 self?.processSource()

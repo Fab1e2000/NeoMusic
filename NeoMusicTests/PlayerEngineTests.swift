@@ -1,4 +1,5 @@
 import AVFoundation
+import Network
 import XCTest
 @testable import NeoMusic
 
@@ -536,6 +537,50 @@ import XCTest
         })
         XCTAssertTrue(engine.isPlaying)
         XCTAssertNil(engine.error)
+    }
+
+    func testDelayedRemoteAudioStartsAndRestoresItsPosition() async throws {
+        let file = try PlayerTestFixtures.silentAudio(seconds: 8)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let audio = try Data(contentsOf: file)
+        let queue = DispatchQueue(label: "test.delayed-audio")
+        let parameters = NWParameters.tcp
+        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+        let server = try NWListener(using: parameters)
+        defer { server.cancel() }
+        let ready = expectation(description: "Loopback audio server is listening")
+        server.stateUpdateHandler = { if case .ready = $0 { ready.fulfill() } }
+        server.newConnectionHandler = { connection in
+            connection.start(queue: queue)
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 8192) { data, _, _, _ in
+                let headers = String(decoding: data ?? Data(), as: UTF8.self).lowercased()
+                let probe = headers.contains("range: bytes=0-1\r\n")
+                let body = probe ? Data(audio.prefix(2)) : audio
+                let status = probe ? "206 Partial Content" : "200 OK"
+                let range = probe ? "Content-Range: bytes 0-1/\(audio.count)\r\n" : ""
+                let header = "HTTP/1.1 \(status)\r\n\(range)Content-Type: audio/wav\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n"
+                queue.asyncAfter(deadline: .now() + (probe ? 0 : 0.25)) {
+                    connection.send(content: Data(header.utf8) + body, completion: .contentProcessed { _ in
+                        connection.cancel()
+                    })
+                }
+            }
+        }
+        server.start(queue: queue)
+        await fulfillment(of: [ready], timeout: 3)
+        let port = try XCTUnwrap(server.port)
+        let url = try XCTUnwrap(URL(string: "http://127.0.0.1:\(port.rawValue)/song.wav"))
+        let engine = LocalPlaybackEngine()
+        defer { engine.shutdown() }
+        for position in [0.0, 3.0] {
+            engine.load(url: url, position: position, autoplay: true)
+            try await waitUntil {
+                let state = await engine.debugBackendState()
+                return !engine.isLoading && (state.currentPlaybackTime ?? 0) > position + 0.1
+            }
+            XCTAssertNil(engine.error)
+            engine.stop()
+        }
     }
 
     @MainActor func testRemoteStreamAttachesStandardFormatSourceNodeWithoutCrashing() async throws {

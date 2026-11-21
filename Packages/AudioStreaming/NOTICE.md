@@ -23,3 +23,4 @@ NeoMusic changes:
 - End-of-input without a readable audio format reports an error instead of remaining in buffering.
 - The source cancels its header probe with the current request, reports probe failures, and restarts incomplete non-range streams from byte zero without replaying the partial prefix.
 - URLSession transfer pauses with source consumption and when the compressed data waiting for the decoder exceeds a high-water mark.
+- A pending seek keeps reading until the stream parser can resolve the target position.

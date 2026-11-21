@@ -214,7 +214,11 @@
     private func handleDidStartPlaying(player: AudioStreaming.AudioPlayer, entryId: AudioEntryId) {
         guard player === audio else { return }
         entryID = entryId
-        if let position = initialPosition { initialPosition = nil; player.seek(to: position, resumeAfterSeek: wantsPlayback) }
+        guard let position = initialPosition else { return }
+        initialPosition = nil
+        if position > 0 {
+            player.seek(to: position, resumeAfterSeek: wantsPlayback)
+        }
     }
     nonisolated func audioPlayerStateChanged(player: AudioStreaming.AudioPlayer, with newState: AudioPlayerState, previous: AudioPlayerState) {
         let playerBox = UncheckedSendableBox(value: player)
