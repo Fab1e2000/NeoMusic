@@ -1,5 +1,4 @@
 #!/bin/bash
-# 推送前执行本机完整检查。纯文档、设计参考和许可证跳过。
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -19,7 +18,6 @@ while read -r local_ref local_sha remote_ref remote_sha; do
         if [ -n "$base" ]; then
             git diff --name-only --no-renames "$base" "$commit" >"$paths"
         else
-            # 没有已知基线时检查整棵树，也覆盖根提交和合并提交。
             git ls-tree -r --name-only "$commit" >"$paths"
         fi
     else

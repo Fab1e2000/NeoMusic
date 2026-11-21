@@ -290,7 +290,6 @@ final class LibraryDetailNavigationTests: XCTestCase {
         XCTAssertEqual(root.traitCollection.userInterfaceStyle, .light, "Detail appearance must not recolor the library behind zoom")
         XCTAssertEqual(tabs.traitCollection.userInterfaceStyle, .light)
         XCTAssertEqual(page.traitCollection.userInterfaceStyle, .dark)
-        // UIKit reports the original page again when an interactive return is cancelled.
         bridge.navigationController(nav, willShow: root, animated: true)
         try await settle()
         assertAppearance(.light)
@@ -351,7 +350,6 @@ final class LibraryDetailNavigationTests: XCTestCase {
         nav.popViewController(animated: false)
         try await settle()
         assertAppearance(.dark)
-        // Offscreen controllers inherit updated traits when UIKit restores their view hierarchy.
         XCTAssertTrue(root.view.window === window)
         XCTAssertEqual(root.traitCollection.userInterfaceStyle, .dark, "The restored library follows the current system appearance")
         page.chrome.setColorScheme(.light)
@@ -391,7 +389,6 @@ final class LibraryDetailNavigationTests: XCTestCase {
         let pager = try XCTUnwrap(descendants(of: UIView.self, in: tabs.popupBar).first {
             $0.gestureRecognizers?.contains(where: { $0.name == PlayerInteraction.trackSwipeGestureName }) == true
         })
-        // Finish the initial native display before measuring placement-only updates.
         XCTAssertTrue(pager.window === window)
         let initialBar = UIGraphicsImageRenderer(bounds: tabs.popupBar.bounds).image { _ in
             XCTAssertTrue(tabs.popupBar.drawHierarchy(in: tabs.popupBar.bounds, afterScreenUpdates: true))
@@ -401,7 +398,6 @@ final class LibraryDetailNavigationTests: XCTestCase {
         initialAppearance.lifetime = .keepAlways
         add(initialAppearance)
         let updates = Mutex((phase: "initial", events: [String]()))
-        // LNPopupUI writes userInfo whenever it resubmits a PopupItem, even for the same song.
         let observation = item.observe(\.userInfo, options: [.new]) { _, _ in
             updates.withLock { $0.events.append("\($0.phase) at \(ProcessInfo.processInfo.systemUptime)") }
         }
@@ -409,7 +405,6 @@ final class LibraryDetailNavigationTests: XCTestCase {
         for cycle in 0..<3 {
             for placement in [LNPopupBar.Environment.inline, .regular] {
                 updates.withLock { $0.phase = "cycle=\(cycle), placement=\(placement)" }
-                // These are the two native trait updates made by LN's minimization callback.
                 content.traitOverrides[LNPopupBar.EnvironmentTrait.self] = placement
                 tabs.popupBar.traitOverrides[LNPopupBar.EnvironmentTrait.self] = placement
                 try await Task.sleep(for: .milliseconds(350))
@@ -480,7 +475,6 @@ final class LibraryDetailNavigationTests: XCTestCase {
             NSStringFromClass(type(of: $0)).contains("LNPopupInteractionPanGestureRecognizer")
         }
 
-        // Verify UIKit hit testing inside regular LNPopupBar actually lands on TrackSwipeTouchSurface.
         XCTAssertGreaterThan(pager.bounds.width, 100)
         XCTAssertEqual(pager.bounds.height, 36, accuracy: 1)
         let titlePoint = CGPoint(x: pager.bounds.midX, y: pager.bounds.minY + 9)
@@ -494,7 +488,6 @@ final class LibraryDetailNavigationTests: XCTestCase {
                           "Window hitTest at \(localPoint) returned \(String(describing: window.hitTest(pointInWindow, with: nil))) instead of swipe surface")
         }
 
-        // Verify gesture delegation matches native coordination rules.
         XCTAssertEqual(panDelegate.gestureRecognizer?(pan, shouldRecognizeSimultaneouslyWith: highlight), true)
         XCTAssertEqual(panDelegate.gestureRecognizer?(pan, shouldRecognizeSimultaneouslyWith: openTap), false)
         XCTAssertEqual(panDelegate.gestureRecognizer?(pan, shouldBeRequiredToFailBy: openTap), true)
@@ -515,7 +508,6 @@ final class LibraryDetailNavigationTests: XCTestCase {
         regularSnapshot.lifetime = .keepAlways
         add(regularSnapshot)
 
-        // Verify inline placement shrinks cleanly and check hit testing / visual appearance.
         content.traitOverrides[LNPopupBar.EnvironmentTrait.self] = LNPopupBar.Environment.inline
         popupBar.traitOverrides[LNPopupBar.EnvironmentTrait.self] = LNPopupBar.Environment.inline
         try await Task.sleep(for: .milliseconds(350))
@@ -566,7 +558,6 @@ final class LibraryDetailNavigationTests: XCTestCase {
                     var sampledFrames = 0
                     var mismatchedFrames = 0
                     let sampler = NativeDisplayFrameSampler { _ in
-                        // Inspect the actual mounted sibling, not the configured bar endpoint.
                         guard let wrapper = tabs.popupContentView.value(forKey: "transitionView") as? UIView,
                               wrapper.window === window else { return }
                         sampledFrames += 1
@@ -657,7 +648,7 @@ final class LibraryDetailNavigationTests: XCTestCase {
                 let image = XCTAttachment(image: rendered)
                 image.name = "\(theme)-\(position)-behind-bars"; image.lifetime = .keepAlways; add(image)
             }
-            let lastSong = IndexPath(item: songs.count, section: 0) // Header is the first list item.
+            let lastSong = IndexPath(item: songs.count, section: 0)
             list.scrollToItem(at: lastSong, at: .bottom, animated: false)
             list.layoutIfNeeded()
             let attributes = try XCTUnwrap(list.layoutAttributesForItem(at: lastSong))
@@ -761,8 +752,6 @@ final class LibraryDetailNavigationTests: XCTestCase {
             }.min { $0.frame.minY < $1.frame.minY }
         }
         let initialCategoryY = try XCTUnwrap(firstCategoryCell()).frame.minY
-        // The recently-added grid hosts SwiftUI cards without a native artwork
-        // surface, matching the pinned shelf, so probe its widest visible card.
         func recentCoverFrame(presentation: Bool, inWindow: Bool = false) -> CGRect? {
             let hostedGrids = descendants(of: UICollectionView.self, in: page.view).filter { grid in
                 grid !== list && !(grid.delegate is PinnedCollectionView.Coordinator)
@@ -927,7 +916,6 @@ final class LibraryDetailNavigationTests: XCTestCase {
         let removedCategoryY = try XCTUnwrap(firstCategoryCell()).frame.minY
         XCTAssertEqual(pinned.numberOfItems(inSection: 0), 1)
         XCTAssertLessThan(removedCategoryY, finalCategoryY - 1)
-        // List owns its row resize; the diffable shelf owns continuous item movement.
         let finalPinWindowFrame = survivingPin.convert(survivingPin.bounds, to: window)
         XCTAssertGreaterThan(finalPinWindowFrame.minX, initialPinWindowFrame.minX + 1)
         XCTAssertTrue(pinWindowFrames.contains {
@@ -1154,7 +1142,6 @@ final class LibraryDetailNavigationTests: XCTestCase {
             (.dark, .accessibility5, Locale(identifier: "zh_CN"))
         ]
         for (scheme, size, locale) in appearances {
-            // The production cell provider restores its button trait when it reconfigures.
             cell.accessibilityTraits = .header
             host.rootView = content(scheme, size, locale)
             try await settle()
@@ -1179,7 +1166,6 @@ final class LibraryDetailNavigationTests: XCTestCase {
             var routes: [LibraryRoute] = [.category(category)]
             if category != .downloaded { routes.append(.downloadedCategory(category)) }
             for route in routes {
-                // An empty destination cannot supply title preferences later.
                 let page = bridge.makePage(AnyView(EmptyView()), route: route)
                 XCTAssertFalse(page.isViewLoaded)
                 XCTAssertEqual(page.navigationItem.title, title, "\(route)")
@@ -1199,7 +1185,6 @@ final class LibraryDetailNavigationTests: XCTestCase {
         for route in routes {
             XCTAssertNil(route.initialCategoryTitle)
             let chrome = LibraryNavigationChrome(isRoot: false, route: route)
-            // Entity titles still come from the current destination's content.
             chrome.title = "当前名称"
             chrome.mode = .always
             let page = LibraryDetailHostingController(chrome: chrome)
@@ -1375,7 +1360,6 @@ final class LibraryDetailNavigationTests: XCTestCase {
         let cover = LibraryArtworkSurfaceView(frame: CGRect(x: 62, y: 13, width: 266, height: 266))
         cover.isZoomAlignmentTarget = true
         scroll.addSubview(cover)
-        // Other artwork must not be mistaken for the detail header, even when larger.
         scroll.addSubview(LibraryArtworkSurfaceView(frame: CGRect(x: 0, y: 400, width: 390, height: 390)))
         XCTAssertEqual(page.libraryArtworkAlignmentRect(), CGRect(x: 62, y: 113, width: 266, height: 266))
         scroll.contentOffset.y = 80
@@ -1572,9 +1556,6 @@ final class LibraryDetailNavigationTests: XCTestCase {
                 XCTAssertGreaterThan(cover.bounds.width, 0)
                 XCTAssertEqual(cover.bounds.width, cover.bounds.height, accuracy: 0.5)
                 XCTAssertEqual(cover.bounds.width, cell.contentView.bounds.width, accuracy: 0.5)
-                // Measure local bounds so edit-mode wobble cannot distort the check.
-                // The caption remains outside this square; a whole-card zoom source
-                // would consume the title row and fail these geometry assertions.
                 let captionHeight = UIFont.preferredFont(forTextStyle: .caption1,
                                                         compatibleWith: cell.traitCollection).lineHeight
                 XCTAssertGreaterThanOrEqual(cell.contentView.bounds.height - cover.bounds.height,
@@ -1583,7 +1564,6 @@ final class LibraryDetailNavigationTests: XCTestCase {
         }
 
         try assertArtworkSurfaces()
-        // Update the existing representable, rather than mounting an unrelated edit fixture.
         host.rootView = TestPinnedShelf(isEditing: true)
         try await settle()
         try assertArtworkSurfaces()
@@ -1670,8 +1650,6 @@ final class LibraryDetailNavigationTests: XCTestCase {
         let surfaces = descendants(of: LibraryArtworkSurfaceView.self, in: page)
         XCTAssertEqual(surfaces.count, 1)
         let cover = try XCTUnwrap(surfaces.first)
-        // The list also owns a context-menu interaction. Resolve the card's nearest
-        // menu host from its cover instead of accepting an ancestor of the whole list.
         var ancestor = cover.superview
         while let current = ancestor,
               !current.interactions.contains(where: { $0 is UIContextMenuInteraction }) {
@@ -1742,7 +1720,6 @@ final class LibraryDetailNavigationTests: XCTestCase {
         }
 
         assertWobble(true)
-        // Exercise the same hosted cells, including entering editing a second time.
         for _ in 0..<2 {
             host.rootView = TestPinnedShelf(isEditing: false)
             try await settle()
@@ -1832,8 +1809,6 @@ final class LibraryDetailNavigationTests: XCTestCase {
     private func assertNativeToolbar(in navigation: UINavigationController?, file: StaticString = #filePath, line: UInt = #line) throws {
         let navigation = try XCTUnwrap(navigation, file: file, line: line)
         let page = try XCTUnwrap(navigation.topViewController, file: file, line: line)
-        // UIKit groups include system spacing items. HomeFeedTests checks each
-        // visible action through the SwiftUI accessibility tree and opens Account.
         XCTAssertFalse(page.navigationItem.trailingItemGroups.isEmpty, file: file, line: line)
         XCTAssertTrue(navigation.navigationBar.topItem === page.navigationItem, file: file, line: line)
         XCTAssertFalse(navigation.isNavigationBarHidden, file: file, line: line)
@@ -1896,7 +1871,6 @@ final class LibraryDetailNavigationTests: XCTestCase {
         let open = try XCTUnwrap(openFromPlayer)
         XCTAssertEqual(bridge.depth, 0)
 
-        // The push must be visible before the popup's close completion can run.
         open(.album("player-route"))
         XCTAssertEqual(bridge.depth, 1, "Player navigation must not wait for the close transition")
         open(.album("player-route"))
@@ -1999,7 +1973,6 @@ final class LibraryDetailNavigationTests: XCTestCase {
         XCTAssertEqual(player.currentTrack?.id, "mini-0")
 
         coordinator.handle(.ended, translation: swipeX, velocity: -150, from: pager)
-        // Allow immediate selection and async .popupItem preference delivery to complete.
         try await Task.sleep(for: .milliseconds(25))
         XCTAssertEqual(player.currentTrack?.id, "mini-1")
         let frame1 = renderView(popupBar)
@@ -2055,8 +2028,6 @@ final class AlbumInitialAppearanceTests: XCTestCase {
                     artwork: .missing, tint: .clear, albumBackdrop: backdrop, songs: [], route: route))
                     .background {
                         AlbumAppearanceProbe(onAppearance: { probe in
-                            // UIKit has prepared traits and geometry, but has not yet
-                            // completed subtree layout/display. Check prepared state here.
                             do {
                                 let page = try XCTUnwrap(probe.navigationController?.topViewController as? LibraryDetailHostingController)
                                 let sequence = appearances + [id]
@@ -2105,7 +2076,6 @@ final class AlbumInitialAppearanceTests: XCTestCase {
 
     private func assertRenderedAppearance(of page: LibraryDetailHostingController, component: Double,
                                           appearances: [String], bridge: LibraryDetailNavigation) throws {
-        // Capture after UIKit returns from viewDidAppear, outside its layout/display transaction.
         XCTAssertNotNil(page.view.libraryArtworkAlignmentRect(), "The album content must be present")
         let id = component == 0 ? "dark" : "light"
         let appearance = "album=\(id), appearances=\(appearances)"
@@ -2155,7 +2125,6 @@ final class AlbumInitialAppearanceTests: XCTestCase {
     private func backgroundPixel(in view: UIView, snapshot: UIImage) throws -> [UInt8] {
         XCTAssertGreaterThan(view.bounds.width, 20)
         XCTAssertGreaterThan(view.bounds.height, 20)
-        // The leading page margin lies outside the centered artwork and all list text.
         let point = backgroundSamplePoint(in: view)
         let image = try XCTUnwrap(snapshot.cgImage)
         let width = image.width, height = image.height
@@ -2176,7 +2145,6 @@ final class AlbumInitialAppearanceTests: XCTestCase {
     }
 }
 
-/// Test-only observation of the real UIKit appearance lifecycle; no delayed sampling.
 private struct AlbumAppearanceProbe: UIViewControllerRepresentable {
     let onAppearance: (UIViewController) -> Void
     let onDisplayed: (UIViewController) -> Void
@@ -2284,7 +2252,6 @@ private struct PlaybackIndicatorsProbeView: View {
     }
 }
 
-/// Mirrors the player popup's environment contract over the real navigation container.
 private struct PlaybackIndicatorsEnvironmentHost: View {
     let probe: PlaybackIndicatorsEnvironmentProbe
     let bridge: LibraryDetailNavigation

@@ -3,7 +3,6 @@ import XCTest
 @testable import NeoMusic
 
 @MainActor final class PlaybackStartupBenchmarkTests: XCTestCase {
-    /// Measures first advancing transport time, not audible output or cold-network latency.
     func testLocalWAVStartupComparedWithPreciseAVPlayer() async throws {
         let url = try PlayerTestFixtures.silentAudio(seconds: 20)
         defer { try? FileManager.default.removeItem(at: url) }
@@ -12,7 +11,6 @@ import XCTest
         let activated = try await session.activate()
         XCTAssertTrue(activated)
         for repetition in 1...3 {
-            // Alternate order so one implementation does not always warm the file first.
             for streaming in (repetition.isMultiple(of: 2) ? [true, false] : [false, true]) {
                 let start = ContinuousClock.now
                 let firstProgress: ContinuousClock.Instant
@@ -42,7 +40,6 @@ import XCTest
         }
     }
 
-    /// Explicit opt-in: this measures a public GitHub MP3, not NetEase service latency.
     func testRemoteMP3StartupComparedWithPreciseAVPlayer() async throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["NEOMUSIC_NETWORK_BENCHMARK"] == "1",
                           "Set NEOMUSIC_NETWORK_BENCHMARK=1 for the external-network benchmark")

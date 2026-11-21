@@ -40,7 +40,6 @@ final class LibraryListAccessibilityTests: XCTestCase {
 
     func testGenericCollectionListRequiresStringIdentifiers() {
         XCTAssertTrue(PlaylistEntry.ID.self == String.self)
-        // The same-type constraint makes these String identifiers usable without casting.
         let list = playlistList(deselectsImmediately: false)
         XCTAssertEqual(list.items.map(\.id), ["playlist"])
     }
@@ -102,7 +101,6 @@ final class LibraryListAccessibilityTests: XCTestCase {
         let cell = try XCTUnwrap(collection.cellForItem(at: path))
         XCTAssertEqual(cell.accessibilityLabel, "夜曲, 周杰伦, 暂无完整音源")
 
-        // The row label must not replace the independent controls inside the cell.
         let more = try XCTUnwrap(descendants(of: UIButton.self, in: cell).first { $0.accessibilityLabel == "更多" })
         XCTAssertFalse(more.isHidden)
         XCTAssertTrue(more.isEnabled)

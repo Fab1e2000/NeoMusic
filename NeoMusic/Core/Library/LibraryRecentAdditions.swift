@@ -1,8 +1,6 @@
 import Foundation
 
-/// 最近添加按加入资料库的时间从新到旧排列。单曲卡片不指向专辑。
 enum LibraryRecentAdditions {
-    /// 本地文件用加入时间的 Unix 秒数作为 `addedOrder`；更小的值只表示相对顺序。
     static let datedOrderThreshold = 1_000_000_000
 
     private typealias Ranked = (item: LibraryShelfItem, date: Date?, order: Int)

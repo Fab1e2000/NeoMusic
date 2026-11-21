@@ -1,10 +1,8 @@
 // Direct source port from MeloX (GPL-3.0), b8bc60f.
-// NeoDizzy adapters are limited to track data, available playback features and localization.
 import SwiftUI
 
 public struct NowPlayingTransportButtonStyle: ButtonStyle {
     let reducesMotion: Bool
-    /// 松手时图标用带单次轻微过冲的弹簧弹回（播放/暂停按钮用），否则平缓回到原大。
     var springsBack = false
     var diameter: CGFloat = 62
     var showsHighlight = true

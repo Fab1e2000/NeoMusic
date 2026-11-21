@@ -21,7 +21,6 @@ struct NativePlayerPagePreview: View {
     }
 }
 
-/// Exercises the production popup and full-screen module with isolated local media.
 struct PlayerPerformancePreview: View {
     @State private var fixtures: NativePlayerPreviewFixtures?
     @State private var loadError: String?
@@ -123,7 +122,6 @@ struct PlayerPerformancePreview: View {
 
     deinit { try? FileManager.default.removeItem(at: directory) }
 
-    /// Shared local PCM data for lyric previews and the real-engine performance fixture.
     private static func silentWave(duration: Int) -> Data {
         let sampleRate: UInt32 = 8_000
         let byteCount = UInt32(duration) * sampleRate * 2

@@ -110,12 +110,10 @@ import XCTest
         controller.panChanged(translation: -65, distance: 100, previous: prev, next: next)
         XCTAssertEqual(hapticCount, 1)
 
-        // Small pullback still within hysteresis band should not re-arm prematurely.
         controller.panChanged(translation: -25, distance: 100, previous: prev, next: next)
         controller.panChanged(translation: -35, distance: 100, previous: prev, next: next)
         XCTAssertEqual(hapticCount, 1)
 
-        // Pulling well inside re-arm band allows crossing threshold to tick again.
         controller.panChanged(translation: -10, distance: 100, previous: prev, next: next)
         controller.panChanged(translation: -35, distance: 100, previous: prev, next: next)
         XCTAssertEqual(hapticCount, 2)
@@ -190,7 +188,6 @@ import XCTest
         ) { _ in }
 
         XCTAssertTrue(controller.isSettling)
-        // Find an overshoot frame where offset dips slightly negative even though next song (song2) has a different artist.
         let samples = (0...30).map { controller.currentOffset(at: baseDate.addingTimeInterval(Double($0) / 60.0)) }
         let overshootOffset = try? XCTUnwrap(samples.first { $0 < -0.5 })
         XCTAssertNotNil(overshootOffset)
@@ -281,7 +278,6 @@ import XCTest
         XCTAssertEqual(selected, [1])
         XCTAssertEqual(controller.currentStep, 1)
 
-        // Catch the outgoing settle, then reverse past the original threshold before release.
         now = baseDate.addingTimeInterval(0.05)
         let liveOffset = controller.currentOffset(at: now)
         XCTAssertGreaterThan(liveOffset, 20)
@@ -471,8 +467,6 @@ import XCTest
         XCTAssertEqual(controller.motion.value, 108, accuracy: 0.01)
         let releaseDate = now
 
-        // A 90 ms synchronous main-thread stall after touch-up must advance the spring by
-        // the same 90 ms of real time; only the remaining settle may render.
         now = releaseDate.addingTimeInterval(0.090)
         controller.stepSpringFrame(at: now)
         XCTAssertTrue(controller.isSettling)
@@ -533,7 +527,6 @@ import XCTest
         controller.stepSpringFrame(at: now)
         XCTAssertEqual(controller.motion.value, expectedAtTwoFrames, accuracy: 0.001)
 
-        // A long interruption (e.g. backgrounding) must complete immediately rather than replaying stale motion.
         now = now.addingTimeInterval(1.2)
         controller.stepSpringFrame(at: now)
         XCTAssertFalse(controller.isSettling)

@@ -5,7 +5,6 @@ import FullScreenPlayer
     var handler: (String) -> Void = { _ in }
 }
 
-/// NeoMusic's composition boundary; all reusable presentation lives in FullScreenPlayer.
 struct PlayerNowPlayingHostView: View {
     @Environment(PlayerState.self) private var player
     @Environment(PlayerActions.self) private var actions

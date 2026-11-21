@@ -3,7 +3,6 @@ import SwiftUI
 import Observation
 import FullScreenPlayer
 
-/// This consumer deliberately imports no application module.
 @MainActor final class PlayerContractTests: XCTestCase {
     func testPlaybackReadsStayLiveWithoutPublishingAnotherQueue() {
         let owner = TestPlaybackSource()

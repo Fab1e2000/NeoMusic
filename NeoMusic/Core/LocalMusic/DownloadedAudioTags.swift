@@ -3,7 +3,6 @@ import AVFoundation
 import Foundation
 import ImageIO
 
-/// Tags only newly prepared download files. Source audio bytes are not re-encoded.
 nonisolated enum DownloadedAudioTags {
     struct Metadata: Sendable, Equatable {
         let title: String
@@ -21,7 +20,6 @@ nonisolated enum DownloadedAudioTags {
         var errorDescription: String? { message }
     }
 
-    /// `url` belongs to the caller's staging area. Publish it only after this succeeds.
     @concurrent static func write(_ metadata: Metadata, to url: URL) async throws {
         try Task.checkCancellation()
         try await validate(url)

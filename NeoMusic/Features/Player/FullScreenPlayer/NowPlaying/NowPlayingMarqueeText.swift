@@ -1,8 +1,5 @@
 import SwiftUI
 
-/// 放不下时滚动的单行文字（和系统音乐的歌名一样）：先停一会儿，再匀速向左滚一整圈，
-/// 后面接着第二份文字，首尾相连，滚完回到起点再停。放得下时就是普通的 Text。
-/// 字体、颜色跟随外部环境；`isActive` 为 false（比如相邻曲目的预览）或减弱动态效果时不滚，截断显示。
 public struct NowPlayingMarqueeText: View {
     let text: String
     var isActive = true
@@ -13,13 +10,9 @@ public struct NowPlayingMarqueeText: View {
     @State private var textWidth: CGFloat = 0
     @State private var containerWidth: CGFloat = 0
 
-    /// 首尾两份文字之间的空隙。
     private static let gap: CGFloat = 40
-    /// 滚动速度（pt/秒）。
     private static let speed: CGFloat = 30
-    /// 每一圈开始前停留的时间。
     private static let pause: TimeInterval = 2.5
-    /// 两侧渐隐的宽度。
     private static let fadeWidth: CGFloat = 12
 
     private var scrolls: Bool {
@@ -42,7 +35,6 @@ public struct NowPlayingMarqueeText: View {
                 withTransaction(transaction) { containerWidth = width }
             }
             .background(alignment: .leading) {
-                // 量文字完整宽度用，不显示。
                 Text(text)
                     .lineLimit(1)
                     .fixedSize()
@@ -60,7 +52,6 @@ public struct NowPlayingMarqueeText: View {
                         .transition(.identity)
                 }
             }
-            // 宽度测量后插入的滚动文字与外层共用切页几何动画。
             .geometryGroup()
             .accessibilityLabel(text)
     }

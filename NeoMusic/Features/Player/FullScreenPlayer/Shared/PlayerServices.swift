@@ -29,7 +29,6 @@ public struct PlayerArtworkRequest: Hashable, Sendable {
     }
 }
 
-/// The host resolves media identities and owns image I/O, caching and request coalescing.
 @MainActor public final class PlayerArtworkProvider {
     private let cachedAction: (PlayerArtworkRequest) -> UIImage?
     private let loadAction: (PlayerArtworkRequest) async throws -> UIImage
@@ -55,7 +54,6 @@ public struct PlayerArtworkRequest: Hashable, Sendable {
     public func prepare(_ identity: String?) { if let identity { prepareAction(identity) } }
 }
 
-/// An interval is finished by the same host that opened it.
 @MainActor public final class PlayerDiagnostics {
     private let beginAction: (StaticString, Bool) -> (() -> Void)
     private let eventAction: (StaticString) -> Void

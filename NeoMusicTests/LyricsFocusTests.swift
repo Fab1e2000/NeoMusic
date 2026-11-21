@@ -75,16 +75,16 @@ final class LyricsFocusTests: XCTestCase {
 
     func testBlankInterludeRowsOnlyDisplayWhenExceedingFourSeconds() {
         let source = [
-            PlayerLyricLine(id: 0, time: 0.0, text: ""),         // <= 4.0s before line 1 -> filtered
+            PlayerLyricLine(id: 0, time: 0.0, text: ""),
             PlayerLyricLine(id: 1, time: 4.0, text: "First"),
-            PlayerLyricLine(id: 2, time: 7.0, text: ""),         // 3.0s gap -> filtered, maps to line 1
+            PlayerLyricLine(id: 2, time: 7.0, text: ""),
             PlayerLyricLine(id: 3, time: 10.0, text: "Second"),
-            PlayerLyricLine(id: 4, time: 14.0, text: ""),        // 4.0s exact gap -> filtered (must exceed 4s)
+            PlayerLyricLine(id: 4, time: 14.0, text: ""),
             PlayerLyricLine(id: 5, time: 18.0, text: "Third"),
-            PlayerLyricLine(id: 6, time: 20.0, text: ""),        // 5.5s gap to line 8 -> kept
-            PlayerLyricLine(id: 7, time: 22.0, text: "  "),      // consecutive blank -> deduplicated, maps to interlude 6
+            PlayerLyricLine(id: 6, time: 20.0, text: ""),
+            PlayerLyricLine(id: 7, time: 22.0, text: "  "),
             PlayerLyricLine(id: 8, time: 25.5, text: "Fourth"),
-            PlayerLyricLine(id: 9, time: 30.0, text: "")         // trailing blank -> filtered, maps to line 8
+            PlayerLyricLine(id: 9, time: 30.0, text: "")
         ]
         let display = NativeLyricsScrollView.displayLines(from: source)
         XCTAssertEqual(display.lines.map(\.id), [1, 3, 5, 6, 8])
@@ -105,9 +105,8 @@ final class LyricsFocusTests: XCTestCase {
     }
 
     func testInterludeTimelinePhasesContinuityAndReduceMotion() {
-        let interval = LyricsInterludeInterval(start: 6.0, end: 26.0) // T = 20s
+        let interval = LyricsInterludeInterval(start: 6.0, end: 26.0)
 
-        // Start of interlude: scale(0) and opacity(0) with base dot opacity ~0.3
         let start = LyricsInterludeTimeline.evaluate(at: 6.0, interval: interval)
         XCTAssertEqual(start.scale, 0, accuracy: 0.0001)
         XCTAssertEqual(start.groupOpacity, 0, accuracy: 0.0001)
@@ -115,39 +114,33 @@ final class LyricsFocusTests: XCTestCase {
         XCTAssertEqual(start.dot2Opacity, 0.30, accuracy: 0.001)
         XCTAssertEqual(start.dot3Opacity, 0.30, accuracy: 0.001)
 
-        // Mid-entrance (~0.6s in): smoothly scaling up & fading in, still at base gray-white
         let midEnter = LyricsInterludeTimeline.evaluate(at: 6.6, interval: interval)
         XCTAssertGreaterThan(midEnter.scale, 0.5)
         XCTAssertGreaterThan(midEnter.groupOpacity, 0.3)
         XCTAssertLessThan(midEnter.groupOpacity, 0.8)
         XCTAssertEqual(midEnter.dot1Opacity, 0.30, accuracy: 0.001)
 
-        // Entrance finished (1.2s in): full group opacity, dots begin 3-segment progression
         let afterEnter = LyricsInterludeTimeline.evaluate(at: 7.2, interval: interval)
         XCTAssertEqual(afterEnter.groupOpacity, 1.0, accuracy: 0.001)
         XCTAssertEqual(afterEnter.dot1Opacity, 0.30, accuracy: 0.001)
         XCTAssertEqual(afterEnter.dot2Opacity, 0.30, accuracy: 0.001)
         XCTAssertEqual(afterEnter.dot3Opacity, 0.30, accuracy: 0.001)
 
-        // Segment 1 midpoint (~1.2 + 5.92/2 = 4.16s in -> t = 10.16s): dot 1 halfway lit, dots 2 & 3 base
         let seg1Mid = LyricsInterludeTimeline.evaluate(at: 10.16, interval: interval)
         XCTAssertEqual(seg1Mid.dot1Opacity, 0.65, accuracy: 0.03)
         XCTAssertEqual(seg1Mid.dot2Opacity, 0.30, accuracy: 0.001)
         XCTAssertEqual(seg1Mid.dot3Opacity, 0.30, accuracy: 0.001)
 
-        // Segment 2 midpoint (~t = 16.08s): dot 1 stays 1.0, dot 2 halfway lit, dot 3 base
         let seg2Mid = LyricsInterludeTimeline.evaluate(at: 16.08, interval: interval)
         XCTAssertEqual(seg2Mid.dot1Opacity, 1.0, accuracy: 0.001)
         XCTAssertEqual(seg2Mid.dot2Opacity, 0.65, accuracy: 0.03)
         XCTAssertEqual(seg2Mid.dot3Opacity, 0.30, accuracy: 0.001)
 
-        // Segment 3 midpoint (~t = 22.0s): dots 1 & 2 stay 1.0, dot 3 halfway lit
         let seg3Mid = LyricsInterludeTimeline.evaluate(at: 22.0, interval: interval)
         XCTAssertEqual(seg3Mid.dot1Opacity, 1.0, accuracy: 0.001)
         XCTAssertEqual(seg3Mid.dot2Opacity, 1.0, accuracy: 0.001)
         XCTAssertEqual(seg3Mid.dot3Opacity, 0.65, accuracy: 0.03)
 
-        // Parallel breathing oscillation across the wait: sweeps cleanly around [0.91, 1.09]
         var minScale = Double.greatestFiniteMagnitude
         var maxScale = 0.0
         for step in 0..<90 {
@@ -159,7 +152,6 @@ final class LyricsFocusTests: XCTestCase {
         XCTAssertEqual(minScale, 0.91, accuracy: 0.01)
         XCTAssertEqual(maxScale, 1.09, accuracy: 0.01)
 
-        // Exit anticipation (~0.55s before 0.45s shrink, all 3 dots fully lit -> swells to 1.25x)
         let anticPeakTime = 26.0 - LyricsInterludeTimeline.exitLeadClearance - LyricsInterludeTimeline.maxShrinkDuration
         let anticPeak = LyricsInterludeTimeline.evaluate(at: anticPeakTime, interval: interval)
         XCTAssertEqual(anticPeak.dot1Opacity, 1.0, accuracy: 0.001)
@@ -168,7 +160,6 @@ final class LyricsFocusTests: XCTestCase {
         XCTAssertEqual(anticPeak.scale, 1.25, accuracy: 0.01)
         XCTAssertEqual(anticPeak.groupOpacity, 1.0, accuracy: 0.001)
 
-        // Rapid shrink & fade to 0 before interval.end
         let midShrink = LyricsInterludeTimeline.evaluate(at: anticPeakTime + 0.25, interval: interval)
         XCTAssertLessThan(midShrink.scale, anticPeak.scale)
         XCTAssertGreaterThan(midShrink.scale, 0.2)
@@ -178,7 +169,6 @@ final class LyricsFocusTests: XCTestCase {
         XCTAssertEqual(endFrame.scale, 0, accuracy: 0.001)
         XCTAssertEqual(endFrame.groupOpacity, 0, accuracy: 0.001)
 
-        // Scale trajectory must remain continuous without abrupt jumps across phase joints
         var previousScale = 0.0
         for step in 1...1000 {
             let t = 6.0 + Double(step) * 0.02
@@ -187,14 +177,12 @@ final class LyricsFocusTests: XCTestCase {
             previousScale = frame.scale
         }
 
-        // Short interlude (T = 4.2s) still progresses monotonically through all 3 dots
         let shortInterval = LyricsInterludeInterval(start: 10.0, end: 14.2)
         let shortMid = LyricsInterludeTimeline.evaluate(at: 12.0, interval: shortInterval)
         XCTAssertEqual(shortMid.groupOpacity, 1.0, accuracy: 0.001)
         XCTAssertEqual(shortMid.dot1Opacity, 1.0, accuracy: 0.001)
         XCTAssertGreaterThan(shortMid.dot2Opacity, 0.30)
 
-        // Reduce motion disables breathing & scale anticipation while keeping 3-dot progress
         let reducedMid = LyricsInterludeTimeline.evaluate(at: 16.08, interval: interval, reducesMotion: true)
         XCTAssertEqual(reducedMid.scale, 1.0, accuracy: 0.0001)
         XCTAssertEqual(reducedMid.dot1Opacity, 1.0, accuracy: 0.001)
@@ -216,7 +204,6 @@ final class LyricsFocusTests: XCTestCase {
             plainText: "",
             source: "test"
         )
-        // Rendered rows: 0=intro(-1), 1=id0, 2=id1, 3=interlude(id2), 4=id3, 5=id4, 6=id5
         let state = LyricsFocusTestState(lineCount: 6, activeID: nil)
         state.lyrics = lyrics
         state.timelineAnchor = PlayerTimelineAnchor(baseElapsed: 2.0, rate: 0, duration: 60)
@@ -224,15 +211,12 @@ final class LyricsFocusTests: XCTestCase {
         defer { window.isHidden = true }
         let table = try XCTUnwrap(scrollViews(in: window).compactMap { $0 as? NativeLyricsScrollView }.first)
 
-        // 1. Intro interlude expands when activeID is nil; mid-song interlude stays collapsed at height 0.
         let introExpanded = try await waitUntil { table.expandedInterludeRowIndex == 0 }
         XCTAssertTrue(introExpanded)
         let expectedInterludeHeight = table.focusLineHeight + AppleMusicLyricsMotionProfile.iOS26_6.lineSpacing
         XCTAssertEqual(table.rectForRow(at: IndexPath(row: 0, section: 0)).height, expectedInterludeHeight, accuracy: 1)
         XCTAssertEqual(table.rectForRow(at: IndexPath(row: 3, section: 0)).height, 0, accuracy: 0.5)
 
-        // 2. Advancing to line 1 (row 2) collapses intro (row 0) and keeps mid-song interlude (row 3) collapsed
-        //    so row 4 sits immediately below row 2 with rowOffset == 1 blur (2.0).
         state.activeID = 1
         state.timelineAnchor = PlayerTimelineAnchor(baseElapsed: 15.0, rate: 0, duration: 60)
         try await assertFocus(1, in: state)
@@ -246,7 +230,6 @@ final class LyricsFocusTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(table.rowDistanceBlurRadius(forRow: 4)), 2.0, accuracy: 0.05,
                        "Row immediately after a collapsed interlude must receive adjacent rowOffset=1 blur")
 
-        // 3. Entering mid-song interlude (id 2 -> row 3) expands row 3 and focuses it.
         state.activeID = 2
         state.timelineAnchor = PlayerTimelineAnchor(baseElapsed: 24.0, rate: 0, duration: 60)
         let midExpanded = try await waitUntil {
@@ -260,8 +243,6 @@ final class LyricsFocusTests: XCTestCase {
         let interludeTop = try XCTUnwrap(table.transitionViewportTop(forRow: 3))
         XCTAssertEqual(nextTopDuringInterlude - interludeTop, expectedInterludeHeight, accuracy: 1.5)
 
-        // 4. Leaving mid-song interlude (id 3 -> row 4) collapses row 3 back to 0, animates row 4 upward,
-        //    and keeps row 2 anchored right above focus without extra gap.
         state.activeID = 3
         state.timelineAnchor = PlayerTimelineAnchor(baseElapsed: 36.0, rate: 0, duration: 60)
         let collapseStarted = try await waitUntil {
@@ -293,16 +274,12 @@ final class LyricsFocusTests: XCTestCase {
             plainText: "",
             source: "test"
         )
-        // First sung line starts at 1.5s <= 4.0s, so no intro interlude row is inserted.
-        // Rendered rows: 0=id1, 1=id2, 2=id3, 3=id4.
         let state = LyricsFocusTestState(lineCount: 4, activeID: nil)
         state.lyrics = lyrics
         let window = try await mount(state, size: .large)
         defer { window.isHidden = true }
         let table = try XCTUnwrap(scrollViews(in: window).compactMap { $0 as? NativeLyricsScrollView }.first)
 
-        // 1. At 0:00 (activeID == nil), row 0 is already anchored at focusTop in waiting state:
-        //    unfocused, unblurred (0), while row 1 gets adjacent blur (2.0) and row 2 gets 3.125.
         try await assertFocus(1, in: state)
         let waitingOffset = table.contentOffset.y
         let waitingTop = try XCTUnwrap(state.geometry.top(for: 1))
@@ -311,14 +288,12 @@ final class LyricsFocusTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(table.rowDistanceBlurRadius(forRow: 1)), 2.0, accuracy: 0.05)
         XCTAssertEqual(try XCTUnwrap(table.rowDistanceBlurRadius(forRow: 2)), 3.125, accuracy: 0.05)
 
-        // 2. Active ID hitting a filtered leading credit line keeps the exact same waiting anchor.
         state.activeID = 0
         try await Task.sleep(for: .milliseconds(80))
         XCTAssertEqual(table.contentOffset.y, waitingOffset, accuracy: 0.5)
         XCTAssertEqual(table.isRowFocused(forRow: 0), false)
         XCTAssertEqual(try XCTUnwrap(table.rowDistanceBlurRadius(forRow: 0)), 0, accuracy: 0.01)
 
-        // 3. When the first sung line begins (id 1 -> row 0), offset does not jump and row 0 illuminates.
         state.activeID = 1
         let focusedFirst = try await waitUntil { table.isRowFocused(forRow: 0) == true }
         XCTAssertTrue(focusedFirst)
@@ -327,7 +302,6 @@ final class LyricsFocusTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(state.geometry.top(for: 1)), waitingTop, accuracy: 1.0)
         XCTAssertEqual(try XCTUnwrap(table.rowDistanceBlurRadius(forRow: 1)), 2.0, accuracy: 0.05)
 
-        // 4. Returning from a later line back to 0:00 (activeID == nil) re-anchors row 0 in waiting state.
         state.activeID = 3
         try await assertFocus(3, in: state)
         state.activeID = nil
@@ -451,7 +425,6 @@ final class LyricsFocusTests: XCTestCase {
         defer { window.isHidden = true }
         let scrollView = try XCTUnwrap(scrollViews(in: window).first)
         let overscan = NativeLyricsScrollView.viewportOverscan
-        // Re-layout before another render commit must retain the current model position.
         scrollView.setNeedsLayout()
         scrollView.layoutIfNeeded()
         let initialHeight = try XCTUnwrap(state.geometry.height(for: 40))
@@ -558,15 +531,12 @@ final class LyricsFocusTests: XCTestCase {
             scrollViews(in: window).compactMap { $0 as? NativeLyricsScrollView }.first
         )
 
-        // 1. User drags lyrics (exits blur -> browsing = true)
         table.delegate?.scrollViewWillBeginDragging?(table)
-        // 2. Scroll up to reveal bottom controls
         table.setContentOffset(CGPoint(x: 0, y: table.contentOffset.y - 140), animated: false)
         table.delegate?.scrollViewDidScroll?(table)
         state.isInterfaceHidden = false
         table.delegate?.scrollViewDidEndDragging?(table, willDecelerate: false)
 
-        // 3. Wait ~3s so resumeFollowing and idle interface hide collide
         try await Task.sleep(for: .milliseconds(2950))
         state.isInterfaceHidden = true
         try await Task.sleep(for: .milliseconds(600))
@@ -583,16 +553,13 @@ final class LyricsFocusTests: XCTestCase {
         XCTAssertTrue(foundTable)
         let table = try XCTUnwrap(activeLyricsTable(in: window))
 
-        // Wait until lyrics load and settle, and controls auto-hide after 3s
         try await Task.sleep(for: .milliseconds(3400))
 
-        // Drag lyrics to clear blur and scroll up to reveal bottom controls
         table.delegate?.scrollViewWillBeginDragging?(table)
         table.setContentOffset(CGPoint(x: 0, y: table.contentOffset.y - 160), animated: false)
         table.delegate?.scrollViewDidScroll?(table)
         table.delegate?.scrollViewDidEndDragging?(table, willDecelerate: false)
 
-        // Sit idle for 4 seconds while playback ticks every 200ms
         for _ in 0..<20 {
             playback.progress += 0.2
             try await Task.sleep(for: .milliseconds(200))
@@ -612,7 +579,6 @@ final class LyricsFocusTests: XCTestCase {
         defer { allowPlayback.finish() }
         model.configurePlayback(resolveResource: { id in
             guard id == nextID else { return PlaybackResource(url: first) }
-            // The new lyrics finish loading while the online audio URL is still pending.
             var waiting = audioReady.makeAsyncIterator()
             _ = await waiting.next()
             try Task.checkCancellation()
@@ -813,7 +779,6 @@ final class LyricsFocusTests: XCTestCase {
                              "Bottom row must not overlap the row above it during cascade")
         try await assertFocus(41, in: state)
 
-        // Single-line active target (row 43 -> 44, where 43 & 44 are 1 line): row 45 must stay blurred.
         state.activeID = 43
         try await assertFocus(43, in: state)
         state.activeID = 44
@@ -1083,7 +1048,6 @@ final class LyricsFocusTests: XCTestCase {
             scrollViews(in: window).compactMap { $0 as? NativeLyricsScrollView }.first
         )
 
-        // Move the viewport away from the playing line, as a user does while browsing.
         table.delegate?.scrollViewWillBeginDragging?(table)
         table.scrollToRow(at: IndexPath(row: 68, section: 0), at: .top, animated: false)
         table.layoutIfNeeded()
@@ -1125,11 +1089,9 @@ final class LyricsFocusTests: XCTestCase {
         XCTAssertEqual(table.isRowBrowsingAppearanceActive(forRow: 69), true)
         XCTAssertEqual(interactionEvents, [true])
 
-        // Deceleration keeps interaction active until scrollViewDidEndDecelerating.
         table.delegate?.scrollViewDidEndDragging?(table, willDecelerate: true)
         XCTAssertEqual(interactionEvents, [true])
 
-        // Scrolling back up reveals controls before tapping a lyric to exit browsing.
         state.isInterfaceHidden = false
         try await Task.sleep(for: .milliseconds(150))
         let tappedRow = try XCTUnwrap(table.visibleLineIDs.first { row in
@@ -1202,7 +1164,6 @@ final class LyricsFocusTests: XCTestCase {
         XCTAssertTrue(table.visibleLineIDs.contains(600))
         assertBoundedRows(table, total: 1200)
 
-        // Basic user scrolling: a bounded window follows the offset while browsing.
         table.delegate?.scrollViewWillBeginDragging?(table)
         table.setContentOffset(CGPoint(x: 0, y: table.contentOffset.y + 1800), animated: false)
         table.layoutIfNeeded()
@@ -1210,7 +1171,6 @@ final class LyricsFocusTests: XCTestCase {
         assertBoundedRows(table, total: 1200)
         table.delegate?.scrollViewDidEndDragging?(table, willDecelerate: false)
 
-        // Tap-to-seek uses the same owner path and re-focuses without a full row set.
         let visibleIDs = table.visibleLineIDs.sorted()
         guard !visibleIDs.isEmpty else {
             XCTFail("Scrolling must keep a bounded row window visible")
@@ -1223,7 +1183,6 @@ final class LyricsFocusTests: XCTestCase {
         try await assertFocus(target, in: state)
         assertBoundedRows(table, total: 1200)
 
-        // Rapid song replacement must not leave any row from the previous lyrics.
         for (index, offset) in [10_000, 20_000, 30_000].enumerated() {
             state.lyrics = LyricsFocusTestState.makeLyrics(count: 1200, idOffset: offset)
             state.activeID = offset + 600 + index

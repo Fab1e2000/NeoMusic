@@ -1,7 +1,6 @@
 #if DEBUG
 import SwiftUI
 
-/// Routes debug previews separately from normal app startup.
 @MainActor
 enum DebugLaunchRouter {
     static var isPreviewLaunch: Bool {

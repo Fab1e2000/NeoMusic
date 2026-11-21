@@ -1,7 +1,6 @@
 #if DEBUG
 import SwiftUI
 
-/// New settings only; existing library and player pages use OnlineLibraryShellPreview.
 struct OnlineLibraryPreviewRoot: View {
     @State private var wifiQuality = "无损"
     @State private var cellularQuality = "高品质"

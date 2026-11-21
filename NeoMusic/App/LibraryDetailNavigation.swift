@@ -1,13 +1,9 @@
 import SwiftUI
 import UIKit
 
-/// The sole owner of the library navigation stack. SwiftUI supplies page content and
-/// the original toolbar items; UIKit owns navigation, titles, search and transitions.
 @MainActor @Observable
 final class LibraryDetailNavigation: NSObject, UINavigationControllerDelegate {
     var depth: Int { max(0, (navigationController?.viewControllers.count ?? 1) - 1) }
-    /// The destination route of the visible page, used to collapse a repeated
-    /// request onto the page it already opened. Root pages have no route.
     var topRoute: LibraryRoute? {
         (navigationController?.topViewController as? LibraryDetailHostingController)?.chrome.route
     }
@@ -81,8 +77,6 @@ final class LibraryDetailNavigation: NSObject, UINavigationControllerDelegate {
     func open(_ route: LibraryRoute, source: UIView? = nil, animated: Bool = true,
               sourceProvider: (() -> UIView?)? = nil, preview: LibraryNavigationPreview? = nil) {
         NavigationDiagnostics.event("UIKitLibrary.openRequested", page: route.diagnosticPage)
-        // UIKit's fluid zoom handles new pushes/pops during an ongoing transition.
-        // https://developer.apple.com/documentation/uikit/enhancing-your-app-with-fluid-transitions
         guard let nav = navigationController, let destination else { return }
         let page = makePage(destination(route), route: route, preview: preview?.route == route ? preview : nil)
         switch route {
@@ -95,7 +89,6 @@ final class LibraryDetailNavigation: NSObject, UINavigationControllerDelegate {
                     return view.libraryArtworkAlignmentRect()
                 }
                 page.preferredTransition = .zoom(options: options) { [weak source] _ in
-                    // A provider must not fall back to a cell that has since been reused.
                     let current = sourceProvider.map { $0() } ?? source
                     guard let current, current.window != nil else { return nil }
                     return current
@@ -112,7 +105,6 @@ final class LibraryDetailNavigation: NSObject, UINavigationControllerDelegate {
     }
 
     func navigationController(_ navigationController: UINavigationController, didShow viewController: UIViewController, animated: Bool) {
-        // A cancelled interactive pop leaves the album visible; restore its style as well.
         updateColorScheme((viewController as? LibraryDetailHostingController)?.chrome.colorScheme)
         for case let page as LibraryDetailHostingController in navigationController.viewControllers {
             page.chrome.isActive = page === viewController
@@ -135,7 +127,6 @@ private struct LibraryNavigationPreviewScope: View {
     }
 }
 
-/// Transfers application-level dependencies and navigation actions into an independently hosted UIKit page root.
 private struct LibraryHostedPageEnvironment: ViewModifier {
     let sourceEnvironment: EnvironmentValues
     let chrome: LibraryNavigationChrome
@@ -200,7 +191,6 @@ final class LibraryDetailHostingController: UIHostingController<AnyView> {
         self.chrome = chrome
         super.init(rootView: AnyView(EmptyView()))
         chrome.controller = self
-        // Keep the production back button treatment; the fixture used .minimal.
         navigationItem.backButtonDisplayMode = .default
         chrome.apply()
     }
@@ -211,8 +201,6 @@ final class LibraryDetailHostingController: UIHostingController<AnyView> {
     }
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        // SwiftUI List may materialize after the controller's first appearance.
-        // Register it using the public API once it exists, just like the UIKit lab.
         guard registeredScroll?.isDescendant(of: view) != true else { return }
         if let scroll = firstScroll(in: view), scroll !== registeredScroll {
             registeredScroll = scroll
@@ -246,14 +234,12 @@ final class LibraryDetailHostingController: UIHostingController<AnyView> {
     }
 }
 
-/// Only category titles are known without loading a destination's content.
-/// Native links and explicit UIKit pushes use the same initial navigation state.
 extension LibraryRoute {
     var initialCategoryTitle: (title: String, mode: NavigationBarItem.TitleDisplayMode)? {
         let category: LibraryCategory
         switch self {
         case .category(let value): category = value
-        case .downloadedCategory(.downloaded): return nil // No destination for this route.
+        case .downloadedCategory(.downloaded): return nil
         case .downloadedCategory(let value): category = value
         case .album, .artist, .artistSection, .playlist, .playlistFolder, .searchCategory: return nil
         }
@@ -270,7 +256,6 @@ extension LibraryRoute {
 @MainActor @Observable
 final class LibraryNavigationChrome: NSObject, UISearchResultsUpdating, UISearchBarDelegate, UISearchControllerDelegate {
     var isActive = false
-    /// Set by the native appearance callback; returning keeps the shelf in place.
     var hasAppeared = false
     @ObservationIgnored weak var controller: UIViewController?
     @ObservationIgnored let route: LibraryRoute?
@@ -335,8 +320,6 @@ final class LibraryNavigationChrome: NSObject, UISearchResultsUpdating, UISearch
             search.obscuresBackgroundDuringPresentation = false
             self.search = search
         }
-        // SwiftUI may reuse this chrome with a new navigation host on re-entry.
-        // Rebind the existing controller without recreating its query or active state.
         if controller.navigationItem.searchController !== search {
             controller.navigationItem.searchController = search
             controller.navigationItem.hidesSearchBarWhenScrolling = true
@@ -454,8 +437,6 @@ private struct LibraryHomeChrome: ViewModifier {
     @Environment(\.libraryNavigationChrome) private var chrome
     @ViewBuilder func body(content: Content) -> some View {
         if chrome != nil {
-            // SwiftUI still owns toolbar preferences inside the hosting controller.
-            // Give them the same policy so its updates cannot reset UIKit to defaults.
             content
                 .toolbarMinimizationBehavior(.onScrollDown, for: .navigationBar)
                 .toolbarMinimizationRestoration(.atScrollEdge, for: .navigationBar)

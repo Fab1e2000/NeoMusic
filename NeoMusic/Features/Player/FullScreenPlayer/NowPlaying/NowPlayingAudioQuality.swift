@@ -1,7 +1,6 @@
 import SwiftUI
 import UIKit
 
-/// Temporary playback information uses a centered glass information card.
 struct NowPlayingAudioQualityControl: View {
     let quality: PlayerAudioQuality?
     var openAudioQualitySettings: (() -> Void)?
@@ -10,7 +9,6 @@ struct NowPlayingAudioQualityControl: View {
     @State private var presenter = PlayerQualityPresentationController()
     @State private var displayedQuality: PlayerAudioQuality?
 
-    /// 只把 badge 真正显示出来的内容当作身份；同一音质只是附注变化时保持不动。
     private struct BadgeIdentity: Hashable {
         let title: String
         let isLocalFormat: Bool
@@ -73,8 +71,6 @@ struct NowPlayingAudioQualityControl: View {
         }
     }
 
-    /// 在线曲目切歌时音质会短暂为空；保留上一首的显示，等新值回来再交叉淡化，
-    /// 避免控件先被移除、再以新内容瞬间插回造成的闪变。
     private func updateDisplayedQuality(with newQuality: PlayerAudioQuality?) {
         guard let newQuality else { return }
         let changed: Bool

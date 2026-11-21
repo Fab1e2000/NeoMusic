@@ -425,14 +425,12 @@ private struct HitTarget: UIViewRepresentable {
         let initialKey = player.currentTrackTransitionKey
         let initialGeneration = player.playbackGeneration
 
-        // Pause/resume and availability reconciliation must not look like a track change.
         player.togglePlayback()
         player.togglePlayback()
         owner.reconcileAvailability(songs: owner.queue)
         XCTAssertEqual(player.playbackGeneration, initialGeneration)
         XCTAssertEqual(player.currentTrackTransitionKey, initialKey)
 
-        // Switching A -> B -> A must produce a distinct transition key so player pages reset.
         player.skip(toQueueIndex: 1)
         let keyB = player.currentTrackTransitionKey
         XCTAssertNotEqual(keyB, initialKey)

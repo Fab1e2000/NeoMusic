@@ -1,8 +1,6 @@
 // Ported from youshen2/MeloX (GPL-3.0), commit 1fe5fbab3f554e8529c4847fc54281a472b7b61a.
 import Foundation
 
-/// Solver inputs for a physical spring. Values are normalized on creation so
-/// animation code never hands non-finite or non-physical inputs to SwiftUI.
 nonisolated struct LyricPhysicalSpringParameters: Equatable, Sendable {
     let mass: Double
     let stiffness: Double

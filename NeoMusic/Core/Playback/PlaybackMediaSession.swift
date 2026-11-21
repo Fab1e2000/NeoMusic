@@ -1,7 +1,6 @@
 import MediaPlayer
 import UIKit
 
-/// Opt-in system integration: create only for the application's active playback owner.
 @MainActor final class PlaybackMediaSession {
     struct Metadata {
         var title: String

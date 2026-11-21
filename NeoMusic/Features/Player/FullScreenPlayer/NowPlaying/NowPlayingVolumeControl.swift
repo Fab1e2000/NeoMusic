@@ -2,7 +2,6 @@ import AVFoundation
 import MediaPlayer
 import SwiftUI
 
-/// 音量滑块离手惯性衰减与触控速度估计的纯数学模型，便于独立单元测试。
 struct VolumeInertiaPhysics: Sendable, Equatable {
     struct TouchSample: Sendable, Equatable {
         let timestamp: TimeInterval
@@ -136,8 +135,6 @@ struct NowPlayingVolumeControl: View {
 }
 
 final class AlignedSystemVolumeView: MPVolumeView {
-    // MPVolumeView stays at alpha = 1 with hidden slider subviews so iOS
-    // reliably handles hardware volume and HUD suppression without drawing UIKit's track.
     private let clearImage = NowPlayingScrubbingSlider.clearTrackImage
     private var volumeObserver: NSKeyValueObservation?
     private var notificationTokens: [NSObjectProtocol] = []
@@ -212,8 +209,6 @@ final class AlignedSystemVolumeView: MPVolumeView {
     private func refreshHUDVisibility() {
         guard isVolumeDisplayActive, window != nil else { return }
         if isHidden { isHidden = false }
-        // Calling setAlpha on MPVolumeView/MPVolumeSlider triggers MPVolumeHUDController
-        // to re-evaluate ancestor visibility after popup open transitions or route changes.
         alpha = 1
         for slider in subviews.compactMap({ $0 as? UISlider }) {
             slider.alpha = 1
@@ -233,8 +228,6 @@ final class AlignedSystemVolumeView: MPVolumeView {
             let volume = session.outputVolume
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                // Ignore delayed / quantized AVAudioSession IPC echoes while dragging,
-                // coasting on flick inertia, or during the brief post-release settle window.
                 guard !self.isDragging, !self.isCoasting, ContinuousClock.now >= self.suppressObserverUntil else { return }
                 let changed = abs(volume - self.lastReportedFraction) > 0.0001
                 self.lastReportedFraction = volume

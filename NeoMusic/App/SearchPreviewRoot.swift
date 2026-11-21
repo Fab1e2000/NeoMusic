@@ -2,7 +2,6 @@ import FullScreenPlayer
 #if DEBUG
 import SwiftUI
 
-/// Explicit pages use fixed display fixtures; the catalog preview can load public content.
 struct SearchPreviewRoot: View {
     @State private var preview: SearchPreviewPresentation
     @State private var library = PlaylistLibrary(playlists: [], folders: [])
@@ -125,7 +124,6 @@ private final class SearchPreviewPresentation {
         model.isLoading = true
         defer { model.isLoading = false }
         do {
-            // Keep one real public snapshot across preview modes; UI checks do not requery the service.
             if let data = try? Data(contentsOf: snapshotURL), let cached = try? JSONDecoder().decode(Snapshot.self, from: data) {
                 snapshot = cached
             } else {

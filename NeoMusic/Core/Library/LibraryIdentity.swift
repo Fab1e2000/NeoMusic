@@ -1,6 +1,5 @@
 import Foundation
 
-/// Unified parser and formatter for online song identities (`netease:<owner>:<songID>`).
 enum OnlineSongIdentity: Equatable, Hashable, Sendable {
     static func parse(_ id: String) -> (owner: Int64, song: Int64)? {
         let parts = id.split(separator: ":", omittingEmptySubsequences: false)
@@ -30,7 +29,6 @@ enum OnlineSongIdentity: Equatable, Hashable, Sendable {
     }
 }
 
-/// Structured representation of playlist route identifiers across local, account, home, and downloaded scopes.
 enum PlaylistRouteIdentity: Equatable, Hashable, Sendable {
     case favorites
     case account(ownerID: String, playlistID: Int64)
@@ -100,7 +98,6 @@ enum PlaylistRouteIdentity: Equatable, Hashable, Sendable {
     }
 }
 
-/// Structured representation of online catalog artist and album identifiers (`catalog:artist:<id>`, `catalog:album:<id>`).
 enum CatalogRouteIdentity: Equatable, Hashable, Sendable {
     case artist(Int64)
     case album(Int64)
@@ -151,7 +148,6 @@ enum CatalogRouteIdentity: Equatable, Hashable, Sendable {
     }
 }
 
-/// Structured key for deferred artwork loading (`<domain>:<session>:<payload>`).
 struct DeferredArtworkKey: Equatable, Hashable, Sendable {
     enum Domain: String, Equatable, Hashable, Sendable {
         case music

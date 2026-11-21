@@ -19,7 +19,6 @@ def run(*args, check=True):
 
 
 def audio_fixtures(directory, count, artwork):
-    # Silence keeps playback deterministic and avoids audible test output.
     base = directory / 'fixture-source.wav'
     with wave.open(str(base), 'wb') as audio:
         audio.setnchannels(1)
@@ -38,7 +37,6 @@ def audio_fixtures(directory, count, artwork):
     sources = []
     for index, cover in enumerate(covers):
         target = directory / f'fixture-{index:02d}.mp3'
-        # AVFoundation exposes the ID3 APIC picture as commonKeyArtwork.
         run(ffmpeg, '-hide_banner', '-loglevel', 'error', '-y',
             '-i', str(base), '-i', str(cover), '-map', '0:a:0', '-map', '1:v:0',
             '-c:a', 'libmp3lame', '-b:a', '32k', '-ar', '22050', '-c:v', 'copy',
@@ -62,8 +60,6 @@ def seed(simulator, count=180, artwork=False):
     ids = []
     with tempfile.TemporaryDirectory(prefix='neomusic-performance-') as temporary:
         sources = audio_fixtures(Path(temporary), count, artwork)
-        # Re-seeding this dedicated container replaces only generated audio,
-        # including the previous format when switching between WAV and MP3.
         for extension in ('wav', 'mp3'):
             for existing in music.glob(f'Album [0-9]*/Track [0-9]*.{extension}'):
                 existing.unlink()
@@ -138,7 +134,6 @@ def metrics(result, output):
     measured = {}
     for entry in json.loads((output / 'manifest.json').read_text()):
         file = output / entry['metricsFileName']
-        # Xcode 27 can append the CSV extension twice in its manifest.
         if not file.exists() and file.suffix == '.csv': file = file.with_suffix('')
         with file.open() as handle: row = next(csv.DictReader(handle))
         values = {}

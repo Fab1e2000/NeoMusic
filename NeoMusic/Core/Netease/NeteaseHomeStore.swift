@@ -351,7 +351,6 @@ import Observation
                 _ = try await fetchDetail(id: id, refresh: true, preloadArtwork: false) { [client] in
                     let first = try await client.detail(id: id, credential: credential, trackLimit: 1)
                     guard let previous, previous.orderedTrackIDs == first.orderedTrackIDs, previous.nextOffset > first.nextOffset else { return first }
-                    // The cover refresh must not discard pages already loaded for this playlist.
                     let replacement = Dictionary(first.songs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
                     return NeteasePlaylistDetail(playlist: first.playlist,
                         songs: previous.songs.map { replacement[$0.id] ?? $0 }, addedTimes: first.addedTimes,
@@ -362,7 +361,7 @@ import Observation
             guard revision == generation else { return }
             onChange?()
             requestDisplayedArtwork()
-        } catch { /* Existing first-track artwork survives a failed refresh of the same playlist. */ }
+        } catch {}
     }
 
     private func refreshRoaming(force: Bool) async {
@@ -412,7 +411,6 @@ import Observation
         return value
     }
 
-    /// 播放中的私人漫游再取一批。不改首页卡片状态，也不换掉还没开始播的预备批次。
     func nextRoamingSongs() async throws -> [NeteaseMusicSong] {
         try Task.checkCancellation()
         guard restored, let credential else { throw NeteaseHomeActionError.loginRequired }
@@ -429,8 +427,6 @@ import Observation
         return songs.filter { $0.id > 0 && !$0.unavailable && seen.insert($0.id).inserted }
     }
 
-    /// Keep referenced queue and local-playlist metadata when Home replaces its displayed content.
-    /// The integration publishes the updated catalog after accepting the batch into its queue.
     @discardableResult
     func retainReferencedSongs(ids: Set<Int64>, adding songs: [NeteaseMusicSong] = []) -> Bool {
         guard userID != nil else { return false }
@@ -443,7 +439,6 @@ import Observation
         return true
     }
 
-    /// A cancelled queue-replacement confirmation leaves this batch available.
     func consumeRoamingBatch(id: UUID) {
         guard var value = roamingCache, value.id == id, !value.consumed else { return }
         value.consumed = true
@@ -558,8 +553,6 @@ import Observation
             var value = try await client.homeFeed(credential: credential, refresh: force)
             try Task.checkCancellation()
             guard generation == revision else { return }
-            // Keep a complete warm snapshot until the replacement finishes. A cold page
-            // can display its first valid response while later pages are still loading.
             if feed == nil, value.hasMore == true, !value.blocks.isEmpty {
                 publishFeed(value)
             }
@@ -616,7 +609,6 @@ import Observation
             guard generation == revision else { return }
             let previous = cache.snapshots[date]
             let snapshot = NeteaseDailySnapshot(date: date, songs: songs, id: previous?.songs.map(\.id) == songs.map(\.id) ? previous!.id : UUID().uuidString)
-            // History references this immutable ID after the bounded page cache is evicted.
             try await cacheIO.save(snapshot, to: dailyArchiveURL(snapshot.id))
             try Task.checkCancellation()
             guard generation == revision else { return }
@@ -631,7 +623,6 @@ import Observation
         } catch is CancellationError {} catch { if generation == revision, !Task.isCancelled { dailyError = error.localizedDescription; onChange?() } }
     }
     var cachedSongs: [NeteaseMusicSong] { userID == nil ? [] : songCatalog }
-    /// Older saved queues contain only IDs. Their missing metadata is recovered after the first screen.
     func restoreCachedSongs(ids: Set<Int64>) async -> [NeteaseMusicSong] {
         guard userID != nil, !ids.isEmpty, !Task.isCancelled else { return [] }
         let revision = generation, owner = scope
@@ -717,7 +708,6 @@ import Observation
         return detail
     }
 
-    /// Browsing refreshes the displayed page; playback consumes the selected snapshot.
     func playlistArtworkFile(id: Int64) async throws -> URL? {
         let revision = generation
         _ = try await restoreCachedDetail(id: id, publish: false)
@@ -792,7 +782,6 @@ import Observation
         }
     }
 
-    /// Shared requests belong to this session; a disappearing view only cancels its own wait.
     private func joinDetail(_ id: Int64) async throws -> NeteasePlaylistDetail? {
         guard let task = detailTasks[id] else { return nil }
         let revision = generation
@@ -848,7 +837,6 @@ import Observation
         guard restored, generation == revision, scope == owner, !Task.isCancelled else { return nil }
         return file
     }
-    /// 首页会展示的封面在内容到达时全部请求，不等对应卡片进入屏幕。
     private func requestDisplayedArtwork() {
         let urls = displayFeedBlocks.flatMap { $0.resources.compactMap(\.artworkURL) }
             + NeteaseHomeQuickAction.allCases.compactMap { quickActionArtwork($0) }

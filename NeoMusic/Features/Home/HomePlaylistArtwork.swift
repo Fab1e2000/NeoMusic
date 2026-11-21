@@ -2,7 +2,6 @@ import SwiftUI
 import UIKit
 import CoreImage
 
-/// The approved square cover and its softly extended lower edge.
 struct HomePlaylistArtwork: View {
     let artwork: Artwork
     var onVisibleArtworkChange: (Bool) -> Void = { _ in }
@@ -67,7 +66,6 @@ struct HomePlaylistArtwork: View {
     }
 }
 
-/// Processes local cached artwork off the UI actor, once per image and display scale.
 actor HomePlaylistArtworkRenderer {
     struct Images: Sendable { let cover: UIImage; let background: UIImage }
     static let shared = HomePlaylistArtworkRenderer()
@@ -96,7 +94,6 @@ actor HomePlaylistArtworkRenderer {
         }
         guard let cgImage = extended.cgImage else { return nil }
         let input = CIImage(cgImage: cgImage)
-        // Extend edge colors before blurring so transparent samples cannot darken the perimeter.
         let blurred = input.clampedToExtent()
             .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 7 * scale])
             .cropped(to: input.extent)

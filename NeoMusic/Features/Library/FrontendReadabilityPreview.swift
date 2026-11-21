@@ -2,7 +2,6 @@
 import SwiftUI
 import UIKit
 
-/// Native, in-memory comparisons for the frontend review. Production screens remain independent.
 struct FrontendReadabilityPreview: View {
     let page: String
     @Environment(\.dynamicTypeSize) private var systemTextSize
@@ -108,7 +107,6 @@ struct FrontendReadabilityPreview: View {
     }
 }
 
-/// SwiftUI exposes contrast as a read-only environment value. UIKit owns the preview override.
 private struct ReviewContrastHost<Content: View>: UIViewControllerRepresentable {
     let highContrast: Bool
     let content: Content

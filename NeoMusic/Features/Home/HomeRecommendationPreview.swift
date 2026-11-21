@@ -1,7 +1,6 @@
 #if DEBUG
 import SwiftUI
 
-/// Isolated presentation data for approving the three real-content home shelves.
 struct HomeRecommendationPreview: View {
     enum Mode: String { case signedIn, guest, error }
     let mode: Mode
@@ -91,7 +90,6 @@ struct HomeRecommendationPreview: View {
 
     private var dailyCard: some View {
         ZStack(alignment: .bottomLeading) {
-            // The existing new-music mesh composition, with recommendation wording.
             MeshGradient(width: 3, height: 3, points: [
                 [0, 0], [0.5, 0], [1, 0], [0, 0.5], [0.7, 0.38], [1, 0.5], [0, 1], [0.5, 1], [1, 1]
             ], colors: [

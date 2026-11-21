@@ -31,7 +31,6 @@ final class NeteaseAccountTests: XCTestCase {
 
         let validation = Task { await account.revalidate() }
         await network.started.wait()
-        // A foreground validation must not turn the completed cache phase into a network wait.
         await account.restoreCachedContent()
         XCTAssertEqual(storage.reads, 1)
         XCTAssertEqual(validations, 1)

@@ -1,7 +1,6 @@
 #if DEBUG
 import SwiftUI
 
-/// Isolated layout approval fixture; only the supplied quick-action covers are real service artwork.
 struct HomeFeedPreview: View {
     private let feedbackOverride: String?
     @State private var selected: String?

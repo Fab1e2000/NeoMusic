@@ -1,13 +1,11 @@
 import SwiftUI
 import UIKit
 
-/// 从封面生成 3×3 MeshGradient 背景；每首歌只取一次色，运动交给 SwiftUI 的动画系统。
 struct NowPlayingArtworkBackdrop: View {
     let artworkURL: URL?
     var trackID: String? = nil
     var isPlaying: Bool = true
     var ignoresSafeArea = true
-    /// 背景实际铺开的范围（含安全区），供外层坐标校准。
     var onFrameChange: ((CGRect) -> Void)? = nil
     var onPaletteChange: ((NowPlayingBackdropPalette?) -> Void)? = nil
 
@@ -61,8 +59,6 @@ struct NowPlayingArtworkBackdrop: View {
             ZStack {
                 Color.black
 
-                // 换歌时保持同一个 MeshGradient，让 SwiftUI 直接插值网格颜色与控制点；
-                // 不按调色板重建视图，避免新旧两层同时半透明而透出底下的黑色。
                 if let palette {
                     NowPlayingMeshBackdrop(
                         palette: palette,
@@ -85,12 +81,10 @@ struct NowPlayingArtworkBackdrop: View {
         .ignoresSafeArea(edges: ignoresSafeArea ? .all : [])
         .accessibilityHidden(true)
         .onChange(of: palette, initial: true) { _, newValue in
-            // 首次出现直接显示；只有更换曲目才做颜色过渡，避免播放器展开时多一层黑场。
             if newValue != nil { hasDisplayedPalette = true }
             onPaletteChange?(newValue)
         }
         .task(id: BackdropRequestID(url: artworkURL, trackID: trackID)) {
-            // 加载期间保留上一张背景，但绝不把别的歌曲封面算进当前曲目。
             guard let artworkURL, let request = Self.request(for: artworkURL) else {
                 if trackID == nil || renderedTrackID != trackID {
                     palette = nil
@@ -115,7 +109,6 @@ struct NowPlayingArtworkBackdrop: View {
     }
 }
 
-/// 单个曲目的静态配色加缓慢形变；没有自建计时器，动画由 SwiftUI 驱动。
 private struct NowPlayingMeshBackdrop: View {
     let palette: NowPlayingBackdropPalette
     let animates: Bool
@@ -142,7 +135,6 @@ private struct NowPlayingMeshBackdrop: View {
             : .easeInOut(duration: 1.2)
     }
 
-    /// 边界点只在各自的边上滑动，四角固定，渐变始终铺满且不会露出接缝。
     private var points: [SIMD2<Float>] {
         let drift = isDrifting
         let seed = palette.seed

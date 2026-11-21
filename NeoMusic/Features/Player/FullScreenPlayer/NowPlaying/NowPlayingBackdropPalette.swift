@@ -1,8 +1,6 @@
 import SwiftUI
 import UIKit
 
-/// 每首歌只从封面提取 2–3 个主色，再铺成 3×3 MeshGradient 配色。
-/// 亮度与彩度沿用原流体背景的 Oklab 校准思路，让极暗、极亮和高饱和封面都能作为可读背景。
 struct NowPlayingBackdropPalette: Hashable, Sendable {
     struct Swatch: Hashable, Sendable {
         let red: Float
@@ -23,9 +21,7 @@ struct NowPlayingBackdropPalette: Hashable, Sendable {
     static let columns = 3
     static let rows = 3
 
-    /// 行优先：左上到右下，共 `columns * rows` 个色块。
     let swatches: [Swatch]
-    /// 由封面像素派生，供背景动画的起始方向使用，使不同封面不会走完全相同的轨迹。
     let seed: UInt64
 
     static let fallback = NowPlayingBackdropPalette(
@@ -35,7 +31,6 @@ struct NowPlayingBackdropPalette: Hashable, Sendable {
         seed: 0
     )
 
-    /// 分析 128×128 的不透明 sRGB 像素，提取主色后返回按行优先排列的九宫格配色。
     static func make(fromRGBA8 bytes: UnsafePointer<UInt8>, width: Int, height: Int) -> Self {
         guard width >= columns, height >= rows else { return .fallback }
 
@@ -72,7 +67,6 @@ struct NowPlayingBackdropPalette: Hashable, Sendable {
                 sumA += Double(lab.a)
                 sumB += Double(lab.b)
 
-                // 偏中亮度的彩色作为整张封面的主色，避免暗部与过曝区域主导。
                 let lumGate = smoothstep(edge0: 0.14, edge1: 0.56, x: lab.l)
                 let w = pow(Double(c), 1.4) * Double(lumGate)
                 weightedA += Double(lab.a) * w
@@ -111,7 +105,6 @@ struct NowPlayingBackdropPalette: Hashable, Sendable {
         let accentC = hypot(accentA, accentB)
         let accentStrength = min(max(accentC / 0.12, 0), 1)
 
-        // 把整张封面的明暗中心校准到适合做背景的范围：亮封面不刺眼，黑封面仍保留层次。
         let tonalL = min(max(meanL * 0.65 + p85L * 0.35, 0), 1)
         let highKeyLift = pow(max(tonalL - 0.62, 0) / 0.38, 1.5) * 0.21
         let targetCenterL = min(max(0.19 + tonalL * 0.32 + highKeyLift, 0.19), 0.71)
@@ -123,8 +116,6 @@ struct NowPlayingBackdropPalette: Hashable, Sendable {
             ? [ColorCluster(l: meanL, a: meanA, b: meanB, x: 0.5, y: 0.5, weight: 1)]
             : clusters
 
-        // 主色本身已经压掉了封面噪点，只留少量向平均色的收敛，
-        // 让两三种主色在画面上仍能辨认，而不是并成一块灰底。
         let wash: Float = 0.20
         let sigma: Float = 0.32
         let sigmaSquaredTwice = 2 * sigma * sigma
@@ -154,7 +145,6 @@ struct NowPlayingBackdropPalette: Hashable, Sendable {
             var a = cellA + (meanA - cellA) * wash
             var b = cellB + (meanB - cellB) * wash
 
-            // 彩度压在背景可接受的范围内，接近 Apple Music 那种偏灰的封面染色。
             let chroma = hypot(a, b)
             let chromaCap: Float = 0.075
             if chroma > chromaCap {
@@ -162,7 +152,6 @@ struct NowPlayingBackdropPalette: Hashable, Sendable {
                 b *= chromaCap / chroma
             }
 
-            // 封面主体偏灰时补极少量主色，避免完全变成灰底。
             if accentStrength > 0.08, accentC > 0.004 {
                 let floorC = min(accentC, 0.08) * 0.30 * accentStrength
                     * min(max((0.78 - meanL) / 0.18, 0), 1)
@@ -203,8 +192,6 @@ struct NowPlayingBackdropPalette: Hashable, Sendable {
         var weight: Float
     }
 
-    /// 在 Oklab 上做确定性的三色聚类；颜色同时带上它在封面里的平均位置，
-    /// 让九宫格保留封面的大致色彩分布，而不是把主色均匀撒满整屏。
     private static func dominantColors(in samples: [ColorSample]) -> [ColorCluster] {
         guard !samples.isEmpty else { return [] }
 
@@ -219,7 +206,6 @@ struct NowPlayingBackdropPalette: Hashable, Sendable {
         let mean = samples.reduce(SIMD3<Float>.zero) { $0 + vector($1) } / Float(samples.count)
         var centers: [SIMD3<Float>] = [mean]
 
-        // 最远点初始化：依次挑出与已有中心差异最大的样本，结果与遍历顺序一致。
         if let farthest = samples.max(by: { squaredDistance(vector($0), mean) < squaredDistance(vector($1), mean) }) {
             centers.append(vector(farthest))
             if let third = samples.max(by: { lhs, rhs in
@@ -279,7 +265,6 @@ struct NowPlayingBackdropPalette: Hashable, Sendable {
         return result
     }
 
-    /// 与参考实现一致的纵向压暗曲线：顶部略提亮，底部收敛。
     private static func verticalShade(row: Int) -> Float {
         let y = Float(row) / Float(max(rows - 1, 1))
         let ramp = smoothstep(edge0: 0.10, edge1: 0.96, x: y)
@@ -331,7 +316,6 @@ struct NowPlayingBackdropPalette: Hashable, Sendable {
     }
 }
 
-/// 按封面 URL 缓存已算好的配色，避免滚回同一首歌时重新分析像素。
 final class NowPlayingBackdropCache: @unchecked Sendable {
     static let shared = NowPlayingBackdropCache()
 
@@ -383,7 +367,6 @@ final class NowPlayingBackdropCache: @unchecked Sendable {
                     bitmapInfo: CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue
                   ) else { return nil }
 
-            // 先铺不透明黑底，半透明封面也不会被预乘压暗。
             context.setFillColor(CGColor(colorSpace: colorSpace, components: [0, 0, 0, 1])!)
             context.fill(CGRect(x: 0, y: 0, width: size, height: size))
             context.interpolationQuality = .high

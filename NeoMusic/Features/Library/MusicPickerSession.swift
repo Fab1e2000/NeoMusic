@@ -1,6 +1,5 @@
 import SwiftUI
 
-/// 资料库快照与按需加载入口，供「添加到播放列表」选单读取真实资料库数据。
 @MainActor
 struct MusicPickerSource {
     var songs: @MainActor () -> [LibrarySongItem] = { [] }
@@ -77,7 +76,6 @@ extension EnvironmentValues {
 }
 
 
-// MARK: - Session Cache
 
 @MainActor @Observable
 final class MusicPickerSession {
@@ -176,7 +174,6 @@ final class MusicPickerSession {
     }
 }
 
-// MARK: - Routes
 
 enum MusicPickerRoute: Hashable {
     case artists, albums, songs, playlists, downloaded, recent

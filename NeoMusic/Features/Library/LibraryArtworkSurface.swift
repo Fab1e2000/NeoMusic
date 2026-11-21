@@ -5,8 +5,6 @@ extension EnvironmentValues {
     @Entry var nativeArtworkSurfaceEnabled = false
 }
 
-/// A real, cover-only UIKit surface for zoom. The existing SwiftUI artwork drawing
-/// is retained verbatim, including placeholder symbols, stroke and corner radius.
 struct LibraryArtworkSurface<Content: View>: UIViewRepresentable {
     let content: Content
     let cornerRadius: CGFloat
@@ -48,8 +46,6 @@ final class LibraryArtworkSurfaceView: UIView {
 }
 
 extension UIView {
-    /// Resolve the marked detail cover each time, including after scrolling. A missing
-    /// or fully clipped cover leaves alignment to UIKit instead of choosing a track image.
     func libraryArtworkAlignmentRect() -> CGRect? {
         func target(in view: UIView) -> LibraryArtworkSurfaceView? {
             if let cover = view as? LibraryArtworkSurfaceView, cover.isZoomAlignmentTarget { return cover }
@@ -74,8 +70,6 @@ extension UIView {
     }
 }
 
-/// Independent hosting roots inherit traits from UIKit. Copy only explicit public
-/// appearance values and the image-loading action, never navigation internals.
 extension View {
     func libraryHostedAppearance(_ environment: EnvironmentValues) -> some View {
         self.environment(\.colorScheme, environment.colorScheme)

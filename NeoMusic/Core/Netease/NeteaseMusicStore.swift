@@ -8,8 +8,6 @@ final class NeteaseMusicStore {
     private(set) var playlists: [NeteaseMusicPlaylist] = []
     private(set) var songs: [Int64: NeteaseMusicSong] = [:]
     private(set) var playlistTracks: [Int64: [Int64]] = [:]
-    /// Changes only when a favorites playlist or an already-liked song record changes.
-    /// Home observes this instead of the whole song table, so loading another playlist does not republish the feed.
     private(set) var likedSongRevision = 0
     private(set) var likedIDs: Set<Int64> = []
     private(set) var likedAt: [Int64: Date] = [:]
@@ -264,7 +262,6 @@ final class NeteaseMusicStore {
         onChange?()
     }
 
-    /// Restored queues can outlive search results and radio batches that supplied their metadata.
     func resolveReferencedSongs(ids: Set<Int64>) async -> [NeteaseMusicSong] {
         guard userID != nil, !Task.isCancelled else { return [] }
         let requested = ids.filter { $0 > 0 }
@@ -325,8 +322,6 @@ final class NeteaseMusicStore {
             return await performLoadPlaylist(id: id, mode: mode)
         }
         detailTasks[id] = task
-        // The store owns this shared request; individual view tasks may leave
-        // while another consumer still needs the same page or complete queue.
         return await task.value
     }
 
@@ -391,7 +386,6 @@ final class NeteaseMusicStore {
         details[id] = detail
         playlistTracks[id] = trackIDs
         for song in detail.songs {
-            // 喜欢操作不知道曲目详情时，不能用「不可用」占位盖住正在播放的歌曲。
             if song.unavailable, songs[song.id]?.unavailable == false { continue }
             songs[song.id] = song
         }
@@ -432,7 +426,6 @@ final class NeteaseMusicStore {
         guard let userID else { throw NeteaseAccountError.authenticationRequired }
         let revision = generation
         let previous = LikedMembership(ids: likedIDs, times: likedAt, detail: playlists.first(where: \.isFavorites).flatMap { details[$0.id] })
-        // 和 MeloX 的 setLocalSong 一样：先改喜欢列表，请求失败再放回去。
         reviseLiked(songID, liked: liked, persist: false)
         onChange?()
         do {
@@ -472,7 +465,6 @@ final class NeteaseMusicStore {
         let detail: NeteasePlaylistDetail?
     }
 
-    /// 喜欢歌曲的名单和「我喜欢的音乐」曲目一起改。已在目标状态时不改加入时间。
     private func reviseLiked(_ songID: Int64, liked: Bool, persist: Bool) {
         if liked {
             if likedIDs.insert(songID).inserted { likedAt[songID] = Date() }
@@ -492,7 +484,6 @@ final class NeteaseMusicStore {
         }
         if liked {
             ids.insert(songID, at: 0)
-            // 只有已经拿到曲目时才放进喜欢列表。缺详情不能记成「暂无完整音源」。
             if songs[songID] != nil { loadedIDs.insert(songID, at: 0) }
         }
         let loaded = loadedIDs.compactMap { songs[$0] }
@@ -507,7 +498,6 @@ final class NeteaseMusicStore {
         likedAt = previous.times
     }
 
-    /// 写请求失败时，以服务器上的喜欢名单为准。已经达到目标就不再报失败。
     private func confirmedLiked(_ songID: Int64, liked: Bool, userID: Int64, revision: UUID) async -> Bool {
         guard let ids = try? await run({ [client] in try await client.likedIDs(userID: userID, credential: $0) }),
               revision == generation, ids.contains(songID) == liked else { return false }
@@ -616,7 +606,6 @@ final class NeteaseMusicStore {
     }
 }
 
-/// File work for the three account-owned content caches stays off the UI executor.
 actor NeteaseCacheIO {
     func load<Value: Decodable & Sendable>(_ type: Value.Type, from url: URL) -> Value? {
         guard !Task.isCancelled, let data = try? Data(contentsOf: url) else { return nil }

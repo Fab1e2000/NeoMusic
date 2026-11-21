@@ -546,7 +546,6 @@ import XCTest
             let state = await engine.debugBackendState()
             return state.itemID != nil
         })
-        // Give the async remote preparation task a chance to attach AVAudioSourceNode to SharedAudioGraph.
         try await Task.sleep(for: .milliseconds(100))
         engine.stop()
     }

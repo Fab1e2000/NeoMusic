@@ -61,7 +61,6 @@ actor LyricsReader {
         let document = try read(url)
         guard !document.isEmpty else { throw Failure.invalidFile }
         try FileManager.default.createDirectory(at: storageDirectory, withIntermediateDirectories: true)
-        // Keep original text and encoding; never modify the source file.
         let data = try Data(contentsOf: url)
         try data.write(to: importedURL(songID), options: .atomic)
     }

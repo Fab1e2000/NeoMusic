@@ -2,7 +2,6 @@
 // Shares the MeloX-derived lyric row appearance and geometry (GPL-3.0).
 import SwiftUI
 
-/// Exercises production lyric positioning with local, variable-height sample lines.
 public struct NativeLyricsFocusPreview: View {
     public init() {}
     @State private var time = 160.0
@@ -62,8 +61,6 @@ public struct NativeLyricsFocusPreview: View {
     NativeLyricsFocusPreview()
 }
 
-/// Interactive preview demonstrating the 3-dot interlude indicator lifecycle
-/// (row expansion, 1.2s entrance, 3-segment progress, 4.5s breathing, anticipation & collapse).
 private struct LyricsInterludeIndicatorPreview: View {
     @State private var isPlaying = true
     @State private var anchor = PlayerTimelineAnchor(baseElapsed: 0, rate: 1, duration: 36)

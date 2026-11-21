@@ -65,7 +65,6 @@ public struct PlayerLyricLine: Identifiable, Equatable, Sendable {
     }
 }
 
-/// Display-ready lyrics. Parsing, translation and storage belong to the host.
 public struct PlayerLyrics: Equatable, Sendable {
     public var lines: [PlayerLyricLine]
     public var plainText: String
@@ -79,9 +78,6 @@ public struct PlayerLyrics: Equatable, Sendable {
     public func activeLine(at time: TimeInterval) -> Int? { lines.last { $0.time <= time }?.id }
 }
 
-/// Immutable playback clock anchor published only on discrete transport transitions
-/// (play, pause, seek, track change, or low-frequency drift sync) so UI surfaces can
-/// derive live progress locally via `TimelineView` without 60Hz main-actor polling.
 public struct PlayerTimelineAnchor: Equatable, Sendable {
     public let baseElapsed: Double
     public let hostTimestamp: TimeInterval
@@ -114,7 +110,6 @@ public struct PlayerTimelineAnchor: Equatable, Sendable {
     }
 }
 
-/// Reads must participate in Observation. The host owns playback and queue mutations.
 @MainActor public protocol PlayerPlaybackSource: AnyObject, Observable {
     var tracks: [PlayerTrack] { get }
     var currentTrack: PlayerTrack? { get }
@@ -161,7 +156,6 @@ public extension PlayerPlaybackSource {
     }
 }
 
-/// Stable environment identity with live reads into the host; no copied playback state or clock.
 @MainActor @Observable public final class PlayerState {
     private let source: any PlayerPlaybackSource
     public init(source: any PlayerPlaybackSource) { self.source = source }

@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// Each page keeps only its last projection. Unrelated presentation updates reuse it,
-/// while changed data and controls produce their result in the same render pass.
 @MainActor final class LibraryListProjection<Input: Equatable, Output> {
     private var input: Input?
     private var output: Output?
@@ -15,8 +13,6 @@ import SwiftUI
     }
 }
 
-/// Runs heavy list filtering and Pinyin sorting off the main thread while browsing,
-/// preserving the previous valid snapshot until background computation finishes.
 @MainActor @Observable
 final class AsyncListProjection<Input: Equatable, Output> {
     private(set) var committedOutput: Output?
@@ -37,8 +33,6 @@ final class AsyncListProjection<Input: Equatable, Output> {
         return initial
     }
 
-    /// Returns fast-path results immediately, retains the last committed output while recomputing
-    /// subsequent changes, and supplies `placeholder` on first appearance so navigation pushes never block.
     func currentValue(for input: Input,
                       fastPath: (Input) -> Output?,
                       placeholder: (Input) -> Output) -> Output {
@@ -47,9 +41,6 @@ final class AsyncListProjection<Input: Equatable, Output> {
         return placeholder(input)
     }
 
-    /// True only for the current input: it either hits the synchronous fast path or its own
-    /// background projection has committed. A retained snapshot for a previous input stays
-    /// visible through `currentValue`, but must never make the new input look resolved.
     func isResolved(for input: Input, fastPath: (Input) -> Output?) -> Bool {
         fastPath(input) != nil || resolvedValue(for: input) != nil
     }
@@ -73,7 +64,6 @@ final class AsyncListProjection<Input: Equatable, Output> {
         }
 
         await computeIfNeeded(for: input) {
-            // Structured cancellation reaches the worker when the page changes its task ID.
             let intermediate = await withTaskGroup(of: Intermediate.self) { group in
                 group.addTask { background() }
                 return await group.next()
@@ -101,17 +91,14 @@ final class AsyncListProjection<Input: Equatable, Output> {
     }
 }
 
-/// 列表页的筛选：全部、喜爱、已下载。本地音乐都在本机，“下载”保留位置但不可用。
 enum LibraryFilter: Hashable, Sendable {
     case all, favorites, downloaded
 }
 
-/// 专辑、播放列表页的显示方式。
 enum LibraryLayout: Hashable {
     case grid, list
 }
 
-/// 排序菜单里的一项；副标题显示在标题下方（例如“艺人”下的“A-Z”）。
 struct LibrarySortOption<Sort: Hashable & Sendable>: Identifiable, Sendable {
     let sort: Sort
     let title: String
@@ -119,7 +106,6 @@ struct LibrarySortOption<Sort: Hashable & Sendable>: Identifiable, Sendable {
     var id: Sort { sort }
 }
 
-/// 右上角“≡”按钮：筛选。首项为“所有…”，其下为喜爱与下载。对照 Apple Music。
 struct LibraryFilterMenu: View {
     @Binding var filter: LibraryFilter
     let allTitle: String
@@ -147,12 +133,10 @@ struct LibraryFilterMenu: View {
     }
 }
 
-/// 右上角“…”按钮：显示方式（网格、列表）与排序。对照 Apple Music。
 struct LibrarySortMenu<Sort: Hashable & Sendable>: View {
     var layout: Binding<LibraryLayout>?
     @Binding var sort: Sort
     let options: [LibrarySortOption<Sort>]
-    /// 页面自身的操作，分别排在显示方式之前与排序之后（例如文件夹页的重新命名与删除）。
     var leading: LibraryMenuSections = []
     var trailing: LibraryMenuSections = []
     @Environment(\.accessibilityReduceMotion) private var reducesMotion
@@ -193,9 +177,6 @@ struct LibrarySortMenu<Sort: Hashable & Sendable>: View {
 }
 
 extension Sequence {
-    /// 按字符串排序；中文按拼音，非字母开头的排在最后，与资料库字母分组（“#”在最后）一致。
-    /// A cancelled caller (a superseded background projection) stops building sort keys early;
-    /// its partial result is discarded by `AsyncListProjection`.
     func sorted(byName name: (Element) -> String) -> [Element] {
         var keyed: [(isLetter: Bool, key: String, element: Element)] = []
         keyed.reserveCapacity(underestimatedCount)

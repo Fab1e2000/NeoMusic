@@ -1,7 +1,6 @@
 import Foundation
 import Observation
 
-/// Owns the account credential, validation, and avatar work for the current session.
 @MainActor @Observable
 final class NeteaseAccount {
     let music: NeteaseMusicStore?
@@ -18,7 +17,6 @@ final class NeteaseAccount {
         case pending, signedOut, signedIn(String)
     }
 
-    /// A failed or unfinished credential read must not resolve the saved queue as signed out.
     var restoredPlaybackIdentity: RestoredPlaybackIdentity {
         guard hasRestored, !isAuthenticating, !isLoggingOut else { return .pending }
         guard let session else { return .signedOut }
@@ -133,8 +131,6 @@ final class NeteaseAccount {
         await validate(restoring: true)
     }
 
-    /// Restore the saved owner and library summaries. Home content and network
-    /// validation are restored independently after the library can be displayed.
     func restoreCachedContent() async {
         guard !hasRestored, !isAuthenticating, !Task.isCancelled else { return }
         if let logoutTask { _ = await logoutTask.result; return }
@@ -195,8 +191,6 @@ final class NeteaseAccount {
                     error = nil
                     PerformanceDiagnostics.restoration("account.read.success signedIn=\(session != nil)")
                     previousState = session == nil ? .signedOut : .unverified
-                    // Restore the saved identity and its image independently of
-                    // the account endpoint; validation still owns session validity.
                     if validateSession { refreshAvatar() }
                 }
                 if !restoring, refreshContent {
@@ -281,7 +275,6 @@ final class NeteaseAccount {
         await task.value
     }
 
-    /// Each content owner restores and refreshes independently after the identity is established.
     private func activateContent(_ session: NeteaseSavedSession?, refresh: Bool = true) async {
         guard !Task.isCancelled else { return }
         async let homeContent: Void? = home?.activate(session, refresh: refresh)
@@ -346,8 +339,6 @@ final class NeteaseAccount {
                 avatarID = nil
                 oldValidation?.cancel()
                 oldAvatar?.cancel()
-                // The validation task can be awaiting a shared playlist load.
-                // Stop each content owner before joining that task.
                 await home?.activate(nil, refresh: false)
                 try checkLogin(id)
                 await artists?.activate(nil, refresh: false)
@@ -376,8 +367,6 @@ final class NeteaseAccount {
                 refreshAfterLogin()
             } catch {
                 if loginID == id {
-                    // Credential rollback must also restore content when the presenting
-                    // login task has been cancelled. The account owns this cleanup task.
                     let recovery = Task { [self] in
                         guard loginID == id, logoutID == nil, !Task.isCancelled else { return }
                         await activateContent(session, refresh: false)
@@ -494,7 +483,6 @@ final class NeteaseAccount {
             }
         }
         logoutTask = task
-        // Once requested, leaving the page does not interrupt credential removal.
         try await task.value
     }
 
@@ -509,7 +497,6 @@ final class NeteaseAccount {
         var errorDescription: String? { "恢复原账户凭据失败，请重试退出登录：\(cause.localizedDescription)" }
     }
 
-    /// A cancelled write restores its prior value before another login or logout proceeds.
     private func persist(_ proposed: NeteaseSavedSession, replacing previous: NeteaseSavedSession?,
                          isCurrent: @MainActor () -> Bool) async throws {
         try await saveSession(proposed)
@@ -529,8 +516,6 @@ final class NeteaseAccount {
         let oldTask = avatarTask
         oldTask?.cancel()
         let removedAvatar = avatarOwner?.userID == profile.userID && avatarOwner?.avatarURL != nil && profile.avatarURL == nil
-        // NetEase can rotate CDN hosts for the same image. Keep this user's
-        // displayed avatar until its replacement arrives; the URL scopes requests.
         let sameUser = avatarOwner?.userID == profile.userID || startupAvatar?.belongs(to: profile) == true
         if !sameUser || profile.avatarURL == nil {
             startupAvatar = nil
@@ -563,7 +548,7 @@ final class NeteaseAccount {
                 avatarData = data
                 avatarDataURL = url
                 await saveAvatarSnapshot(data, profile)
-            } catch { /* The account remains usable when its avatar cannot be loaded. */ }
+            } catch {}
         }
     }
 }

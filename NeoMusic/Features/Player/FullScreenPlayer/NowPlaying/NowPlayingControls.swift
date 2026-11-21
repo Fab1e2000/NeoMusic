@@ -1,8 +1,6 @@
 // Direct source port from MeloX (GPL-3.0), b8bc60f.
-// NeoDizzy adapters are limited to track data, available playback features and localization.
 import SwiftUI
 
-/// Timing fitted frame-by-frame against 60 fps Apple Music device recordings.
 struct NowPlayingHighlightTiming {
     let duration: TimeInterval
     let delay: TimeInterval
@@ -31,7 +29,6 @@ enum NowPlayingProgressFeedbackSpec {
     static let pressedTimeVerticalOffset: CGFloat = 9.41 / 3.0
     static let pressSpring = Animation.spring(Spring(response: 0.38, dampingRatio: 0.73))
     static let releaseSpring = Animation.spring(Spring(response: 0.41, dampingRatio: 0.61))
-    /// Brightening finishes before the bar settles; dimming waits briefly after release.
     static let progressHighlight = NowPlayingHighlightFeedback(
         press: NowPlayingHighlightTiming(duration: 0.14, delay: 0, easesOutOnly: false),
         release: NowPlayingHighlightTiming(duration: 0.15, delay: 0.05, easesOutOnly: true)
@@ -40,7 +37,6 @@ enum NowPlayingProgressFeedbackSpec {
         press: NowPlayingHighlightTiming(duration: 0.09, delay: 0, easesOutOnly: false),
         release: NowPlayingHighlightTiming(duration: 0.13, delay: 0.08, easesOutOnly: true)
     )
-    /// Post-release volume flick deceleration fitted against 60 fps Apple Music recordings (`tau ≈ 82 ms`).
     static let volumeInertiaTimeConstant: TimeInterval = 0.082
     static let volumeInertiaStopVelocity: Float = 0.015
     static let volumeMinimumFlickVelocity: Float = 0.15
@@ -50,7 +46,6 @@ enum NowPlayingProgressFeedbackSpec {
 final class NowPlayingProgressInteraction {
     var isPressed = false
     var scrubbingProgress: TimeInterval?
-    /// Retains the just-committed seek target briefly until async player progress catches up.
     var committedSeekProgress: TimeInterval?
     var committedSeekDeadline: ContinuousClock.Instant?
 
@@ -169,8 +164,6 @@ struct NowPlayingProgressControl: View {
 
 }
 
-/// Shared custom capsule track so bar thickness, horizontal expansion, and
-/// surrounding labels/icons are driven by the exact same SwiftUI spring.
 struct NowPlayingCapsuleTrack: View {
     let fraction: CGFloat
     let baseWidth: CGFloat
@@ -280,8 +273,6 @@ private struct NowPlayingProgressStatusView<Content: View>: View {
     }
 }
 
-/// Only the slider and time readout subscribe to the periodic playback clock.
-/// The quality control and surrounding page layout retain their existing inputs.
 private struct NowPlayingProgressSlider: UIViewRepresentable {
     let maximum: TimeInterval
     let interaction: NowPlayingProgressInteraction
@@ -352,8 +343,6 @@ private struct NowPlayingProgressSlider: UIViewRepresentable {
             slider.cancelTracking(with: nil)
         }
 
-        /// Prevents stale `player.progress` ticks emitted before an async `seek` settles
-        /// from snapping the slider backward during rapid repeated drags.
         func resolvedExternalProgress(from liveProgress: Double) -> Double {
             guard let target = pendingSeekTarget, let deadline = pendingSeekDeadline else {
                 return liveProgress
@@ -401,9 +390,6 @@ private struct NowPlayingProgressSlider: UIViewRepresentable {
         }
 
         @objc func changed(_ slider: NowPlayingScrubbingSlider) {
-            // While dragging, drive the visual bar/time from the finger only and
-            // commit a single AVPlayer seek on release so background time ticks
-            // and mid-drag seeks never fight the user's finger.
             if slider.isTracking {
                 let value = Double(slider.value)
                 scrub.setEditing(true)
@@ -414,7 +400,6 @@ private struct NowPlayingProgressSlider: UIViewRepresentable {
                 interaction.committedSeekDeadline = nil
                 interaction.scrubbingProgress = value
             } else {
-                // VoiceOver adjustable increment/decrement.
                 scrub.setEditing(true)
                 scrub.propose(Double(slider.value)) { player.seek(to: $0) }
                 scrub.setEditing(false)
@@ -424,7 +409,6 @@ private struct NowPlayingProgressSlider: UIViewRepresentable {
     }
 }
 
-/// Native `UIControl` relative progress scrubber with zero post-release inertia.
 final class NowPlayingScrubbingSlider: UIControl {
     static let clearTrackImage = UIGraphicsImageRenderer(size: CGSize(width: 1, height: 1)).image { _ in }
     var onHighlightChanged: ((Bool) -> Void)?
@@ -582,7 +566,6 @@ private func formatPlaybackTime(_ value: TimeInterval) -> String {
     return String(format: "%d:%02d", seconds / 60, seconds % 60)
 }
 
-/// Forwards values only during a user-originated slider edit.
 @MainActor final class NowPlayingProgressScrub {
     private(set) var isEditing = false
 
@@ -602,7 +585,6 @@ struct NowPlayingTransportControls: View {
 
     @Environment(\.nowPlayingLayout) private var layout
 
-    /// 每点一次上一首/下一首加一，触发图标的推进动画。
     @State private var previousTrigger = 0
     @State private var nextTrigger = 0
 

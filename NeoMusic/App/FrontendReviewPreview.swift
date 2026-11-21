@@ -337,8 +337,6 @@ private struct NativeCatalogLoadingPreview: View {
     }
 }
 
-/// Uses the production album page with the current and public Core Image colors.
-/// Only this isolated preview consumes the candidate extraction result.
 private struct NativeArtworkColorPreview: View {
     @State private var navigation = LibraryDetailNavigation()
 

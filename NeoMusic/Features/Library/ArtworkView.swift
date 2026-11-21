@@ -1,22 +1,16 @@
 import SwiftUI
 import Observation
 
-/// 专辑、播放列表或歌曲的封面。
 enum Artwork: Equatable {
-    /// Apple Music“喜爱歌曲”星标的实测颜色。
     static let favoritesRed = DesignTokens.Colors.favoritesRed
     static let favoritesBackground = DesignTokens.Colors.favoritesBackground
 
     case image(Image)
     case file(URL)
     case deferred(id: String, placeholder: ArtworkPlaceholder)
-    /// “喜爱歌曲”固定使用浅灰底上的红色星标。
     case favorites
-    /// 没有封面的播放列表。
     case playlist
-    /// 播放列表文件夹。
     indirect case folder([Artwork])
-    /// 没有封面的歌曲或专辑。
     case missing
 
     var loadID: String? { if case .deferred(let id, _) = self { id } else { nil } }
@@ -37,7 +31,6 @@ extension EnvironmentValues {
     @Entry var artworkLoadAction = ArtworkLoadAction()
 }
 
-/// 方形封面，按宽度铺满并裁切圆角。
 struct ArtworkView: View {
     let artwork: Artwork
     var contentID: String?
@@ -91,13 +84,11 @@ struct ArtworkView: View {
         case .playlist:
             placeholder(systemImage: "music.note.list", symbolScale: 0.38)
         case .folder(let artworks) where artworks.isEmpty:
-            // 空文件夹显示文件夹符号，与 Apple Music 一致。
             placeholder(systemImage: "folder", symbolScale: 0.44)
         case .folder(let artworks):
             GeometryReader { proxy in
                 Color(.tertiarySystemFill)
                     .overlay(alignment: .topLeading) {
-                        // 文件夹封面是内容的 2×2 缩略图；空文件夹保留空底。
                         Grid(horizontalSpacing: proxy.size.width * 0.06, verticalSpacing: proxy.size.width * 0.06) {
                             GridRow {
                                 folderThumbnail(artworks, at: 0, width: proxy.size.width)
@@ -154,7 +145,6 @@ private struct ArtworkPlaceholderView: View {
     }
 }
 
-/// A downloaded file keeps the deferred cover's placeholder until its pixels are ready.
 private struct LoadedArtworkView: View {
     let artwork: Artwork
     let retainsImageAcrossSources: Bool
@@ -173,14 +163,10 @@ private struct LoadedArtworkView: View {
         self.artwork = artwork
         self.retainsImageAcrossSources = retainsImageAcrossSources
         self.loadImage = loadImage
-        // Seed once, then retain this neutral placeholder across deferred -> file.
         let kind: ArtworkPlaceholder
         if case .deferred(_, let value) = artwork { kind = value } else { kind = .missing }
         _placeholderKind = State(initialValue: kind)
-        // The navigation source is a one-time seed for this stable resource identity.
         _initialArtwork = State(initialValue: previewArtwork)
-        // A cached thumbnail is already visible before the larger decode finishes.
-        // Keep those pixels if metadata changes the file during that decode.
         switch artwork {
         case .file(let url):
             _image = State(initialValue: LocalArtworkImages.cached(url, pixels: 0))
@@ -205,7 +191,6 @@ private struct LoadedArtworkView: View {
         if let url, let ready = (imageURL == url ? image : nil) ?? LocalArtworkImages.cached(url, pixels: pixels) {
             return ready
         }
-        // Only a caller-supplied stable item identity permits retaining a different file.
         return retainsImageAcrossSources ? image : nil
     }
 
@@ -260,7 +245,6 @@ private struct LoadedArtworkView: View {
     }
 }
 
-/// Image arrivals notify image readers without replacing their containing collection.
 @propertyWrapper struct ArtworkResource<Value: Equatable>: Equatable {
     private var state: ArtworkResourceState<Value>
     init(wrappedValue: Value) { state = ArtworkResourceState(wrappedValue) }
@@ -287,7 +271,6 @@ private struct LoadedArtworkView: View {
     }
 }
 
-/// Reads the resource inside the image subtree, keeping grid layout out of image notifications.
 struct ResourceArtworkView: View {
     let resource: ArtworkResourceState<Artwork>
     var contentID: String?

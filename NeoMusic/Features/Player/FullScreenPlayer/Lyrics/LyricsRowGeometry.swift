@@ -1,8 +1,6 @@
 import Foundation
 import Observation
 
-/// Only the focused line's height affects viewport layout. Measured positions
-/// stay outside observable state and can be inspected without driving scrolling.
 @Observable
 final class LyricsRowGeometry {
     nonisolated struct Measurement: Equatable, Sendable {
@@ -16,8 +14,6 @@ final class LyricsRowGeometry {
     private(set) var focusedHeight: CGFloat?
 
     func height(for id: Int?) -> CGFloat? {
-        // Subscribe even before onChange selects a newly active line. Read its
-        // cached height immediately instead of reusing the previous line's.
         let currentHeight = focusedHeight
         guard let id else { return nil }
         return id == focusedID ? currentHeight : heights[id]
@@ -43,8 +39,6 @@ final class LyricsRowGeometry {
     func top(for id: Int) -> CGFloat? { tops[id] }
 
     func discardPosition(for id: Int) {
-        // An offscreen lazy row's last viewport position is stale. Its height
-        // remains a useful estimate until it is measured after a distant seek.
         tops.removeValue(forKey: id)
     }
 

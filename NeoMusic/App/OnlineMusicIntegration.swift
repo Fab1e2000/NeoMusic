@@ -2,7 +2,6 @@ import SwiftUI
 
 typealias OnlineMusicIntegration = OnlineLibraryIntegration
 
-/// Converts account-owned library content (playlists and liked songs) into the library and playback contracts.
 @MainActor
 final class OnlineLibraryIntegration {
     private let account: NeteaseAccount

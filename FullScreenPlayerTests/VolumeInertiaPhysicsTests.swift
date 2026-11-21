@@ -44,7 +44,6 @@ final class VolumeInertiaPhysicsTests: XCTestCase {
             endTimestamp: 1.045,
             trackWidth: 200
         )
-        // (110 - 10) / 200 / 0.04 = 12.5 -> clamped to 12.0
         XCTAssertEqual(velocity, 12.0, accuracy: 0.001)
     }
 

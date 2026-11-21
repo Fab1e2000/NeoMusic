@@ -344,7 +344,6 @@ import Observation
         let item = albumItem(value.album)
         let cover: Artwork
         if case .file(let url) = item.artwork, LocalArtworkImages.cached(url, pixels: 0) == nil, backdropSources[id] != url {
-            // Publish the newly decoded cover with its prepared appearance.
             cover = .missing
         } else { cover = item.artwork }
         return .init(kind: .album, title: value.album.title, subtitle: value.album.artist, caption: item.year.map { "\($0)年" }, artwork: cover, tint: Color(.systemBackground), albumBackdrop: item.albumBackdrop, isFavorite: item.isFavorite, songs: value.songs.map(songItem), route: .album(item.id))

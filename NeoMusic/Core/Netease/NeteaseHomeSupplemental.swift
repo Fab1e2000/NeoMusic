@@ -1,10 +1,7 @@
 import Foundation
 
-/// Supplemental sources retain their own identity instead of claiming a homepage block code.
 /// Endpoints follow NeteaseCloudMusicApiEnhanced/api-enhanced (GPL-3.0),
-/// module/toplist.js and module/artist_new_song.js.
 /// Playback and new-song parameters follow MeloX (GPL-3.0),
-/// 09713edb847a0f0a3515a34f779cc630d4fe5985, NeteaseAPI+Home / IntelligenceMode.
 enum NeteaseHomeSupplemental {
     struct Intelligence: Decodable, Sendable {
         struct Item: Decodable, Sendable { let id: Int64 }
@@ -22,8 +19,6 @@ enum NeteaseHomeSupplemental {
         let songs: [Song]
         var models: [NeteaseMusicSong] { NeteaseHomeSupplemental.songs(songs) }
     }
-    /// These endpoints return either the older artists/album/duration keys or
-    /// the song-detail ar/al/dt keys. Both carry the same stable music identities.
     struct Song: Decodable, Sendable {
         let model: NeteaseMusicSong
         private enum CodingKeys: String, CodingKey { case id, name, artists, ar, album, al, duration, dt }
@@ -140,7 +135,6 @@ extension NeteaseMusicClient {
             ["limit": 20, "startTimestamp": Int64(Date().timeIntervalSince1970 * 1000)], credential)
         let block = response.block
         var covers: [Int64: URL] = [:]
-        // Reuse the account-owned snapshot; request details only for uncovered albums.
         for resource in cached?.resources ?? [] {
             if let id = resource.numericID, let url = resource.artworkURL { covers[id] = url }
         }

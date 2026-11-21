@@ -201,7 +201,6 @@ import SwiftUI
     }
 
     func testCancelledSystemArtworkLoadCannotRestorePreviousTrackCover() async throws {
-        // The test host also restores its real player; finish that owner before testing MediaPlayer's process-wide center.
         await LocalLibrary.runtime.refresh()
         for _ in 0..<500 where LocalLibrary.runtime.isScanning { try await Task.sleep(for: .milliseconds(10)) }
         XCTAssertFalse(LocalLibrary.runtime.isScanning)

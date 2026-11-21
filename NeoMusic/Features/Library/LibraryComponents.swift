@@ -1,6 +1,5 @@
 import SwiftUI
 
-/// 列表页标题下方的“播放 / 随机播放”两个胶囊按钮。
 struct PlayShuffleButtons: View {
     let play: () -> Void
     let shuffle: () -> Void
@@ -33,7 +32,6 @@ struct PlayShuffleButtons: View {
     }
 }
 
-/// 专辑网格中的一项：封面、标题与副标题。
 struct AlbumCard: View {
     let item: LibraryShelfItem
     @Environment(\.dynamicTypeSize) private var textSize
@@ -86,7 +84,6 @@ struct LibraryNavigationPreview: Equatable {
     }
 }
 
-/// 在资料库导航栈中推入一页，由持有导航路径的宿主提供。
 struct OpenLibraryRouteAction {
     let handler: (LibraryRoute) -> Void
     var sourceHandler: ((LibraryRoute, UIView?) -> Void)?
@@ -95,7 +92,6 @@ struct OpenLibraryRouteAction {
     func callAsFunction(_ route: LibraryRoute, source: UIView? = nil) {
         if let sourceHandler { sourceHandler(route, source) } else { handler(route) }
     }
-    /// Reusable cells resolve the current artwork again on both zoom in and zoom out.
     func callAsFunction(_ route: LibraryRoute, sourceProvider: @escaping () -> UIView?) {
         if let sourceProviderHandler { sourceProviderHandler(route, sourceProvider) }
         else { callAsFunction(route, source: sourceProvider()) }
@@ -107,7 +103,6 @@ struct OpenLibraryRouteAction {
     @MainActor func callAsFunction(_ item: LibraryShelfItem, sourceProvider: @escaping () -> UIView?) {
         guard let route = item.route else { return }
         var artwork = item.artwork
-        // Retain the decoded source pixels while the detail prepares its larger cover.
         if case .file(let url) = artwork, let image = LocalArtworkImages.cached(url, pixels: 0) {
             artwork = .image(Image(uiImage: image))
         }
@@ -123,7 +118,6 @@ extension EnvironmentValues {
     @Entry var libraryNavigationPreview: LibraryNavigationPreview?
 }
 
-/// 喜爱的条目在行首留白处显示的小星标，不挤动封面与文字。
 struct FavoriteMark: View {
     let isFavorite: Bool
     var color: Color = .secondary
@@ -141,13 +135,11 @@ struct FavoriteMark: View {
     }
 }
 
-/// 按标题首字母（中文取拼音首字母）分组；非字母开头归入“#”，排在最后。
 struct TitleSection<Item>: Identifiable {
     let letter: String
     let items: [Item]
     var id: String { letter }
 
-    /// 排序用的键：中文转为拼音，去掉声调，小写。
     static func sortKey(_ title: String) -> String {
         LibraryTitleSortKeys.key(for: title)
     }
@@ -156,7 +148,6 @@ struct TitleSection<Item>: Identifiable {
         var keyed: [(sortKey: String, item: Item)] = []
         keyed.reserveCapacity(items.count)
         for item in items {
-            // Building pinyin keys is the expensive stage; stop when a newer input superseded it.
             if Task.isCancelled { return [] }
             keyed.append((sortKey: sortKey(title(item)), item: item))
         }
@@ -170,9 +161,7 @@ struct TitleSection<Item>: Identifiable {
     }
 }
 
-/// Transliteration is shared by song, album and playlist sorting and bounded by NSCache.
 private enum LibraryTitleSortKeys {
-    // NSCache supports concurrent access; no UI actor is needed for pure sort keys.
     nonisolated(unsafe) private static let cache: NSCache<NSString, NSString> = {
         let cache = NSCache<NSString, NSString>()
         cache.totalCostLimit = 2 * 1_024 * 1_024
@@ -190,8 +179,6 @@ private enum LibraryTitleSortKeys {
     }
 }
 
-/// Detail actions (for example deleting the current album) use the owning navigator.
-/// Sheets keep their own standard SwiftUI dismiss action.
 struct CloseLibraryDetailAction {
     var handler: (() -> Void)?
 }

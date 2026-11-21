@@ -1,7 +1,6 @@
 #if DEBUG
 import SwiftUI
 
-/// Isolated visual fixture. Its controls only change preview state and never start a download.
 struct DownloadsPreview: View {
     private enum Page: String, CaseIterable {
         case songs, actions, settings

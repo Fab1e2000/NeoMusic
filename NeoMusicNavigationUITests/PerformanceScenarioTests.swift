@@ -1,6 +1,5 @@
 import XCTest
 
-/// Release-optimized build with DEBUG previews enabled and its own app identifier.
 @MainActor
 final class FullScreenPlayerPerformanceTests: XCTestCase {
     private var controls: [String: CGVector] = [:]
@@ -85,7 +84,6 @@ final class FullScreenPlayerPerformanceTests: XCTestCase {
             let frame = visibleButton(label, in: app).frame
             controls[label] = CGVector(dx: frame.midX / app.frame.width, dy: frame.midY / app.frame.height)
         }
-        // Allows an external Instruments recording to attach before measured interactions.
         if let delay = ProcessInfo.processInfo.environment["NEOMUSIC_TRACE_DELAY"].flatMap(Double.init) {
             print("PLAYER_PERFORMANCE_READY")
             Thread.sleep(forTimeInterval: delay)
@@ -159,7 +157,6 @@ final class FullScreenPlayerPerformanceTests: XCTestCase {
     }
 }
 
-/// Run on the isolated simulator prepared by scripts/performance-benchmark.py.
 @MainActor
 final class PerformanceScenarioTests: XCTestCase {
     override func setUpWithError() throws {
@@ -192,15 +189,11 @@ final class PerformanceScenarioTests: XCTestCase {
         XCTAssertTrue(play.waitForExistence(timeout: 5))
         let next = app.buttons["mini.next"]
         XCTAssertTrue(next.waitForExistence(timeout: 5))
-        // LNPopup exposes the hosted title slot as a button without text children.
-        // The retained launch recording and screenshot cover its rendered text.
         let title = try miniPlayerTitle(app)
         XCTAssertGreaterThan(title.frame.minX, app.frame.minX + 50)
         XCTAssertLessThan(title.frame.maxX, play.frame.minX)
         XCTAssertGreaterThan(title.frame.minY, app.frame.height * 0.7)
         XCTAssertLessThan(abs(title.frame.midY - play.frame.midY), 20)
-        // On the 402 pt fixture the floating bar's 20 pt inset leaves the
-        // trailing control 20...44 pt from the window edge.
         XCTAssertGreaterThan(app.frame.maxX - next.frame.maxX, 15)
         XCTAssertLessThan(app.frame.maxX - next.frame.maxX, 45)
     }

@@ -1,5 +1,4 @@
 // Direct source port from MeloX (GPL-3.0), b8bc60f.
-// NeoDizzy adapters are limited to track data, available playback features and localization.
 import SwiftUI
 
 enum NowPlayingPageTransition {

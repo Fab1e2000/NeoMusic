@@ -90,7 +90,6 @@ final class DownloadedAudioTagsTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: staged), original)
     }
 
-    /// Compare encoded frames, excluding the format's tag blocks.
     private func audioPayload(_ bytes: Data, format: String) throws -> Data {
         let value = Array(bytes)
         if format == "flac" {

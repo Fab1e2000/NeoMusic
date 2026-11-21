@@ -1,10 +1,6 @@
 import SwiftUI
 import UIKit
 
-/// 播放列表页的列表显示方式，用原生 `UICollectionView`：SwiftUI 的 `List` 会自己接走拖放，
-/// 行上的放置目标收不到。这里由集合视图统一处理点按、长按菜单与“拖到文件夹上移入”，
-/// 行内容仍由 SwiftUI 渲染。交互对照 Apple Music：长按先出菜单，接着拖动即拿起封面缩略图，
-/// 拖到文件夹上整行高亮，松手移入。
 struct GenericCollectionList<Item: Identifiable & Equatable>: UIViewControllerRepresentable where Item.ID == String {
     let items: [Item]
     let menu: (Item) -> UIMenu
@@ -12,9 +8,6 @@ struct GenericCollectionList<Item: Identifiable & Equatable>: UIViewControllerRe
     let moveItem: ((_ id: String, _ folderID: String) -> Void)?
     let shelfItem: (Item) -> LibraryShelfItem
     let route: (Item) -> LibraryRoute
-    /// Rows that only perform an action (for example playing a song) must release the
-    /// system selection as soon as the tap is handled. Navigating rows keep it until
-    /// `PlaylistListController` fades it alongside the push.
     var deselectsImmediately = false
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -283,7 +276,6 @@ struct GenericCollectionList<Item: Identifiable & Equatable>: UIViewControllerRe
 }
 
 extension PlaylistEntry {
-    /// 影响行显示的内容；变化时重新配置这一行。
     var signature: String {
         let item = shelfItem
         let contents: [String]
@@ -293,7 +285,6 @@ extension PlaylistEntry {
     }
 }
 
-/// UIHostingConfiguration supports a view-backed cover without child controllers.
 struct PlaylistCellArtwork: UIViewRepresentable {
     let artwork: Artwork
     func makeUIView(context: Context) -> LibraryArtworkSurfaceView { LibraryArtworkSurfaceView() }
@@ -321,7 +312,6 @@ struct PlaylistCellArtwork: UIViewRepresentable {
     }
 }
 
-/// Coordinate selection fading with the containing navigation transition.
 private final class PlaylistListController: UICollectionViewController {
     override func viewWillAppear(_ animated: Bool) {
         clearsSelectionOnViewWillAppear = false

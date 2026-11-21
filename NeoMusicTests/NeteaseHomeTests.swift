@@ -619,7 +619,6 @@ import Synchronization
         XCTAssertNotEqual(nextID, firstID)
         XCTAssertEqual(nextSongs.map(\.id), [3])
         XCTAssertEqual(HomePaginationProtocol.count(path), 2)
-        // Accepting an older confirmation must not consume a newer refresh.
         store.consumeRoamingBatch(id: firstID)
         guard case .roaming(let stillPrepared, _) = try await store.performQuickAction(.privateRoaming) else { return XCTFail("Missing current batch") }
         XCTAssertEqual(stillPrepared, nextID)

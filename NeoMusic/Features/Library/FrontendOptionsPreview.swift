@@ -1,7 +1,6 @@
 #if DEBUG
 import SwiftUI
 
-/// Native design comparisons with local, memory-only examples.
 struct FrontendOptionsPreview: View {
     let page: String
     @State private var candidate: Bool
@@ -87,7 +86,6 @@ private struct OptionCategory: Identifiable, Hashable {
     let colorIndex: Int
     var id: String { name }
 
-    // A category subset with the existing catalogue's group and hot fields.
     static let samples: [Self] = [
         .init(name: "华语", group: .language, isHot: true, colorIndex: 0),
         .init(name: "流行", group: .style, isHot: true, colorIndex: 1),

@@ -116,7 +116,6 @@ final class NeteaseDownloadStore {
             let available = await Self.availableSongIDs(records: records, musicDirectory: musicDirectory)
             availableFileIDs = available
             for id in available { states[id] = .downloaded }
-            // A download delegate may have moved its file just before the process exited.
             for id in jobs.keys where jobs[id]?.stagedFilename == nil {
                 let file = transport.spool.appending(path: id.uuidString + ".transfer")
                 if FileManager.default.fileExists(atPath: file.path) { jobs[id]?.stagedFilename = file.lastPathComponent }
@@ -305,7 +304,6 @@ final class NeteaseDownloadStore {
                 let url = try ownedFile(path)
                 if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
             }
-            // Retain source identity and collection references for online fallback and future downloads.
             states.removeValue(forKey: id)
         }
         try await persist()
@@ -317,7 +315,6 @@ final class NeteaseDownloadStore {
         return url
     }
 
-    /// Used by background-event completion and deterministic integration tests.
     func waitForProcessing() async {
         while !workers.isEmpty { for task in workers.values { await task.value } }
         _ = await persistenceTask?.result
@@ -336,7 +333,6 @@ final class NeteaseDownloadStore {
 
     @discardableResult
     func reconcileFileAvailability(_ availableSongIDs: Set<Int64>) -> Bool {
-        // The media file can already exist while its durable index write is in flight.
         let checked = availableSongIDs.filter {
             records[$0] != nil && (states[$0] != .processing || availableFileIDs.contains($0))
         }
@@ -403,7 +399,6 @@ final class NeteaseDownloadStore {
         switch event {
         case let .progress(id, progress):
             guard let job = jobs[id], !job.cancelled, job.stagedFilename == nil else { return }
-            // Whole percent updates keep long lists independent of network packet frequency.
             set(.downloading((progress * 100).rounded(.down) / 100), for: job.metadata.song.id)
         case let .waiting(id):
             guard let job = jobs[id], !job.cancelled, job.stagedFilename == nil else { return }
@@ -423,7 +418,6 @@ final class NeteaseDownloadStore {
             transferring.remove(id)
             guard let job = jobs[id], !job.cancelled, !changingNetwork, !changingSession else { return }
             if cancelled {
-                // User stops are persisted above. System cancellation after force-quit keeps the request resumable.
                 set(.queued, for: job.metadata.song.id); pump(); return
             }
             fail(id, message: message); pump()
@@ -455,7 +449,6 @@ final class NeteaseDownloadStore {
         let relative = folder + "/" + filename
         let destination = try ownedFile(relative)
         try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-        // Repeated requests reuse a committed file; only a fully prepared file can replace an orphan.
         if resource(songID: song.id) != nil {
             jobs.removeValue(forKey: job.id)
             cleanupTransfer(job)
@@ -465,7 +458,6 @@ final class NeteaseDownloadStore {
         }
         let recoveringCommit = job.destinationRelativePath == relative && FileManager.default.fileExists(atPath: destination.path)
         if FileManager.default.fileExists(atPath: destination.path), !recoveringCommit { throw CocoaError(.fileWriteFileExists) }
-        // Persist ownership before the move so a process exit between file and index commits is recoverable.
         jobs[job.id]?.destinationRelativePath = relative
         try await persist()
         try check(job.id, revision: revision)
@@ -543,7 +535,6 @@ final class NeteaseDownloadStore {
     private func persist() async throws {
         try await enqueuePersistence().value
     }
-    // Capture in main-actor submission order; a failed write must not prevent a later recovery write.
     private func enqueuePersistence() -> Task<Void, Error> {
         let value = Snapshot(records: Array(records.values), collections: Array(collections.values), jobs: jobs.values.filter { !committingJobs.contains($0.id) })
         let previous = persistenceTask, directory = directory, writeIndex = writeIndex

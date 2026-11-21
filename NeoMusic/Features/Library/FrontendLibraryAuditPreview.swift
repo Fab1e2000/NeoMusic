@@ -2,7 +2,6 @@
 import SwiftUI
 import UIKit
 
-/// Production library components with an unsaved catalog and observable, in-memory actions.
 struct FrontendLibraryAuditPreview: View {
     @State private var fixture = LibraryAuditFixture()
     @State private var navigation = LibraryDetailNavigation()
@@ -46,7 +45,6 @@ struct FrontendLibraryAuditPreview: View {
     }
 }
 
-/// Preview-only text sizing is applied inside the system menu's preview closure.
 struct FrontendMenuSizingPreview: View {
     @State private var usesAdaptiveSizing = true
     @State private var previewTextSize = LibraryAuditFixture.TextSize.ax5

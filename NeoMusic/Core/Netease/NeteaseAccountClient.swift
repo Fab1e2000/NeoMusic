@@ -1,6 +1,4 @@
-// EAPI framing and AES-ECB transport adapted from NeoDizzy NeteaseClient.swift
 // and MeloX NeteaseDirectClient.swift (GPL-3.0), upstream commit
-// 1fe5fbab3f554e8529c4847fc54281a472b7b61a: https://github.com/youshen2/MeloX
 import CommonCrypto
 import CryptoKit
 import Foundation
@@ -69,8 +67,6 @@ final class NeteaseAccountClient: Sendable {
         ]
         if credential == nil { header.removeValue(forKey: "MUSIC_U") }
         header["requestId"] = "\(Int64(Date().timeIntervalSince1970 * 1000))_\(Int.random(in: 1000...9999))"
-        // MeloX 09713ed: song_url_v1 uses the default iOS EAPI profile,
-        // with MUSIC_U in both the encrypted header and the scoped cookie.
         if profile != .account {
             header = ["os": "ios", "appver": "9.0.90", "osver": "18.0",
                       "buildver": String(Int(Date().timeIntervalSince1970)),
@@ -141,7 +137,6 @@ final class NeteaseAccountClient: Sendable {
         return data
     }
 
-    /// Only explicitly read-only operations opt in. URLSession retains system trust validation.
     private func dataWithTLSRetry(for request: URLRequest, enabled: Bool) async throws -> (Data, URLResponse) {
         try Task.checkCancellation()
         do {
@@ -188,8 +183,6 @@ final class NeteaseAccountClient: Sendable {
     OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
     THE SOFTWARE.
     */
-    // WEAPI wire format follows api-enhanced util/crypto.js (MIT, Binaryify).
-    // Native CommonCrypto CBC and Security RSA implement the protocol without a JS dependency.
     func makeWebRequest(path: String, fields: [String: any Sendable], credential: NeteaseCredential?) throws -> URLRequest {
         var payload = fields
         payload["csrf_token"] = credential?.csrf ?? ""
@@ -199,7 +192,6 @@ final class NeteaseAccountClient: Sendable {
         let secret = Data((0..<16).map { _ in alphabet.randomElement(using: &generator)! })
         let first = try Self.encryptCBC(json, key: Data("0CoJUm6Qyw8W8jud".utf8)).base64EncodedString()
         let params = try Self.encryptCBC(Data(first.utf8), key: secret).base64EncodedString()
-        // PKCS#1 DER public key: 1024-bit service modulus and exponent 65537.
         let spki = Data(base64Encoded: "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDgtQn2JZ34ZC28NWYpAUd98iZ37BUrX/aKzmFbt7clFSs6sXqHauqKWqdtLkF2KexO40H1YTX8z2lSgBBOAxLsvaklV8k4cBFK9snQXE9/DDaFt6Rr7iVZMldczhC0JNgTz+SHXT6CBHuX3e9SdB1Ua44oncaTWz7OBGLbCiK45wIDAQAB")!
         var error: Unmanaged<CFError>?
         guard let key = SecKeyCreateWithData(spki.dropFirst(22) as CFData, [kSecAttrKeyType: kSecAttrKeyTypeRSA, kSecAttrKeyClass: kSecAttrKeyClassPublic] as CFDictionary, &error) else { throw NeteaseAccountError.requestEncoding }
@@ -312,7 +304,6 @@ final class NeteaseAccountClient: Sendable {
     }
 }
 
-/// A web operation rejection is kept separate from account-profile authentication.
 struct NeteaseWebResponseError: LocalizedError, Equatable, Sendable {
     let code: Int
     let message: String?

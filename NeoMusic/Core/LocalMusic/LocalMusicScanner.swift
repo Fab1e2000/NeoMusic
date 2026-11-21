@@ -35,7 +35,6 @@ struct LocalScanResult: Sendable {
     var reusedCount = 0
 }
 
-/// Traversal and metadata work stay off the main actor; failed subtrees retain their previous records.
 actor LocalMusicScanner {
     static let supportedExtensions: Set<String> = ["mp3", "aac", "m4a", "alac", "flac", "wav", "aiff", "aif"]
 
@@ -75,7 +74,6 @@ actor LocalMusicScanner {
         let scanGeneration = generation
         let previous = Dictionary(previousTracks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var result = LocalScanResult()
-        // Device containers may expose /var and /private/var aliases. Normalize both sides before deriving IDs.
         let root = root.standardizedFileURL.resolvingSymlinksInPath()
         let rootComponents = root.pathComponents
         let manager = FileManager.default
@@ -87,7 +85,6 @@ actor LocalMusicScanner {
         var unreadableDirectories: [URL] = []
         var directoryIssues: [String] = []
         var listingFailures: [String] = []
-        // Collect using explicit recursion so errors are propagated instead of silently removing records.
         func files(in directory: URL) throws -> [URL] {
             var result: [URL] = []
             let children: [URL]
@@ -134,7 +131,6 @@ actor LocalMusicScanner {
             }
             let relative = components.dropFirst(rootComponents.count).joined(separator: "/")
             guard Self.supportedExtensions.contains(url.pathExtension.lowercased()) else {
-                // Lyrics, artwork and metadata are companion files, not skipped songs.
                 let ext = url.pathExtension.lowercased()
                 let knownAudio: Set<String> = ["ogg", "oga", "opus", "wma", "ape", "dsf", "dff", "wv", "mka", "mp2", "aifc", "caf", "ac3", "dts"]
                 if knownAudio.contains(ext) || UTType(filenameExtension: ext)?.conforms(to: .audio) == true {
@@ -178,7 +174,6 @@ actor LocalMusicScanner {
                 try Task.checkCancellation()
                 guard generation == scanGeneration else { throw CancellationError() }
                 if metadata.artworkData == nil {
-                    // A present entry with nil records an unsuccessful lookup for this directory too.
                     if let checked = checkedCoverArtwork[directoryID] {
                         metadata.artworkData = checked
                     } else {

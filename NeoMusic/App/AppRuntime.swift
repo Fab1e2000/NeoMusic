@@ -1,6 +1,5 @@
 import SwiftUI
 
-/// Owns application-wide connections and restoration independently of page mounting.
 @MainActor
 final class AppRuntime {
     let account: NeteaseAccount

@@ -81,10 +81,10 @@ import Observation
             do {
                 let retry = self.detailLibrary.onlineErrors[id] != nil
                 try await self.load(id, loadMore: retry && self.detailLibrary.onlineHasMore.contains(id), force: retry)
-            } catch { /* load publishes the retry error. */ }
+            } catch {}
         }
         detailLibrary.loadMoreOnlinePlaylist = { [weak self] id in
-            do { try await self?.load(id, loadMore: true) } catch { /* load preserves the visible page. */ }
+            do { try await self?.load(id, loadMore: true) } catch {}
         }
         detailLibrary.completeOnlinePlaylist = { [weak self] id in
             guard let self else { return false }
@@ -104,7 +104,6 @@ import Observation
             _ = account.music?.likedIDs
             _ = account.music?.likedAt
             _ = account.music?.playlists
-            // likedSongRevision, not the song dictionary: another playlist's page must not rebuild this feed.
             _ = account.music?.likedSongRevision
         } onChange: { [weak self] in
             Task { @MainActor in self?.observe() }
@@ -114,7 +113,6 @@ import Observation
         refreshOpenCollectionFavorites()
     }
 
-    /// 喜欢状态变了之后，正在看的歌单曲目要换成爱心或删除、下载。
     private func refreshOpenCollectionFavorites() {
         guard owner != nil, account.music?.userID.map(String.init) == owner else { return }
         let liked = account.music?.likedIDs ?? []
@@ -397,8 +395,6 @@ import Observation
         }
         LocalLibrary.songLibrary.updateOnlineArtwork(songs, source: "home")
     }
-    /// A retained Home collection keeps its stable library identity when its images arrive later.
-    /// With no URL filter, replay cached files when either the Home cache or retained collections restore.
     static func updateRetainedArtwork(in library: PlaylistLibrary, home: NeteaseHomeStore, owner: String,
                                       urls: Set<URL>? = nil, songs: [String: LibrarySongItem] = [:]) {
         guard home.userID.map(String.init) == owner else { return }
@@ -669,7 +665,7 @@ import Observation
                         self.beginRoamingContinuation(continuation)
                     })
                 }
-            } catch { /* The home store publishes each action's retry state. */ }
+            } catch {}
         }
     }
 
@@ -691,7 +687,6 @@ import Observation
         if loaded[id] != nil { loaded[id]?.0 = item }
     }
 
-    /// 私人漫游是持续的电台，不是一次返回的那几首。还剩一首时要下一批，队尾的下一首接着播。
     private func beginRoamingContinuation(_ continuation: PlaybackQueueContinuation) {
         guard player.continuation == continuation else { return }
         roamingGeneration = UUID()

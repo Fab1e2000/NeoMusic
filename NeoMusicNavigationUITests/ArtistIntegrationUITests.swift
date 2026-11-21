@@ -6,7 +6,6 @@ final class ArtistIntegrationUITests: XCTestCase {
         app.launchArguments = ["-catalogArtist", "13223"]
         app.launch()
         XCTAssertTrue(app.buttons["歌曲排行"].waitForExistence(timeout: 40))
-        // Wait for pixels from the artwork before capturing the header.
         let artworkVisible = NSPredicate { _, _ in
             guard let image = app.screenshot().image.cgImage,
                   let crop = image.cropping(to: CGRect(x: image.width / 3, y: image.height / 7,

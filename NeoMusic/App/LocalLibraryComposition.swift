@@ -13,7 +13,6 @@ struct CollectionDownloadHandling {
 
 typealias AppLibrary = LocalLibrary
 
-/// 应用级资料库、播放与现有页面的装配入口。
 @MainActor
 enum LocalLibrary {
     static let runtime = LocalLibraryRuntime(
@@ -34,7 +33,6 @@ enum LocalLibrary {
             .filter { $0.isOnline || !deletedAlbums.ids.contains($0.albumID) }
     }
 
-    /// 已下载的网易云歌曲在喜爱歌曲里沿用在线条目：下载状态变化只更新行内标记，不替换行身份。
     static func favoriteRows(online: [LibrarySongItem],
                              favorites: [LibrarySongItem],
                              downloadedSongID: (String) -> Int64?) -> [LibrarySongItem] {
@@ -50,7 +48,6 @@ enum LocalLibrary {
             let shown = song.isOnline ? song : downloadedSongID(song.id).flatMap { onlineBySongID[$0] } ?? song
             if seen.insert(shown.id).inserted { items.append(shown) }
         }
-        // 下载完成到本地扫描回填之间，在线条目暂时不在 favoriteSongs 里，也要保留在列表原位。
         for song in online where song.isFavorite {
             if seen.insert(song.id).inserted { items.append(song) }
         }
@@ -108,7 +105,6 @@ enum LocalLibrary {
         return netease + local
     }
 
-    /// 专辑的置顶、喜爱状态以 `pinnedAlbums`、`favoriteAlbums` 为准。
     private static func withPinState(_ album: LibraryShelfItem) -> LibraryShelfItem {
         var album = album
         album.isPinned = pinnedAlbums.ids.contains(album.id)
@@ -116,7 +112,6 @@ enum LocalLibrary {
         return album
     }
 
-    /// 最近添加：播放列表、专辑，以及喜爱或加入播放列表的单曲。按加入时间从新到旧。
     static var allRecentlyAdded: [LibraryShelfItem] { recentAdditions() }
     static var recentlyAdded: [LibraryShelfItem] { recentAdditions(limit: 6) }
 
@@ -178,7 +173,6 @@ enum LocalLibrary {
         playSongs([song], shuffled: false)
     }
 
-    /// 最近添加单曲卡的菜单使用与播放相同的歌曲查找。
     static func songForMenu(_ id: String) -> LibrarySongItem? {
         song(id: id) ?? playlistLibrary.containedSong(id)
     }
@@ -188,7 +182,6 @@ enum LocalLibrary {
         return pinnedOrder.ordered(items) { $0.route.flatMap(PinnedOrderID.init(route:)) }
     }
 
-    /// Reorder only the currently visible pinned items; stale or incomplete requests fail without writing.
     @discardableResult
     static func reorderPinned(_ routes: [LibraryRoute]) -> Bool {
         let visible = pinned.compactMap { $0.route.flatMap(PinnedOrderID.init(route:)) }
@@ -197,7 +190,6 @@ enum LocalLibrary {
         return pinnedOrder.reorder(visible: visible, to: requested)
     }
 
-    /// 尚未建立最近播放历史，不返回示例记录。
     static var recentPlaybackFixture: [LibrarySongItem] { [] }
 
     static let playlistLibrary = PlaylistLibrary(playlists: [
@@ -206,7 +198,6 @@ enum LocalLibrary {
     private static let downloadedPlaylistView = PlaylistLibrary(playlists: [])
     static var downloadedPlaylists: PlaylistLibrary { downloadedPlaylistView }
 
-    /// Download records own these snapshots; the editable playlist store never serializes them.
     static func refreshDownloadPresentation() {
         songLibrary.refreshDownloadPresentation()
         refreshDownloadedPlaylistsPresentation()
@@ -301,7 +292,6 @@ enum LocalLibrary {
             }, openAudioQualitySettings: openAudioQualitySettings)
     }
 
-    /// 一个专辑或播放列表里的歌曲与名称。
     private static func collection(_ route: LibraryRoute) -> (title: String, songs: [LibrarySongItem])? {
         switch route {
         case .album(let id): albumDetail(id).map { ($0.title, $0.songs) }
@@ -327,7 +317,6 @@ enum LocalLibrary {
         }
     }
 
-    /// Online menus resolve the complete collection before committing an action.
     private static func withCollection(_ route: LibraryRoute,
                                        perform: @escaping @MainActor ((title: String, songs: [LibrarySongItem])) -> Void) {
         guard case .playlist(let id) = route, let item = playlistLibrary.playlist(id) else {
@@ -370,7 +359,6 @@ enum LocalLibrary {
         }
     }
 
-    /// 集合菜单操作接入播放队列与持久化资料库。
     static var menuActions: CollectionMenuActions {
         CollectionMenuActions(
             play: { route, shuffled in
@@ -406,7 +394,6 @@ enum LocalLibrary {
             },
             playbackSource: { player.isPlaying ? player.sourceTitle : nil },
             requestMove: { playlistLibrary.pendingMove = playlistLibrary.playlist($0) },
-            // 资料库里的所有专辑与用户播放列表都可以删除；系统播放列表不能。
             canDelete: { route in
                 if catalog.handles(route) { return false }
                 return switch route {
@@ -455,7 +442,6 @@ enum LocalLibrary {
         )
     }
 
-    /// 歌曲播放与持久化资料库操作。
     private static var songActions: SongMenuActions {
         SongMenuActions(
             downloads: downloads,
@@ -475,7 +461,6 @@ enum LocalLibrary {
                 songLibrary.delete(song.id)
                 playlistLibrary.removeSongsEverywhere([song.id])
             },
-            // 对照 Apple Music：播放中显示“随后播放”与来源；暂停时为“添加到队列”。
             playbackSource: { player.isPlaying ? player.sourceTitle : nil },
             openAlbum: { song, open in
                 if song.onlineAlbumID != nil { open(.album(song.albumID)) }
@@ -499,7 +484,6 @@ enum LocalLibrary {
         return actions
     }
 
-    /// 应用装配：标签栏、迷你播放条与资料库各页。
     static var app: some View {
         AppShell(library: {
             LocalLibraryHome()
@@ -559,7 +543,6 @@ enum LocalLibrary {
         }
     }
 
-    /// 启动参数 `-mockPage <页面>` 直接打开对应页面，便于截图核对。
     private static var launchPage: String? {
         let arguments = ProcessInfo.processInfo.arguments
         guard let index = arguments.firstIndex(of: "-mockPage"), index + 1 < arguments.count else { return nil }
@@ -588,7 +571,6 @@ enum LocalLibrary {
 
 }
 
-/// 在首页自己的 body 里读取置顶状态：置顶变化只刷新首页，不会让上层重建而重置首页的编辑状态。
 struct LocalLibraryHome: View {
     var body: some View {
         let ready = LocalLibrary.runtime.isInitialLibraryReady
@@ -609,7 +591,6 @@ struct LocalLibraryHome: View {
     }
 }
 
-/// 在页面的 body 中生成目标页，资料库变化时随之刷新。
 private struct LocalDestination: View {
     let route: LibraryRoute
     @Environment(\.libraryZoomNamespace) private var zoomNamespace

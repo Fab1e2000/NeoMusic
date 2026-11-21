@@ -6,8 +6,6 @@ extension EnvironmentValues {
     @Entry var songPlaybackIndicatorsActive = true
 }
 
-/// Only the small current-track slot observes transport state. Audio samples are
-/// read by its UIView, so display frames never invalidate the list or its rows.
 struct AlbumSongPosition: View {
     let song: LibrarySongItem
     var foreground: Color? = nil
@@ -36,14 +34,12 @@ struct AlbumSongPosition: View {
     }
 }
 
-/// Playlist rows share the album's audio-driven indicator, over the current cover.
 struct PlaylistSongArtwork: View {
     let song: LibrarySongItem
     var cornerRadius: CGFloat = DesignTokens.Radius.songRowCover
 
     var body: some View {
         ArtworkView(artwork: song.artwork, cornerRadius: cornerRadius)
-            // Track thumbnails are not collection zoom sources.
             .environment(\.nativeArtworkSurfaceEnabled, false)
             .songPlaybackOverlay(songID: song.id, cornerRadius: cornerRadius)
     }
@@ -173,7 +169,7 @@ final class SpectrumBarsView: UIView {
             let value = values.indices.contains(i) ? CGFloat(values[i]) : 0
             let target = value.isFinite ? min(1, max(0, value)) : 0
             if abs(levels[i] - target) > 0.0005 {
-                levels[i] = target // Demo C attack/release already happens in the analyzer.
+                levels[i] = target
                 changed = true
             }
         }

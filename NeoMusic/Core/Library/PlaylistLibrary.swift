@@ -1,6 +1,5 @@
 import SwiftUI
 
-/// 播放列表文件夹；文件夹里可以再放文件夹。
 struct PlaylistFolder: Identifiable, Codable, Sendable, Equatable {
     let id: String
     var name: String
@@ -8,17 +7,14 @@ struct PlaylistFolder: Identifiable, Codable, Sendable, Equatable {
     var addedOrder = 0
 }
 
-/// 资料库中的播放列表与文件夹；保存条目身份及引用歌曲的显示资料，不触碰音乐文件。
 @MainActor @Observable
 final class PlaylistLibrary {
     private(set) var playlists: [LibraryPlaylistItem]
     private(set) var folders: [PlaylistFolder]
-    /// 播放列表所在文件夹；不在表中即在最外层。
     private(set) var placement: [String: String] = [:]
     private var nextOrder = 1000
     @ObservationIgnored private var songEntriesByID: [String: [(playlistID: String, item: LibrarySongItem)]]?
     private var contents: [String: [LibrarySongItem]] = [:] { didSet { songEntriesByID = nil } }
-    /// 歌曲加入某个自建播放列表的时间。已在列表中的旧歌没有这项记录。
     private var songAddedAt: [String: Date] = [:]
     private(set) var downloadedSnapshotItems: [LibraryPlaylistItem] = []
     private var downloadedContents: [String: [LibrarySongItem]] = [:]
@@ -99,21 +95,15 @@ final class PlaylistLibrary {
             if contents[item.id] != values { contents[item.id] = values }
         }
     }
-    /// 最近一次移入文件夹，页面据此显示“已移至”提示。
     private(set) var recentMove: RecentMove?
-    /// 等待确认删除的播放列表，由宿主弹出确认框。
     var pendingDeletion: LibraryPlaylistItem?
-    /// 等待移到文件夹的播放列表，由宿主弹出文件夹选择页。
     var pendingMove: LibraryPlaylistItem?
-    /// 等待编辑的播放列表，由宿主弹出编辑页（例如从长按菜单进入）。
     var pendingEdit: LibraryPlaylistItem?
-    /// 等待选择目标播放列表的歌曲，由宿主弹出“添加到播放列表”。
     var pendingAddition: PendingAddition?
 
     @ObservationIgnored var loadOnlinePlaylist: (@MainActor (String) async -> Void)?
     @ObservationIgnored var loadMoreOnlinePlaylist: (@MainActor (String) async -> Void)?
     @ObservationIgnored var completeOnlinePlaylist: (@MainActor (String) async -> Bool)?
-    /// 取消网易云收藏。成功后由账号歌单名单决定这张卡片是否还在。
     @ObservationIgnored var unsubscribeOnlinePlaylist: (@MainActor (String) -> Void)?
     private(set) var onlineHasMore: Set<String> = []
     private(set) var onlineTrackCounts: [String: Int] = [:]
@@ -169,7 +159,6 @@ final class PlaylistLibrary {
         else if error != nil, loadedOnlinePlaylistIDs.contains(item.id) { loadedOnlinePlaylistIDs.remove(item.id) }
     }
 
-    /// Explicit local organization retains a reference without subscribing in the cloud.
     func retainOnlinePlaylist(_ item: LibraryPlaylistItem, songs: [LibrarySongItem]) {
         guard let owner = onlineOwnerID, item.sourceOwnerID == owner else { return }
         var artworkFile: URL?
@@ -257,7 +246,6 @@ final class PlaylistLibrary {
         }
     }
 
-    /// Publish only changed covers; collection identity, load state and organization stay stable.
     func updateArtwork(songs: [String: LibrarySongItem], playlists artwork: [String: Artwork] = [:]) {
         if !artwork.isEmpty {
             for index in playlists.indices {
@@ -294,8 +282,6 @@ final class PlaylistLibrary {
                 let isReadOnly = meta?.isReadOnly ?? false
                 guard !item.isOnline || offline != nil || isReadOnly || item.onlineOwnerID == restoredOnlineOwnerID else { continue }
                 if item.publishArtwork(from: replacement), meta?.isReadOnly == false, item.isOnline {
-                    // Another catalog may already have published this shared resource.
-                    // Retained playlist metadata still needs to persist the delivered file.
                     changedLocalContent = true
                 }
             }
@@ -334,7 +320,6 @@ final class PlaylistLibrary {
         if result.changedLocal { markRestoredMetadataChanged() }
     }
 
-    /// Online refreshes update only online metadata; local scan owns local availability.
     func reconcileOnlineSongs(_ songs: [LibrarySongItem], excludingReadOnly: Bool = false) {
         guard !contents.isEmpty else { return }
         var lookup: [String: LibrarySongItem] = [:]
@@ -350,7 +335,6 @@ final class PlaylistLibrary {
         if result.changedLocal { markRestoredMetadataChanged() }
     }
 
-    /// File removal changes the resource reference without removing a playlist entry.
     func remapSongReferences(_ replacements: [String: LibrarySongItem]) {
         guard !replacements.isEmpty else { return }
         var changedLocalContent = false
@@ -373,7 +357,6 @@ final class PlaylistLibrary {
         if changedLocalContent { persist() }
     }
 
-    /// The background lifecycle flushes metadata arrivals together; user edits also save them.
     func persistRestoredMetadata() {
         guard restoredMetadataNeedsSave else {
             saveOnlinePreferences()
@@ -387,7 +370,6 @@ final class PlaylistLibrary {
         restoredMetadataNeedsSave = true
     }
 
-    /// Local playlists restore independently; reveal their saved online metadata only for the restored owner.
     func restoreOnlineIdentity(ownerID: String?) {
         guard restoredOnlineOwnerID != ownerID else { return }
         captureReferencedOnlineSongs()
@@ -465,7 +447,6 @@ final class PlaylistLibrary {
     @ObservationIgnored private var pendingWrites: [URL: PendingWrite] = [:]
     @ObservationIgnored private var persistenceFailures: [URL: String] = [:]
     @ObservationIgnored private var persistenceBackgroundTask: UIBackgroundTaskIdentifier = .invalid
-    /// Metadata edits reuse the exact stored PNG instead of rasterizing every cover again.
     @ObservationIgnored private var savedArtwork: [String: (image: Image, data: Data)] = [:]
 
     private struct PendingWrite {
@@ -500,7 +481,6 @@ final class PlaylistLibrary {
         var songAddedAt: [String: Date]? = nil
     }
 
-    /// Restore stable identities immediately; the verified scan resolves missing metadata.
     @discardableResult
     func configurePersistence(url: URL, songs: [LibrarySongItem], restoredState: Result<Snapshot?, Error>? = nil) -> Bool {
         var transaction = Transaction(animation: nil)
@@ -552,7 +532,6 @@ final class PlaylistLibrary {
                 persistenceError = nil
                 return true
             } catch {
-                // Leave an unreadable store untouched; do not overwrite it with an empty library.
                 persistenceError = "无法读取播放列表：\(error.localizedDescription)"
                 return false
             }
@@ -629,8 +608,6 @@ final class PlaylistLibrary {
     private func startPersistence() {
         guard persistenceTask == nil else { return }
         persistenceTask = Task {
-            // Build a local snapshot only when ready to write. Save each owner's
-            // captured preferences separately and replace only pending writes.
             while needsLocalSnapshot || !pendingWrites.isEmpty {
                 if needsLocalSnapshot, let url = persistenceURL {
                     needsLocalSnapshot = false
@@ -653,7 +630,6 @@ final class PlaylistLibrary {
         }
     }
 
-    /// Wait for every submitted snapshot, including writes added while suspended.
     func flushPersistence() async {
         while let task = persistenceTask { await task.value }
     }
@@ -682,7 +658,6 @@ final class PlaylistLibrary {
     }
     func songs(in id: String) -> [LibrarySongItem] { contents[id] ?? [] }
 
-    /// Still referenced by a playlist, with the latest time a user added each song.
     func recentlyAddedSongs() -> [String: (song: LibrarySongItem, addedAt: Date)] {
         guard !songAddedAt.isEmpty else { return [:] }
         var songs: [String: (song: LibrarySongItem, addedAt: Date)] = [:]
@@ -701,8 +676,6 @@ final class PlaylistLibrary {
         return nil
     }
 
-    /// 单次选择确认后才提交，保留选择顺序；已有歌曲不重复加入。
-    /// 按顺序加到播放列表末尾，已在列表中的歌曲跳过；返回实际加入的数量。
     @discardableResult
     func addSongs(_ songs: [LibrarySongItem], to id: String) -> Int {
         defer { persist() }
@@ -721,13 +694,11 @@ final class PlaylistLibrary {
         return added
     }
 
-    /// 没有自定封面的播放列表用第一首歌的封面，与 Apple Music 一致。
     func displayArtwork(of playlist: LibraryPlaylistItem) -> Artwork {
         if case .playlist = playlist.artwork, let first = contents[playlist.id]?.first { return first.artwork }
         return playlist.artwork
     }
 
-    /// 歌曲从资料库删除时，也从所有播放列表移除。
     func removeSongsEverywhere(_ songIDs: Set<String>) {
         guard !songIDs.isEmpty else { return }
         var changed = false
@@ -814,10 +785,8 @@ final class PlaylistLibrary {
     func playlists(in folderID: String?) -> [LibraryPlaylistItem] { playlists.filter { placement[$0.id] == folderID } }
     func folderID(of playlistID: String) -> String? { placement[playlistID] }
 
-    /// 文件夹中直接包含的播放列表数量。
     func playlistCount(in folderID: String) -> Int { playlists(in: folderID).count }
 
-    /// 创建播放列表并保存。
     @discardableResult
     func createPlaylist(named name: String, artwork: Artwork, in folderID: String?) -> LibraryPlaylistItem? {
         defer { persist() }
@@ -840,7 +809,6 @@ final class PlaylistLibrary {
         return folder
     }
 
-    /// 把播放列表移到某个文件夹；`nil` 为最外层。
     func move(playlistID: String, to folderID: String?) {
         defer { persist() }
         guard placement[playlistID] != folderID else { return }
@@ -852,17 +820,14 @@ final class PlaylistLibrary {
         if recentMove == move { recentMove = nil }
     }
 
-    /// 用户自己的播放列表可以删除；“喜爱歌曲”等系统播放列表不能删除。
     func canDelete(_ playlistID: String) -> Bool {
         playlists.contains { $0.id == playlistID && !$0.isSystem && !$0.isReadOnly }
     }
 
-    /// 网易云收藏的歌单可以取消收藏。
     func canUnsubscribe(_ playlistID: String) -> Bool {
         playlists.contains { $0.id == playlistID && $0.isSubscribed }
     }
 
-    /// 从资料库删除播放列表，只删记录，不碰音乐文件。收藏歌单改为请求网易云取消收藏。
     func deletePlaylist(_ id: String) {
         if playlist(id)?.isSubscribed == true {
             unsubscribeOnlinePlaylist?(id)
@@ -875,7 +840,6 @@ final class PlaylistLibrary {
         contents[id] = nil
     }
 
-    /// 取消收藏后丢掉本地留下的引用，避免卡片在下次同步时又出现。
     func releaseRetainedOnlinePlaylist(_ id: String) {
         let hadPreference = onlinePreferences.removeValue(forKey: id) != nil
         if hadPreference { saveOnlinePreferences(force: true) }
@@ -885,8 +849,6 @@ final class PlaylistLibrary {
         contents[id] = nil
     }
 
-    /// 删除文件夹及其中的子文件夹与播放列表，对照 Apple Music。只删资料库记录，不碰音乐文件；
-    /// “喜爱歌曲”等系统播放列表不能删除，移回最外层。
     func deleteFolder(_ id: String) {
         defer { persist() }
         let removed = Set(folders.map(\.id).filter { isDescendant($0, of: id) })
@@ -905,7 +867,6 @@ final class PlaylistLibrary {
         folders[index].name = name
     }
 
-    /// 把文件夹移到另一个文件夹；`nil` 为最外层。不能移进自己或自己的子文件夹。
     func move(folderID: String, to parentID: String?) {
         defer { persist() }
         guard let index = folders.firstIndex(where: { $0.id == folderID }),
@@ -913,7 +874,6 @@ final class PlaylistLibrary {
         folders[index].parentID = parentID
     }
 
-    /// `id` 是否为 `ancestorID` 本身或其子孙文件夹。
     func isDescendant(_ id: String, of ancestorID: String) -> Bool {
         var current: String? = id
         while let value = current {

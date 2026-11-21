@@ -1,7 +1,5 @@
 import XCTest
 
-/// Runs the same real UI paths against the checkpoint and candidate with identical
-/// local fixtures. Baseline is installed separately; no production test switches.
 @MainActor
 final class FunctionalParityTests: XCTestCase {
     private var versions = [
@@ -17,7 +15,6 @@ final class FunctionalParityTests: XCTestCase {
         return app
     }
     private func capture(_ app: XCUIApplication, _ name: String) throws {
-        // Screenshot API does not itself wait for SwiftUI's interruptible springs.
         Thread.sleep(forTimeInterval: 0.6)
         let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("FunctionalParity/\(version)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -181,7 +178,6 @@ final class FunctionalParityTests: XCTestCase {
             XCTAssertTrue(app.staticTexts["Created Parity Edited"].firstMatch.waitForExistence(timeout: 5))
             app.navigationBars.buttons["更多"].tap(); app.buttons["从资料库删除"].tap()
             try capture(app, "17-playlist-delete-confirmation")
-            // iOS presents this confirmation as a popover; cancel by tapping outside.
             app.tap()
             XCTAssertTrue(app.staticTexts["Created Parity Edited"].firstMatch.exists)
             app.navigationBars.buttons["更多"].tap(); app.buttons["从资料库删除"].tap()
@@ -214,7 +210,6 @@ final class FunctionalParityTests: XCTestCase {
             try capture(app, "19-player-artwork")
             try tapVisible(app.buttons.matching(identifier: "歌词"))
             try capture(app, "20-player-lyrics")
-            // The fixture may retain the manual import from the independent source-priority test.
             let lyric = app.descendants(matching: .any).matching(NSPredicate(format: "label IN %@", ["First line", "Repeated line", "Last line", "Imported parity line", "Second imported line"])).firstMatch
             XCTAssertTrue(lyric.waitForExistence(timeout: 5))
             try tapVisible(app.buttons.matching(identifier: "继续播放"))
@@ -374,8 +369,6 @@ final class FunctionalParityTests: XCTestCase {
             open("播放列表", in: app)
             let source = app.staticTexts["Parity Mix"].firstMatch
             let target = app.staticTexts["Folder B"].firstMatch
-            // Drag the cover within the collection cell, then dwell over the folder
-            // so the collection view can resolve an insert-into drop proposal.
             let sourceCell = name == "candidate"
                 ? app.staticTexts["Parity Mix"].firstMatch
                 : app.collectionViews.cells.containing(.staticText, identifier: "Parity Mix").firstMatch
@@ -472,8 +465,6 @@ final class FunctionalParityTests: XCTestCase {
             XCTAssertTrue(app.buttons["收起播放器"].waitForExistence(timeout: 5))
             try tapVisible(app.buttons.matching(identifier: "暂停"))
             let progress = app.sliders["播放进度"]
-            // Its accessibility value is a timestamp, not a percentage. Exercise
-            // the real track coordinates instead of XCTest's value-based adjustment.
             progress.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.5))
                 .press(forDuration: 0.1, thenDragTo: progress.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)))
             try capture(app, "38-player-seek-paused")
@@ -483,7 +474,6 @@ final class FunctionalParityTests: XCTestCase {
             XCTAssertEqual(parts.count, 2, time)
             XCTAssertEqual(parts[0] * 60 + parts[1], 60, accuracy: 5)
             try tapVisible(app.buttons.matching(identifier: "继续播放"))
-            // Normalize using visible controls, then verify each state in the cycle.
             for _ in 0..<3 {
                 if app.buttons["列表循环"].exists { break }
                 let label = app.buttons["循环关闭"].exists ? "循环关闭" : "单曲循环"
@@ -539,8 +529,6 @@ final class FunctionalParityTests: XCTestCase {
             try tapVisible(app.buttons.matching(identifier: "暂停"))
             XCUIDevice.shared.orientation = .landscapeLeft
             try capture(app, "41-player-rotation")
-            // The reference commit has no landscape player layout. Record the
-            // actual rotation response without inventing a parity requirement.
             XCTAssertTrue(app.buttons["收起播放器"].isHittable)
             XCTAssertTrue(app.sliders["播放进度"].isHittable)
             XCUIDevice.shared.orientation = .portrait
@@ -707,7 +695,6 @@ final class FunctionalParityTests: XCTestCase {
         try exercisePlaylistReorderAndRemove()
     }
 
-    /// The isolated fixture driver removes Alpha only after this stage finishes.
     private func exercisePrepareMissingFileQueue() throws {
         continueAfterFailure = false
         for (name, bundle) in versions {
@@ -969,8 +956,6 @@ final class FunctionalParityTests: XCTestCase {
             if app.staticTexts["Sunrise"].firstMatch.exists {
                 pin = app.staticTexts["Sunrise"].firstMatch
             } else {
-                // The checkpoint exposes native artwork tiles as unlabeled buttons.
-                // Its second pinned tile occupies the right half of the first row.
                 pin = try XCTUnwrap(app.buttons.allElementsBoundByIndex.first {
                     $0.label.isEmpty && $0.frame.width > 100 && $0.frame.width < 150
                         && $0.frame.height > 100 && $0.frame.height < 160
@@ -1024,7 +1009,6 @@ final class FunctionalParityTests: XCTestCase {
         try exercisePinnedTapAndAppend()
     }
 
-    // Probe system-owned picker hierarchies before asserting an import workflow.
     private func exerciseFilePickerProbe() throws {
         continueAfterFailure = false
         for (name, bundle) in versions {
@@ -1179,7 +1163,6 @@ final class FunctionalParityTests: XCTestCase {
         try exercisePlaylistSearchScroll()
     }
 
-    /// External fixture staging only; no production file injection switches.
     private func waitForScanFixture(_ phase: String) throws {
         let ready = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("scan-\(version)-\(phase).ready")
         try? FileManager.default.removeItem(at: ready)
@@ -1272,8 +1255,6 @@ final class FunctionalParityTests: XCTestCase {
             dawn.swipeLeft()
             XCTAssertTrue(app.buttons["下载"].waitForExistence(timeout: 5))
             try capture(app, "96-song-trailing-swipe")
-            // UIKit exposes this disabled SwiftUI swipe action as AX-enabled in
-            // both versions. Check its actual no-op behavior separately.
             app.buttons["下载"].tap()
             XCTAssertTrue(app.navigationBars["歌曲"].exists)
             XCTAssertTrue(app.staticTexts["Dawn"].firstMatch.exists)

@@ -14,7 +14,6 @@ ZERO = "0" * 40
 
 class RepositoryFixture(unittest.TestCase):
     def setUp(self):
-        # Hooks export repository-specific Git variables; each fixture owns its repository.
         self.environment = os.environ.copy()
         for name in subprocess.check_output(["git", "rev-parse", "--local-env-vars"], text=True).splitlines():
             self.environment.pop(name, None)

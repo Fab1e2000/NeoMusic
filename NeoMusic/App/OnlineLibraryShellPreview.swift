@@ -2,7 +2,6 @@ import FullScreenPlayer
 #if DEBUG
 import SwiftUI
 
-/// Uses the production chrome and playlist rows with an isolated, unsaved library.
 struct OnlineLibraryShellPreview: View {
     @State private var library: PlaylistLibrary
     @State private var player: NowPlayingModel

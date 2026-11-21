@@ -2,9 +2,6 @@
 import CommonCrypto
 import Foundation
 
-/// NCM container layout and cipher reference:
-/// https://github.com/taurusxin/ncmdump/blob/4ede4cee1bad35bbf28a7b5524feeca0422a4feb/src/ncmcrypt.cpp
-/// Independently implemented with bounded reads and CommonCrypto. Tags come from the download metadata.
 nonisolated enum NeteaseDownloadedAudio {
     enum Failure: LocalizedError {
         case damagedContainer, unsupportedAudio
@@ -16,8 +13,6 @@ nonisolated enum NeteaseDownloadedAudio {
         }
     }
 
-    /// Returns a staged audio payload. Finalization validates playability before publication.
-    /// The downloaded source is never modified.
     @concurrent static func prepare(_ source: URL, declaredType: String, staging: URL) async throws -> URL {
         try Task.checkCancellation()
         let input = try FileHandle(forReadingFrom: source)
@@ -49,7 +44,7 @@ nonisolated enum NeteaseDownloadedAudio {
 
     private static func decrypt(_ input: FileHandle, staging: URL) throws -> URL {
         let size = try input.seekToEnd()
-        try input.seek(toOffset: 10) // signature + reserved bytes
+        try input.seek(toOffset: 10)
         func read(_ count: Int) throws -> Data {
             let data = try input.read(upToCount: count) ?? Data()
             guard data.count == count else { throw Failure.damagedContainer }
@@ -96,9 +91,8 @@ nonisolated enum NeteaseDownloadedAudio {
             let j = (offset + 1) & 255
             return box[(Int(box[j]) + Int(box[(Int(box[j]) + j) & 255])) & 255]
         }
-        // Metadata and cover are not needed: the provider writes authoritative API tags afterwards.
         try skip(uint32())
-        try skip(5) // CRC32 + image version
+        try skip(5)
         let coverCapacity = try uint32()
         let coverLength = try uint32()
         guard coverLength <= coverCapacity else { throw Failure.damagedContainer }

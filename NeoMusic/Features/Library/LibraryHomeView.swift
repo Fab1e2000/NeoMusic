@@ -1,7 +1,6 @@
 import SwiftUI
 import UIKit
 
-/// 资料库首页展示用的一项专辑或播放列表。
 struct LibraryShelfItem: Identifiable, Equatable {
     let id: String
     let title: String
@@ -10,16 +9,13 @@ struct LibraryShelfItem: Identifiable, Equatable {
     var route: LibraryRoute?
     var isFavorite = false
     var isPinned = false
-    /// 排序用：数值越大越晚加入资料库；专辑的发行年份。
     var addedOrder = 0
-    /// 单曲卡片只代表这一首歌，不进入专辑。
     var songID: String? = nil
     var year: Int?
     var sourceOwnerID: String?
     var albumBackdrop: AlbumArtworkBackdrop? = nil
 }
 
-/// 资料库内的页面跳转。
 enum LibraryRoute: Hashable {
     case category(LibraryCategory)
     case downloadedCategory(LibraryCategory)
@@ -31,7 +27,6 @@ enum LibraryRoute: Hashable {
     case searchCategory(String)
 }
 
-/// 资料库首页：置顶、分类入口与最近添加。布局对照 Apple Music。
 struct LibraryHomeView: View {
     let pinned: [LibraryShelfItem]
     let recentlyAdded: [LibraryShelfItem]
@@ -40,14 +35,12 @@ struct LibraryHomeView: View {
     var isPinnedReady = true
     var reorderPinned: ([LibraryRoute]) -> Bool = { _ in false }
     var playSong: (String) -> Void = { _ in }
-    /// 最近添加单曲卡的长按菜单读取这一首的当前资料。
     var songForMenu: (String) -> LibrarySongItem? = { _ in nil }
     @State private var isCreatingPlaylist = false
     @Environment(\.collectionMenuActions) private var actions
     @Environment(\.dynamicTypeSize) private var textSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isEditingPinned = false
-    /// 各置顶项的“轻点操作”，只保存在本次运行中。
     @State private var tapActions: [String: PinnedTapAction] = [:]
     @Namespace private var playlistCreationTransition
 
@@ -90,7 +83,6 @@ struct LibraryHomeView: View {
         .libraryHomeNavigation()
         .toolbar {
             if isEditingPinned {
-                // 编辑置顶时只保留完成按钮，对照 Apple Music。
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("完成", systemImage: "checkmark", role: .confirm) {
                         isEditingPinned = false
@@ -101,11 +93,9 @@ struct LibraryHomeView: View {
                     Button("新建播放列表", systemImage: "text.badge.plus") { isCreatingPlaylist = true }
                         .disabled(!isContentReady)
                 }
-                // ToolbarItem 的转场源包含系统共享玻璃背景。
                 .matchedTransitionSource(id: "newPlaylist", in: playlistCreationTransition)
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu("更多", systemImage: "ellipsis") {
-                        // The cells own their wobble; keep toolbar replacement out of an animation transaction.
                         Button("编辑置顶", systemImage: "pin") { isEditingPinned = true }
                             .disabled(pinned.isEmpty)
                     }
@@ -145,7 +135,6 @@ enum LibraryCategory: CaseIterable, Hashable {
     }
 }
 
-/// 分类入口；分隔线从文字起点开始。
 private struct LibraryCategoryRows: View {
     @ScaledMetric(relativeTo: .title2) private var iconWidth = 24.0
     @ScaledMetric(relativeTo: .body) private var iconSpacing = 17.0
@@ -172,8 +161,6 @@ private struct LibraryCategoryRows: View {
     }
 }
 
-/// 最近添加最多六项；辅助功能字号使用内容自适应的单列。
-/// 常规字号保留两列集合视图，由系统按卡片身份播放增删补位动画。
 private struct RecentlyAddedGrid: View {
     let items: [LibraryShelfItem]
     let animatesItemChanges: Bool
@@ -374,7 +361,6 @@ private struct RecentlyAddedCollection: UIViewRepresentable {
     }
 }
 
-/// 单曲卡点按只播放这一首；长按菜单与歌曲行右侧省略号相同。
 private struct RecentSongCard: View {
     let item: LibraryShelfItem
     let songID: String
@@ -404,7 +390,6 @@ private struct RecentSongCard: View {
     }
 }
 
-/// 已下载资料库首页：展示已下载分类入口与最近下载专辑。
 struct DownloadedLibraryView: View {
     let albums: [LibraryShelfItem]
     private let columns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
@@ -425,7 +410,6 @@ struct DownloadedLibraryView: View {
                 }
             }
             .listSectionSeparator(.hidden, edges: .top)
-            // 还没有下载过专辑时不显示“最近下载”。
             if !albums.isEmpty {
             Section {
                 VStack(alignment: .leading, spacing: 13) {

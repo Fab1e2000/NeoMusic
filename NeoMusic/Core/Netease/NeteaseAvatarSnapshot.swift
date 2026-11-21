@@ -13,7 +13,6 @@ struct NeteaseAvatarSnapshot: Codable, Equatable, Sendable {
     }
 }
 
-/// A small, derived image for the first frame; credentials remain in Keychain.
 struct NeteaseAvatarSnapshotStore: Sendable {
     private static let maximumFileSize = 256 * 1024
     private let fileURL: URL
@@ -61,7 +60,7 @@ struct NeteaseAvatarSnapshotStore: Sendable {
                                                     withIntermediateDirectories: true)
             guard !Task.isCancelled else { return }
             try encoded.write(to: fileURL, options: .atomic)
-        } catch { /* A derived image can be rebuilt after the next successful avatar load. */ }
+        } catch {}
     }
 
     func clear() {

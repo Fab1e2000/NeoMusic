@@ -328,7 +328,6 @@ final class ArtworkRenderingTests: XCTestCase {
         return ArtworkRenderingHost(window: window, controller: controller)
     }
 
-    /// Each sample is drawn after a display-link boundary from the same live hierarchy.
     private func frames(_ host: ArtworkRenderingHost, count: Int) async -> [ArtworkRenderedFrame] {
         var result: [ArtworkRenderedFrame] = []
         for _ in 0..<count {

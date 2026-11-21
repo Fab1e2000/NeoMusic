@@ -1,13 +1,11 @@
 import SwiftUI
 import UIKit
 
-/// Apple Music 全屏播放器亮度层级（标准白主角 + `.plusLighter` 配角透明叠加）。
 enum NowPlayingVisualHierarchy {
     static var primaryColor: Color { .white }
 
     static var primaryUIColor: UIColor { .white }
 
-    // 以下配角透明系数按 `.blendMode(.plusLighter)` 逐 pixel 测量 Apple Music 截图反推。
     static let grabberOpacity: Double = 0.28
     static let subtitleOpacity: Double = 0.48
     static let audioQualityTextOpacity: Double = 0.40

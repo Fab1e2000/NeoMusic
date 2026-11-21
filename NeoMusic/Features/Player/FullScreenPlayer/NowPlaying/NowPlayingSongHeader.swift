@@ -1,5 +1,4 @@
 // Direct source port from MeloX (GPL-3.0), b8bc60f.
-// NeoDizzy adapters are limited to track data, available playback features and localization.
 import SwiftUI
 
 struct NowPlayingArtworkTransitionModifier<ID: Hashable>: ViewModifier {
@@ -43,14 +42,10 @@ extension View {
 
 struct NowPlayingSongHeader: View {
     static let referenceHeight: CGFloat = 72
-    /// 竖屏共用头部离页面顶部（收起把手下方）的留白，参照系统音乐。
     static let topInset: CGFloat = -2.75
-    /// 「继续播放」页里头部下沿到模式按钮之间多留的距离。
     static let bottomSpacing: CGFloat = 4.75
     static let height = referenceHeight
 
-    /// 头部往上滚时的透明度：一开始滚就变淡，滚 30pt 淡完，几乎不会盖到顶部的收起把手。
-    /// 滚出页面时整组淡出；静止位置的歌名保持完全不透明。
     static func scrollFadeOpacity(scrolled: CGFloat) -> Double {
         1 - min(1, max(0, scrolled / 30))
     }
@@ -83,9 +78,7 @@ struct NowPlayingSongHeader: View {
             artwork
                 .frame(width: artworkSize, height: artworkSize)
 
-            // 左右滑动歌名切到上一首/下一首。
             NowPlayingTrackSwipe(song: song, rowSpacing: 2, viewportInsets: .header) { track, marqueeActive in
-                // 放不下时滚动显示（相邻曲目的预览不滚）；滑动期间保持当前歌滚动。
                 NowPlayingMarqueeText(text: track.title, isActive: marqueeActive)
                     .font(
                         usesReferenceLayout

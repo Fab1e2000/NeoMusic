@@ -105,8 +105,6 @@ final class PlaylistPersistenceTests: XCTestCase {
         await library.flushPersistence()
         XCTAssertEqual(try savedCover(playlist.id, at: url), initial)
 
-        // Existing stores can contain any decodable cover. Keep its original bytes,
-        // making a metadata-only edit observable if it accidentally rerenders it.
         let storedPNG = try XCTUnwrap(cover(.green).pngData())
         var object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
         var entries = try XCTUnwrap(object["playlists"] as? [[String: Any]])
@@ -156,7 +154,6 @@ final class PlaylistPersistenceTests: XCTestCase {
         let playlist = try XCTUnwrap(library.createPlaylist(named: "cover", artwork: .image(Image(uiImage: cover(.red))), in: nil))
         await library.flushPersistence()
         let original = try XCTUnwrap(savedCover(playlist.id, at: url))
-        // A directory at the destination makes atomic replacement fail deterministically.
         try FileManager.default.removeItem(at: url)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
         library.savePlaylist(playlist.id, title: "new cover", description: "latest", showsOnProfile: false,
@@ -348,7 +345,6 @@ final class CoverSelectionTests: XCTestCase {
         await gate.waitUntilStarted()
         XCTAssertTrue(selection.isLoading)
         task.cancel()
-        // The provider can still return data after cancellation; it must not be applied.
         gate.finish(.success(png(.red)))
         await task.value
         XCTAssertTrue(selection.image === original)
@@ -457,7 +453,6 @@ final class CoverSelectionTests: XCTestCase {
     }
 }
 
-/// Deterministic completion order without sleeps or real photo-library access.
 @MainActor
 private final class CoverDataLoadGate {
     private var hasStarted = false

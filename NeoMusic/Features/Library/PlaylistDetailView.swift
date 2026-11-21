@@ -1,6 +1,5 @@
 import SwiftUI
 
-/// 作为标签根页面时不显示导航标题，和喜爱歌曲一样。
 private struct PlaylistRootChrome: ViewModifier {
     let isRoot: Bool
     @ViewBuilder func body(content: Content) -> some View {
@@ -16,7 +15,6 @@ private struct RootArtworkName: ViewModifier {
     }
 }
 
-/// 用户播放列表的原生效果稿。所有编辑只作用于注入的内存资料库。
 struct PlaylistDetailView: View {
     let playlistID: String
     let library: PlaylistLibrary
@@ -24,7 +22,6 @@ struct PlaylistDetailView: View {
     var availableSongs: (@MainActor () -> [LibrarySongItem])? = nil
     var externalActions: ExternalPlaylistActions? = nil
     var externalArtwork: AnyView? = nil
-    /// 宿主提供示例最近播放，不将资料库顺序当作播放历史。
     var recentlyPlayedSongs: [LibrarySongItem] = []
     @Environment(\.artworkLoadAction) private var loadArtwork
     @Environment(\.displayScale) private var displayScale
@@ -477,8 +474,6 @@ struct PlaylistDetailView: View {
     }
 }
 
-/// The row ID and ordering selected by one tap. Rendering can retain a previous
-/// projection while paging, so playback resolves against the completed collection.
 struct PlaylistTrackSelection: Equatable {
     let id = UUID()
     let playlistID: String
@@ -546,7 +541,6 @@ private struct PlaylistDetailSearch: ViewModifier {
 }
 
 extension View {
-    /// 长按菜单等入口请求编辑播放列表时弹出编辑页，挂在应用根部。
     func playlistEditSheet(_ library: PlaylistLibrary, songs: @escaping @MainActor () -> [LibrarySongItem]) -> some View {
         modifier(PlaylistEditSheet(library: library, songs: songs))
     }
@@ -563,7 +557,6 @@ private struct PlaylistEditSheet: ViewModifier {
     }
 }
 
-/// Only an open editor observes the full catalog used to add music.
 private struct PlaylistEditorContent: View {
     let playlistID: String
     let library: PlaylistLibrary

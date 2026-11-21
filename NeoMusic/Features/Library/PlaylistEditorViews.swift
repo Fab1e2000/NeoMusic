@@ -19,7 +19,6 @@ struct PlaylistDraftSnapshot: Equatable {
     }
 }
 
-/// 编辑草稿仅在完成时提交；取消或放弃不改变资料库。
 struct PlaylistEditor: View {
     let playlistID: String
     let library: PlaylistLibrary
@@ -212,7 +211,6 @@ private struct PlaylistEditorFields: View {
     }
 }
 
-/// 默认两行并随文字大小缩放，较长的描述在内部滚动。
 struct PlaylistDescriptionTextView: UIViewRepresentable {
     @Binding var text: String
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -256,7 +254,6 @@ struct PlaylistDescriptionTextView: UIViewRepresentable {
     }
 }
 
-/// Each form owns its own selection draft; only the form's save action persists it.
 @MainActor @Observable
 final class PlaylistCoverSelection {
     var image: UIImage?
@@ -299,7 +296,6 @@ final class PlaylistCoverSelection {
         isLoading = true
         photoError = false
         defer {
-            // Cancellation may finish this request, but never a newer request's loading state.
             if generation == requestGeneration { isLoading = false }
         }
         do {
@@ -374,7 +370,6 @@ struct PlaylistCoverMenu: View {
     }
 }
 
-/// Present pickers from the persistent form, not from transient menu contents.
 struct PlaylistCoverPicker: ViewModifier {
     @Bindable var selection: PlaylistCoverSelection
 

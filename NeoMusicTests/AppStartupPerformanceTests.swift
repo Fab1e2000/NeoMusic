@@ -18,7 +18,6 @@ final class AppStartupPerformanceTests: XCTestCase {
         window.rootViewController = host
         window.makeKeyAndVisible()
         defer { window.isHidden = true }
-        // 冷的模拟器可能要好几秒才给出窗口尺寸。持续把页面排出来，直到可见封面发出请求。
         let deadline = ContinuousClock.now.advanced(by: .seconds(15))
         while !requested.contains("cover-0"), ContinuousClock.now < deadline {
             host.view.layoutIfNeeded()
@@ -30,7 +29,6 @@ final class AppStartupPerformanceTests: XCTestCase {
         }
         host.view.layoutIfNeeded()
         XCTAssertTrue(requested.contains("cover-0"), "The visible artist album requests artwork")
-        // Inspect children too because the album strip is inside the vertical page.
         func horizontal(_ view: UIView) -> UIScrollView? {
             if let scroll = view as? UIScrollView, scroll.contentSize.width > scroll.bounds.width + 100 { return scroll }
             return view.subviews.lazy.compactMap(horizontal).first
@@ -108,7 +106,6 @@ final class AppStartupPerformanceTests: XCTestCase {
         }
         let tabs = try XCTUnwrap(findTabs(host))
         let original = try XCTUnwrap(library.navigationController)
-        // UITab may resolve its provider to inspect controller metadata before selection.
         XCTAssertFalse(home.navigationController?.topViewController?.isViewLoaded ?? false,
                        "Unselected home must not load its initial SwiftUI view tree")
         library.open(.category(.songs), animated: false)

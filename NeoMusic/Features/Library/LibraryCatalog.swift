@@ -1,7 +1,6 @@
 import SwiftUI
 import Observation
 
-/// Library projections and actions supplied by the app's catalog integration.
 @MainActor @Observable final class LibraryCatalog {
     var artists: [LibraryArtistItem] = []
     var albums: [LibraryShelfItem] = []

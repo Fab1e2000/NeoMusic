@@ -1,9 +1,6 @@
 @preconcurrency import AVFoundation
 @preconcurrency import AudioStreaming
 
-/// One decoded stream. Seeking stays muted until the requested sample is ready.
-/// Isolated to `@PlaybackAudioActor` so decoding, graph changes, and AudioStreaming
-/// control calls never block the main thread.
 @PlaybackAudioActor final class StreamingPlaybackDeck: NSObject, @preconcurrency AudioPlayerDelegate {
     var onChange: (() -> Void)?
     var onEnded: (() -> Void)?
@@ -296,7 +293,6 @@ private struct UncheckedSendableBox<Value>: @unchecked Sendable {
     let value: Value
 }
 
-/// Real-time audio thread gate for pulling `AudioStreaming` frames at an exact `hostTime`.
 private final class StreamRenderGate: @unchecked Sendable {
     private let lock = NSLock()
     private var player: AudioStreaming.AudioPlayer?
@@ -381,7 +377,6 @@ private final class StreamRenderGate: @unchecked Sendable {
             if skipFrames == 0 {
                 return activePlayer.renderExternal(inNumberFrames: renderFrames, ioData: outputData)
             }
-            // Non-interleaved offset render not expected for AudioStreaming, fallback to pulling full frameCount.
             return activePlayer.renderExternal(inNumberFrames: frameCount, ioData: outputData)
         }
 

@@ -81,7 +81,6 @@ import XCTest
         let directory = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        // Existing SHA256(scope)-SHA256(remote URL) lowercase filename, before key memoization.
         let filename = "73475cb40a568e8da8a045ced110137e159f890ac4da883b6b17dc651b3a8049-104257710801dd3ee6320d3d1a845a651c66e8c477d15f4f618c118323f68843.image"
         let existing = directory.appendingPathComponent(filename)
         let content = Data("cached artwork".utf8)

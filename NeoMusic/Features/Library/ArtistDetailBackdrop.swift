@@ -21,7 +21,6 @@ struct ArtistDetailBackdrop: View {
             let request = ArtistBackdropRequest(url: artworkURL, width: geometry.size.width, scale: displayScale)
             let y = geometry.frame(in: .scrollView).minY
             let upward = max(0, -y)
-            // Blur and color loss are one image transition, independent of the page shade.
             let imageProgress = min(1, max(0, (upward - 150) / 330))
             let extent: CGFloat = 520
             let maskSize = CGSize(width: geometry.size.width * displayScale, height: extent * displayScale)
@@ -181,8 +180,6 @@ private actor ArtistBackdropPreparer {
         }
         guard let cgImage = extended.cgImage else { return nil }
         let input = CIImage(cgImage: cgImage)
-        // Core Image coordinates start at the bottom. Keep the upper artwork sharp,
-        // then smoothly increase the radius through the image's lower edge.
         let gradient = CIFilter.smoothLinearGradient()
         gradient.point0 = CGPoint(x: 0, y: (520 - 400) * displayScale)
         gradient.point1 = CGPoint(x: 0, y: (520 - 288) * displayScale)
@@ -208,7 +205,6 @@ private actor ArtistBackdropPreparer {
         let image = CIImage(cgImage: source)
         let average = CIFilter.areaAverage()
         average.inputImage = image
-        // Sample the lower quarter of the displayed crop, before mirroring or blur.
         average.extent = CGRect(x: 0, y: 0, width: image.extent.width, height: floor(image.extent.height / 4))
         guard let output = average.outputImage else { return nil }
 
@@ -220,10 +216,8 @@ private actor ArtistBackdropPreparer {
         let green = Double(max(0, pixel[1]))
         let blue = Double(max(0, pixel[2]))
         let luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue
-        // Cap luminance for the song list's translucent white secondary text.
         let target = min(0.10, max(0.035, luminance))
         let chroma = max(red, green, blue) - min(red, green, blue)
-        // Reduce very vivid colors toward neutral without changing their hue.
         let chromaScale = target / max(luminance, chroma / 0.8, 0.0001)
         return ArtistBackdropColor(
             red: target + (red - luminance) * chromaScale,

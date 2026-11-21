@@ -1,5 +1,4 @@
 // Official-site authentication follows MeloX / NeoDizzy (GPL-3.0).
-// WebKit owns the website and its temporary cookie store; the account owns credentials.
 import SwiftUI
 import WebKit
 

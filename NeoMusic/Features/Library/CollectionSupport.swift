@@ -5,7 +5,6 @@ enum DetailSort: String, CaseIterable, Identifiable, Sendable {
     var id: Self { self }
 }
 
-/// 专辑与歌单详情页共享的异步曲目过滤/排序投影与时长聚合。
 struct TrackFilterProjectionInput: Equatable {
     let tracks: [LibrarySongItem]
     let query: String
@@ -85,8 +84,6 @@ enum TrackFilterProjection {
         await projection.computeIfNeeded(for: input) { await result(for: input) }
     }
 
-    /// Resolve exactly this input for a playback action. A retained render snapshot may still
-    /// describe the partial page or an earlier query and must not be used for queuing.
     @MainActor
     static func result(for input: TrackFilterProjectionInput) async -> TrackFilterProjectionResult? {
         guard !Task.isCancelled else { return nil }
@@ -132,7 +129,6 @@ enum TrackFilterProjection {
     }
 }
 
-/// 统一通过共享缓存提取详情页封面背景色，避免无缓存重算与主线程 PNG 编码。
 @MainActor enum CollectionBackdropResolver {
     static func resolve(artwork: Artwork, loadArtwork: ArtworkLoadAction) async -> AlbumArtworkBackdrop? {
         if let cached = LocalArtworkImages.cachedBackdrop(for: artwork) { return cached }

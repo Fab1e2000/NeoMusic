@@ -193,16 +193,12 @@ final class DownloadedLibraryTests: XCTestCase {
         let downloadedSongID: (String) -> Int64? = { $0 == local.id ? 9 : nil }
         let expected = [online.id, other.id]
 
-        // 下载文件存在时，喜爱歌曲使用在线身份，而不是被替换成本地文件行。
         XCTAssertEqual(LocalLibrary.favoriteRows(online: [online], favorites: [local, other],
                                                  downloadedSongID: downloadedSongID).map(\.id), expected)
-        // 移除下载后，同一行继续保留在线身份。
         XCTAssertEqual(LocalLibrary.favoriteRows(online: [online], favorites: [online, other],
                                                  downloadedSongID: downloadedSongID).map(\.id), expected)
-        // 文件删除与在线条目回填之间的瞬间同时出现两份，也只保留一行。
         XCTAssertEqual(LocalLibrary.favoriteRows(online: [online], favorites: [local, online, other],
                                                  downloadedSongID: downloadedSongID).map(\.id), expected)
-        // 未登录或在线条目尚未加载时仍显示本地收藏。
         XCTAssertEqual(LocalLibrary.favoriteRows(online: [], favorites: [local, other],
                                                  downloadedSongID: downloadedSongID).map(\.id), [local.id, other.id])
     }

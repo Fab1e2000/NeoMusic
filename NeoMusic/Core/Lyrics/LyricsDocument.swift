@@ -33,7 +33,6 @@ struct LyricsDocument: Equatable, Sendable {
     private static let translationMatchToleranceMS = 50
     private typealias TimedText = (index: Int, ms: Int, text: String)
 
-    /// Parse bracket prefixes rather than interpreting text after the timestamp as markup.
     static func parse(_ text: String) -> Self {
         let parsed = parseEntries(text)
         let lines = parsed.entries.enumerated().map { index, entry in
@@ -42,7 +41,6 @@ struct LyricsDocument: Equatable, Sendable {
         return Self(lines: lines, plainText: lines.isEmpty ? parsed.plain.joined(separator: "\n") : lines.map(\.text).joined(separator: "\n"))
     }
 
-    /// Separates an original LRC document from its translation inside one stored file.
     static let storedTranslationMarker = "[neomusic:translation]"
 
     static func storedText(original: String, translation: String) -> String {
@@ -120,13 +118,10 @@ struct LyricsDocument: Equatable, Sendable {
             }
             return lhs.element.time < rhs.element.time
         }
-        // Keep the original timing if the offset would put any line outside the
-        // representable range. Validate the greatest time because the shift is monotonic.
         if let last = sortedLines.last, milliseconds(max(0, last.element.time - offsetSeconds)) == nil {
             offsetSeconds = 0
         }
         let entries = sortedLines.map { _, entry in
-            // Positive LRC offsets advance lyrics; negative offsets delay them.
             ParsedEntry(rawTime: entry.time, time: max(0, entry.time - offsetSeconds), text: entry.text)
         }
         return (entries, plain)
@@ -186,8 +181,6 @@ struct LyricsDocument: Equatable, Sendable {
         }
     }
 
-    /// Parsed lines are ordered by timestamp. Limit matching to the tolerance
-    /// window while retaining order and allowing equal-distance ties.
     private static func nearbyText(in lines: [TimedText], at ms: Int) -> ArraySlice<TimedText> {
         var lower = 0
         var upper = lines.count
@@ -200,7 +193,6 @@ struct LyricsDocument: Equatable, Sendable {
                 upper = middle
             }
         }
-        // Compare a difference so the upper bound cannot overflow near Int.max.
         return lines[lower...].prefix { $0.ms - ms <= translationMatchToleranceMS }
     }
 

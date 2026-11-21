@@ -2,7 +2,6 @@ import SwiftUI
 import CryptoKit
 import CoreImage.CIFilterBuiltins
 
-/// The album's opaque sRGB background and the matching system foreground style.
 struct AlbumArtworkBackdrop: Codable, Equatable, Sendable {
     let red: Double
     let green: Double
@@ -26,7 +25,6 @@ struct AlbumArtworkBackdrop: Codable, Equatable, Sendable {
         channel <= 0.04045 ? channel / 12.92 : pow((channel + 0.055) / 1.055, 2.4)
     }
 
-    /// Runs away from the UI actor and chooses the most populated Core Image color cluster.
     static func extract(from data: Data) -> AlbumArtworkBackdrop? {
         autoreleasepool {
             guard let input = CIImage(data: data) else { return nil }
@@ -57,8 +55,6 @@ struct AlbumArtworkBackdrop: Codable, Equatable, Sendable {
                        bounds: output.extent, format: .RGBAf, colorSpace: space)
         guard let dominant = (0..<8).max(by: { weighted[$0 * 4 + 3] < weighted[$1 * 4 + 3] }),
               weighted[dominant * 4 + 3] > 0 else { return nil }
-        // Core Image stores each cluster's population in alpha; the palette's
-        // color is rendered opaque before choosing the largest cluster.
         var colors = [Float](repeating: 0, count: 32)
         context.render(output.settingAlphaOne(in: output.extent), toBitmap: &colors, rowBytes: 128,
                        bounds: output.extent, format: .RGBAf, colorSpace: space)
@@ -67,9 +63,7 @@ struct AlbumArtworkBackdrop: Codable, Equatable, Sendable {
     }
 }
 
-/// Prepares the exact artwork-derived colors before publishing a library snapshot.
 actor AlbumArtworkBackdropPreparer {
-    // Version 2 derives the palette through the public Core Image filter.
     static let cacheVersion = 2
     private struct Snapshot: Codable {
         let version: Int
@@ -108,7 +102,6 @@ actor AlbumArtworkBackdropPreparer {
         return try prepare(artworkByID, retaining: [:])
     }
 
-    /// File-backed images arrive individually; keep colors of previously prepared files.
     func prepareAdditionalArtwork(_ artworkByID: [String: Data]) throws -> [String: AlbumArtworkBackdrop] {
         try loadPersistedColors()
         return try prepare(artworkByID, retaining: persisted)
@@ -125,7 +118,6 @@ actor AlbumArtworkBackdropPreparer {
                 prepared = existing
             } else {
                 let key = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-                // A resolved nil is cached too, so invalid artwork is not analyzed on every launch.
                 let color = persisted[key] ?? extract(data)
                 prepared = (key, color)
             }
@@ -136,8 +128,6 @@ actor AlbumArtworkBackdropPreparer {
         }
         try Task.checkCancellation()
         if let cacheURL, nextPersisted != persisted {
-            // Derived colors are expendable. A missing, corrupt or unwritable cache
-            // must never prevent the library from opening.
             if let data = try? JSONEncoder().encode(Snapshot(version: Self.cacheVersion, colors: nextPersisted)),
                (try? data.write(to: cacheURL, options: .atomic)) != nil {
                 persisted = nextPersisted

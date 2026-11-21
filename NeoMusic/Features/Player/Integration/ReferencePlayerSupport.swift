@@ -21,7 +21,6 @@ import Observation
 
 typealias ReferenceLibrary = PlayerLyricsController
 
-/// Adapts the local lyrics store to the player presentation.
 actor PlayerLyricsStoreAdapter {
     private let reader: LyricsReader
     private let root: URL

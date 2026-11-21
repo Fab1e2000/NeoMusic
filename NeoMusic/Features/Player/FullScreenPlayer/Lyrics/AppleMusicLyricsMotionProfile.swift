@@ -1,14 +1,9 @@
 // Ported from youshen2/MeloX (GPL-3.0), commit 1fe5fbab3f554e8529c4847fc54281a472b7b61a.
 import Foundation
 
-/// Internal reconstruction of motion constants observed in Apple Music 26.6.
-/// Property names describe inferred behavior; they are not public Apple API.
 nonisolated struct AppleMusicLyricsMotionProfile: Equatable, Sendable {
     let firstLineStartOffset: Double
-    /// Percentage of the effective viewport height used for synced-line
-    /// positioning before subtracting the lyric font ascender.
     let selectedLineTopRelativePercent: Double
-    /// Static-mode vertical insets; these do not combine with synced mode.
     let staticTopContentInset: Double
     let staticBottomContentInset: Double
     let paragraphSpacing: Double
@@ -28,26 +23,20 @@ nonisolated struct AppleMusicLyricsMotionProfile: Equatable, Sendable {
     let increasedContrastSelectedTextOpacity: Double
     let increasedContrastSelectedUpcomingTextOpacity: Double
     let increasedContrastDeselectedTextOpacity: Double
-    /// The native line-focus blur animator also drives its brightness filter.
     let focusBlurTransitionDuration: TimeInterval
     let focusBlurTransitionControlPoint1X: Double
     let focusBlurTransitionControlPoint1Y: Double
     let focusBlurTransitionControlPoint2X: Double
     let focusBlurTransitionControlPoint2Y: Double
     let animationHeadstart: TimeInterval
-    /// Timed glyph/syllable emphasis range. Never scale the complete row.
     let emphasisScaleRange: ClosedRange<Double>
     let lineFinishProgressAnimationDuration: TimeInterval
     let lineProgressionGradientFeather: Double
     let glowRadius: Double
     let syllableLift: Double
-    /// Default focus and line-change solver values observed in Lyrics.Specs.
     let lineChangeSpring: LyricPhysicalSpringParameters
-    /// Solver values observed on the forced/special line catch-up path.
     let forcedLineCatchUpSpring: LyricPhysicalSpringParameters
-    /// Translation/transliteration reveal solver values.
     let supplementalTextShowSpring: LyricPhysicalSpringParameters
-    /// Translation/transliteration removal solver values.
     let supplementalTextHideSpring: LyricPhysicalSpringParameters
 
     static let iOS26_6 = Self(
@@ -116,9 +105,6 @@ nonisolated struct AppleMusicLyricsMotionProfile: Equatable, Sendable {
         Double(max(rowIndex - activeIndex, 0)) * cascadeDelay
     }
 
-    /// Paragraph-index blur progression using the same smoothstep falloff:
-    /// upcoming rows ease from `nonFocusedBlurRadius` to `maximumNonFocusedBlurRadius`
-    /// independent of active row wrapping, while past rows blur one step sooner.
     func blurRadius(rowOffset: Int) -> Double {
         if rowOffset == 0 { return 0 }
         let step = rowOffset < 0 ? Double(-rowOffset) : Double(rowOffset - 1)
@@ -128,8 +114,6 @@ nonisolated struct AppleMusicLyricsMotionProfile: Equatable, Sendable {
             + (maximumNonFocusedBlurRadius - nonFocusedBlurRadius) * farCurve
     }
 
-    /// Distance between the leading lines, normalized for the displayed font size.
-    /// Wrapped paragraphs therefore contribute their full height to the falloff.
     func blurRadius(verticalDistance: Double, lineHeight: Double) -> Double {
         let distance = abs(verticalDistance) / max(lineHeight + lineSpacing, 1)
         let near = min(distance, 1)

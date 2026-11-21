@@ -1,6 +1,5 @@
 import SwiftUI
 
-/// Apple SF Symbols, with one shared weight, rendering mode and placement.
 struct SearchCategorySymbol: View {
     let category: String
 

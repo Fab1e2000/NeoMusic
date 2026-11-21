@@ -276,7 +276,6 @@ private struct TabOrderPage: View {
         .accessibilityIdentifier("account.tab-order")
     }
 
-    /// 只在显示的标签之间拖动；未显示的标签留在原来的相对位置。
     private func moveShown(from source: IndexSet, to destination: Int) {
         var reordered = shown
         reordered.move(fromOffsets: source, toOffset: destination)

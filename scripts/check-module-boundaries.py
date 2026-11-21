@@ -29,7 +29,6 @@ def check_source(relative: Path, text: str) -> list[str]:
         for module in re.findall(r"^\s*(?:@\w+\s+)?import\s+([A-Za-z_][A-Za-z_0-9]*)", text, re.MULTILINE):
             allowed = module in (NETEASE_IMPORTS if netease else COMMON_IMPORTS)
             allowed |= player and module in PLAYER_IMPORTS
-            # Native image processing is owned by these concrete artwork renderers.
             allowed |= relative in {
                 Path("NeoMusic/Features/Home/HomePlaylistArtwork.swift"),
                 Path("NeoMusic/Features/Library/ArtistDetailBackdrop.swift"),
@@ -54,7 +53,6 @@ def check_source(relative: Path, text: str) -> list[str]:
             errors.append("full-screen presentation must consume host interfaces, not app implementations")
         if re.search(r'Bundle\.main|UIImage\(named:|"netease:|"preview\.appearance', text):
             errors.append("full-screen resources and identities must not depend on the app bundle or account format")
-    # Scan Swift and Objective-C together; moving code does not exempt it.
     if not (netease or account_ui or app) and re.search(r"\bNetease\w*\b", text):
         errors.append("NetEase types belong in Core/Netease, Features/Account or App assembly")
     if not netease and re.search(r"\b(?:URLSession|NSURLSession|HTTPCookieStorage|SecItem\w+|CommonCrypto)\b", text):

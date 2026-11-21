@@ -1,6 +1,5 @@
 import Foundation
 
-/// Public avatar responses use a dedicated system cache without authentication cookies.
 struct NeteaseAvatarClient: Sendable {
     private let session: URLSession
 

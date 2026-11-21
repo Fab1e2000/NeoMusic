@@ -1,7 +1,5 @@
 @preconcurrency import AVFoundation
 
-/// Native `AVAudioFile` + `AVAudioPlayerNode` deck for local files.
-/// Seeking schedules directly at the target sample frame without re-decoding from frame 0.
 @PlaybackAudioActor final class LocalFilePlaybackNode {
     var onEnded: (() -> Void)?
 
@@ -119,8 +117,6 @@
         guard totalFrames > 0, anchoredFrame < totalFrames else {
             isPlayingState = false
             if totalFrames > 0 {
-                // A restored position at the end must not leave an empty node that
-                // reports playing without any scheduled audio.
                 finished = true
                 if startPlaying {
                     wantsPlayback = false

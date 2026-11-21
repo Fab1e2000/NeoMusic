@@ -1,6 +1,5 @@
 import SwiftUI
 
-// MARK: - Sub-pages
 
 struct PickerArtistsListView: View {
     let artists: [LibraryArtistItem]
@@ -287,7 +286,6 @@ struct PickerRecentlyAddedListView: View {
     }
 }
 
-// MARK: - Artist Library & Catalog Views
 
 struct PickerArtistLibraryView: View {
     let artist: LibraryArtistItem
@@ -564,7 +562,6 @@ struct PickerArtistCatalogSectionView: View {
     }
 }
 
-// MARK: - Album & Playlist Detail Views
 
 struct PickerAlbumDetailView: View {
     let album: LibraryShelfItem
@@ -737,7 +734,6 @@ struct PickerPlaylistDetailView: View {
     }
 }
 
-// MARK: - Shared Picker Components
 
 struct PickerCollectionDetailHeader: View {
     let artwork: Artwork

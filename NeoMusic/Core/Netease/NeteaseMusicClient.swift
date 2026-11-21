@@ -71,7 +71,6 @@ final class NeteaseMusicClient: Sendable {
             }
         }
         try Task.checkCancellation()
-        // 详情接口没返回的编号先不放进曲目。不能写成「暂无完整音源」，否则正在播放的歌会被停掉。
         return .init(playlist: detail.playlist, songs: ids.compactMap { lookup[$0] }, addedTimes: detail.addedTimes, trackIDs: detail.orderedTrackIDs, loadedTrackCount: end)
     }
 
@@ -110,7 +109,6 @@ final class NeteaseMusicClient: Sendable {
         let response: Response = try await read("/api/song/like/get", ["uid": userID], credential)
         return Set(response.ids)
     }
-    /// 收藏或取消收藏歌单。与网页一样分别请求 subscribe / unsubscribe，只带歌单编号。
     @concurrent func setPlaylistSubscribed(id: Int64, subscribed: Bool, credential: NeteaseCredential) async throws {
         _ = try await transport.requestWeb(path: subscribed ? "/api/playlist/subscribe" : "/api/playlist/unsubscribe", fields: ["id": id], credential: credential)
     }

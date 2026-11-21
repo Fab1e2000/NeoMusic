@@ -760,7 +760,6 @@ final class NeteaseMusicClientTests: XCTestCase, @unchecked Sendable {
         XCTAssertFalse(completed)
         XCTAssertEqual(store.playlistTracks[2]?.count, 100)
         XCTAssertNotNil(store.playlistErrors[2])
-        // The detail page's retry action uses this same entry point.
         await store.loadPlaylist(id: 2)
         XCTAssertEqual(store.playlistTracks[2], ids)
         XCTAssertFalse(store.hasMorePlaylist(id: 2))
@@ -869,7 +868,6 @@ private final class MusicFixtureProtocol: URLProtocol, @unchecked Sendable {
         let response = Self.responses.withLock { responses in
             guard let first = responses.first else { return #"{"code":500}"# }
             let path = request.url?.path ?? ""
-            // The library's independent playlist and liked-ID refreshes can arrive in either order.
             if ["/eapi/user/playlist", "/eapi/song/like/get"].contains(path),
                let firstPath = Self.refreshPath(for: first), firstPath != path,
                let index = responses.firstIndex(where: { Self.refreshPath(for: $0).map { $0 == path } ?? true }) {

@@ -17,7 +17,6 @@ struct LyricsScrollInterfaceVisibilityTracker {
         guard offsetDelta.isFinite, hideThreshold.isFinite else { return nil }
         if offsetDelta < 0 {
             downwardDistance = 0
-            // Scrolling up while dragging never auto-reveals controls; only a release flick does.
             return nil
         }
 
@@ -30,7 +29,6 @@ struct LyricsScrollInterfaceVisibilityTracker {
         return false
     }
 
-    /// Reveals hidden controls only when the user releases an upward scroll with flick momentum.
     mutating func shouldRevealOnEndDragging(
         velocityY: CGFloat,
         revealVelocityThreshold: CGFloat = 0.35

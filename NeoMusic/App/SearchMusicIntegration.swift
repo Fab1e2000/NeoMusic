@@ -1,7 +1,6 @@
 import SwiftUI
 import Observation
 
-/// Projects account-owned search results into the existing library and playback UI.
 @MainActor @Observable
 final class SearchMusicIntegration {
     let model = SearchPageModel()

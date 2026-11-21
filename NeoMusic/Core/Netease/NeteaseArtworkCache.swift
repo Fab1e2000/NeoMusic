@@ -2,10 +2,8 @@ import CryptoKit
 import Foundation
 import Nuke
 
-/// 网易云图片地址只在下载时改成固定尺寸。模型里仍保存接口返回的原始地址。
 enum NeteaseArtworkURL {
     static let pixelSize = 1_024
-    /// 没有头像时网易云给出的 img1v1Url 不是正方形。
     private static let nonSquareAvatar = "5639395138885805.jpg"
     private static let squareAvatar = "https://p1.music.126.net/VnZiScyynLG7atLIZ2YPkw==/18686200114669622.jpg"
 
@@ -15,7 +13,6 @@ enum NeteaseArtworkURL {
         return NeteaseMusicClient.url(chosen)
     }
 
-    /// 清掉已有的 imageView、水印等参数后再请求 1024。直接追加 param 会被图片服务拒绝。
     static func downloadURL(for canonical: URL) -> URL {
         guard storesSizedVariant(canonical),
               var components = URLComponents(url: canonical, resolvingAgainstBaseURL: false) else { return canonical }
@@ -31,25 +28,18 @@ enum NeteaseArtworkURL {
     }
 }
 
-/// 详情页在数据到达时提前请求的封面数量，其余等所在行出现。
 enum NeteaseArtworkPrefetch {
-    /// 专辑和歌单首屏：大封面之外大约十二行歌曲。
     static let detailSongs = 12
-    /// 艺人页首屏只列出五首。
     static let artistSongs = 5
-    /// 横向作品卡约三张，再准备邻接的一张。
     static let shelfCards = 4
 }
 
-/// Shared original artwork files; Nuke owns network coalescing and subscriber cancellation.
 @MainActor
 final class NeteaseArtworkCache {
     static let shared = NeteaseArtworkCache(
         directory: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("NeteaseArtwork", isDirectory: true),
         countLimit: 4_096)
-    /// Posted synchronously on MainActor, after cachedURL has stopped returning evicted files.
-    /// Observe this cache as the object; use evictedURLs(in:scope:) for the account-owned resources.
     static let didEvictArtwork = Notification.Name("NeoMusic.NeteaseArtworkCache.didEvictArtwork")
 
     nonisolated static func eviction(in notification: Notification) -> (scope: String, urls: Set<URL>)? {
@@ -114,7 +104,6 @@ final class NeteaseArtworkCache {
         return file
     }
 
-    /// Resolves one existing file for visible artwork preparation, without networking or restoring the directory.
     func cachedFileURL(for remote: URL, scope: String) async -> URL? {
         guard !Task.isCancelled, remote.scheme == "https" else { return nil }
         if let file = cachedURL(for: remote, scope: scope) { return file }
@@ -334,7 +323,6 @@ private actor NeteaseArtworkFiles {
             }
             _ = try trim()
         }
-        // A complete index supersedes any earlier single-file lookup snapshots.
         revision += 1
         loaded = true
     }

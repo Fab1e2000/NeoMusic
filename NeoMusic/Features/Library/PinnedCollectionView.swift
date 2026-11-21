@@ -1,8 +1,6 @@
 import SwiftUI
 import UIKit
 
-/// 首页置顶区使用单个原生集合视图；每个置顶项都是独立 cell。
-/// UIKit 负责菜单与交互式重排，资料库仍是置顶状态和顺序的唯一来源。
 struct PinnedCollectionView: UIViewRepresentable {
     let items: [LibraryShelfItem]
     let isEditing: Bool
@@ -33,8 +31,6 @@ struct PinnedCollectionView: UIViewRepresentable {
     func updateUIView(_ view: UICollectionView, context: Context) {
         let animated = context.transaction.animation != nil && !context.transaction.disablesAnimations
             && !context.environment.accessibilityReduceMotion
-        // Diffable updates consult UIKit's animation switch even inside context.animate.
-        // Match this update's transaction, then restore the enclosing SwiftUI update scope.
         let animationsWereEnabled = UIView.areAnimationsEnabled
         UIView.setAnimationsEnabled(animated)
         defer { UIView.setAnimationsEnabled(animationsWereEnabled) }
@@ -106,7 +102,6 @@ struct PinnedCollectionView: UIViewRepresentable {
         func update(with view: PinnedCollectionView, environment: EnvironmentValues, animated: Bool = false) {
             latest = view
             self.environment = environment
-            // Edit state must reach visible cells even while a drag or snapshot is settling.
             for case let cell as PinnedCollectionCell in collectionView?.visibleCells ?? [] {
                 cell.setEditing(view.isEditing, phase: collectionView?.indexPath(for: cell)?.item ?? 0,
                                 reduceMotion: environment.accessibilityReduceMotion)
@@ -117,8 +112,6 @@ struct PinnedCollectionView: UIViewRepresentable {
         private func applyLatestSnapshot(animated: Bool) {
             guard let view = latest else { return }
             let identifiers = view.items.map(PinnedCollectionView.identity)
-            // Diffable snapshots require unique item identities. Never silently
-            // delete or merge data when presented with an invalid input.
             guard Set(identifiers).count == identifiers.count else { return }
             let previousItems = itemsByID
             let updatedItems = Dictionary(uniqueKeysWithValues: zip(identifiers, view.items))
@@ -129,7 +122,6 @@ struct PinnedCollectionView: UIViewRepresentable {
                 if Set(pending) != Set(identifiers) || pending == identifiers {
                     pendingCommittedOrder = nil
                 } else {
-                    // A stale parent render must not undo a just-completed drag.
                     return
                 }
             }
@@ -168,7 +160,6 @@ struct PinnedCollectionView: UIViewRepresentable {
             let routes = final.compactMap { itemsByID[$0]?.route }
             guard routes.count == final.count else { return false }
             if final == original { return true }
-            // There is one commit owner: drop validates and saves before applying its snapshot.
             pendingCommittedOrder = final
             guard latest.reorder(routes) else {
                 pendingCommittedOrder = nil
@@ -205,8 +196,6 @@ struct PinnedCollectionView: UIViewRepresentable {
             guard let cell = collectionView.cellForItem(at: indexPath) else { return nil }
             cell.layoutIfNeeded()
             guard let artwork = cell.contentView.libraryArtworkSource() else { return nil }
-            // Collection-view drag/drop previews snapshot the cell, so the crop
-            // must use cell coordinates and exclude the caption below the artwork.
             let rect = artwork.convert(artwork.bounds, to: cell)
             guard !rect.isEmpty else { return nil }
             let parameters = UIDragPreviewParameters()
@@ -228,7 +217,6 @@ struct PinnedCollectionView: UIViewRepresentable {
         }
 
         func collectionView(_ collectionView: UICollectionView, dragSessionDidEnd session: any UIDragSession) {
-            // Parent renders during the drag were deferred; replay the latest one after UIKit settles.
             restoreLatestSnapshot()
         }
 
@@ -403,8 +391,6 @@ struct PinnedCollectionView: UIViewRepresentable {
     }
 }
 
-/// The cell owns its edit animation, so reconfiguration cannot leave a repeating
-/// SwiftUI transaction alive after the toolbar has left editing mode.
 final class PinnedCollectionCell: UICollectionViewCell {
     private static let wobbleKey = "pinnedEditingWobble"
     private var editing = false
@@ -436,7 +422,6 @@ final class PinnedCollectionCell: UICollectionViewCell {
         updateWobble()
     }
 
-    /// 编辑态下左上角「取消置顶」按钮向 cell 外延伸，扩展命中范围使其完整 44×44pt 可点。
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
         if editing {
             let expanded = bounds.inset(by: UIEdgeInsets(top: -16, left: -16, bottom: 0, right: 0))
@@ -467,8 +452,6 @@ final class PinnedCollectionCell: UICollectionViewCell {
     }
 }
 
-/// UIHostingConfiguration supports UIViewRepresentable, but not child view controllers.
-/// Keep the original artwork drawing inside one real UIView, used by zoom and by the card.
 private struct PinnedArtworkSurface: UIViewRepresentable {
     let artwork: Artwork
     let contentID: String

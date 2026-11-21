@@ -3,7 +3,6 @@ import FullScreenPlayer
 import Foundation
 import Nuke
 
-/// Shared image resource policy; providers still own their image URLs and authentication.
 enum ArtworkImagePipeline {
     static func thumbnailRequest(for url: URL, pixels: Int) -> ImageRequest {
         var request = ImageRequest(url: url)
@@ -22,7 +21,6 @@ enum ArtworkImagePipeline {
         }
     }
     static func configureMemoryCache() {
-        // Retain enough decoded covers for fast ProMotion scrolling across large catalogs. Eviction never removes source data.
         ImageCache.shared.costLimit = min(Int(ProcessInfo.processInfo.physicalMemory / 16), 384 * 1_024 * 1_024)
     }
 
@@ -35,8 +33,6 @@ enum ArtworkImagePipeline {
               displayScale.isFinite, displayScale > 0 else { return nil }
         let pixels = CGSize(width: target.width * displayScale, height: target.height * displayScale)
         guard pixels.width.isFinite, pixels.height.isFinite else { return nil }
-        // Pixel buckets keep nearby layout sizes cache-compatible without decoding a
-        // 44 pt row at 384 px on a 3x display. An explicit decode size stays exact.
         func bucket(_ value: CGFloat) -> CGFloat { (value / 64).rounded(.up) * 64 }
         let thumbnailSize = decodeSize == nil
             ? CGSize(width: bucket(pixels.width), height: bucket(pixels.height))

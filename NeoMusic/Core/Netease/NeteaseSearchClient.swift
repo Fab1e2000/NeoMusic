@@ -39,7 +39,6 @@ struct NeteaseSearchSuggestions: Sendable {
 }
 
 /// Endpoint selection follows MeloX 09713ed (GPL-3.0), Features/Search and
-/// NeteaseAPI+SearchSuggestions. Composite order comes from the service response.
 final class NeteaseSearchClient: Sendable {
     let transport: NeteaseAccountClient
     init(transport: NeteaseAccountClient = .init()) { self.transport = transport }

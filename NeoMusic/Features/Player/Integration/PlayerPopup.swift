@@ -5,7 +5,6 @@ import Nuke
 import SwiftUI
 import UIKit
 
-/// Shared presentation adapter; playback and full-screen content retain their existing owners.
 struct PlayerPopup: ViewModifier {
     @Binding var isPresented: Bool
     let isSuppressed: Bool
@@ -166,8 +165,6 @@ private struct PlayerPopupContent: View {
     }
 }
 
-/// Observes `player.isPlaying` and adjacent tracks outside `PlayerPopup.body` so toggling playback
-/// does not re-evaluate the root popup container or rebuild `LNPopupUI` items.
 private struct PlayerPopupArtworkPrefetcher: View {
     let isPresented: Bool
     let scenePhase: ScenePhase
@@ -200,8 +197,6 @@ private struct PlayerPopupArtworkPrefetcher: View {
     }
 }
 
-/// Isolates `player.isPlaying` observation to the mini-player toolbar buttons so toggling playback
-/// while full-screen is open does not invalidate `PlayerPopupContent` or rebuild `.popupItem`.
 private struct MiniPlayerControlsObserver: View {
     @Environment(PlayerState.self) private var player
 
@@ -215,8 +210,6 @@ private struct MiniPlayerControlsObserver: View {
     }
 }
 
-/// 只切换叠加层，不切换被包裹内容的结构身份：`isActive` 会随 scenePhase 变化，
-/// 若用 if/else 包裹 content，下拉通知中心或回到前台都会重建全屏播放器并重置其 @State。
 private struct OptionalPlayerToastModifier: ViewModifier {
     let toasts: LibraryToastCenter?
     func body(content: Content) -> some View {
@@ -228,7 +221,6 @@ private struct OptionalPlayerToastModifier: ViewModifier {
     }
 }
 
-/// Placement invalidates only the title host, leaving the popup item and full-screen root intact.
 private struct MiniPlayerTitle: View {
     let fallbackTrack: PlayerTrack
     let isActive: Bool
@@ -262,7 +254,6 @@ private struct MiniPlayerTitle: View {
     }
 }
 
-/// One fixed-size toolbar item gives LN a single, stable title exclusion rect.
 struct MiniPlayerControls: View {
     let isPlaying: Bool
     let canPlayNext: Bool

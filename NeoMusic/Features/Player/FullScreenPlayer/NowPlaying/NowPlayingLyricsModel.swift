@@ -1,7 +1,6 @@
 import Foundation
 import Observation
 
-/// Data adapter for the imported player. The injected library owns local/imported lyrics.
 @MainActor @Observable final class NowPlayingLyricsModel {
     private(set) var lyrics: PlayerLyrics?
     private(set) var error: String?
@@ -24,8 +23,6 @@ import Observation
         }
     }
 
-    /// Generation checks also reject stale results from uncancellable providers
-    /// and overlapping reloads of the same track after a lyrics import.
     func load(trackID: String, resolve: () async throws -> PlayerLyrics) async {
         loadGeneration += 1
         let generation = loadGeneration

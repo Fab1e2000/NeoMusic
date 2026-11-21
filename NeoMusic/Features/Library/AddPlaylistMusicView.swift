@@ -1,7 +1,6 @@
 import SwiftUI
 import UIKit
 
-/// 添加音乐选单：直接读取真实资料库结构，选择只保留在本次会话中，完成后才交给播放列表宿主。
 struct AddPlaylistMusicView: View {
     let title: String
     let songs: [LibrarySongItem]
@@ -90,7 +89,6 @@ struct AddPlaylistMusicView: View {
         }
     }
 
-    // MARK: - Selection Helpers
 
     private func isSelected(_ id: String) -> Bool {
         selectedIDSet.contains(id) || existingIDs.contains(id)
@@ -125,7 +123,6 @@ struct AddPlaylistMusicView: View {
         }
     }
 
-    // MARK: - Root Screen
 
     private var rootContent: some View {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -220,7 +217,6 @@ struct AddPlaylistMusicView: View {
         .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] + 64 }
     }
 
-    // MARK: - Destinations
 
     @ViewBuilder private func destination(_ route: MusicPickerRoute) -> some View {
         switch route {
@@ -348,7 +344,6 @@ struct AddPlaylistMusicView: View {
 }
 
 
-// MARK: - Native UIKit Navigation Bar Bridge
 
 private extension View {
     func navigationBarBehavior(prompt: String?, hidesNavBarOnSearch: Bool) -> some View {
@@ -359,8 +354,6 @@ private extension View {
     }
 }
 
-/// 通过 UIKit 原生 `UINavigationItem.prompt` 与 `UISearchController.hidesNavigationBarDuringPresentation`
-/// 保持顶部状态提示与搜索聚焦时导航栏可见，避免拟合实现。
 private struct NavigationBarBehaviorBridge: UIViewControllerRepresentable {
     let prompt: String?
     let hidesNavBarOnSearch: Bool

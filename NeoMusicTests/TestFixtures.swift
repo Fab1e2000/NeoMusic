@@ -4,9 +4,7 @@ import XCTest
 @testable import NeoMusic
 @testable import FullScreenPlayer
 
-/// Test inputs use the same model and adapters as the app, with no demo runtime.
 @MainActor enum PlayerTestFixtures {
-    /// A fresh file per caller keeps playback and persistence tests isolated.
     @discardableResult nonisolated static func silentAudio(
         at url: URL = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".wav"),
         seconds: Int = 1
@@ -73,7 +71,6 @@ actor SessionActivation {
 }
 
 @MainActor extension XCTestCase {
-    /// Hosted tests can begin before UIKit connects the application's first scene.
     func applicationWindowScene() async throws -> UIWindowScene {
         if let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first {
             return scene

@@ -1,6 +1,5 @@
 import SwiftUI
 
-/// 资料库里的一首歌。
 struct LibrarySongItem: Identifiable, Equatable {
     let id: String
     var albumID: String { onlineAlbumID.map(CatalogRouteIdentity.albumID) ?? albumDirectory.map { "folder:" + $0 } ?? (albumArtist + "\u{001F}" + album) }
@@ -24,7 +23,6 @@ struct LibrarySongItem: Identifiable, Equatable {
         get { artworkState.value.artworkURL }
         set { var value = artworkState.snapshot; value.artworkURL = newValue; artworkState = SongArtworkState(value) }
     }
-    /// Prepared with the original artwork before the song becomes visible.
     var artworkBackdrop: AlbumArtworkBackdrop? {
         get { artworkState.value.artworkBackdrop }
         set { var value = artworkState.snapshot; value.artworkBackdrop = newValue; artworkState = SongArtworkState(value) }
@@ -55,8 +53,6 @@ struct LibrarySongItem: Identifiable, Equatable {
         self.artistReferences = artistReferences
     }
 
-    /// Resource arrivals notify image readers without replacing the song or its list.
-    /// Ordinary property setters retain value semantics for metadata edits and snapshots.
     @discardableResult
     func publishArtwork(from replacement: Self) -> Bool {
         guard id == replacement.id else { return false }
@@ -70,13 +66,11 @@ struct LibrarySongItem: Identifiable, Equatable {
         OnlineSongIdentity.parseOwnerAndSong(id)?.songID
     }
     var isOnline: Bool { onlineOwnerID != nil }
-    /// Whether this item represents a track from the NetEase catalog (online, guest catalog, or downloaded).
     var isNeteaseCatalogSong: Bool {
         isOnline || id.hasPrefix("catalog-guest:") || onlineAlbumID != nil || !artistReferences.isEmpty
     }
 }
 
-/// Image resource state is observed separately from song metadata and list ordering.
 @Observable private final class SongArtworkState: Equatable {
     struct Snapshot: Equatable {
         var artwork: Artwork
@@ -98,15 +92,12 @@ struct LibrarySongItem: Identifiable, Equatable {
         return true
     }
 
-    // Comparing list inputs must not subscribe the list to individual image arrivals.
     static func == (lhs: SongArtworkState, rhs: SongArtworkState) -> Bool {
         lhs === rhs || lhs.snapshot == rhs.snapshot
     }
 }
 
 extension LibrarySongItem {
-    /// Online metadata refreshes keep an available cover while a new source is loading.
-    /// The new deferred identity remains responsible for requesting its replacement.
     func retainingArtwork(from previous: Self?) -> Self {
         guard isOnline, let previous, previous.id == id, unavailabilityReason == nil,
               artworkURL == nil else { return self }
@@ -156,7 +147,6 @@ struct LibraryArtistReference: Equatable {
     let name: String
 }
 
-/// 资料库里的一位艺人；本地音乐没有艺人照片时使用占位图。
 struct LibraryArtistItem: Identifiable, Equatable {
     let id: String
     let name: String
@@ -164,10 +154,7 @@ struct LibraryArtistItem: Identifiable, Equatable {
     var isFavorite = false
 }
 
-// MARK: - 歌曲
 
-/// 歌曲列表的排序方式，对照 Apple Music：名称、添加日期、艺人（A-Z）。
-/// 按艺人时依次按专辑艺人、专辑、曲目号排列，并按专辑艺人首字母分组。
 enum SongSort: Hashable, Sendable {
     case name, addedDate, artist
 
@@ -321,7 +308,6 @@ struct SongsListView: View {
     }
 }
 
-/// 歌曲行：点按播放，长按弹出菜单与预览，“…”按钮弹出同一份菜单。
 struct SongRow: View {
     let song: LibrarySongItem
     var play: () -> Void = {}
@@ -348,9 +334,7 @@ struct SongRow: View {
     }
 }
 
-// MARK: - 专辑
 
-/// 专辑页的排序方式，对照 Apple Music：名称、添加日期、艺人（A-Z）、年份。
 enum AlbumSort: Hashable, Sendable {
     case name, addedDate, artist, year
 
@@ -469,7 +453,6 @@ struct AlbumsGridView: View {
         .libraryNavigationTitle("专辑")
         .libraryTitleDisplayMode(.large)
         .libraryRootAccountButton()
-        // Keep the search drawer independent of the library home’s whole-bar minimization during push/pop.
         .librarySearchable(text: $query, prompt: "搜索专辑")
         .task(id: input) {
             let entries = input.albums.enumerated().map { index, album in
@@ -497,7 +480,6 @@ struct AlbumsGridView: View {
     }
 }
 
-/// 专辑、播放列表在列表显示方式下的一行：封面、标题、副标题与箭头；分隔线从标题起点画起。
 struct CollectionListRow: View {
     let item: LibraryShelfItem
     let showsSeparator: Bool
@@ -567,7 +549,6 @@ struct LibraryListEmptyState: View {
     }
 }
 
-// MARK: - 艺人
 
 struct ArtistsListView: View {
     let artists: [LibraryArtistItem]
@@ -600,7 +581,6 @@ struct ArtistsListView: View {
     }
 }
 
-/// 圆形艺人头像；没有图片时为浅灰底上的麦克风。
 struct ArtistAvatar: View {
     let artwork: Artwork?
 

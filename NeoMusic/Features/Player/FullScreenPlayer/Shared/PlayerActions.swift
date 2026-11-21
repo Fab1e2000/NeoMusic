@@ -1,9 +1,7 @@
 // Source: NeoDizzy / MeloX-derived song menu presentation (GPL-3.0).
-// Production adaptation: actions are supplied by the library composition.
 import SwiftUI
 import UIKit
 
-/// Actual resolved playback quality, projected by the owning music or file service.
 public struct PlayerAudioQuality: Equatable, Sendable {
     public let title: String
     public var detail: String? = nil
@@ -17,7 +15,6 @@ public struct PlayerAudioQuality: Equatable, Sendable {
 
 }
 
-/// All entry points use the same actions; platforms supply capabilities, never menu layouts.
 @MainActor struct SongMenuConfiguration {
     var primary: [SongRowAction]
     let secondary: [SongRowAction]
@@ -72,7 +69,6 @@ struct ReferenceSongMenuContents: View {
 }
 
 extension SongMenuConfiguration {
-    /// 系统 trailing 操作按从右向左排列；喜欢位于最右侧。
     var trailingSongActions: [SongRowAction] {
         let items = primary + secondary
         return ["favorite", "download"].compactMap { id in items.first { $0.id == id && !$0.disabled } }

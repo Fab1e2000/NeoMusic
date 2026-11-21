@@ -2,8 +2,6 @@ import SwiftUI
 import UIKit
 
 extension Color {
-    /// Computes the solid ±128 channel-offset secondary color on top of `background`
-    /// for controls (such as SwiftUI `Menu`) whose isolated rendering layer breaks `.blendMode`.
     static func secondaryContentColor(on background: Color, colorScheme: ColorScheme) -> Color {
         CollectionPagePalette(background: UIColor(background), isDark: colorScheme == .dark).secondaryColor
     }
@@ -52,7 +50,6 @@ struct TrackMoreButton: View {
     }
 }
 
-/// 跨页面共用的歌曲行组件，统一左侧槽位、喜爱星标、下载状态与 44×44pt 更多按钮。
 struct SharedSongRow<Leading: View>: View {
     let song: LibrarySongItem
     var subtitle: String? = nil
@@ -139,7 +136,6 @@ enum SongSwipeMode {
 }
 
 extension View {
-    /// 统一为列表歌曲行附加长按菜单、右滑（插播 + 添加到队列）、左滑手势及原生侧滑胶囊背景。
     func songListRow(
         _ song: LibrarySongItem,
         mode: SongSwipeMode = .standard(),

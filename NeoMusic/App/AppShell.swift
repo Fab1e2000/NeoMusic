@@ -9,7 +9,6 @@ extension EnvironmentValues {
 
 enum AppTab: Hashable, Identifiable, RawRepresentable {
     case home, library, favorites, playlists, albums, artists, songs, search
-    /// 用户自己的歌单。喜爱歌曲仍用固定的 `favorites`。
     case playlist(String)
 
     var id: String { rawValue }
@@ -84,11 +83,9 @@ enum AppTab: Hashable, Identifiable, RawRepresentable {
         return true
     }
     static let defaultOrder: [AppTab] = [.home, .library, .search]
-    /// 固定的可排序标签。具体歌单随资料库增减，不在这张表里。搜索固定在末尾。
     static let reorderable: [AppTab] = [.home, .library, .favorites, .playlists, .albums, .artists, .songs]
 }
 
-/// 统一管理各标签页（固定标签与自定义歌单标签）的 `LibraryDetailNavigation` 实例，避免重复创建与逐个枚举。
 @MainActor
 final class AppTabNavigationRegistry {
     private(set) var tabNavigations: [AppTab: LibraryDetailNavigation] = {
@@ -152,13 +149,10 @@ struct AppTabPlaylist: Equatable, Identifiable {
 enum AppTabOrder {
     static let storageKey = "appTabOrder.v1"
     static let hiddenKey = "appTabHidden.v1"
-    /// 连同固定在末尾的搜索，标签栏最多 5 个。再多系统会变成「更多」。
     static let maxVisible = 4
     static let defaultHidden: Set<AppTab> = [.favorites, .playlists, .albums, .artists, .songs]
     static var defaultRaw: String { raw([.home, .library]) }
 
-    /// 只保留可排序标签。未知项和搜索丢掉，缺的固定标签按默认顺序补上。
-    /// 还在资料库里、但顺序里没写过的歌单补在末尾，默认不显示。
     static func resolve(_ raw: String, playlists: [String] = []) -> [AppTab] {
         let allowed = Set(playlists.filter { !$0.isEmpty && !$0.contains(",") })
         var seen = Set<AppTab>()
@@ -175,13 +169,11 @@ enum AppTabOrder {
         return order
     }
 
-    /// 没保存过时，资料库分类先不挂到标签栏。保存过（包括全部显示时的空串）就以保存的为准。
     static func hidden(from stored: String?) -> Set<AppTab> {
         guard let stored else { return defaultHidden }
         return Set(stored.split(separator: ",").compactMap { AppTab(rawValue: String($0)) }.filter(\.isReorderable))
     }
 
-    /// 用户藏起来的，还没加入过顺序的歌单，再加上超出上限、排在后面的。
     static func effectiveHidden(order: String, hidden: String?, playlists: [String] = []) -> Set<AppTab> {
         var hidden = self.hidden(from: hidden)
         let mentioned = Set(order.split(separator: ",").compactMap { AppTab(rawValue: String($0)) })
@@ -199,7 +191,6 @@ enum AppTabOrder {
         return visible.isEmpty ? [.library] : visible
     }
 
-    /// 标签栏实际顺序：显示中的在前，搜索固定在末尾。
     static func displayed(order raw: String, hidden: String? = nil, playlists: [String] = []) -> [AppTab] {
         visible(order: raw, hidden: hidden, playlists: playlists) + [.search]
     }
@@ -209,15 +200,10 @@ enum AppTabOrder {
     }
 }
 
-/// Player links start navigation immediately. This only remembers the request
-/// long enough to collapse repeated taps while the player is closing; it never
-/// queues or delays navigation behind the close transition.
 struct PlayerNavigationHandoff {
     private var route: LibraryRoute?
     private var isClosing = false
 
-    /// Returns false only for the same destination requested again in the same
-    /// closing session, so a double tap cannot push the page twice.
     mutating func begin(_ route: LibraryRoute) -> Bool {
         if isClosing, self.route == route { return false }
         self.route = route
@@ -225,26 +211,22 @@ struct PlayerNavigationHandoff {
         return true
     }
 
-    /// Called when the player reports that its close transition finished.
     mutating func didFinishClosing() {
         isClosing = false
         route = nil
     }
 
-    /// Called when the player is opened again, including after an interrupted close.
     mutating func didBeginPresentation() {
         didFinishClosing()
     }
 }
 
-/// 根标签栏与迷你播放条。显示哪些标签、以及它们的顺序，由账户页里的标签页设置决定。
 struct AppShell<Library: View>: View {
     @ViewBuilder var library: Library
     let detailDestination: (LibraryRoute) -> AnyView
     let nowPlaying: NowPlayingModel?
     let playlistLibrary: PlaylistLibrary
     let toasts: LibraryToastCenter
-    /// 全屏播放页；迷你播放条与业务只通过 `isPlayerPresented` 打开或关闭它，转场实现可单独替换。
     let referencePlayer: PlayerState
     let referenceLibrary: ReferenceLibrary
     let makePlayerActions: (@escaping (LibraryRoute) -> Void, (() -> Void)?) -> PlayerActions
@@ -383,7 +365,6 @@ struct AppShell<Library: View>: View {
         }
         tabNavigations.navigation(for: selection).open(route)
     }
-    /// 播放器内跳转在点击当下开始，关闭播放器只负责自身转场和清理。
     private func startPlayerNavigation(_ route: LibraryRoute) {
         guard playerNavigation.begin(route) else { return }
         if currentNavigation.topRoute != route { openInCurrentTab(route) }
@@ -396,7 +377,6 @@ struct AppShell<Library: View>: View {
 
 }
 
-/// 整组播放会清除手动加入的队列时的确认。居中提示，只有一句说明。
 private struct ClearQueueConfirmation: ViewModifier {
     let player: NowPlayingModel?
 

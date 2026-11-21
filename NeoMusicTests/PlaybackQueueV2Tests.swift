@@ -41,8 +41,6 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
         return try Dictionary(uniqueKeysWithValues: collection.indexPathsForVisibleItems.map { path in
             let item = try XCTUnwrap(source.itemIdentifier(for: path))
             let cell = try XCTUnwrap(collection.cellForItem(at: path) as? UICollectionViewListCell)
-            // The real cell provider clears this handler when it configures a cell.
-            // UIKit's current snapshot does not retain already-applied reconfigure marks.
             cell.configurationUpdateHandler = { _, _ in }
             return (item, cell)
         })
@@ -55,12 +53,9 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
 
     private func assertReorderAccessory(in cell: UICollectionViewListCell) throws {
         XCTAssertEqual(cell.accessories.map(\.accessoryType), [.reorder])
-        // The Swift accessory is a value; bridged object identity is not its contract.
-        // Read the style through the public Objective-C accessory properties.
         let accessories = try XCTUnwrap(cell.value(forKey: "accessories") as? [NSObject])
         XCTAssertEqual(accessories.count, 1)
         let accessory = try XCTUnwrap(accessories.first)
-        // UICellAccessoryDisplayedAlways is 0 in UIKit's public UICellAccessory.h.
         XCTAssertEqual(accessory.value(forKey: "displayedState") as? NSNumber, NSNumber(value: 0))
         XCTAssertEqual(accessory.value(forKey: "tintColor") as? UIColor, UIColor.white.withAlphaComponent(0.45))
     }
@@ -123,8 +118,6 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
         try assertReorderAccessory(in: trackCell)
         XCTAssertFalse(coordinator.update(with: try XCTUnwrap(coordinator.latest)))
 
-        // UIKit can already show a reordered snapshot while the owner still has
-        // the old order. An unchanged owner input must restore the actual snapshot.
         var nativeOrder = source.snapshot()
         nativeOrder.moveItem(.track(b.id), beforeItem: .track(a.id))
         await withCheckedContinuation { continuation in
@@ -134,14 +127,11 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
                                          nativeOrder: nativeOrder.itemIdentifiers))
         XCTAssertEqual(source.snapshot().itemIdentifiers(inSection: .queue), [.track(a.id), .track(b.id)])
 
-        // An accepted move changes the owner input; it must reach UIKit as well.
         inputs.entries.reverse()
         try await settle(host)
         XCTAssertEqual(source.snapshot().itemIdentifiers(inSection: .queue), [.track(b.id), .track(a.id)])
         XCTAssertFalse(coordinator.update(with: try XCTUnwrap(coordinator.latest)))
 
-        // Exercise the real cell provider with the same native cell changing roles,
-        // as it does when UIKit reuses a cell for a different item.
         coordinator.configure(trackCell, item: .title)
         XCTAssertTrue(trackCell.accessories.isEmpty)
         coordinator.configure(trackCell, item: .track(b.id))
@@ -310,7 +300,6 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
                 : [0]
             for offset in offsets {
                 list.contentOffset.y = offset
-                // UIKit aligns the requested position to device pixels.
                 let position = list.contentOffset
                 coordinator.scrollViewDidScroll(list)
                 XCTAssertEqual(list.verticalScrollIndicatorInsets.top,
@@ -355,7 +344,6 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
         list.updateEdgeMask(for: cell)
         XCTAssertTrue(vibrant.mask === vibrantMask, "Unchanged layer targets reuse their gradient")
 
-        // Hosting content can rebuild its compositing hierarchy after a metadata or state update.
         vibrant.compositingFilter = nil
         customChild.compositingFilter = nil
         list.updateEdgeMask(for: cell)
@@ -395,7 +383,6 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
         XCTAssertTrue(placeholderArtwork.mask is CAGradientLayer)
         XCTAssertTrue(vibrantArtist.mask is CAGradientLayer)
 
-        // Simulate async artwork replacement inside SwiftUI without triggering cell.layoutSublayers(of: cell.layer).
         placeholderArtwork.removeFromSuperlayer()
         let loadedArtwork = CALayer()
         loadedArtwork.frame = CGRect(x: 0, y: 6, width: 48, height: 48)

@@ -3,7 +3,6 @@
 #import <Accelerate/Accelerate.h>
 #import <stdatomic.h>
 #define N 2048
-// Tap owns this storage. No allocation, locks, UI work, or dispatch in process().
 typedef struct {
     FFTSetup fft;
     float window[N], input[N], work[N], real[N/2], imag[N/2], power[N/2];
@@ -15,8 +14,6 @@ typedef struct {
     _Atomic(float) levels[5];
     _Atomic(unsigned long) samples;
 } Analysis;
-// Band boundaries from echoghi/v5 (MIT); amplitude follows SpectrumCompareLab C.
-// A common reference preserves relative band energy; no per-band normalization.
 static void initializeWindow(Analysis *s) {
     vDSP_hann_window(s->window,N,vDSP_HANN_NORM);
     s->ceiling=-20;
@@ -36,8 +33,6 @@ static void analyze(Analysis *s) {
         int hi=MIN(N/2-1,(int)ceil(edges[b+1]*N/s->rate));
         float sum=0;
         for(int k=lo;k<=hi;k++) sum+=s->power[k];
-        // Keep the demo's Hann/vDSP magnitude scale so its reference and gate
-        // have the same meaning. This is a display scale, not calibrated dBFS.
         db[b]=20*log10f(fmaxf(sqrtf(sum)/N,1e-7f));
         loudest=fmaxf(loudest,db[b]);
     }
@@ -71,7 +66,6 @@ static void processTap(MTAudioProcessingTapRef tap, CMItemCount frames, MTAudioP
     if(MTAudioProcessingTapGetSourceAudio(tap,frames,buffers,outFlags,NULL,outFrames)!=noErr) { *outFrames=0; return; }
     Analysis *s=MTAudioProcessingTapGetStorage(tap);
     if(!s->supported || !buffers->mNumberBuffers) return;
-    // Downmix for analysis only; playback buffers pass through untouched.
     for(int i=0;i<*outFrames;i++) {
         float mono=0;
         int count=0;
@@ -86,8 +80,6 @@ static void processTap(MTAudioProcessingTapRef tap, CMItemCount frames, MTAudioP
         s->input[s->filled++]=count ? mono/count : 0;
         if(s->filled==N) {
             analyze(s);
-            // Run the demo mapping at about 60 Hz with
-            // overlapping windows, independently of audio callback block size.
             memmove(s->input,s->input+s->hop,(N-s->hop)*sizeof(float));
             s->filled=N-s->hop;
         }

@@ -14,7 +14,6 @@ struct NowPlayingPageSelector: View {
     var body: some View {
         GeometryReader { proxy in
             ZStack {
-                // A selected lyrics page remains dismissible while the next track loads.
                 pageButton(page: .lyrics, systemImage: "quote.bubble", accessibilityLabel: "歌词")
                     .disabled(!hasLyrics && page != .lyrics)
                     .opacity(hasLyrics || page == .lyrics ? 1 : 0.32)

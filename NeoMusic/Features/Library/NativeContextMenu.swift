@@ -1,4 +1,3 @@
-// 复刻自 NeoDizzy（同一作者的项目）Core/UI/NativeCollectionContextMenu.swift。
 import SwiftUI
 import UIKit
 
@@ -12,8 +11,6 @@ struct NativeMenuDrop {
 }
 
 extension View {
-    /// 给卡片加上系统长按菜单与自定义预览；点按卡片或点按展开后的预览都会打开它。
-    /// 菜单状态与之后弹出的表单仍由 SwiftUI 调用方持有。
     func nativeContextMenu(
         identity: String,
         menu: @escaping () -> UIMenu,
@@ -35,8 +32,6 @@ extension View {
     }
 }
 
-/// 用本地的承载容器给 UIKit 一个真实的交互表面，既不用遮挡 SwiftUI 按钮的覆盖层，
-/// 也不把交互挂到无关的祖先视图上。
 private struct NativeContextMenu<Content: View>: UIViewRepresentable {
     typealias Surface = NativeContextMenuView
     let content: Content
@@ -45,7 +40,6 @@ private struct NativeContextMenu<Content: View>: UIViewRepresentable {
     let preview: () -> AnyView
     let previewSize: @MainActor (UITraitCollection) -> CGSize
     let commit: (@escaping () -> UIView?) -> Void
-    /// 点按内容本身时执行；为空时与点按预览一样执行 `commit`。
     let tap: (() -> Void)?
     let drag: NativeMenuDrag?
     let drop: NativeMenuDrop?

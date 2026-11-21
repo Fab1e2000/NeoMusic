@@ -95,9 +95,7 @@ final class FrontendMaintainabilityTests: XCTestCase {
         darkPalette.swiped.getRed(&darkR, green: nil, blue: nil, alpha: nil)
         lightPalette.swiped.getRed(&lightR, green: nil, blue: nil, alpha: nil)
 
-        // Dark page blends 6% toward white: 0.2 * 0.94 + 0.06 = 0.248
         XCTAssertEqual(darkR, 0.248, accuracy: 0.001)
-        // Light page blends 6% toward black: 0.9 * 0.94 = 0.846
         XCTAssertEqual(lightR, 0.846, accuracy: 0.001)
     }
 

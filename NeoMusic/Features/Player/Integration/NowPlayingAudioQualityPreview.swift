@@ -1,7 +1,6 @@
 import SwiftUI
 import FullScreenPlayer
 #if DEBUG
-/// All content is an isolated layout example, with no playback or account side effects.
 struct PlayerAudioQualityPreview: View {
     let openAudioQualitySettings: () -> Void
     @Environment(\.dismiss) private var dismiss

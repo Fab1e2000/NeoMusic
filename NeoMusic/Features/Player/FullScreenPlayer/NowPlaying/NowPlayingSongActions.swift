@@ -1,9 +1,7 @@
 // Direct source port from MeloX (GPL-3.0), b8bc60f.
-// NeoDizzy adapters are limited to track data, available playback features and localization.
 import SwiftUI
 import UIKit
 
-/// 曲目的「…」菜单：前往专辑、查看歌手或社团。
 struct NowPlayingSongActions: View {
     let track: PlayerTrack
     var onImportLyrics: (() -> Void)? = nil
@@ -21,7 +19,6 @@ struct NowPlayingSongActions: View {
     }
 }
 
-/// 由 UIKit 负责按下、滑动、松开整个过程：播放器每秒刷新 SwiftUI，用 SwiftUI 的 Menu 会在手指还按着时被打断。
 struct NowPlayingMenuButton: UIViewRepresentable {
     var track: PlayerTrack? = nil
     var iconColor: UIColor = NowPlayingVisualHierarchy.primaryUIColor
@@ -47,7 +44,6 @@ struct NowPlayingMenuButton: UIViewRepresentable {
         button.layer.cornerRadius = 22
         button.showsMenuAsPrimaryAction = true
         button.accessibilityLabel = String(localized: "更多")
-        // 每次打开时再取当前的菜单项，而不是在 updateUIView 里换掉菜单打断正在进行的操作。
         context.coordinator.artists.bind(track: track, actions: actions)
         button.menu = UIMenu(children: [UIDeferredMenuElement.uncached { [weak coordinator = context.coordinator] completion in
             guard let coordinator else { completion([]); return }

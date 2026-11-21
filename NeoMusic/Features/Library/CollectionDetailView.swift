@@ -1,29 +1,22 @@
 import SwiftUI
 import UIKit
 
-/// 专辑或播放列表详情页的展示数据。
 struct CollectionDetail {
     enum Kind { case album, playlist }
 
     let kind: Kind
     let title: String
-    /// 专辑艺人；播放列表没有时省略。
     var subtitle: String?
-    /// 专辑的发行年份或播放列表的更新时间。
     var caption: String?
     @ArtworkResource var artwork: Artwork
-    /// 页面底色，取自封面主色。
     let tint: Color
-    /// Prepared from the displayed artwork before the library publishes this album.
     var albumBackdrop: AlbumArtworkBackdrop? = nil
     var isFavorite = false
     var isPinned = false
     let songs: [LibrarySongItem]
-    /// 菜单操作作用的对象。
     var route: LibraryRoute?
 }
 
-/// 专辑与播放列表详情：封面取色铺底，封面、标题、操作按钮与曲目列表。布局对照 Apple Music。
 struct CollectionDetailView: View {
     let detail: CollectionDetail
     var hasMoreSongs: Bool = false
@@ -136,8 +129,6 @@ struct CollectionDetailView: View {
             footer: AnyView(Text(summary).font(.subheadline).foregroundStyle(.primary)
                 .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 20).padding(.top, 20).padding(.bottom, 32)),
             pageColor: UIColor(pageBackground), scheme: albumColorScheme ?? colorScheme)
-            // Let the actual scrolling content continue beneath the system bars.
-            // UIKit's adjustedContentInset keeps the resting header and final row clear.
             .ignoresSafeArea(.container, edges: .vertical)
     }
 
@@ -225,7 +216,6 @@ struct CollectionDetailView: View {
                     .padding(.top, 4)
             }
             if let caption = detail.caption {
-                // 实测 Apple Music：年份约 11pt 粗体。
                 Text(caption)
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(resolvedSecondaryColor)
@@ -236,7 +226,6 @@ struct CollectionDetailView: View {
         .padding(.horizontal, 20)
     }
 
-    /// “喜爱歌曲”的星标直接画在底色上，不显示封面边框与阴影。
     @ViewBuilder private var headerArtwork: some View {
         if case .favorites = detail.artwork {
             FavoritesHeaderStar()
@@ -257,7 +246,6 @@ struct CollectionDetailView: View {
     }
 }
 
-/// 喜爱歌曲用星标表示这一页，导航栏和内容里都不再放标题。
 private struct FavoritesTitleHidden: ViewModifier {
     let isHidden: Bool
     @ViewBuilder func body(content: Content) -> some View {
@@ -265,15 +253,12 @@ private struct FavoritesTitleHidden: ViewModifier {
     }
 }
 
-/// 滚动距离只留在星标上。播放列表其余行不因每个像素重算。
 private struct FavoritesHeaderStar: View {
     @Environment(\.accessibilityReduceMotion) private var reducesMotion
     @Environment(\.playlistScrollDistance) private var playlistScrollDistance
     @State private var scrollDistance: CGFloat = 0
 
     var body: some View {
-        // 按 Apple Music 录屏实测：星标宽 237pt，顶端比封面区域高 33pt；
-        // 上滑时只随内容移动约 76%，滚过约 110pt 后逐渐虚化、变淡。
         let currentDistance = playlistScrollDistance?.distance ?? scrollDistance
         let distance = min(max(currentDistance, 0), 490)
         let opacity = 1 - min(max(distance - 130, 0) / 360, 1)
@@ -300,8 +285,6 @@ private struct FavoritesHeaderStar: View {
     }
 }
 
-/// 详情页标题下的随机播放、播放与右侧附加操作。
-/// 专辑右侧为下载按钮：↓、下载进度（中间为停止）、完成后为 ✓，与 Apple Music 一致。
 private struct CollectionActions: View {
     let detail: CollectionDetail
     let albumBackground: Color?
@@ -327,7 +310,6 @@ private struct CollectionActions: View {
                 actionFeedback &+= 1
                 actions.play(route, false)
             } label: {
-                // 实测 Apple Music：三角约 14×15pt，与文字间距约 7pt。
                 HStack(spacing: 5.5) {
                     Image(systemName: "play.fill").font(.system(size: 18, weight: .semibold))
                     Text("播放")
@@ -378,8 +360,6 @@ private struct CollectionActions: View {
     }
 }
 
-/// 下载完成的勾号。实测 Apple Music（相对按钮中心，pt）：起点 (-6.8, 1.3)、拐点 (-1.7, 7.7)、终点 (8, -6.3)，线宽约 2.2pt。
-/// 逐帧计量：起笔点停留约 2 帧，随后快速画出并长时间减速，约 0.5 秒画完，四分之一时间时已画一半。
 struct DrawnCheckmark: View {
     let animates: Bool
     @State private var progress: CGFloat = 1
@@ -409,7 +389,6 @@ private struct CheckmarkShape: Shape {
     }
 }
 
-/// 下载按钮中的整体进度：灰色轨道、白色进度弧，中间是停止方块。实测 Apple Music：圆环直径约 28pt。
 struct DownloadProgressRing: View {
     let progress: Double
 
@@ -430,8 +409,6 @@ struct DownloadProgressRing: View {
 }
 
 
-/// Configure the actual list cell so UIKit continues to own swipe state and geometry.
-/// A SwiftUI listRowBackground replaces that background, so it is deliberately absent.
 struct SwipedSongBackground: UIViewRepresentable {
     let color: UIColor
     let colorScheme: ColorScheme
@@ -510,8 +487,6 @@ struct SwipedSongBackground: UIViewRepresentable {
     }
 }
 
-/// UIKit owns touch highlighting, selection, context menus, swipe actions
-/// and the adjoining separators, including the first and last song boundaries.
 private struct NativeAlbumSongList: UIViewControllerRepresentable {
     let songs: [LibrarySongItem]
     let title: String
@@ -541,7 +516,6 @@ private final class AlbumSongsController: UICollectionViewController {
             isDark: model?.scheme == .dark
         )
     }
-    // The album header shares its hosting environment with its controls.
     private let headerHost = UIHostingController(rootView: AnyView(EmptyView()))
 
     init() {
@@ -550,8 +524,6 @@ private final class AlbumSongsController: UICollectionViewController {
     required init?(coder: NSCoder) { fatalError() }
     override func viewDidLoad() {
         super.viewDidLoad()
-        // Deliver short taps promptly; only confirmed selection receives a visible fill.
-        // UIKit still cancels content touches when a scroll or swipe takes over.
         collectionView.delaysContentTouches = false
         collectionView.register(AlbumSelectionCell.self, forCellWithReuseIdentifier: "song")
         collectionView.register(UICollectionViewListCell.self, forCellWithReuseIdentifier: "header")
@@ -708,7 +680,6 @@ private final class AlbumSongsController: UICollectionViewController {
         source.apply(snapshot, animatingDifferences: shouldAnimate)
     }
 
-    // The native accessory uses the same ±0.5 blend result against the opaque page.
     private var albumSecondaryColor: UIColor {
         CollectionTrackUI.solidSecondaryColor(
             on: model?.pageColor ?? .systemBackground,
@@ -747,7 +718,6 @@ private final class AlbumSongsController: UICollectionViewController {
         guard let song = song(at: indexPath), let model,
               let index = model.songs.firstIndex(where: { $0.id == song.id }) else { return }
         environment.songMenuActions.play(model.songs, index, model.title)
-        // Show native selection feedback only after UIKit has recognized a tap.
         collectionView.deselectItem(at: indexPath, animated: true)
     }
 
@@ -829,8 +799,6 @@ final class AlbumSelectionCell: UICollectionViewListCell {
 
     override func updateConfiguration(using state: UICellConfigurationState) {
         super.updateConfiguration(using: state)
-        // Match the approved D prototype: UIKit owns highlighting and swipe geometry.
-        // A translucent fill preserves the overlap instead of preblending the page color.
         backgroundConfiguration = CollectionTrackUI.translucentCellBackground(for: self, state: state, traitCollection: traitCollection, palette: palette)
     }
 }

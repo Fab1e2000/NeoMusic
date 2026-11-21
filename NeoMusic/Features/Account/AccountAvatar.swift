@@ -79,7 +79,6 @@ struct AccountAvatar: View {
     }
 
     static func startupImage(_ data: Data, pixels: Int) -> UIImage? {
-        // Only the bounded disk snapshot is decoded before the first frame.
         guard let decoded = decodeThumbnail(data, pixels: min(pixels, NeteaseAvatarSnapshot.maximumPixelSize)) else { return nil }
         let image = UIImage(cgImage: decoded.cgImage)
         cache.setObject(image, forKey: Key(data: data, pixels: pixels), cost: decoded.cost)
@@ -137,7 +136,6 @@ struct AccountButton: View {
 }
 
 extension View {
-    /// 作为标签栏根页面时，右上角使用和其他主标签相同的账户按钮。
     func libraryRootAccountButton() -> some View { modifier(LibraryRootAccountButton()) }
 }
 

@@ -2,9 +2,6 @@ import Foundation
 import SwiftUI
 import UIKit
 
-/// Temporary, passive diagnostics for the user-requested zoom timing comparison.
-/// Detailed observation only; the unsuccessful cancelled-push layout experiment is removed.
-/// No delegates, gestures, navigation items, insets or animation parameters are changed.
 @MainActor enum NavigationDiagnostics {
     static let isEnabled = ProcessInfo.processInfo.arguments.contains("-navigationDiagnostics")
     static let recorder = NavigationDiagnosticRecorder()
@@ -96,7 +93,6 @@ final class NavigationDiagnosticFile: Sendable {
         let id = ObjectIdentifier(coordinator as AnyObject)
         guard observedTransitions.insert(id).inserted else { return }
         let transition = String(describing: id)
-        // Retain coordinator until completion so a subsequent transition cannot reuse its identity.
         event("transitionObserved", page: "navigation", extra: ["transition": transition,
             "from": identity(coordinator.viewController(forKey: .from)),
             "to": identity(coordinator.viewController(forKey: .to)),
@@ -161,8 +157,6 @@ final class NavigationDiagnosticFile: Sendable {
             fields["interactivePopState"] = navigation.interactivePopGestureRecognizer.map { String($0.state.rawValue) } ?? "none"
             if event != "sample" || captureStart - lastHierarchyTime >= 0.2 {
                 lastHierarchyTime = captureStart
-                // Inspect the current window for known title labels, including reparented labels.
-                // Read only; do not force layout or retain any UIKit view.
                 var nodes: [[String: String]] = []
                 var visited = 0
                 func walk(_ view: UIView) {
@@ -217,8 +211,6 @@ final class NavigationDiagnosticFile: Sendable {
                     fields["scrollInsets"] = NSCoder.string(for: scroll.adjustedContentInset)
                 }
             }
-            // Public view properties only. Record labels as well as the bar, since a title
-            // may be transparent even while the navigation bar itself remains visible.
             fields["barLabels"] = labelStates(in: bar).joined(separator: " | ")
             if let transition = navigation.transitionCoordinator {
                 fields["transitionPercent"] = String(describing: transition.percentComplete)

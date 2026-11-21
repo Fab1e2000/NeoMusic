@@ -1,7 +1,5 @@
 @preconcurrency import AVFoundation
 
-/// Single shared `AVAudioEngine` clock and mixer graph for all local and streaming decks.
-/// Isolated to `@PlaybackAudioActor` so CoreAudio graph operations never block the main thread.
 @PlaybackAudioActor final class SharedAudioGraph {
     lazy var engine = AVAudioEngine()
     private nonisolated let analyzer = ThreadSafeSpectrumAnalyzer()
@@ -77,7 +75,6 @@
     }
 }
 
-/// Bridges the thread-safe Objective-C `AudioSpectrumAnalyzer` across Swift 6 concurrency domains.
 private final class ThreadSafeSpectrumAnalyzer: @unchecked Sendable {
     private let raw = AudioSpectrumAnalyzer()
 

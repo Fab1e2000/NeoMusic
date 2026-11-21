@@ -247,7 +247,6 @@ final class LibraryInteractionTests: XCTestCase {
         XCTAssertEqual(album.frame.minY, initial.minY, accuracy: 2)
     }
 
-    /// Uses the real local-music simulator fixture; never confirms deletion.
     @MainActor func testNativeAlbumRowPlaybackMenusAndSwipes() {
         continueAfterFailure = false
         let app = XCUIApplication()
@@ -261,14 +260,12 @@ final class LibraryInteractionTests: XCTestCase {
         XCTAssertTrue(cell.waitForExistence(timeout: 5))
         let title = cell.staticTexts["湖畔、二人歌"].firstMatch
         title.tap()
-        // A previous run may have left the track queued by the swipe-action check below.
         let clearQueue = app.buttons["清除队列"]
         if clearQueue.waitForExistence(timeout: 1) { clearQueue.tap() }
         XCTAssertTrue(app.buttons["mini.playPause"].waitForExistence(timeout: 3))
         XCTAssertEqual(app.buttons["mini.playPause"].label, "暂停")
         cell.buttons["更多"].tap()
         XCTAssertTrue(app.buttons["添加到播放列表"].waitForExistence(timeout: 3))
-        // Dismiss by tapping the album cover, outside the menu.
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
         title.press(forDuration: 0.8)
         XCTAssertTrue(app.buttons["添加到播放列表"].waitForExistence(timeout: 3))
@@ -333,7 +330,6 @@ final class LibraryInteractionTests: XCTestCase {
         XCTAssertTrue(app.buttons["浏览"].firstMatch.waitForExistence(timeout: 8))
         let pickerTree = XCTAttachment(string: app.debugDescription)
         pickerTree.name = "File picker accessibility"; pickerTree.lifetime = .keepAlways; add(pickerTree)
-        // The remote document picker reports this visible control as not hittable.
         let cancel = app.navigationBars["FullDocumentManagerViewControllerNavigationBar"].buttons["取消"]
         XCTAssertTrue(cancel.waitForExistence(timeout: 5))
         cancel.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
@@ -420,7 +416,6 @@ final class LibraryInteractionTests: XCTestCase {
         func drag(_ from: XCUIElement, to: XCUIElement) {
             let start = from.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).withOffset(CGVector(dx: 0, dy: -70))
             let end = to.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).withOffset(CGVector(dx: 0, dy: -70))
-            // Hold beyond menu presentation before moving the same finger.
             start.press(forDuration: 1.2, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.5)
         }
         drag(album, to: favorite)

@@ -32,9 +32,7 @@ final class LocalMusicScanTests: XCTestCase, @unchecked Sendable {
     func testFLACVorbisTrackNumberUsesTagInsteadOfFilename() async throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
-        // Generated 0.1-second silent FLAC, tagged TRACKNUMBER=7/12; contains no user media.
         var bytes = Data(base64Encoded: "ZkxhQwAAACIDIAMgAAANAAANAfQA8AAAAyBq0A9H2K1PEgBbIrLKpI94hAAAQAwAAABMYXZmNjMuMS4xMDICAAAAEAAAAFRSQUNLTlVNQkVSPTcvMTIUAAAAZW5jb2Rlcj1MYXZmNjMuMS4xMDL/+HQIAAMf9wAAAEr4")!
-        // Retain normal FLAC padding: AVFoundation rejects an otherwise valid very short stream.
         bytes[42] &= 0x7f
         bytes.insert(contentsOf: [0x81, 0, 0x20, 0] + Array(repeating: UInt8(0), count: 8192), at: 110)
         try bytes.write(to: root.appendingPathComponent("99 unrelated filename.flac"))

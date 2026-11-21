@@ -1,6 +1,5 @@
 import SwiftUI
 
-/// Explicit actions keep browsed collections separate from the user's library.
 struct ExternalPlaylistActions {
     var toggleFavorite: (() -> Void)? = nil
     var togglePin: (() -> Void)? = nil

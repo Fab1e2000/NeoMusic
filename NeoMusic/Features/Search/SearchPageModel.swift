@@ -54,7 +54,6 @@ struct MusicSearchCategorySection: Identifiable, Equatable {
     }
 }
 
-/// The supplied category palette paired with its higher-contrast opaque foreground.
 struct SearchCategoryColor {
     let red: Double
     let green: Double
@@ -85,7 +84,6 @@ struct SearchCategoryColor {
     }
 }
 
-/// Presentation state only. Online requests and account ownership are supplied by assembly.
 @MainActor @Observable
 final class SearchPageModel {
     var query = ""

@@ -1,7 +1,6 @@
 import SwiftUI
 import UIKit
 
-/// An opaque base plus a single fading overlay. No layer fades out to the black underlay.
 public struct NowPlayingBackdropImage: View {
     let image: UIImage
     let animated: Bool
@@ -48,8 +47,6 @@ private struct BackdropImageSurface: UIViewRepresentable {
                 if !animated { settle(image) }
                 return
             }
-            // Fast successive skips start from the currently visible composite,
-            // rather than jumping to either endpoint of the interrupted fade.
             let visible = currentComposite()
             stop()
             target = image
@@ -79,7 +76,6 @@ private struct BackdropImageSurface: UIViewRepresentable {
             let format = UIGraphicsImageRendererFormat()
             format.scale = 1
             format.opaque = true
-            // Backdrops are tiny palette rasters, not screen-sized snapshots.
             return UIGraphicsImageRenderer(size: bottom.size, format: format).image { _ in
                 let rect = CGRect(origin: .zero, size: bottom.size)
                 bottom.draw(in: rect)

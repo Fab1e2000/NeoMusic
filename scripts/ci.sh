@@ -48,7 +48,6 @@ xcodebuild -version
 simulator_id=$(python3 - <<'PY'
 import json, subprocess
 devices = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "devices", "available", "--json"]))["devices"]
-# 使用标准 iPhone；折叠机型的安全区与现有导航几何测试不同。
 candidates = [d for runtime, group in devices.items() if runtime.endswith(".iOS-27-0")
               for d in group if d.get("isAvailable") and d["name"].startswith("iPhone") and "Duo" not in d["name"]]
 if not candidates:

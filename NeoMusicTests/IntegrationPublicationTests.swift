@@ -416,7 +416,6 @@ import XCTest
         XCTAssertEqual(imageChanges.withLock { $0 }, 100)
         XCTAssertEqual(listChanges.withLock { $0 }, 0)
         XCTAssertEqual(playlists.songs(in: item.id).map(\.id), tracks.map(\.id))
-        // A cache eviction still updates the image, while structural removal updates the list.
         let invalidations = Mutex(0)
         withObservationTracking { _ = tracks[0].artwork } onChange: { invalidations.withLock { $0 += 1 } }
         let missing = song("0", artwork: .deferred(id: "new-session:cover", placeholder: .missing))
@@ -521,7 +520,7 @@ import XCTest
 
         var updatedLocal = local
         updatedLocal.duration = 240
-        let searchResult = song(2) // not favorite
+        let searchResult = song(2)
         library.applyBatch(localMetadata: [local.id: updatedLocal],
                            externalSongs: [searchResult],
                            externalSource: "search",
@@ -616,7 +615,6 @@ import XCTest
         XCTAssertEqual(projection.committedOutput, [1, 2, 3], "A cancelled task must not publish its stale result")
         XCTAssertFalse(projection.isResolved(for: 2, fastPath: { _ in nil }))
 
-        // An empty snapshot for the previous input must not surface as the new input's empty state.
         await projection.computeIfNeeded(for: 2, fastPath: { _ in nil }, background: { [Int]() }, finish: { $0 })
         XCTAssertEqual(projection.currentValue(for: 3, fastPath: { _ in nil }, placeholder: { _ in [] }), [],
                        "The previous (empty) snapshot stays visible while the new input computes")

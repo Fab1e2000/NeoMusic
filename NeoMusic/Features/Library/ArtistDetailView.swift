@@ -187,7 +187,6 @@ struct ArtistDetailView: View {
     }
 }
 
-/// Continuous scrolling updates only this background, leaving the page's content stable.
 private struct ArtistPageShade: ViewModifier {
     let color: ArtistBackdropColor?
     @State private var shade: CGFloat = 96

@@ -1,7 +1,6 @@
 import Foundation
 import SQLite3
 
-/// Account-scoped page snapshots. Encoding and database work run on this actor.
 actor NeteasePageCache {
     private let directory: URL
     private let capacity: Int
@@ -192,7 +191,6 @@ actor NeteasePageCache {
         var errorDescription: String? { "页面缓存读写失败（\(code)）：\(message)" }
     }
 
-    /// The handle stays within the owning actor; destruction closes it without an actor hop.
     private final class Connection {
         let handle: OpaquePointer
         init(handle: OpaquePointer) { self.handle = handle }

@@ -1,7 +1,5 @@
 import Foundation
 
-/// Shared factory and projection cache for converting `NeteaseMusicSong` into `LibrarySongItem`
-/// across `OnlineMusicIntegration`, `HomeMusicIntegration`, `ArtistMusicIntegration`, and `SearchMusicIntegration`.
 enum OnlineSongProjector {
     static func makeSong(_ value: NeteaseMusicSong,
                          id: String,
@@ -42,7 +40,6 @@ enum OnlineSongProjector {
     }
 }
 
-/// Memoizes projected `LibrarySongItem` instances by song ID so unchanged metadata reuses existing `SongArtworkState` identities.
 @MainActor
 final class OnlineSongProjectionCache {
     struct Entry {

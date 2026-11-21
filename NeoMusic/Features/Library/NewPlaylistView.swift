@@ -1,7 +1,6 @@
 import PhotosUI
 import SwiftUI
 
-/// 本地播放列表的原生创建页面。
 struct NewPlaylistView: View {
     let library: PlaylistLibrary
     var folderID: String?

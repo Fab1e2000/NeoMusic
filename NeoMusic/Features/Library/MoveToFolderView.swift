@@ -1,7 +1,6 @@
 import SwiftUI
 
 extension View {
-    /// 播放列表等待移到文件夹时弹出选择页，挂在应用根部。
     func moveToFolderSheet(_ library: PlaylistLibrary) -> some View {
         modifier(MoveToFolderSheet(library: library))
     }
@@ -17,15 +16,12 @@ private struct MoveToFolderSheet: ViewModifier {
     }
 }
 
-/// 选择播放列表要移入的位置，对照 Apple Music：只有文件夹可以进入，播放列表显示为灰色；
-/// 进入目标位置后点右上角确认。顶部小字说明正在移动哪个播放列表。
 private struct MoveToFolderView: View {
     let library: PlaylistLibrary
     let playlist: LibraryPlaylistItem
     @State private var sort = PlaylistSort.type
 
     var body: some View {
-        // 说明文字单独一行，在导航栏上方，与 Apple Music 一致。
         VStack(spacing: -6) {
             Text("将“\(playlist.title)”移到")
                 .font(.footnote)
@@ -59,7 +55,6 @@ private struct MoveToFolderList: View {
         return trimmed.isEmpty ? all : all.filter { $0.title.localizedStandardContains(trimmed) }
     }
 
-    /// 已经在这个位置时不能确认。
     private var isCurrentLocation: Bool { library.folderID(of: playlist.id) == folderID }
 
     var body: some View {
@@ -129,7 +124,6 @@ private struct MoveToFolderList: View {
             NavigationLink(value: folder.id) { label(entry) }
                 .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
         case .playlist:
-            // 播放列表不是可选的目标，显示为灰色。
             label(entry)
                 .opacity(0.45)
                 .accessibilityAddTraits(.isStaticText)

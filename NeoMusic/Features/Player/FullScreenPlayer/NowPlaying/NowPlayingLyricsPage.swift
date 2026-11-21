@@ -1,5 +1,4 @@
 // Direct source port from MeloX (GPL-3.0), b8bc60f.
-// Data/settings adapters retain NeoDizzy playback and lyric sources.
 import SwiftUI
 
 enum NowPlayingLyricsPresentation: Equatable {
@@ -7,7 +6,6 @@ enum NowPlayingLyricsPresentation: Equatable {
     case landscape
 }
 
-/// A track mismatch is reported as loading before its replacement task starts.
 struct NowPlayingLyricsContent {
     let lyrics: PlayerLyrics?
     let error: String?
@@ -95,7 +93,6 @@ struct NowPlayingLyricsPage: View {
             value: presentation
         )
         .background {
-            // Progress ticks five times a second. Publish a new line only when the focused row changes.
             LyricLineObserver(
                 lyrics: lyrics,
                 isActive: isActive,
@@ -277,7 +274,6 @@ private struct NowPlayingLyricsLoadingRequest: Equatable {
     let isActive: Bool
 }
 
-/// Delay belongs to the visible load task; replacing or hiding that task cancels publication.
 @MainActor @Observable final class NowPlayingLyricsLoadingFeedback {
     private(set) var visibleTrackID: String?
 
@@ -294,8 +290,6 @@ private struct NowPlayingLyricsLoadingRequest: Equatable {
     }
 }
 
-/// Reads playback timeline anchor and live scrubber state without invalidating lyric rows
-/// until the active line or scrubbing state changes.
 private struct LyricLineObserver: View {
     let lyrics: PlayerLyrics?
     let isActive: Bool

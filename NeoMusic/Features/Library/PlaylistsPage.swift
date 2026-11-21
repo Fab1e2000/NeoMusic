@@ -1,6 +1,5 @@
 import SwiftUI
 
-/// 资料库里的一个播放列表。
 struct LibraryPlaylistItem: Identifiable, Equatable {
     let id: String
     var title: String
@@ -9,9 +8,7 @@ struct LibraryPlaylistItem: Identifiable, Equatable {
     var showsOnProfile = true
     var isFavorite = false
     var isPinned = false
-    /// “喜爱歌曲”等系统播放列表；按类型排序时排在最前。
     var isSystem = false
-    /// 排序用：数值越大越晚。
     var addedOrder = 0
     var lastPlayedOrder = 0
     var updatedOrder = 0
@@ -23,20 +20,16 @@ struct LibraryPlaylistItem: Identifiable, Equatable {
     var subtitle: String? = nil
     var isReadOnlyContent = false
     var isDownloadedSnapshot = false
-    /// 已在网易云收藏。播放列表页面据此提供取消收藏。
     var isSubscribed = false
     var isReadOnly: Bool { sourceOwnerID != nil || isReadOnlyContent || isDownloadedSnapshot }
-    /// 尚未收藏的网易云歌单页显示收藏，收藏后改为下载。
     var offersCollection: Bool { id.hasPrefix("home:playlist:") && sourceOwnerID != nil && !isSubscribed }
 
-    /// 菜单与预览卡片共用的展示数据。
     var shelfItem: LibraryShelfItem {
         LibraryShelfItem(id: id, title: title, subtitle: subtitle, artwork: artwork, route: .playlist(id), isFavorite: isFavorite,
                          isPinned: isPinned, addedOrder: addedOrder, sourceOwnerID: sourceOwnerID)
     }
 }
 
-/// 播放列表页的排序方式，对照 Apple Music。按类型时依次为系统播放列表、文件夹、其他播放列表。
 enum PlaylistSort: Hashable, Sendable {
     case name, addedDate, lastPlayed, updated, type
 
@@ -67,7 +60,6 @@ extension Array where Element == PlaylistEntry {
     }
 }
 
-/// 播放列表页的一项：文件夹或播放列表。
 enum PlaylistEntry: Identifiable, Equatable {
     case folder(PlaylistFolder, playlists: [LibraryPlaylistItem])
     case playlist(LibraryPlaylistItem)
@@ -114,7 +106,6 @@ enum PlaylistEntry: Identifiable, Equatable {
         }
     }
 
-    /// 同类之间的排序依据：文件夹只有名称与添加顺序。
     func order(for sort: PlaylistSort) -> Int {
         switch self {
         case .folder(let folder, _): folder.addedOrder
@@ -127,7 +118,6 @@ enum PlaylistEntry: Identifiable, Equatable {
         }
     }
 
-    /// 按类型排序的分组：系统播放列表、文件夹、其他播放列表。
     var typeRank: Int {
         switch self {
         case .playlist(let playlist) where playlist.isSystem: 0
@@ -137,7 +127,6 @@ enum PlaylistEntry: Identifiable, Equatable {
     }
 }
 
-/// 播放列表总览，或某个文件夹的内容。列表与网格两种显示方式，对照 Apple Music。
 struct PlaylistsListView: View {
     let library: PlaylistLibrary
     var folderID: String?
@@ -327,7 +316,6 @@ struct PlaylistsListView: View {
             .overlay {
                 if resolved {
                     if entries.isEmpty, folderID != nil, query.isEmpty, filter == .all {
-                        // 空文件夹：大图标与一行说明，对照 Apple Music。
                         VStack(spacing: 11) {
                             Image(systemName: "music.note.list")
                                 .font(.system(size: 50))
@@ -418,7 +406,6 @@ struct PlaylistsListView: View {
                 }
                 ToolbarSpacer(.fixed, placement: .topBarTrailing)
                 ToolbarItem(placement: .topBarTrailing) {
-                    // 文件夹页的“…”菜单同时放文件夹自身的操作，对照 Apple Music。
                     let folderActions = folderID.flatMap(library.folder).map(folderSections) ?? []
                     LibrarySortMenu(layout: $layout, sort: $sort, options: PlaylistSort.options,
                                     leading: Array(folderActions.dropLast()), trailing: Array(folderActions.suffix(1)))
@@ -442,11 +429,9 @@ struct PlaylistsListView: View {
                     .navigationTransition(.zoom(sourceID: "newPlaylist", in: playlistCreationTransition))
             }
             .playlistDeletionConfirmation(library)
-            // Apple Music 用居中的提示框确认，只有说明文字，没有标题。
             .alert("", isPresented: Binding(get: { deletingFolder != nil }, set: { if !$0 { deletingFolder = nil } }),
                    presenting: deletingFolder) { folder in
                 Button("删除文件夹和播放列表", role: .destructive) {
-                    // 在文件夹自己的页面里删除时返回上一层。
                     if folder.id == folderID {
                         if let close = closeLibraryDetail.handler { close() } else { dismiss() }
                     }
@@ -466,7 +451,6 @@ struct PlaylistsListView: View {
             }
     }
 
-    /// 文件夹的长按菜单，对照 Apple Music：重新命名、移到文件夹；从资料库删除（先确认）。
     func folderSections(_ folder: PlaylistFolder) -> LibraryMenuSections {
         let targets = library.folders.filter { !library.isDescendant($0.id, of: folder.id) }
         let move: LibraryMenuItem
@@ -532,7 +516,6 @@ struct PlaylistsListView: View {
     }
 }
 
-/// 搜索框默认隐藏，下拉列表时出现；空文件夹没有可滚动的内容，不提供搜索.
 private struct PlaylistSearch: ViewModifier {
     @Binding var query: String
     let isEnabled: Bool
@@ -546,7 +529,6 @@ extension PlaylistEntry {
     var folder: PlaylistFolder? { if case .folder(let folder, _) = self { folder } else { nil } }
 }
 
-/// 移入文件夹后浮在底部的提示，点按进入该文件夹，对照 Apple Music。
 private struct MovedToFolderToast: View {
     let folderName: String
     let open: () -> Void
@@ -577,7 +559,6 @@ private struct MovedToFolderToast: View {
 }
 
 extension View {
-    /// 删除播放列表前的确认。用居中提示框，避免确认框从挂载的页面边缘冒出来。
     func playlistDeletionConfirmation(_ library: PlaylistLibrary, enabled: Bool = true) -> some View {
         modifier(PlaylistDeletionConfirmation(library: library, enabled: enabled))
     }
@@ -606,7 +587,6 @@ private struct PlaylistDeletionConfirmation: ViewModifier {
     }
 }
 
-/// 播放列表、文件夹的列表行：大封面、标题与可选副标题（文件夹显示播放列表数量）。
 struct PlaylistListRow: View {
     let item: LibraryShelfItem
     var usesCellArtwork = false

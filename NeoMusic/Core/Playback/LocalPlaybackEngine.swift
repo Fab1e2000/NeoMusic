@@ -1,8 +1,6 @@
 import AVFoundation
 import Observation
 
-/// Immutable clock anchor produced on discrete transport transitions so UI layers
-/// can derive live playback progress locally without 60Hz main-actor polling.
 struct PlaybackTimelineAnchor: Equatable, Sendable {
     let baseElapsed: Double
     let hostTimestamp: TimeInterval
@@ -35,7 +33,6 @@ struct PlaybackTimelineAnchor: Equatable, Sendable {
     }
 }
 
-/// Snapshot of backend audio state sent from `@PlaybackAudioActor` to `@MainActor`.
 private struct PlaybackBackendSnapshot: Sendable {
     let generation: Int
     let sequence: UInt64
@@ -48,8 +45,6 @@ private struct PlaybackBackendSnapshot: Sendable {
     let hostTimestamp: TimeInterval
 }
 
-/// All CoreAudio, `AVAudioEngine`, `AVAudioFile`, and `AudioStreaming` work lives here
-/// on `@PlaybackAudioActor`, completely decoupled from `@MainActor` UI animations.
 @PlaybackAudioActor
 private final class PlaybackAudioBackend {
     nonisolated let graph = SharedAudioGraph()
@@ -369,7 +364,6 @@ private final class PlaybackAudioBackend {
                     break
                 }
             }
-            // stopMonitor already cleared a cancelled task's slot. It may since have been reused.
             if !Task.isCancelled { self?.monitorTask = nil }
         }
     }
@@ -379,8 +373,6 @@ private final class PlaybackAudioBackend {
         monitorTask = nil
     }
 
-    /// Runs solely on `@PlaybackAudioActor`. Drives crossfade ramps, gapless arming,
-    /// and low-frequency drift calibration without waking `@MainActor` at 60Hz.
     private func backgroundMonitorStep() -> Duration {
         let wasCrossfading = isCrossfading
         updateFade()
@@ -484,9 +476,6 @@ private final class PlaybackAudioBackend {
     }
 }
 
-/// `@MainActor` presentation facade for local & streaming playback.
-/// Dispatches all CoreAudio / decoding / graph operations to `@PlaybackAudioActor`
-/// and publishes discrete `PlaybackTimelineAnchor` transitions instead of 60Hz ticks.
 @MainActor @Observable final class LocalPlaybackEngine {
     private(set) var isPlaying = false
     private(set) var isActivating = false
@@ -629,7 +618,6 @@ private final class PlaybackAudioBackend {
         }
         let rawElapsed = snapshot.elapsed ?? timelineAnchor.elapsed(at: snapshot.hostTimestamp)
         let rate: Double = (isPlaying && !isLoading && error == nil && snapshot.isAdvancing) ? 1.0 : 0.0
-        // Keep the user-visible frozen timestamp on pause if backend HAL render time is within one audio buffer.
         let resolvedElapsed: Double = if rate == 0, !previousLoading, !isLoading,
                                          timelineAnchor.rate == 0,
                                          abs(rawElapsed - timelineAnchor.baseElapsed) < 0.05 {
@@ -775,7 +763,6 @@ private final class PlaybackAudioBackend {
         let previous = backendReadyTask
         let backend = self.backend
 
-        // Wait for any prior queued backend commands before swapping.
         await previous?.value
         try Task.checkCancellation()
         guard expectedGen == generation else { throw CancellationError() }
@@ -959,7 +946,6 @@ private final class PlaybackAudioBackend {
         }
     }
 
-    /// Test & diagnostics hook for inspecting backend deck state off the main actor.
     func debugBackendState(prepared: Bool = false) async -> (deckID: ObjectIdentifier, itemID: UUID?, currentPlaybackTime: Double?, rate: Float) {
         await backendReadyTask?.value
         let backend = self.backend

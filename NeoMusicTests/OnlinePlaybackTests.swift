@@ -102,8 +102,6 @@ final class OnlinePlaybackTests: XCTestCase {
         model.restoreOnlineIdentity(ownerID: "12")
         resolution?.resume(returning: PlaybackResource(url: audioURL))
         await model.waitForResourceResolution()
-        // Resolving a URL starts AVPlayerItem preparation; transport readiness
-        // arrives through its status observation after the resource task ends.
         for _ in 0..<40 where model.isLoading {
             try await Task.sleep(for: .milliseconds(100))
         }

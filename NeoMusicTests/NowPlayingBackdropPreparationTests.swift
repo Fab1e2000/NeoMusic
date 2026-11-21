@@ -84,7 +84,6 @@ final class NowPlayingBackdropPreparationTests: XCTestCase {
             XCTAssertLessThanOrEqual(spread, 0.02, "A neutral cover must not tint the backdrop: \(swatch)")
         }
 
-        // 顶行只比中间行略亮，底行明显更暗，保证控制栏与歌词区域的可读性。
         XCTAssertGreaterThan(averageLuma(0, of: white), averageLuma(1, of: white))
         XCTAssertGreaterThan(averageLuma(1, of: white), averageLuma(2, of: white))
     }

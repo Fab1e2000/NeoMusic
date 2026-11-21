@@ -1,6 +1,5 @@
 import SwiftUI
 
-/// Presentation state for downloads. File and account work is injected by app assembly.
 @MainActor @Observable
 final class LibraryDownloads {
     enum SongState: Equatable {
@@ -141,7 +140,6 @@ private struct DownloadRemovalConfirmation: ViewModifier {
     }
 }
 
-/// Shared detail control; collection summaries describe the full collection, including unloaded pages.
 struct CollectionDownloadButton: View {
     let route: LibraryRoute
     let songs: [LibrarySongItem]
@@ -223,7 +221,6 @@ extension EnvironmentValues {
     @Entry var libraryDownloads: LibraryDownloads?
 }
 
-/// 曲目行右侧的下载状态；完成图标可跟随所在页面的次级前景样式。
 struct SongDownloadIndicator: View {
     let state: LibraryDownloads.SongState?
     var secondaryStyle = AnyShapeStyle(Color.primary.opacity(0.26))
@@ -240,7 +237,6 @@ struct SongDownloadIndicator: View {
             case .finishing:
                 ProgressView().controlSize(.mini).accessibilityLabel("正在处理")
             case .downloaded:
-                // The arrow cutout preserves the row background.
                 Image(systemName: "arrow.down.circle.fill")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(secondaryStyle)
@@ -269,7 +265,6 @@ struct SongDownloadIndicator: View {
     }
 }
 
-/// Observation is confined to this song's status; transfer progress leaves its surrounding list intact.
 struct SongDownloadStatus: View {
     let song: LibrarySongItem
     var showsImported = true

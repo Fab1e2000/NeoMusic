@@ -56,14 +56,11 @@ enum NeteaseHomeActionError: LocalizedError {
 }
 
 /// Homepage resources follow the existing NeoDizzy/MeloX GPL-3.0 resource mapping.
-/// Preserve server titles and resources; the store arranges supported categories.
 struct NeteaseHomeFeed: Codable, Sendable, Equatable {
     var blocks: [Block]
     let hasMore: Bool?
     let cursor: String?
 
-    /// Categories verified in the captured authenticated feed. Other codes remain
-    /// available for diagnostics without being assigned a guessed category.
     enum BlockKind: String, Codable, Sendable {
         case charts = "NEOMUSIC_CHARTS"
         case followedArtists = "NEOMUSIC_FOLLOWED_RELEASES"

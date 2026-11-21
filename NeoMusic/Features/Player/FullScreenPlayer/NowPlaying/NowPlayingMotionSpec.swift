@@ -1,5 +1,4 @@
 // Direct source port from MeloX (GPL-3.0), b8bc60f.
-// NeoDizzy adapters are limited to track data, available playback features and localization.
 import SwiftUI
 
 public enum NowPlayingPage: String, Hashable, Sendable {
@@ -28,7 +27,6 @@ struct NowPlayingAnimationSpec: Equatable, Sendable {
     }
 
     let curve: Curve
-    /// Duration for timed curves; physical springs use their own parameters.
     let duration: TimeInterval
     let delay: TimeInterval
 

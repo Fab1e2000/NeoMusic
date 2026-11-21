@@ -13,7 +13,6 @@ struct LocalAudioMetadata: Sendable {
     var artworkData: Data?
 }
 
-/// Native metadata collection, independent of the library's album grouping and identity rules.
 enum LocalAudioMetadataReader {
     static func read(_ url: URL) async throws -> LocalAudioMetadata {
         let asset = AVURLAsset(url: url)
@@ -29,7 +28,6 @@ enum LocalAudioMetadataReader {
             guard audio.length > 0, audio.processingFormat.sampleRate > 0 else { throw CocoaError(.fileReadCorruptFile) }
             output.duration = Double(audio.length) / audio.processingFormat.sampleRate
         }
-        // A readable audio stream remains indexable if its optional tags cannot be loaded.
         var entries = (try? await asset.load(.commonMetadata)) ?? []
         for format in (try? await asset.load(.availableMetadataFormats)) ?? [] {
             try Task.checkCancellation()
@@ -106,8 +104,6 @@ enum LocalAudioMetadataReader {
         return nil
     }
 
-    // FLAC's Vorbis-comment block stores repeated credits which AVFoundation can collapse.
-    // This reader only handles bounded comments; audio decoding remains with the system.
     static func flacComments(_ url: URL) -> [String: [String]] {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return [:] }
         defer { try? handle.close() }

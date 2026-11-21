@@ -1,7 +1,6 @@
 #if DEBUG
 import SwiftUI
 
-/// Isolated native review surface. Its account uses memory-only dependencies.
 struct AccountPreviewRoot: View {
     let state: String
     @State private var account: NeteaseAccount

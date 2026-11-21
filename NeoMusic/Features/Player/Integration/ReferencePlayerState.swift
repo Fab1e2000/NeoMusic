@@ -2,7 +2,6 @@ import Foundation
 import Observation
 import FullScreenPlayer
 
-/// Presentation adapter for the live player. Queue and transport state have one owner.
 @MainActor @Observable final class NeoMusicPlaybackSource: PlayerPlaybackSource {
     private let model: NowPlayingModel
     @ObservationIgnored private var queuePresentation: (version: PlayerQueueVersion, entries: [PlayerQueueEntry])?
@@ -50,13 +49,11 @@ import FullScreenPlayer
         return indices.compactMap(item(at:))
     }
 
-    /// Header motion and transport progress reuse the same queue projection.
     var upcomingQueueVersion: PlayerQueueVersion {
         PlayerQueueVersion(revision: model.queueRevision, index: currentQueueIndex, repeatMode: repeatMode,
                              queueContinues: model.queueContinues)
     }
 
-    /// Display only the next 20 occurrences; the playback owner retains the full queue.
     var upcomingQueueEntries: [PlayerQueueEntry] {
         let version = upcomingQueueVersion
         if let queuePresentation, queuePresentation.version == version {

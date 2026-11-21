@@ -1,7 +1,5 @@
 import SwiftUI
 
-/// Value links need a SwiftUI NavigationStack. Destination links use the existing
-/// UIKit navigation controller and retain the system row, selection and accessibility.
 struct LibraryRouteLink<Label: View>: View {
     let value: LibraryRoute
     var preview: LibraryNavigationPreview? = nil

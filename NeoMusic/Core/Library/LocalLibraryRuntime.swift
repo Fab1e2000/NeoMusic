@@ -42,7 +42,6 @@ final class LocalLibraryRuntime {
             return PlaybackResource(url: url)
         }, persistenceURL: store.appending(path: "playback.json"))
     }
-    /// Release the initial shelf after restoration or a reported failure; cancellation can retry.
     private(set) var isInitialLibraryReady = false
     private(set) var isInitialPresentationReady = false
     private(set) var isInitialPlaybackReady = false
@@ -98,7 +97,6 @@ final class LocalLibraryRuntime {
         defaults.set(Array(ids), forKey: key)
     }
 
-    /// Restore persisted local metadata without waiting for the directory scan.
     func restoreCachedState() async {
         guard !hasRestoredPlayback, !isScanning else { return }
         isScanning = true
@@ -110,14 +108,12 @@ final class LocalLibraryRuntime {
             try await cache.prepare(documents: documents, store: store)
             try await restoreSavedState()
         } catch is CancellationError {
-            // A later foreground refresh can resume the interrupted restoration.
         } catch {
             status = "读取资料库失败：\(error.localizedDescription)"
             isInitialLibraryReady = true
         }
     }
 
-    /// The local shelf can be presented independently of account-owned content.
     func completeInitialPresentation(songs: [LibrarySongItem]) {
         playlistLibrary.reconcileOnlineSongs(songs)
         player.reconcileAvailability(songs: songs)
@@ -125,8 +121,6 @@ final class LocalLibraryRuntime {
         PerformanceDiagnostics.event("LibraryContentPresented")
     }
 
-    /// Online queue and mixed-playlist metadata are exposed only after the saved
-    /// account identity has been read; page and home caches are not required.
     func completeInitialPlaybackRestoration(ownerID: String?, songs: [LibrarySongItem]) {
         guard hasRestoredPlayback || player.hasCurrent, !isInitialPlaybackReady else { return }
         var transaction = Transaction(animation: nil)
@@ -156,7 +150,6 @@ final class LocalLibraryRuntime {
                 if !hasRestoredPlayback { try await restoreSavedState() }
                 try await refreshFromDisk()
             } catch is CancellationError {
-                // Keep the displayed snapshot and retry at the next refresh.
             } catch {
                 guard !Task.isCancelled else { return }
                 status = "读取资料库失败：\(error.localizedDescription)"
@@ -166,12 +159,10 @@ final class LocalLibraryRuntime {
     }
 
     func removeMissingFiles(_ paths: [String]) async {
-        // Queue behind an active scan so its snapshot cannot restore a removed download.
         for path in paths { pendingImports.insert(path) }
         await importPendingFiles()
     }
 
-    /// Known committed files are read directly; external edits continue through refresh().
     func importFile(_ path: String) async {
         pendingImports.insert(path)
         await importPendingFiles()
@@ -209,7 +200,6 @@ final class LocalLibraryRuntime {
         } catch {
             pendingImports.formUnion(paths)
             status = "读取下载文件失败：\(error.localizedDescription)"
-            // Retry on the next explicit refresh or file commit.
             isScanning = false
             return
         }
@@ -267,9 +257,6 @@ final class LocalLibraryRuntime {
         let songs = localSongs
         playlistLibrary.configurePersistence(url: store.appending(path: "playlists.json"), songs: songs, restoredState: playlists)
         configurePlayer()
-        // A chosen queue takes precedence over a delayed restoration. Transport
-        // remains available after a read failure; the player suspends automatic
-        // persistence until restoration or an explicit replacement succeeds.
         let keepsChosenQueue = player.hasCurrent
         if !keepsChosenQueue {
             guard player.restoreQueue(songs: songs, restoredState: queue) else {
@@ -302,7 +289,6 @@ final class LocalLibraryRuntime {
     }
 }
 
-/// One metadata index with shared immutable image files; no image bytes are read on a normal launch.
 actor LocalLibraryTrackCache {
     private var saved: (url: URL, tracks: [LocalTrack])?
     private var backdropPreparer: AlbumArtworkBackdropPreparer?
@@ -330,7 +316,6 @@ actor LocalLibraryTrackCache {
         return try await externalizeArtwork(tracks, at: url)
     }
 
-    /// Missing derived artwork invalidates only the affected tracks during background verification.
     func reusableTracks(_ tracks: [LocalTrack], at url: URL) -> [LocalTrack] {
         let directory = url.appendingPathExtension("startup")
         var available: [String: Bool] = [:]
@@ -369,7 +354,6 @@ actor LocalLibraryTrackCache {
         let directory = url.appendingPathExtension("startup")
         let restoredColors = try await backdropPreparer!.cachedColors(for: artworkKeys)
         var restoredArtwork: [String: Data] = [:]
-        // A stale palette still needs the original pixels, shared by its content key.
         for key in artworkKeys where restoredColors.index(forKey: key) == nil {
             try Task.checkCancellation()
             restoredArtwork[key] = try? Data(contentsOf: directory.appending(path: key + ".image"))

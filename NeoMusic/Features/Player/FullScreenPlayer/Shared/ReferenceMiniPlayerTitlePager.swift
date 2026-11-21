@@ -1,8 +1,6 @@
 // Source: NeoDizzy Features/Player/MiniPlayerTitlePager.swift; see Resources/PlayerSourceNotices.txt.
 import SwiftUI
 
-/// 迷你条标题区复用与全屏播放页一致的滑动切歌交互、同歌手固定与阈值触感反馈；
-/// 封面与播放控制按钮保持原地不动。
 public struct ReferenceMiniPlayerTitlePager<Title: View, Artist: View>: View {
     var height: CGFloat = 36
     let song: PlayerTrack

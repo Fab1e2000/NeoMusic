@@ -432,7 +432,6 @@ final class LocalLibraryRuntimeTests: XCTestCase {
             deletedAlbums: LocalLibrary.deletedAlbums,
             onLocalSongsApplied: { LocalLibrary.downloads.setLocalSongs($0) })
 
-        // Missing metadata retains saved identities while the background scan resolves them.
         let snapshotAtReady = Mutex<[[String]]?>(nil)
         _ = withObservationTracking { runtime.isInitialLibraryReady } onChange: {
             MainActor.assumeIsolated {
@@ -494,7 +493,6 @@ final class LocalLibraryRuntimeTests: XCTestCase {
         _ = withObservationTracking { runtime.isInitialLibraryReady } onChange: {
             MainActor.assumeIsolated {
                 snapshot.withLock { $0 = [LocalLibrary.songs.map(\.title), restored.songs(in: id).map(\.id), player.queue.map(\.id)] }
-                // If the shelf really appears before scanning, this makes that later scan fail.
                 try? FileManager.default.removeItem(at: root)
             }
         }
@@ -505,8 +503,6 @@ final class LocalLibraryRuntimeTests: XCTestCase {
         XCTAssertEqual(LocalLibrary.songs.map(\.title), [cached.title])
         XCTAssertEqual(try Data(contentsOf: cacheURL), cacheData)
         XCTAssertEqual(try Data(contentsOf: playlistURL), playlistData)
-        // The audio engine may persist generated occurrence IDs after restoration;
-        // a failed scan must preserve the restored queue and playback preferences.
         await player.flushQueuePersistence()
         let savedQueue = try JSONDecoder().decode(NowPlayingModel.SavedQueue.self, from: Data(contentsOf: playbackURL))
         XCTAssertEqual(savedQueue.ids, [song.id])
@@ -762,7 +758,6 @@ final class LocalLibraryRuntimeTests: XCTestCase {
                 deletedAlbums: LocalLibrary.deletedAlbums,
                 onLocalSongsApplied: { LocalLibrary.downloads.setLocalSongs($0) })
             XCTAssertFalse(runtime.isInitialLibraryReady)
-            // An aborted scan must not resolve identities against an empty library or touch the store.
             let cancelled = Task { @MainActor in
                 withUnsafeCurrentTask { $0?.cancel() }
                 await runtime.refresh()
@@ -823,7 +818,6 @@ final class PinnedOrderStoreTests: XCTestCase {
             XCTAssertTrue(store.reorder(visible: [playlist, album], to: [album, playlist]))
             let restored = PinnedOrderStore(defaults: defaults, key: key)
             XCTAssertEqual(restored.ordered([playlist, album, added], id: { $0 }), [album, playlist, added])
-            // Removing a pin hides it; re-pinning restores its position without losing it.
             XCTAssertEqual(restored.ordered([playlist, added], id: { $0 }), [playlist, added])
             XCTAssertEqual(restored.ordered([playlist, album, added], id: { $0 }), [album, playlist, added])
         }

@@ -3,15 +3,12 @@ import AVFoundation
 import MediaPlayer
 import UIKit
 
-/// 本地播放、队列及恢复状态；URL 由资料库注入，不持有平台实现。
 @MainActor @Observable
 final class NowPlayingModel {
     enum RepeatMode: String, Codable, Sendable { case off, all, one }
 
     private(set) var queue: [LibrarySongItem] { didSet { queueRevision &+= 1; updateRemoteCommandAvailability() } }
     private(set) var queueRevision: UInt64 = 0
-    /// Monotonic token incremented whenever playback transitions to a new track occurrence or restarts a track.
-    /// Does not increment on pause/resume, seek, quality reload, or foreground/background transitions.
     private(set) var playbackGeneration: UInt64 = 0
     private(set) var currentIndex: Int { didSet { updateRemoteCommandAvailability() } }
     private(set) var entryIDs: [UUID]
@@ -49,17 +46,12 @@ final class NowPlayingModel {
         queue = Array(queue.prefix(start)) + reordered.map(\.1)
         prepareNext(); saveQueue()
     } }
-    /// 当前播放来源的名称（专辑或播放列表），显示在“随后播放”下方。
     var sourceTitle: String?
     private(set) var continuation: PlaybackQueueContinuation? { didSet { updateRemoteCommandAvailability() } }
-    /// 用户用“插播”“随后播放”手动加入的歌曲。
     private var userQueuedIDs: Set<UUID> = []
-    /// 等待确认的整组播放：队列里还有手动加入的歌曲时，替换前先确认，与 Apple Music 一致。
     var pendingPlay: PendingPlay?
     var onCollectionPlaybackStarted: ((PlaybackCollectionReference) -> Void)?
-    /// 当前来源还会继续供歌，队尾不要循环回第一首。
     var queueContinues: Bool { continuation != nil }
-    /// 待播不多时补歌。`shouldAdvance` 表示用户或自然结束已经要听下一首。
     var replenishQueue: ((_ continuation: PlaybackQueueContinuation, _ shouldAdvance: Bool, _ playbackEnded: Bool) -> Void)?
     private var pendingCollection: PlaybackCollectionReference?
 
@@ -90,8 +82,6 @@ final class NowPlayingModel {
         if let duration = audio?.duration, duration > 0 { return duration }
         return Double(max(current.duration, 1))
     }
-    /// Discrete playback clock anchor so UI surfaces derive live progress locally
-    /// via `TimelineView` without 60Hz `@MainActor` writes.
     var timelineAnchor: PlaybackTimelineAnchor {
         if let audio, hasCurrent, loadedEntry == entryIDs[currentIndex] {
             let anchor = audio.timelineAnchor
@@ -103,7 +93,6 @@ final class NowPlayingModel {
                 duration: anchor.duration
             )
         }
-        // Catalog duration is only an estimate until an audio resource is loaded.
         return PlaybackTimelineAnchor(
             baseElapsed: storedElapsed,
             hostTimestamp: idleAnchorTimestamp,
@@ -111,7 +100,6 @@ final class NowPlayingModel {
             duration: 0
         )
     }
-    /// Current playback time derived on demand from `timelineAnchor`.
     var liveElapsed: Double { timelineAnchor.elapsed() }
     var isLoading: Bool { resolvingResource || (audio?.isLoading ?? false) || (audio?.isActivating ?? false) }
     func spectrumLevels() -> [Float] { audio?.spectrumLevels() ?? Array(repeating: 0, count: 5) }
@@ -122,7 +110,6 @@ final class NowPlayingModel {
     var next: LibrarySongItem? { queue.indices.contains(currentIndex + 1) ? queue[currentIndex + 1] : nil }
     var canSkipForward: Bool { hasCurrent && (next != nil || queueContinues || repeatMode == .all) }
     var upcoming: ArraySlice<LibrarySongItem> { queue[min(currentIndex + 1, queue.count)...] }
-    /// 待播部分里还有手动加入的歌曲。
     var hasUserQueuedUpcoming: Bool { entryIDs.dropFirst(min(currentIndex + 1, entryIDs.count)).contains { userQueuedIDs.contains($0) } }
 
     func togglePlayback() { guard hasCurrent else { return }; isPlaying.toggle(); if isPlaying { if loadedEntry == entryIDs[currentIndex], audio?.error == nil { audio?.play() } else { startCurrent(at: elapsed) } } else { audio?.pause(); saveQueue(); updateNowPlaying() } }
@@ -138,7 +125,6 @@ final class NowPlayingModel {
         if let continuation { replenishQueue?(continuation, false, false) }
     }
 
-    /// 播放超过 3 秒时先回到开头，否则回到上一首。
     func skipBackward() {
         if liveElapsed > 3 || previous == nil {
             seek(to: 0, source: .previous)
@@ -149,8 +135,6 @@ final class NowPlayingModel {
 
     func select(_ index: Int) {
         guard queue.indices.contains(index) else { return }
-        // Reuse AVQueuePlayer's next item only when it is the requested queue
-        // occurrence and the player still owns the current occurrence.
         if index != currentIndex, hasCurrent,
            loadedEntry == entryIDs[currentIndex], preparedEntry == entryIDs[index],
            audio?.advancePrepared() == true {
@@ -176,7 +160,6 @@ final class NowPlayingModel {
             reorderedIDs[slot] = entry
             reorderedQueue[slot] = songs[entry]!
         }
-        // Publish the completed native reorder once, independent of queue length.
         entryIDs = reorderedIDs
         queue = reorderedQueue
         prepareNext(); saveQueue()
@@ -190,7 +173,6 @@ final class NowPlayingModel {
         prepareNext(); saveQueue()
     }
 
-    /// 请求从头播放一组歌曲：会清除手动加入的歌曲时先挂起，由宿主弹出确认。
     func requestPlay(_ songs: [LibrarySongItem], from source: String, shuffled: Bool,
                      collection: PlaybackCollectionReference? = nil,
                      continuation: PlaybackQueueContinuation? = nil, onStarted: (() -> Void)? = nil) {
@@ -203,7 +185,6 @@ final class NowPlayingModel {
         }
     }
 
-    /// 点击具体歌曲也遵循手动队列清除确认，并保留用户选择的位置。
     func requestPlay(_ songs: [LibrarySongItem], startingAt index: Int, from source: String,
                      collection: PlaybackCollectionReference? = nil,
                      continuation: PlaybackQueueContinuation? = nil, onStarted: (() -> Void)? = nil) {
@@ -216,7 +197,6 @@ final class NowPlayingModel {
         }
     }
 
-    /// 确认清除队列并播放挂起的一组歌曲。
     func confirmPendingPlay() {
         guard let pending = pendingPlay else { return }
         pendingPlay = nil
@@ -228,7 +208,6 @@ final class NowPlayingModel {
         pending.onStarted?()
     }
 
-    /// 从头播放一组歌曲，替换当前队列。
     func play(_ songs: [LibrarySongItem], from source: String, shuffled: Bool,
               collection: PlaybackCollectionReference? = nil, continuation: PlaybackQueueContinuation? = nil) {
         guard !songs.isEmpty else { return }
@@ -254,7 +233,6 @@ final class NowPlayingModel {
         startCurrent()
     }
 
-    /// 从一组歌曲中的某一首开始播放，替换当前队列。
     func play(_ songs: [LibrarySongItem], startingAt index: Int, from source: String,
               collection: PlaybackCollectionReference? = nil, continuation: PlaybackQueueContinuation? = nil) {
         guard songs.indices.contains(index) else { return }
@@ -278,7 +256,6 @@ final class NowPlayingModel {
         startCurrent()
     }
 
-    /// 插播：放在当前歌曲之后。
     func insertNext(_ songs: [LibrarySongItem]) {
         guard !songs.isEmpty else { return }
         queueRestorationFailed = false
@@ -292,12 +269,10 @@ final class NowPlayingModel {
         saveQueue()
     }
 
-    /// 随后播放：放在队列末尾。
     func appendLater(_ songs: [LibrarySongItem]) {
         appendToEnd(songs, userQueued: true)
     }
 
-    /// 自动来源续上的歌曲，放在队尾，不算用户手动加入。
     func appendContinuing(_ songs: [LibrarySongItem]) {
         appendToEnd(songs, userQueued: false)
     }
@@ -326,7 +301,6 @@ final class NowPlayingModel {
     @ObservationIgnored private let makeAudioEngine: @MainActor () -> LocalPlaybackEngine
     var hasAudioEngine: Bool { audio != nil }
     @ObservationIgnored private var mediaSession: PlaybackMediaSession?
-    // Clock readers must reattach to the engine when an asynchronously resolved track is loaded.
     private var loadedEntry: UUID?
     @ObservationIgnored private var preparedEntry: UUID? { didSet { preparedQuality = nil } }
     @ObservationIgnored private var preparedQuality: String?
@@ -393,8 +367,6 @@ final class NowPlayingModel {
 
     func waitForResourceResolution() async { await resourceTask?.value }
 
-    /// The owner of local files supplies metadata only while the file is available.
-    /// Queue identities remain unchanged when an online item gains an offline copy.
     func configureOfflineSongs(_ resolver: @escaping @MainActor (String) -> LibrarySongItem?) {
         offlineSong = resolver
         reconcileOfflineAvailability()
@@ -411,7 +383,6 @@ final class NowPlayingModel {
 
     var hasOfflineCurrentSong: Bool { hasCurrent && offlineSongIDs.contains(current.id) }
 
-    /// Relink a removed local copy without replacing its queue occurrences or transport.
     func remapSongReferences(_ replacements: [String: LibrarySongItem]) {
         let replacements = replacements.filter { $0.key != $0.value.id }
         guard !replacements.isEmpty else { return }
@@ -446,7 +417,6 @@ final class NowPlayingModel {
         resolveCurrent(at: elapsed, replacing: true)
     }
 
-    /// Resolve saved display metadata after the account owner is known, without loading its catalog.
     func restoreOnlineIdentity(ownerID: String?) {
         guard !hasResolvedOnlineIdentity || resolvedOnlineOwnerID != ownerID else { return }
         PerformanceDiagnostics.restoration("player.identity.resolved signedIn=\(ownerID != nil) pendingMetadata=\(pendingRestoredSongs.count)")
@@ -512,7 +482,6 @@ final class NowPlayingModel {
         if persist { saveQueue() }
     }
 
-    /// 详情还没到不能当成播放失败。登录不对、文件没了仍然要停。
     private static func blocksPlayback(_ song: LibrarySongItem) -> Bool {
         guard let reason = song.unavailabilityReason else { return false }
         return reason != "暂无完整音源"
@@ -660,8 +629,6 @@ final class NowPlayingModel {
     }
     private func syncTransport(publishNowPlaying: Bool = true) {
         guard !configuringAudio, let audio else { return }
-        // A same-track resource request keeps playing its loaded occurrence.
-        // New-track resolution has no loaded entry and retains its requested position.
         if resolvingResource, !hasCurrent || loadedEntry != entryIDs[currentIndex] { return }
         let stopped = isPlaying && !audio.isPlaying && !audio.isActivating
         if abs(elapsed - audio.elapsed) > 0.0001 {
@@ -722,7 +689,6 @@ final class NowPlayingModel {
 
     private func commitQueueSave(to persistenceURL: URL) {
         guard !applyingState, !queueRestorationFailed else { return }
-        // Progress-only saves share these arrays. Queue or restored metadata changes invalidate them.
         if cachedQueueContent?.revision != queueRevision {
             var seen = Set<String>()
             let metadata = queue.filter { seen.insert($0.id).inserted }.map { song in
@@ -739,8 +705,6 @@ final class NowPlayingModel {
         let persistence = queuePersistence
         queuePersistenceRevision += 1
         let revision = queuePersistenceRevision
-        // Each write waits for its predecessor; actor scheduling alone does not
-        // guarantee that snapshots arrive in the order the UI submitted them.
         queuePersistenceTask = Task { [weak self] in
             await previous?.value
             do {
@@ -757,7 +721,6 @@ final class NowPlayingModel {
         }
     }
 
-    /// Wait for submitted snapshots, including changes made while a write finishes.
     func flushQueuePersistence() async {
         if queuePersistenceDebounceTask != nil, let persistenceURL {
             queuePersistenceDebounceTask?.cancel()
@@ -836,7 +799,6 @@ final class NowPlayingModel {
             isCrossfadeEnabled = state.crossfadeEnabled ?? false
             audio?.crossfadeEnabled = isCrossfadeEnabled
             repeatMode = state.repeatMode
-            // Restore the saved order without shuffling a second time.
             let savedOrder = queue
             isShuffled = state.shuffled
             queue = savedOrder
@@ -860,7 +822,6 @@ final class NowPlayingModel {
         }
     }
 
-    /// Artwork arrival leaves playback resources, queue order and availability alone.
     func updateArtwork(_ replacements: [String: LibrarySongItem]) {
         guard !replacements.isEmpty else { return }
         var updated = queue
@@ -941,7 +902,6 @@ final class NowPlayingModel {
                 if updated == nil { updated = queue }
                 updated?[index] = next
             }
-            // An authenticated stable online identity is playable without a loaded detail page.
             if next.onlineOwnerID != nil && hasResolvedOnlineIdentity && next.onlineOwnerID == resolvedOnlineOwnerID && !Self.blocksPlayback(next) {
                 ids.insert(next.id)
             } else if !ids.contains(next.id) || Self.blocksPlayback(next) {

@@ -100,7 +100,6 @@ final class LocalLyricsTests: XCTestCase, @unchecked Sendable {
     }
 
     func testDecodeStoredRecognizesStackedAndInterleavedBilingualLRC() {
-        // Legacy concatenated download format (original block + translation block without marker)
         let stacked = """
         [00:00.000] 作词 : 藤井健太郎
         [00:01.081] 鮮やかなる色彩の
@@ -129,7 +128,6 @@ final class LocalLyricsTests: XCTestCase, @unchecked Sendable {
             "倘若初次领悟温暖的涵义"
         ])
 
-        // Interleaved bilingual LRC with duplicate timestamps and repeated chorus timestamps
         let interleaved = """
         [00:01.081][01:00.000] 鮮やかなる色彩の
         [00:01.081][01:00.000] 那绚烂夺目的色彩
@@ -157,7 +155,6 @@ final class LocalLyricsTests: XCTestCase, @unchecked Sendable {
             "那绚烂夺目的色彩"
         ])
 
-        // Monolingual LRC with header credits sharing [00:00.00] must not trigger false translations
         let monolingual = """
         [00:00.00] 作词 : A
         [00:00.00] 作曲 : B

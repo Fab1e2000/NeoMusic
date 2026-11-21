@@ -1,6 +1,5 @@
 import Foundation
 
-/// The system owns transfer scheduling, connectivity waiting and background resumption.
 @MainActor
 final class NeteaseDownloadTransport: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
     enum Event: Sendable {
@@ -74,7 +73,6 @@ final class NeteaseDownloadTransport: NSObject, URLSessionDownloadDelegate, @unc
     nonisolated func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
                                didFinishDownloadingTo location: URL) {
         guard let id = downloadTask.taskDescription.flatMap(UUID.init(uuidString:)) else { return }
-        // This temporary URL expires when this delegate method returns.
         do {
             guard let response = downloadTask.response as? HTTPURLResponse,
                   (200..<300).contains(response.statusCode) else { throw NeteaseDownloadError.invalidFile }

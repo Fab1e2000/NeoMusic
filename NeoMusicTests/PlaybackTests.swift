@@ -376,7 +376,7 @@ final class PlaybackTests: XCTestCase {
         let url = try PlayerTestFixtures.silentAudio(at: root.appendingPathComponent("tone.wav"), seconds: 4)
         defer { try? FileManager.default.removeItem(at: root) }
         var first = song("first")
-        first.duration = 99 // The resolved asset duration must still reach Now Playing.
+        first.duration = 99
         let model = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false)
         model.configurePlayback(resolveURL: { $0 == "missing" ? nil : url }, persistenceURL: root.appendingPathComponent("queue.json"))
         defer { model.shutdownPlayback() }
@@ -563,7 +563,6 @@ final class PlaybackTests: XCTestCase {
     }
 }
 
-// MediaPlayer invokes this immutable artwork provider from its background access queue.
 private final class ArtworkRequestBox: @unchecked Sendable {
     let artwork: MPMediaItemArtwork
     init(_ artwork: MPMediaItemArtwork) { self.artwork = artwork }

@@ -389,7 +389,6 @@ final class AlbumMenuTests: XCTestCase {
             })
             events.removeAll()
             try XCTUnwrap(items.first { $0.title == (selected ? "撤销" : "喜爱") }).perform()
-            // 已经喜欢时，「撤销」先确认，确认前不改喜爱状态。
             XCTAssertEqual(events, selected ? [] : ["favorite", LibraryToast.favorited.title])
         }
     }
@@ -451,7 +450,6 @@ final class QueueMenuTests: XCTestCase {
             XCTAssertEqual(events, notifies ? ["next", "下个播放", "later", "已添加到队列"] : ["next", "later"])
         }
 
-        // Rebuild after source changes, including returning to a paused/no-source state.
         let sources: [String?] = [nil, "喜爱歌曲", nil]
         for currentSource in sources {
             source = currentSource
@@ -471,7 +469,6 @@ final class QueueMenuTests: XCTestCase {
                 try check(songActions.albumTrackSections(for: song, isDownloaded: downloaded,
                     download: {}, removeDownload: {}, notify: notify), notifies: true)
             }
-            // 没接提示时，歌曲菜单只执行动作。
             try check(songActions.sections(for: song, goToAlbum: {}), notifies: false)
         }
         songActions.notify = notify

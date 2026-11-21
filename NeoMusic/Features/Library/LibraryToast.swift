@@ -1,15 +1,11 @@
 import SwiftUI
 import UIKit
 
-/// 操作完成后在迷你播放条上方短暂显示的提示，对照 Apple Music。
 enum LibraryToast {
     case error(String)
     case favorited, unfavorited, pinned, unpinned
-    /// 插播、随后播放（添加到队列）。
     case playingNext, addedToQueue
-    /// 加入播放列表：封面、加入数量与播放列表名称，点按打开该播放列表。
     case addedToPlaylist(count: Int, title: String, artwork: Artwork, playlistID: String)
-    /// 多选加入多个播放列表：图标与数量摘要。
     case addedToPlaylists(count: Int, playlistCount: Int)
 
     var title: String {
@@ -67,7 +63,6 @@ enum LibraryToast {
     }
 }
 
-/// 当前显示的提示。由持有资料库的宿主创建，菜单操作通过 `CollectionMenuActions.notify` 发出提示。
 @MainActor @Observable
 final class LibraryToastCenter {
     struct Presentation: Equatable {
@@ -89,7 +84,6 @@ final class LibraryToastCenter {
         self.sleep = sleep
     }
 
-    /// 宿主持有计时，页面重建不会提前收起提示；新反馈替换旧反馈并重新计时。
     func show(_ toast: LibraryToast) {
         let presentation = Presentation(toast: toast)
         current = presentation
@@ -134,14 +128,10 @@ final class LibraryToastCenter {
 }
 
 extension View {
-    /// 在页面底部（安全区内，即迷你播放条上方）显示提示。要挂在导航栈里的各个页面上：
-    /// 标签栏与迷你播放条占用的安全区只传给页面，挂在导航栈外会被标签栏挡住。
     func libraryToasts(_ center: LibraryToastCenter) -> some View {
         modifier(LibraryToastOverlay(center: center))
     }
 
-    /// 提示出现时的触感反馈；每个提示只反馈一次，挂在根部。
-    /// 喜爱和取消喜爱由操作本身反馈，避免和这里再震一次；错误提示用错误触感。
     func libraryToastFeedback(_ center: LibraryToastCenter) -> some View {
         modifier(LibraryToastFeedback(center: center))
     }
@@ -189,15 +179,12 @@ private struct LibraryToastFeedback: ViewModifier {
     }
 }
 
-/// 资料库操作共用的系统触感发生器。
-/// 常驻发生器并在触发后立即预热，保证连续操作响应低延迟。
 enum LibraryHaptics {
     @MainActor private static let softGenerator = UIImpactFeedbackGenerator(style: .soft)
     @MainActor private static let lightGenerator = UIImpactFeedbackGenerator(style: .light)
     @MainActor private static let mediumGenerator = UIImpactFeedbackGenerator(style: .medium)
     @MainActor private static let notificationGenerator = UINotificationFeedbackGenerator()
 
-    /// 柔型冲击（0.6）：用于直接播放按钮、开始/停止/重试下载、插播与添加到队列。
     static func impact() {
         runOnMain {
             softGenerator.impactOccurred(intensity: 0.6)
@@ -205,7 +192,6 @@ enum LibraryHaptics {
         }
     }
 
-    /// 轻型冲击（Light Impact）：用于确认从喜欢歌曲/歌单移除单曲、确认移除本机下载文件。
     static func lightImpact() {
         runOnMain {
             lightGenerator.impactOccurred()
@@ -213,7 +199,6 @@ enum LibraryHaptics {
         }
     }
 
-    /// 中型冲击（Medium Impact）：用于确认从资料库删除整个播放列表或专辑。
     static func mediumImpact() {
         runOnMain {
             mediumGenerator.impactOccurred()
@@ -221,7 +206,6 @@ enum LibraryHaptics {
         }
     }
 
-    /// 成功通知（Success）：用于喜爱/取消喜爱、收藏加号、置顶/取消置顶。
     static func success() {
         runOnMain {
             notificationGenerator.notificationOccurred(.success)
@@ -259,7 +243,6 @@ private struct LibraryToastOverlay: ViewModifier {
     }
 }
 
-/// 短提示高 53pt，较大文字和长内容自适应增高。
 struct LibraryToastView: View {
     let toast: LibraryToast
     let dismiss: () -> Void
@@ -286,7 +269,6 @@ struct LibraryToastView: View {
                         .frame(width: 33, height: 33)
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 0) {
-                        // 实测 Apple Music：说明 13pt、名称 15pt 半粗体，箭头更小、为次要色。
                         Text(toast.title).font(.footnote).foregroundStyle(.secondary)
                         HStack(spacing: 3) {
                             Text(title).font(.subheadline.weight(.semibold))

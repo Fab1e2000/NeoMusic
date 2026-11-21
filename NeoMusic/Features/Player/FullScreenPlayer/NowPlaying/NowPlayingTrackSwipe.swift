@@ -420,8 +420,6 @@ final class TrackSwipeController {
         stepSpringFrame(at: sampleDate)
     }
 
-    /// Samples the release spring on the same real timeline as touch-up, so a main-thread
-    /// stall consumes the settle instead of being absorbed and replayed later.
     func stepSpringFrame(at sampleDate: Date) {
         guard isSettling else { return }
         let dt = max(0, sampleDate.timeIntervalSince(springStartDate))
@@ -480,19 +478,12 @@ final class TrackSwipeController {
 
 struct NowPlayingTrackSwipe<Title: View, Artist: View>: View {
     let song: PlayerTrack
-    /// 相邻歌名离当前歌名的距离；不传时用这一块自己的宽度再留一点间隔。
     var pageDistance: CGFloat? = nil
-    /// 可选固定槽高度；用于在迷你条中将手势热区撑满完整行高。
     var slotHeight: CGFloat? = nil
-    /// 行间距；为 nil 时标题和歌手叠放在同一槽内由调用方精确定位。
     var rowSpacing: CGFloat? = 2
-    /// 视口边缘羽化与溢出距离。
     var viewportInsets: TrackSwipeViewportInsets = .header
-    /// 已知视口宽度时可直接传入，避免切页入场首帧从 0 度量再触发遮罩分支切换。
     var viewportWidth: CGFloat? = nil
-    /// LN hosts title content in a separate controller; give that slot an explicit touch surface.
     var usesUIKitTouchSurface = false
-    /// `marqueeActive` controls scrolling title; `interactive` controls button clicks on current track.
     @ViewBuilder let title: (_ track: PlayerTrack, _ marqueeActive: Bool) -> Title
     @ViewBuilder let artist: (_ track: PlayerTrack, _ interactive: Bool) -> Artist
 
@@ -642,7 +633,6 @@ struct NowPlayingTrackSwipe<Title: View, Artist: View>: View {
             }
         }
 
-        // Only mask the mini bar artist layer (no `.plusLighter`); fullscreen/header artist fade runs inside the shader to preserve backdrop vibrancy.
         let artistStack = applyArtistEdgeFade(rawArtistStack, isStationary: pinnedArtist)
 
         if let rowSpacing {
@@ -734,7 +724,6 @@ struct NowPlayingTrackSwipe<Title: View, Artist: View>: View {
         return result
     }
 
-    /// Commits at release for unit-level threshold/velocity verification, sharing the single source of truth with `panEnded`.
     static func selectTarget(
         translation: CGFloat,
         velocity: CGFloat,
@@ -757,7 +746,6 @@ struct NowPlayingTrackSwipe<Title: View, Artist: View>: View {
     }
 }
 
-/// 只认横向拖动的平移手势。用 UIKit 手势是为了在作者名（原生按钮）和迷你条上拖动也能流畅仲裁并触发。
 private struct NowPlayingHorizontalPan: UIGestureRecognizerRepresentable {
     let onStart: (CGFloat) -> Void
     let onChange: (CGFloat) -> Void
@@ -810,7 +798,6 @@ private struct NowPlayingHorizontalPan: UIGestureRecognizerRepresentable {
         }
     }
 
-    /// 第三方 LNPopupController 手势私有类名前缀契约；上游升级时集中在此核对。
     private enum LNPopupGestureClassName {
         static let longPress = "LNPopupLongPress"
         static let interactionPan = "LNPopupInteractionPan"
@@ -877,7 +864,6 @@ private struct TrackSwipeGestureModifier: ViewModifier {
     }
 }
 
-/// Gives mini-bar title slots a dedicated UIKit pan surface that cooperates with LNPopup gestures.
 struct TrackSwipeTouchSurface: UIViewRepresentable {
     fileprivate let pan: NowPlayingHorizontalPan
 
@@ -934,8 +920,6 @@ struct TrackSwipeTouchSurface: UIViewRepresentable {
     }
 }
 
-/// Both player surfaces share one selection generator: swiping between tracks is a
-/// value change, matching the system selection pattern.
 @MainActor enum ReferenceTrackSwipeFeedback {
     private static let generator = UISelectionFeedbackGenerator()
     static func prepare() { generator.prepare() }

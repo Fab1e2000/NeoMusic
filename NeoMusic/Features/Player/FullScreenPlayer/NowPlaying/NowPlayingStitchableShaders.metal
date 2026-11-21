@@ -24,7 +24,6 @@ using namespace metal;
     float4 edgeBounds,
     float rightEnd
 ) {
-    // edgeBounds: (slotOffsetX, leftStart, fadeInEnd, fadeOutStart)
     float x = position.x + edgeBounds.x;
     if (x <= edgeBounds.y || x >= rightEnd) {
         return half4(0.0h);

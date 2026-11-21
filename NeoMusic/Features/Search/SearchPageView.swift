@@ -181,7 +181,6 @@ struct SearchPageView: View {
     }
 }
 
-/// One list per search kind. Equality skips rebuilding the hidden lists when only the selected kind changes.
 private struct SearchResultList: View {
     let kind: MusicSearchKind
     let groups: [MusicSearchGroup]

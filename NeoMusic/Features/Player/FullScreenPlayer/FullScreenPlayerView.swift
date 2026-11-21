@@ -1,6 +1,5 @@
 import SwiftUI
 
-/// Full-screen presentation. The host supplies playback, media services and its container transition.
 public struct FullScreenPlayerView<ArtworkTransition: ViewModifier>: View {
     private let player: PlayerState
     private let services: PlayerServices

@@ -1,6 +1,5 @@
 import Foundation
 
-/// 收藏专辑的加入时间。第一次看到的名单只建立基线，之后新出现的专辑才记下当前时间。
 struct AlbumLibraryAdditions: Equatable, Codable, Sendable {
     var addedAt: [String: Date] = [:]
     var baselineRecorded = false

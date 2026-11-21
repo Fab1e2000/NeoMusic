@@ -218,7 +218,6 @@ final class AlbumArtworkBackdropTests: XCTestCase {
         XCTAssertEqual(changed, ["song": secondColor])
         XCTAssertEqual(calls.withLock { $0[secondData] }, 1)
 
-        // Only artwork in the last successful snapshot remains cached.
         let restored = try await preparer.prepare(["song": firstData])
         XCTAssertEqual(restored, ["song": firstColor])
         XCTAssertEqual(calls.withLock { $0[firstData] }, 2)

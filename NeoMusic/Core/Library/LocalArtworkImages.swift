@@ -1,7 +1,6 @@
 import UIKit
 import ImageIO
 
-/// File-backed artwork is shared by the library and system media surfaces.
 @MainActor enum LocalArtworkImages {
     private final class Variants {
         var images: [Int: UIImage] = [:]
@@ -63,8 +62,6 @@ import ImageIO
         return backdrop
     }
 
-    /// Prepare a bounded set of local thumbnails before the first shelf is shown.
-    /// Folder tiles use their smaller display size; repeated files share one load.
     static func prepare(_ artworks: [Artwork], pixels: Int = 512, limit: Int = 10) async {
         guard limit > 0, !Task.isCancelled else { return }
         var requests: [URL: Int] = [:]
@@ -90,7 +87,6 @@ import ImageIO
         await load(url, pixels: pixels, prepareBackdrop: true)
     }
 
-    /// Row thumbnails only need pixels and skip backdrop color extraction and disk writes.
     static func loadThumbnail(_ url: URL, pixels: Int) async -> UIImage? {
         await load(url, pixels: pixels, prepareBackdrop: false)
     }
@@ -107,8 +103,6 @@ import ImageIO
         if let pending = loading[request] {
             task = pending
         } else {
-            // Multiple visible rows can share an album cover. Keep one preparation
-            // alive for those consumers even when an individual row scrolls away.
             task = Task {
                 defer { loading[request] = nil }
                 guard let prepared = await decoder.load(url, pixels: pixels, prepareBackdrop: prepareBackdrop) else { return nil }

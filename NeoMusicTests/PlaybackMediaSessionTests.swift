@@ -59,7 +59,6 @@ import XCTest
     }
 }
 
-// Immutable provider is intentionally requested off-main, like MediaPlayer's artwork access queue.
 private struct MediaSessionArtworkRequest: @unchecked Sendable {
     let artwork: MPMediaItemArtwork
 }

@@ -1,7 +1,6 @@
 // Player presentation for the MeloX-derived components (GPL-3.0).
 import SwiftUI
 
-/// Resident content keeps its scroll state; SwiftUI animates the presentation targets.
 struct NowPlayingPagePresentation: ViewModifier {
     @Environment(\.nowPlayingLayout) private var layout
     let isVisible: Bool
@@ -16,7 +15,6 @@ struct NowPlayingPagePresentation: ViewModifier {
         let direct = change.map {
             NowPlayingPageTransition.isDirectLyricsQueueTransition(from: $0.source, to: $0.destination)
         } ?? false
-        // Once fully hidden, completion restores the next entrance's .95 scale.
         let hiddenScale: CGFloat = selection == .artwork && change == nil ? 0.95 : 0.9
         let spatialAnimation: Animation? = if !animates {
             nil
@@ -60,7 +58,6 @@ struct NowPlayingPagePresentation: ViewModifier {
     }
 }
 
-/// Source identity keeps outgoing visuals active and rejects older completions.
 struct NowPlayingPageChange {
     let id = UUID()
     let source: NowPlayingPage

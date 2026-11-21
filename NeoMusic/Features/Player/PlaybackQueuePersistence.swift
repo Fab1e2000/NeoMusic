@@ -1,6 +1,5 @@
 import Foundation
 
-/// Display metadata can restore independently of a catalog or a temporary playback resource.
 struct PlaybackSongSnapshot: Codable, Sendable {
     struct Artist: Codable, Sendable {
         let id: String
@@ -47,7 +46,6 @@ struct PlaybackSongSnapshot: Codable, Sendable {
     }
 
     @MainActor var song: LibrarySongItem {
-        // A snapshot never supplies a remote image URL to the playback resource path.
         let cover = artworkURL.flatMap { $0.isFileURL ? $0 : nil }
         return LibrarySongItem(id: id, title: title, artist: artist, album: album, albumArtist: albumArtist,
             trackNumber: trackNumber, artwork: cover.map(Artwork.file) ?? .missing,
@@ -59,7 +57,6 @@ struct PlaybackSongSnapshot: Codable, Sendable {
     }
 }
 
-/// Serial disk access keeps encoding and atomic replacement off the UI actor.
 actor PlaybackQueuePersistence {
     func save(_ state: NowPlayingModel.SavedQueue, to url: URL) throws {
         let data = try JSONEncoder().encode(state)

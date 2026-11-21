@@ -1,7 +1,6 @@
 import SwiftUI
 import Observation
 
-/// Joins account-owned transfers to the existing local library and player.
 @MainActor
 final class DownloadMusicIntegration {
     private let account: NeteaseAccount

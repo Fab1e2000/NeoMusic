@@ -1,12 +1,9 @@
 import SwiftUI
 import UIKit
 
-/// UIKit owns both levels of chrome. SwiftUI TabView would otherwise apply its
-/// outer toolbar preferences to the independently hosted library navigation bar.
 struct LibraryAppTabs<Library: View>: UIViewControllerRepresentable {
     @Binding var selection: AppTab
     var tabOrder: [AppTab] = AppTab.defaultOrder
-    /// 正式应用读 UserDefaults。测试传入固定顺序时关掉，避免被模拟器里已保存的顺序盖掉。
     var storesOrder = true
     let navigation: LibraryDetailNavigation
     let library: Library
@@ -75,7 +72,6 @@ struct LibraryAppTabs<Library: View>: UIViewControllerRepresentable {
             controller.setTabs(tabs, animated: false)
             controller.selectedTab = tabs.first { $0.identifier == (selection == .search ? search.identifier : selection.rawValue) }
         }
-        // Resolve system appearance from the container when a page has no preference.
         controller.registerForTraitChanges([UITraitUserInterfaceStyle.self]) { [weak coordinator = context.coordinator] (controller: UITabBarController, _) in
             let style = coordinator?.preferredStyle ?? controller.traitCollection.userInterfaceStyle
             coordinator?.updateNavigationAppearance(systemStyle: controller.traitCollection.userInterfaceStyle)
@@ -163,20 +159,13 @@ struct LibraryAppTabs<Library: View>: UIViewControllerRepresentable {
     }
     private static func applyAppearance(_ style: UIUserInterfaceStyle, to tabBar: UITabBar,
                                         navigationBar: UINavigationBar?) {
-        // Navigation-item preferences can reach the bar only when zoom finishes.
-        // Resolve the bars independently so the source page keeps its own appearance.
         navigationBar?.overrideUserInterfaceStyle = style
-        // Keep the bar view and UIKit-owned glass/items on the same resolved style.
-        // A UIView override alone leaves the visible tab content unchanged until zoom ends.
-        // Use a resolved style: clearing to .unspecified can retain the previous appearance.
         tabBar.overrideUserInterfaceStyle = style
         if tabBar.standardAppearance.overrideUserInterfaceStyle != style {
             let appearance = tabBar.standardAppearance.copy()
             appearance.overrideUserInterfaceStyle = style
             tabBar.standardAppearance = appearance
         }
-        // At the scroll edge, UIKit's implicit appearance can retain the old style
-        // for minimized controls. Preserve its configuration and resolve it explicitly.
         if tabBar.scrollEdgeAppearance?.overrideUserInterfaceStyle != style {
             let appearance = (tabBar.scrollEdgeAppearance ?? tabBar.standardAppearance).copy()
             appearance.overrideUserInterfaceStyle = style

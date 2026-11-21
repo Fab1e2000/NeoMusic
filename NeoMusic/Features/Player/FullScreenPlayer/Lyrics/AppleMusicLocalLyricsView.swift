@@ -1,12 +1,4 @@
 // Adapted from MeloX AppleMusicLyricsView (GPL-3.0), commit
-// 1fe5fbab3f554e8529c4847fc54281a472b7b61a. Typography and timing follow
-// the supplied Music references; UIKit owns scrolling and row animations.
-//
-// The lyric list is a UITableView with the scroll view as the same owner:
-// content offset, focus alignment, browsing resume and tap-to-seek all stay on
-// one UIScrollView subclass. Only visible rows (plus a small overscan) hold
-// hosting views, so long songs no longer allocate one row per lyric line.
-// Long jumps animate the table's scroll position with a single spring.
 import SwiftUI
 import UIKit
 
@@ -122,10 +114,6 @@ private struct NativeLyricsScrollContent: UIViewRepresentable {
     static func dismantleUIView(_ view: NativeLyricsViewportView, coordinator: ()) { view.lyricsView.stop() }
 }
 
-/// Extends the table past the visible viewport horizontally and vertically.
-/// Horizontal bleed keeps the blur halo inside a hosting surface without
-/// changing the text width; vertical overscan lets rows participating in a
-/// line-change spring stay alive while the owner scrolls.
 final class NativeLyricsViewportView: UIView {
     let lyricsView = NativeLyricsScrollView(frame: .zero, style: .plain)
 
@@ -149,15 +137,10 @@ final class NativeLyricsViewportView: UIView {
     }
 }
 
-/// A single scroll owner lays out lyric rows, animates nearby focus changes
-/// with staggered springs, and scrolls to faraway rows as a table.
 @objc(NeoMusicLyricsScrollView)
 final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableViewDelegate {
-    /// Room for the blur halo on each side; the text keeps the view's width.
     static let horizontalBleed: CGFloat = 24
-    /// Rows just outside the viewport stay materialized for the line spring.
     static let viewportOverscan: CGFloat = 160
-    /// Synthetic row ID used for a leading intro interlude (`•••`) when the first sung line starts after 4s.
     static let introInterludeLineID = -1
 
     private let motion = AppleMusicLyricsMotionProfile.iOS26_6
@@ -173,7 +156,6 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
     private var hasAppliedLyricsInput = false
     private var renderedForeground = Color.white
     private var translationAnimator: UIViewPropertyAnimator?
-    /// Holds the focused line at the position left by the translation spring until the next line change.
     private var holdsTranslationAnchor = false
     var onUserInteractionChange: ((Bool) -> Void)?
     private var lastVisualSize = CGSize.zero
@@ -210,13 +192,9 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
                 return false
             }
             let location = touch.location(in: owner)
-            // When lyrics are blurred (not browsing), tapping anywhere inside the hidden bottom
-            // controls zone reveals the controls instead of seeking the lyric underneath.
             if !owner.browsing, owner.isInHiddenControlsZone(location) {
                 return true
             }
-            // Otherwise (above controls zone, or while browsing with blur cleared),
-            // empty space and interlude rows reveal controls so any lyric tap seeks directly.
             guard let indexPath = owner.indexPathForRow(at: location) else { return true }
             return owner.isInterludeRow(indexPath.row)
         }
@@ -278,7 +256,6 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
         visibleCells.compactMap { $0 as? NativeLyricCell }
     }
 
-    // MARK: - SwiftUI input
 
     fileprivate func update(_ value: NativeLyricsScrollContent) {
         let previous = input
@@ -345,7 +322,6 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
         let changed = next != focusedIndex
         let unblurred = browsing || value.isScrubbing
         let exitedBrowsing = !unblurred && !scrubbingChanged && visibleRows.contains { $0.appearance.browsing }
-        // Pressing/releasing the progress bar toggles blur instantaneously like Apple Music.
         let appearanceAnimated = (changed || exitedBrowsing) && wasActive && !value.reducesMotion
         let currentVisualSize = CGSize(
             width: bounds.width,
@@ -376,10 +352,6 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
         setNeedsLayout()
     }
 
-    /// Filters out production credit rows, short blank timestamp rows, and trailing
-    /// blank rows, keeping at most one interlude row when the gap to the next sung
-    /// line exceeds 4 seconds (including a leading intro interlude before the first sung line).
-    /// Filtered row IDs map to the preceding kept row so focus never drops.
     static func displayLines(
         from source: [PlayerLyricLine],
         minimumInterludeDuration: TimeInterval = 4.0
@@ -416,8 +388,6 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
 
         var previousWasBlank = false
         for (i, line) in source.enumerated() {
-            // Everything before the first sung line (credits / leading blanks) collapses
-            // into the intro interlude if one was inserted, or is skipped if the song starts promptly.
             if let firstSungOffset, i < firstSungOffset {
                 if !rendered.isEmpty, indices[line.id] == nil {
                     indices[line.id] = 0
@@ -478,16 +448,11 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
         return activeIndex
     }
 
-    /// Row that anchors viewport positioning and distance blur: uses the active row
-    /// once singing starts, or anchors on the first lyric row while waiting before
-    /// the initial lyric (when no intro interlude precedes it).
     private func layoutAnchorIndex(for activeIndex: Int?) -> Int? {
         if let activeIndex, renderedLines.indices.contains(activeIndex) { return activeIndex }
         return renderedLines.isEmpty ? nil : 0
     }
 
-    /// Distance in visible (non-collapsed) rows so collapsed 0-height interlude rows
-    /// never inflate distance blur or cascade delays between adjacent sung lines.
     private func visualRowOffset(from anchor: Int, to row: Int) -> Int {
         guard !interludeIntervals.isEmpty, anchor != row else { return row - anchor }
         let step = row > anchor ? 1 : -1
@@ -502,7 +467,6 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
         return count
     }
 
-    // MARK: - Table data
 
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         renderedLines.count
@@ -607,8 +571,6 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
             if let cell { self?.pendingAnimatedFocusCells.remove(cell) }
             self?.cancelAnimations(for: cell)
         }
-        // Overscan rows must not flash outside the viewport before the next
-        // geometry refresh. New cells are always at their final position.
         let viewportTop = cell.frame.minY - contentOffset.y - Self.viewportOverscan
         let fade = currentFade()
         let intersects = viewportTop + textHeight(of: cell) >= fade.topStart - NativeLyricCell.horizontalBleed
@@ -623,8 +585,6 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
         }
     }
 
-    /// Expands or collapses translations with the Music supplemental-text spring.
-    /// The focused row stays on screen; rows below move with the table's height animation.
     private func revealTranslations(_ showsTranslation: Bool, animated: Bool) {
         let anchor = translationAnchorRow()
         let before = anchor.flatMap { rectForRow(at: IndexPath(row: $0, section: 0)).minY }
@@ -687,13 +647,8 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
         contentOffset.y += delta
     }
 
-    // MARK: - Layout
 
     override func layoutSubviews() {
-        // Rows carry a line-change translation while the table lays out. UIKit
-        // assigns `frame` through the active transform, which would rewrite the
-        // row's center and commit overlapping row positions; lay out without the
-        // translation and put it back afterwards.
         let residentCells = subviews.compactMap { $0 as? NativeLyricCell }
         let rowTransforms = residentCells.map(\.transform)
         UIView.performWithoutAnimation {
@@ -765,7 +720,6 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
     private var fadePendingStartHeight: CGFloat?
     private var pendingTransformCommitObserver: CFRunLoopObserver?
 
-    /// Ignore stale pre-tap active line updates emitted while parent SwiftUI state catches up to a seek.
     private func activeRowIndex(for activeID: Int?, updatingSuppression: Bool) -> Int? {
         if let suppressed = suppressedPreSeekActiveID {
             if activeID != suppressed {
@@ -796,15 +750,10 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
         return max(-topInset, min(offset, maxOffset))
     }
 
-    /// Far jumps land outside the table's estimated window. Step by the
-    /// heights already measured in the visible window until the destination
-    /// row exists, so the focused row is never replaced by an estimate.
     private func materializeRow(_ index: Int, focus: CGFloat, topInset: CGFloat,
                                 target: inout CGFloat) -> NativeLyricCell? {
         var cell = displayedCell(forRow: index)
         if cell == nil {
-            // The table owns row materialization; ask it to bring the row
-            // into the viewport instead of scrolling an estimate by hand.
             scrollToRow(at: IndexPath(row: index, section: 0), at: .top, animated: false)
             setNeedsLayout()
             layoutIfNeeded()
@@ -872,8 +821,6 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
         max(cell.bounds.height - motion.lineSpacing, 1)
     }
 
-    /// `frame` includes an in-flight line-change spring; the row's committed
-    /// layout position is center minus half its bounds.
     private func modelTop(of cell: UIView) -> CGFloat {
         cell.center.y - cell.bounds.height / 2
     }
@@ -883,9 +830,6 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
         return cellForRow(at: IndexPath(row: row, section: 0)) as? NativeLyricCell
     }
 
-    /// `cellForRow` can transiently return a cell the table has already
-    /// detached while self-sizing settles; only displayed cells may drive
-    /// focus corrections or geometry recording.
     private func displayedCell(forRow row: Int) -> NativeLyricCell? {
         guard let cell = visibleCell(forRow: row) else { return nil }
         return visibleRows.contains { $0 === cell } ? cell : nil
@@ -1049,8 +993,6 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
         let elapsed = min(max(timestamp - scroll.timestamp, 1.0 / 240.0), 1.0 / 20.0)
         scroll.timestamp = timestamp
 
-        // Promote a newly materialized target row once it has rendered at least one
-        // unfocused frame and entered the visible viewport so its 0.96 -> 1.0 scale-up animates.
         if focusedIndex == row, let cell = displayedCell(forRow: row), !cell.appearance.focused,
            isRowVisibleInViewport(row) {
             pendingAnimatedFocusCells.remove(cell)
@@ -1091,7 +1033,6 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
             }
             return
         }
-        // Apply the system spring to each real scroll position so UIKit lays out the rows it passes.
         let next = scroll.spring.value(fromValue: position, toValue: target,
                                        initialVelocity: scroll.velocity, time: elapsed)
         scroll.velocity = scroll.spring.velocity(fromValue: position, toValue: target,
@@ -1101,7 +1042,6 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
         if abs(nextOffset - offset) > 0.01 {
             setContentOffset(CGPoint(x: 0, y: nextOffset), animated: false)
         }
-        // Carry subpixel movement forward while following UIKit's larger layout corrections.
         let remainder = nextOffset - contentOffset.y
         let pixel = 1 / max(traitCollection.displayScale, 1)
         scrollMotion?.offsetRemainder = abs(remainder) <= pixel ? remainder : 0
@@ -1167,19 +1107,11 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
         setNeedsLayout()
         layoutIfNeeded()
 
-        // Hosting cells report their final height during layout. Materialize
-        // the destination row (stepping by measured heights when a far jump
-        // lands outside the estimated window), then converge against measured
-        // heights so newly self-sized surrounding rows do not leave the first
-        // jump off-target.
         if let cell = materializeRow(anchorIndex, focus: focus, topInset: topInset, target: &target) {
             convergeMeasuredTarget(for: cell, activeID: anchorID, interfaceHidden: interfaceHidden,
                                    focus: &focus, topInset: &topInset, target: &target)
         }
 
-        // UITableView materializes the destination window on the next layout pass.
-        // End the positioning lock first so the row animations target the new cells
-        // instead of the old visible window that is already off-screen.
         positioning = false
         setNeedsLayout()
         layoutIfNeeded()
@@ -1199,7 +1131,6 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
                     cell.transform = .identity
                     continue
                 }
-                // Newly expanded interlude dots bloom directly in place at focusTop.
                 if expandedRowChanged, row == nextExpandedRow {
                     cell.transform = .identity
                     continue
@@ -1248,8 +1179,6 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
                 cell.transform = .identity
                 continue
             }
-            // `frame` includes the transform that is being animated, so using it here
-            // double-counts the displacement and makes every far target look off-screen.
             let destination = cell.center.y - cell.bounds.height / 2 - target - Self.viewportOverscan
             let current = destination + cell.transform.ty
             guard max(current, destination) + cell.bounds.height > -NativeLyricCell.horizontalBleed,
@@ -1263,10 +1192,6 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
             setNeedsLayout()
             return
         }
-        // Directional wave cascade matching Apple Music:
-        // - Moving up (forward/collapse): top-most moving row in the fade window leads.
-        // - Moving down (reverse jump/expand): rows just below the target lead so lower lines
-        //   peel away first without stalling the tapped upper line at the header edge.
         let fade = currentFade()
         let visibleFadeRows = animatedEntries.compactMap { entry -> Int? in
             let top = entry.cell.center.y - entry.cell.bounds.height / 2 + entry.cell.transform.ty
@@ -1387,7 +1312,6 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
         }
     }
 
-    /// Keep pre-commit transforms and fade bounds until Core Animation flushes the current transaction.
     private func schedulePendingTransformClear() {
         guard !pendingStartTransforms.isEmpty || fadePendingStartHeight != nil else {
             cancelPendingTransformCommitObserver()
@@ -1497,8 +1421,6 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
     }
 
     @objc fileprivate func refreshVisualGeometry() {
-        // The presentation tree can still contain pre-layout frames on first mount.
-        // Only our running row animations need its interpolated coordinates.
         updateVisualGeometry(presentation: !animators.isEmpty)
     }
 
@@ -1546,7 +1468,6 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
             let height = textHeight(of: cell)
             let intersectsFade = viewportTop + height >= fade.topStart - bleed
                 && viewportTop <= fade.bottomEnd + bleed
-            // Horizontal overflow stays visible; offscreen rows remain hidden vertically.
             if cell.isContentHidden == intersectsFade { cell.setContentHidden(!intersectsFade) }
             if intersectsFade {
                 if !cell.appearance.focused, !isInterludeRow(row) {
@@ -1590,8 +1511,6 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
         if let cell {
             rowTop = modelTop(of: cell)
         } else if let (nearRow, nearCell) = nearestVisibleRow(to: index) {
-            // The table's estimated rect can lag behind a tall self-sized row;
-            // extrapolate from a displayed neighbour's measured position.
             let heights = visibleRows.map(\.bounds.height)
             let average = max(heights.reduce(0, +) / CGFloat(max(heights.count, 1)), 1)
             rowTop = modelTop(of: nearCell) + CGFloat(index - nearRow) * average
@@ -1619,16 +1538,12 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
         correctSettledFocusIfNeeded()
     }
 
-    // MARK: - Seeking and browsing
 
     func seek(_ index: Int) {
         guard let input, input.isActive, renderedLines.indices.contains(index) else { return }
         resumeTask?.cancel()
         visibility.end()
         endUserInteractionIfNeeded()
-        // Keep browsing active until the alignment has captured its origin and
-        // finished layout convergence. Release it right before updating row
-        // appearances so non-active blur and opacity immediately restore.
         needsFocus = false
         input.isInterfaceHidden = false
         input.onSeek(renderedLines[index].time)
@@ -1649,7 +1564,6 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
         }
     }
 
-    /// Same path as a row tap; kept internal for regression coverage.
     func performSeek(row: Int) {
         seek(row)
     }
@@ -1664,19 +1578,16 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
 
     var renderedLineCount: Int { renderedLines.count }
 
-    /// Visible boundary height and its transition state, exposed for interaction regressions.
     var interfaceFadeHeight: CGFloat { fadeBottom }
     var isInterfaceFadeAnimating: Bool { fadeAnimator != nil }
     var isScrollSpringAnimating: Bool { scrollMotion != nil }
     var isRowTransitionAnimating: Bool { !animators.isEmpty }
-    /// Current animated viewport position of a row, used to assert the starting edge of a seek.
     func transitionViewportTop(forRow row: Int) -> CGFloat? {
         guard let cell = displayedCell(forRow: row) else { return nil }
         return cell.center.y - cell.bounds.height / 2 + cell.transform.ty
             - contentOffset.y - Self.viewportOverscan
     }
 
-    /// Pre-commit transform captured before UIKit replaces the model value with its target.
     func pendingTransitionViewportTop(forRow row: Int) -> CGFloat? {
         guard let cell = displayedCell(forRow: row),
               let transform = pendingStartTransforms[ObjectIdentifier(cell)] else { return nil }
@@ -1702,7 +1613,6 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
             - contentOffset.y - Self.viewportOverscan
     }
 
-    /// Font-derived line height used by the focus formula; exposed for tests.
     var focusLineHeight: CGFloat {
         LyricsFontMetrics.boldLineHeight(size: input?.fontSize ?? 0)
     }
@@ -1793,7 +1703,6 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
         resumeTask = Task { @MainActor [weak self] in
             do { try await Task.sleep(for: .seconds(3)) } catch { return }
             guard let self, let input = self.input, input.isActive, input.isPlaying, self.browsing else { return }
-            // Keep free browsing active when the currently playing lyric is scrolled out of view.
             guard let activeRow = self.layoutAnchorIndex(
                       for: self.activeRowIndex(for: input.activeID, updatingSuppression: false)
                   ),
@@ -1827,9 +1736,6 @@ final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableV
 
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         guard let hit = super.hitTest(point, with: event) else { return nil }
-        // When lyrics are blurred and controls are hidden, divert touches in the hidden
-        // bottom controls zone to the scroll view itself so rows underneath never show
-        // press feedback, while scrolling and tap-to-reveal still work natively.
         if let input, input.isActive, input.isInterfaceHidden, !browsing,
            isInHiddenControlsZone(point) {
             return self

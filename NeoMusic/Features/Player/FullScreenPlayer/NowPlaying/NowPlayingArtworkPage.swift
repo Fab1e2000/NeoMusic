@@ -1,5 +1,4 @@
 // Direct source port from MeloX (GPL-3.0), b8bc60f.
-// NeoDizzy adapters are limited to track data, available playback features and localization.
 import SwiftUI
 
 struct NowPlayingArtworkPage: View {
@@ -153,7 +152,6 @@ struct NowPlayingArtworkPage: View {
                     fadesOnlyWhenSliding: false
                 )
 
-                // 只限制在歌名与歌手区域内左右滑动；边缘仅做视口羽化，文本全程保持实体不透明。
                 NowPlayingTrackSwipe(
                     song: song,
                     pageDistance: max(layout.width(278), slotWidth + 24),
@@ -161,7 +159,6 @@ struct NowPlayingArtworkPage: View {
                     viewportInsets: swipeInsets,
                     viewportWidth: slotWidth
                 ) { track, marqueeActive in
-                    // 放不下时滚动显示（相邻曲目的预览不滚）；滑动期间保持当前歌滚动。
                     NowPlayingMarqueeText(text: track.title, isActive: marqueeActive)
                         .font(.system(size: informationFontSize, weight: .semibold))
                         .nowPlayingPrimary()
@@ -199,7 +196,6 @@ struct NowPlayingArtworkPage: View {
         }
     }
 
-    /// Information grows upward from its approved lower edge, retaining the gap above playback controls.
     static func artworkSide(layout: ReferenceNowPlayingLayout, textScale: CGFloat, controlsOverflow: CGFloat = 0) -> CGFloat {
         max(0, layout.artworkSide - max(0, 53 * (textScale - 1)) - controlsOverflow)
     }
@@ -225,7 +221,6 @@ struct NowPlayingArtworkPage: View {
     }
 }
 
-/// Measures the cover without mounting controls, lyrics, image requests or timers.
 struct NowPlayingArtworkFrameMeasurement: View {
     @Environment(\.nowPlayingLayout) private var layout
     @Environment(\.nowPlayingControlsOverflow) private var controlsOverflow

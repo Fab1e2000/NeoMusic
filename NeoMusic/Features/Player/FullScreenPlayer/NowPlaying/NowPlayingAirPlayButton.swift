@@ -2,7 +2,6 @@ import SwiftUI
 import AVKit
 import CoreBluetooth
 
-/// 保留系统输出设备选择，当前设备名称由音频路由提供。
 struct ReferenceAirPlayButton: View {
     var opacity: Double = 0.72
     @State private var route = ReferenceAudioOutputRoute()
@@ -124,8 +123,6 @@ private final class ReferenceAudioOutputRoute: NSObject, @preconcurrency CBCentr
 
     private func identify() {
         guard let central, central.state == .poweredOn, let bluetoothName, peripheral == nil else { return }
-        // One audio device may expose multiple connected BLE endpoints with the same name.
-        // Compare returned models; an endpoint without model data contributes no identity.
         candidates = central.retrieveConnectedPeripherals(withServices: [informationService])
             .filter { $0.name == bluetoothName }
         resolvedSymbols.removeAll()
@@ -221,7 +218,6 @@ private struct ReferenceAirPlayRoutePicker: UIViewRepresentable {
         return picker
     }
 
-    /// 播放页固定深色，用主题色的深色档，不随窗口外观取浅色档。
     func updateUIView(_ picker: AVRoutePickerView, context: Context) {
         picker.tintColor = UIColor.white.withAlphaComponent(opacity)
         picker.activeTintColor = UIColor.white.withAlphaComponent(opacity)

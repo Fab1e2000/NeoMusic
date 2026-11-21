@@ -1,5 +1,4 @@
 // Direct source port from MeloX (GPL-3.0), b8bc60f.
-// NeoDizzy adapters are limited to track data, available playback features and localization.
 import SwiftUI
 
 struct NowPlayingQueuePage: View {
@@ -82,7 +81,6 @@ struct NowPlayingQueuePage: View {
         }
     }
 
-    /// 头部占的整段高度：上方留白、头部本身、到模式按钮的间距。
     private var songHeaderHeight: CGFloat {
         presentation == .portrait
             ? NowPlayingSongHeader.topInset + NowPlayingSongHeader.referenceHeight
@@ -91,8 +89,6 @@ struct NowPlayingQueuePage: View {
     }
 
     private var bottomContentInset: CGFloat {
-        // Leave a small gap above the progress track, halfway between the
-        // original fixed inset and the track-aligned version.
         presentation == .portrait
             ? max(0, layout.contentSize.height - 3 - layout.contentY(557)) + controlsOverflow
             : 12
@@ -115,7 +111,6 @@ struct NowPlayingQueuePage: View {
     }
 }
 
-/// Header motion is observed separately from the list; edge fading runs inside the collection view.
 @MainActor @Observable
 private final class QueueHeaderScrollState {
     var offset: CGFloat = 0
@@ -161,7 +156,6 @@ private struct QueueSongHeader: View {
     }
 }
 
-/// A short transparent-to-opaque edge shared by the queue and its header.
 struct NowPlayingQueueTopFade: View {
     let height: CGFloat
 

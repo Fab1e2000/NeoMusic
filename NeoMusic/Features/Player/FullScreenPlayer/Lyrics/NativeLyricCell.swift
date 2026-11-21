@@ -26,12 +26,6 @@ nonisolated struct LyricsInterludeFrame: Equatable, Sendable {
     }
 }
 
-/// Pure, time-driven animation model for Apple Music's 3-dot interlude indicator.
-/// Geometry and phase timings align with the supplied Apple Music iOS recording
-/// (00:06–00:26): centered group scaling, ~1.2s entrance from 0 to ~0.3 opacity,
-/// 3 equal linear progress segments across the wait, parallel 4.5s breathing
-/// oscillation, and ~1.0s exit (anticipation swell to 1.25x then rapid 0.45s
-/// shrink-to-0 and fade right before row collapse).
 nonisolated enum LyricsInterludeTimeline {
     static let baseDotOpacity: Double = 0.30
     static let increasedContrastBaseDotOpacity: Double = 0.45
@@ -41,8 +35,6 @@ nonisolated enum LyricsInterludeTimeline {
     static let maxAnticipationDuration: TimeInterval = 0.55
     static let maxShrinkDuration: TimeInterval = 0.45
     static let exitDurationFraction: Double = 0.28
-    /// Finish fade/shrink slightly before the next lyric line triggers so the
-    /// 24Hz line observer never clips the final shrink frames before collapse.
     static let exitLeadClearance: TimeInterval = 0.04
     static let breathingPeriod: TimeInterval = 4.50
     static let breathingAmplitude: Double = 0.09
@@ -106,7 +98,6 @@ nonisolated enum LyricsInterludeTimeline {
         let exitStart = max(entranceDuration, effectiveDuration - exitBudget)
         let shrinkStart = effectiveDuration - shrinkDuration
 
-        // Main progress: divide the wait between entrance and exit into 3 equal segments.
         let progressSpan = max(exitStart - entranceDuration, 0.001)
         let progress = clamp01((elapsed - entranceDuration) / progressSpan)
         let dot1 = baseOpacity + (litDotOpacity - baseOpacity) * clamp01(progress * 3.0)
@@ -153,7 +144,6 @@ nonisolated enum LyricsInterludeTimeline {
         } else {
             let p = shrinkDuration > 0 ? clamp01((elapsed - shrinkStart) / shrinkDuration) : 1
             scale = anticipationPeakScale * (1.0 - p * p)
-            // Keep full brightness during the initial inward pull, then fade smoothly to 0.
             let fadeP = clamp01((p - 0.25) / 0.75)
             groupOpacity = 1.0 - smoothstep(fadeP)
         }
@@ -206,7 +196,6 @@ nonisolated enum LyricsInterludeTimeline {
     var isPageActive = true
     var timelineAnchor: PlayerTimelineAnchor = .zero
     var interludeInterval: LyricsInterludeInterval?
-    // Read alongside focus/opacity changes; changing timing alone must not redraw every row.
     @ObservationIgnored var animated = false
     @ObservationIgnored var progressInteraction: NowPlayingProgressInteraction?
     @ObservationIgnored var onTap: (() -> Void)?
@@ -369,7 +358,6 @@ private struct LocalLyricsRow: View {
     }
 }
 
-/// Animate focus independently so per-frame distance updates retain the 120ms focus curve.
 nonisolated private struct LyricsFocusBlur: ViewModifier, Animatable {
     var radius: Double
     var amount: Double
@@ -389,7 +377,6 @@ nonisolated private struct LyricsFocusBlur: ViewModifier, Animatable {
 
 final class NativeLyricCell: UITableViewCell {
     static let reuseIdentifier = "NativeLyricCell"
-    // Keep the blur halo inside the hosting surface even if an internal host clips.
     static let horizontalBleed = NativeLyricsScrollView.horizontalBleed
     let appearance = LyricsRowAppearance()
     var onPrepareForReuse: (() -> Void)?
@@ -412,8 +399,6 @@ final class NativeLyricCell: UITableViewCell {
     required init?(coder: NSCoder) { nil }
 
     var contentHost: UIView? {
-        // iOS 27 installs UIHostingConfiguration's content view directly on
-        // the cell; earlier versions put it in contentView.
         subviews.first { $0 is any UIContentView }
             ?? subviews.first { $0 !== contentView }
             ?? contentView.subviews.first
@@ -528,8 +513,6 @@ final class NativeLyricCell: UITableViewCell {
         super.layoutSubviews()
         contentHost?.isHidden = contentShouldBeHidden
         needsFadeTargetDiscovery = true
-        // Hosting sizes settle during layout. Let the owner run one more pass
-        // so focus correction and edge masks see the final row height.
         if abs(bounds.height - lastLayoutHeight) > 0.5 {
             lastLayoutHeight = bounds.height
             (superview as? NativeLyricsScrollView)?.setNeedsLayout()
@@ -553,8 +536,6 @@ final class NativeLyricCell: UITableViewCell {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
-        // Rows overlapping the top/bottom fade zone may gain dynamic press-highlight
-        // backing layers on touch; re-discover targets so the highlight is always masked.
         let inEdgeFadeZone = viewportTop < fade.topEnd || viewportTop + bounds.height > fade.bottomStart
         var targets = cachedFadeTargets.allObjects.compactMap { $0 as? CALayer }.filter { $0.superlayer != nil }
         if needsFadeTargetDiscovery || inEdgeFadeZone || targets.isEmpty {
@@ -588,7 +569,6 @@ final class NativeLyricCell: UITableViewCell {
         for child in layer.sublayers ?? [] { removeEdgeMask(in: child) }
     }
 
-    /// Match the queue: mask blend/compositing leaves, preserving existing custom masks.
     @discardableResult private func collectTargets(in layer: CALayer, targets: inout [CALayer]) -> Bool {
         let start = targets.count
         let hasFilter = layer.compositingFilter != nil
@@ -663,7 +643,6 @@ nonisolated struct LyricsViewportFade: Equatable, Sendable {
         bottomStart = max(topEnd, bottomEnd - bottomFade)
     }
 
-    /// The table's content coordinates are shifted by its vertical overscan.
     func shifted(by offset: CGFloat) -> LyricsViewportFade {
         var shifted = self
         shifted.topStart += offset

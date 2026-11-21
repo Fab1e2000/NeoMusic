@@ -1,7 +1,6 @@
 import SwiftUI
 import UIKit
 
-/// Reports UIKit scroll offset from a hosted header container without SwiftUI scroll-geometry coupling.
 @MainActor @Observable
 final class PlaylistScrollDistance {
     var distance: CGFloat = 0
@@ -16,11 +15,8 @@ enum NativePlaylistSwipeMode {
     case editablePlaylist(remove: (LibrarySongItem) -> Void)
 }
 
-/// Shared UIKit list chrome, secondary blend-equivalent colors, swipe actions, and context menus.
 @MainActor
 enum CollectionTrackUI {
-    /// Computes the solid ±0.5 channel-offset equivalent of SwiftUI `.plusLighter`/`.plusDarker`
-    /// on top of an opaque background color, avoiding per-row GPU offscreen blend passes.
     static func solidSecondaryColor(on background: UIColor, isDark: Bool, traitCollection: UITraitCollection) -> UIColor {
         CollectionPagePalette(background: background, isDark: isDark).secondary
     }
@@ -48,9 +44,6 @@ enum CollectionTrackUI {
         return background
     }
 
-    /// One VoiceOver description for song rows in playlists, Favorites, and albums.
-    /// The artist stays audible even when the visible subtitle is replaced by an
-    /// unavailability reason.
     static func songAccessibilityLabel(for song: LibrarySongItem) -> String {
         var components = [song.title, song.artist]
         if let reason = song.unavailabilityReason, !reason.isEmpty {
@@ -193,8 +186,6 @@ enum CollectionTrackUI {
     }
 }
 
-/// High-frequency UICollectionView track list for playlists and Favorites, matching AlbumSongsController's
-/// UIKit gesture, separator, and swipe behavior without per-row SwiftUI list diffing overhead.
 struct NativePlaylistTrackList: UIViewControllerRepresentable {
     let songs: [LibrarySongItem]
     let title: String
@@ -1207,7 +1198,6 @@ private final class PlaylistDownloadBadgeView: UIView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    /// 交互态下向左扩展 12pt 热区（总宽 40pt × 44pt），不挤压歌名宽度。
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
         if button.isUserInteractionEnabled {
             return bounds.inset(by: UIEdgeInsets(top: 0, left: -12, bottom: 0, right: 0)).contains(point)

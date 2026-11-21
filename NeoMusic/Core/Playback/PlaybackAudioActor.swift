@@ -1,8 +1,5 @@
 import Foundation
 
-/// Dedicated serial execution domain for all CoreAudio, AVAudioEngine,
-/// AVAudioFile, and AudioStreaming operations so playback backend work
-/// never contends with `@MainActor` UI animations.
 @globalActor
 actor PlaybackAudioActor {
     static let shared = PlaybackAudioActor()

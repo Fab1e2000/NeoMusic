@@ -73,7 +73,6 @@ final class AudioSpectrumTests: XCTestCase {
         for i in 0..<Int(frames) {
             buffer.floatChannelData![0][i] = Float(0.1 * sin(2 * .pi * frequency * Double(i) / 44100))
         }
-        // Close the writer before handing the file to AVPlayer.
         do {
             let file = try AVAudioFile(forWriting: url, settings: format.settings)
             try file.write(from: buffer)

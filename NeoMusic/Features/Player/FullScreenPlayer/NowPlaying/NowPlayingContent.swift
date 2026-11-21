@@ -1,5 +1,4 @@
 // Direct source port from MeloX (GPL-3.0), b8bc60f.
-// Data/settings adapters retain NeoDizzy playback and lyric sources.
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -40,8 +39,6 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
         self.onDismiss = onDismiss
         self.isActive = isActive
         _page = State(initialValue: initialPage)
-        // Geometry belongs to this presentation's identity; callers may supply
-        // its initial owner to observe layout without screen-coordinate feedback.
         _geometryState = State(initialValue: geometry)
     }
     private var artworkPreparationIDs: [String] {
@@ -58,13 +55,11 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
         GeometryReader { geometry in
             let layout = ReferenceNowPlayingLayout(contentSize: geometry.size)
             ZStack {
-                // 背景自己在铺满安全区之后上报位置，背景副本才能和它完全重合。
                 PlaybackLinkedBackdrop(
                     artworkURL: player.currentTrack?.coverURL,
                     trackID: player.currentTrack?.id,
                     onFrameChange: { geometryState.backdropFrame = $0 }
                 )
-                // iPhone 只支持竖屏（见 project.yml 的 UISupportedInterfaceOrientations），不保留横屏布局。
                 if let song = player.currentTrack {
                     portraitContent(for: song, layout: layout,
                                     lyricsBottomExtension: geometry.safeAreaInsets.bottom + 3)
@@ -400,7 +395,6 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
                 if queueHeaderOffset.points != offset { queueHeaderOffset.points = offset }
             }
         )
-        // 列表及切页遮罩均使用整屏宽度，保留边缘的原生滚动条。
         .padding(.horizontal, portraitHorizontalPadding)
         .clipped()
         .modifier(NowPlayingPagePresentation(
@@ -541,8 +535,6 @@ private struct LyricsControlsIdleKey: Equatable {
     let generation: Int
 }
 
-/// Observes `player.isPlaying` and scrubbing state outside `NowPlayingContent.body`
-/// so toggling playback disables auto-hide without re-evaluating the whole player tree.
 private struct LyricsControlsAutoHideObserver: View {
     @Environment(PlayerState.self) private var player
     @Environment(NowPlayingProgressInteraction.self) private var progressInteraction: NowPlayingProgressInteraction?
@@ -593,7 +585,6 @@ private struct LyricsControlsAutoHideObserver: View {
     }
 }
 
-/// Observes touches on the player without taking them from buttons, sliders, or lyric rows.
 private struct LyricsControlsIdleTouchMonitor: UIViewRepresentable {
     var isActive: Bool
     var onBegan: () -> Void
@@ -688,7 +679,6 @@ private struct LyricsControlsIdleTouchMonitor: UIViewRepresentable {
     }
 }
 
-/// Keeps taps that miss a button on the lyrics control surface, instead of the lyric row behind it.
 struct LyricsControlSurfaceHitShield: ViewModifier {
     var isActive: Bool
 
@@ -703,7 +693,6 @@ struct LyricsControlSurfaceHitShield: ViewModifier {
     }
 }
 
-/// Queue scroll writes here. Only the header and floating artwork read it, so the rest of the player stays put.
 @MainActor @Observable
 private final class QueueHeaderOffset {
     var points: CGFloat = 0
@@ -729,7 +718,6 @@ private struct QueueLinkedSongHeader: View {
     }
 }
 
-/// Keep scroll observation outside the title, artist menu and track-swipe content.
 private struct QueueSongHeaderScrollPresentation: ViewModifier {
     let page: NowPlayingPage
     let offset: QueueHeaderOffset
@@ -742,8 +730,6 @@ private struct QueueSongHeaderScrollPresentation: ViewModifier {
     }
 }
 
-/// Keep `player.isPlaying` observation inside the backdrop so toggling playback
-/// does not invalidate `NowPlayingContent` (including resident lyrics/queue pages).
 private struct PlaybackLinkedBackdrop: View {
     @Environment(PlayerState.self) private var player
     let artworkURL: URL?
@@ -828,8 +814,6 @@ private struct QueueArtworkScrollMask: ViewModifier {
     func body(content: Content) -> some View {
         content.mask {
             GeometryReader { geometry in
-                // The queue cover follows the list behind its top edge.
-                // Keep the artwork page's shadow uncut beneath the handle.
                 VStack(spacing: 0) {
                     NowPlayingQueueTopFade(height: page == .queue ? min(24, max(0, -offset.points)) : 0)
                     Rectangle()

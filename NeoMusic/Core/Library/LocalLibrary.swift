@@ -1,6 +1,5 @@
 import SwiftUI
 
-/// A typed identity prevents a playlist and an album with the same ID from colliding.
 struct PinnedOrderID: Hashable, Codable {
     enum Kind: String, Codable { case playlist, album }
     let kind: Kind
@@ -10,8 +9,6 @@ struct PinnedOrderID: Hashable, Codable {
 
 }
 
-/// Pin flags remain authoritative. The order is independent, so partial loading,
-/// a missing file, or a cancelled scan cannot erase a user's saved positions.
 @MainActor @Observable
 final class PinnedOrderStore {
     private(set) var order: [PinnedOrderID]
@@ -28,7 +25,6 @@ final class PinnedOrderStore {
                 order = decoded.filter { seen.insert($0).inserted }
                 canWrite = true
             } else {
-                // A future version or damaged value must never be silently overwritten.
                 order = []
                 canWrite = false
             }
@@ -38,7 +34,6 @@ final class PinnedOrderStore {
         }
     }
 
-    /// Unseen pins append in the existing library order; unavailable pins retain their stored positions.
     func ordered<T>(_ items: [T], id: (T) -> PinnedOrderID?) -> [T] {
         let ranks = Dictionary(uniqueKeysWithValues: order.enumerated().map { ($0.element, $0.offset) })
         return items.enumerated().sorted { lhs, rhs in
@@ -48,7 +43,6 @@ final class PinnedOrderStore {
         }.map(\.element)
     }
 
-    /// Rearrange only a complete permutation of current pins. Hidden/unloaded IDs keep their slots.
     @discardableResult
     func reorder(visible: [PinnedOrderID], to requested: [PinnedOrderID]) -> Bool {
         let visibleSet = Set(visible)
@@ -69,7 +63,6 @@ final class PinnedOrderStore {
     }
 }
 
-/// 持久化选择集合。
 @MainActor @Observable
 final class LibrarySelectionSet {
     private(set) var ids: Set<String> { didSet { if let key { UserDefaults.standard.set(Array(ids), forKey: key) } } }
@@ -87,7 +80,6 @@ final class LibrarySelectionSet {
     func remove(_ id: String) { ids.remove(id) }
 }
 
-/// Album ordering and cover selection change with local metadata, independently of favorites and pins.
 @MainActor
 final class LocalAlbumIndex {
     let items: [LibraryShelfItem]
@@ -118,7 +110,6 @@ final class LocalAlbumIndex {
         albumIDsByArtist = artistAlbums
     }
 
-    /// Called on mutation only; reads reuse the prepared index without inspecting the song array.
     static func hasSameMetadata(_ lhs: [LibrarySongItem], _ rhs: [LibrarySongItem]) -> Bool {
         guard lhs.count == rhs.count else { return false }
         return zip(lhs, rhs).allSatisfy { a, b in
@@ -129,7 +120,6 @@ final class LocalAlbumIndex {
     }
 }
 
-/// 共享歌曲记录与持久化喜爱状态。
 @MainActor @Observable
 final class SongLibrary {
     private(set) var songs: [LibrarySongItem] {
@@ -140,7 +130,6 @@ final class SongLibrary {
             }
         }
     }
-    /// Explicit alias distinguishing scanned local files (`localSongs`) from `onlineSongs` and `allSongs`.
     var localSongs: [LibrarySongItem] { songs }
     private(set) var albumIndex = LocalAlbumIndex(songs: [])
     @ObservationIgnored private var onlineSongsByID: [String: LibrarySongItem] = [:]
@@ -241,7 +230,6 @@ final class SongLibrary {
             let updatedFavorites = Self.orderedFavorites(updated)
             if favoriteSongs != updatedFavorites { favoriteSongs = updatedFavorites }
         }
-        // Detail routes and old queue entries keep their original online identity.
         var byID: [String: LibrarySongItem] = [:]
         byID.reserveCapacity(candidates.count)
         for candidate in candidates where byID[candidate.id] == nil {
@@ -315,7 +303,6 @@ final class SongLibrary {
         if onlineSongs != updated { onlineSongs = updated }
     }
 
-    /// Image arrivals update their owning catalog without reloading playback availability.
     func updateOnlineArtwork(_ replacements: [String: LibrarySongItem], source: String? = nil) {
         guard !replacements.isEmpty else { return }
         if let source {
