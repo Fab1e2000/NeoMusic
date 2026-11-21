@@ -243,9 +243,37 @@ enum LocalLibrary {
             return FileManager.default.fileExists(atPath: url.path) ? url : nil
         }))
 
-    private static func playerActions(openRoute: @escaping (LibraryRoute) -> Void,
+    static func songAlbumPreview(_ song: LibrarySongItem, route: LibraryRoute) -> LibraryNavigationPreview? {
+        guard case .album(let id) = route else { return nil }
+        let online = CatalogRouteIdentity.isCatalogID(id)
+        if let owner = song.onlineOwnerID, owner != (playbackAccountID ?? "search-guest") { return nil }
+        let album: LibraryShelfItem?
+        if online {
+            album = catalog.cachedAlbumItem?(id) ?? catalog.albums.first {
+                $0.id == id && $0.sourceOwnerID == playbackAccountID
+            }
+        } else {
+            album = albumItem(id)
+        }
+        let songCover: Artwork
+        if let url = song.artworkURL, url.isFileURL { songCover = .file(url) }
+        else { songCover = song.artwork }
+        let cover = album.flatMap { $0.artwork == .missing ? nil : $0.artwork } ?? songCover
+        let color = album?.albumBackdrop ?? LocalArtworkImages.cachedBackdrop(for: cover)
+            ?? song.artworkBackdrop ?? LocalArtworkImages.cachedBackdrop(for: songCover)
+        var preview = LibraryNavigationPreview(route: route, ownerID: online ? playbackAccountID : nil,
+            title: album?.title ?? song.album, subtitle: album?.subtitle ?? (song.albumArtist.isEmpty ? song.artist : song.albumArtist),
+            artwork: cover, albumBackdrop: color)
+        preview.requiresMatchingAccount = online
+        if case .file(let file) = cover { preview.backdropFile = file }
+        else if let id = cover.loadID { preview.backdropFile = LocalArtworkImages.resolvedURL(for: id) }
+        return preview
+    }
+
+    private static func playerActions(navigate: @escaping (LibraryRoute, LibraryNavigationPreview?) -> Void,
                                       openAudioQualitySettings: (() -> Void)?) -> PlayerActions {
-        PlayerActions(
+        let openRoute: (LibraryRoute) -> Void = { navigate($0, nil) }
+        return PlayerActions(
             isFavorite: { id in song(id: id)?.isFavorite == true },
             toggleFavorite: { songLibrary.toggleFavorite($0) },
             addToPlaylist: { id in
@@ -257,9 +285,7 @@ enum LocalLibrary {
             },
             openAlbum: { id in
                 guard let song = song(id: id) else { return }
-                if song.onlineAlbumID != nil { openRoute(.album(song.albumID)) }
-                else if song.isNeteaseCatalogSong || catalog.downloadedOnlineSongID?(id) != nil { catalog.openSongAlbum?(id, openRoute) }
-                else { openRoute(.album(song.albumID)) }
+                songActions.openAlbum(song) { route in navigate(route, songAlbumPreview(song, route: route)) }
             },
             openArtist: { id in
                 guard let song = song(id: id) else { return }
@@ -462,6 +488,7 @@ enum LocalLibrary {
                 playlistLibrary.removeSongsEverywhere([song.id])
             },
             playbackSource: { player.isPlaying ? player.sourceTitle : nil },
+            albumPreview: songAlbumPreview,
             openAlbum: { song, open in
                 if song.onlineAlbumID != nil { open(.album(song.albumID)) }
                 else if song.isNeteaseCatalogSong || catalog.downloadedOnlineSongID?(song.id) != nil { catalog.openSongAlbum?(song.id, open) }

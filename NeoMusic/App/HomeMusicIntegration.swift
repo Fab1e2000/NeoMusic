@@ -722,7 +722,7 @@ import Observation
         guard preview.ownerID == owner, case .playlist(let id) = preview.route, id.hasPrefix("home:") else { return }
         var item = detailLibrary.playlist(id) ?? LibraryPlaylistItem(id: id, title: preview.title, artwork: preview.artwork)
         item.title = preview.title
-        item.subtitle = preview.subtitle
+        if let subtitle = preview.subtitle, !subtitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { item.subtitle = subtitle }
         item.artwork = preview.artwork
         item.sourceOwnerID = owner
         item.isReadOnlyContent = true

@@ -229,7 +229,7 @@ struct AppShell<Library: View>: View {
     let toasts: LibraryToastCenter
     let referencePlayer: PlayerState
     let referenceLibrary: ReferenceLibrary
-    let makePlayerActions: (@escaping (LibraryRoute) -> Void, (() -> Void)?) -> PlayerActions
+    let makePlayerActions: (@escaping (LibraryRoute, LibraryNavigationPreview?) -> Void, (() -> Void)?) -> PlayerActions
     var isInitialContentReady = true
     var searchContent: AnyView? = nil
     var searchDestination: ((LibraryRoute) -> AnyView)? = nil
@@ -316,8 +316,8 @@ struct AppShell<Library: View>: View {
                               toasts: toasts))
         .environment(referencePlayer)
         .environment(referenceLibrary)
-        .environment(makePlayerActions({ route in
-            startPlayerNavigation(route)
+        .environment(makePlayerActions({ route, preview in
+            startPlayerNavigation(route, preview: preview)
         }, account.music == nil ? nil : { showsAudioQualitySettings = true }))
         .onChange(of: isPlayerPresented) { _, presented in
             if presented { playerNavigation.didBeginPresentation() }
@@ -357,17 +357,17 @@ struct AppShell<Library: View>: View {
         case .favorites, .playlists, .albums, .artists, .songs, .playlist: return sectionBridge(selection)
         }
     }
-    private func openInCurrentTab(_ route: LibraryRoute) {
+    private func openInCurrentTab(_ route: LibraryRoute, preview: LibraryNavigationPreview?) {
         if selection == .search, effectiveSearchContent == nil {
             selection = .library
-            detailNavigation.open(route)
+            detailNavigation.open(route, preview: preview)
             return
         }
-        tabNavigations.navigation(for: selection).open(route)
+        tabNavigations.navigation(for: selection).open(route, preview: preview)
     }
-    private func startPlayerNavigation(_ route: LibraryRoute) {
+    private func startPlayerNavigation(_ route: LibraryRoute, preview: LibraryNavigationPreview?) {
         guard playerNavigation.begin(route) else { return }
-        if currentNavigation.topRoute != route { openInCurrentTab(route) }
+        if currentNavigation.topRoute != route { openInCurrentTab(route, preview: preview) }
         isPlayerPresented = false
     }
     private func finishPlayerNavigation() {

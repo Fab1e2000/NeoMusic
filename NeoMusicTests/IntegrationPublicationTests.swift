@@ -346,6 +346,12 @@ import XCTest
             LocalLibrary.songLibrary.replaceExternalSongs(previousExternal)
         }
         integration.connect()
+        let route = LibraryRoute.playlist("home:playlist:12")
+        for subtitle in ["Creator", "  "] {
+            integration.prepareNavigation(.init(route: route, ownerID: nil, title: "Public list",
+                                                subtitle: subtitle, artwork: .playlist))
+        }
+        XCTAssertEqual(integration.detailLibrary.playlist("home:playlist:12")?.subtitle, "Creator")
         XCTAssertTrue(integration.cachedSongs.isEmpty)
         let changes = Mutex(0)
         withObservationTracking {

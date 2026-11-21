@@ -56,6 +56,7 @@ final class LibraryDetailNavigation: NSObject, UINavigationControllerDelegate {
                         destination: self?.destination,
                         openAction: OpenLibraryRouteAction(
                             handler: { [weak self] in self?.open($0) },
+                            previewHandler: { [weak self] in self?.open($0, preview: $1) },
                             sourceHandler: { [weak self] in self?.open($0, source: $1) },
                             sourceProviderHandler: { [weak self] in self?.open($0, sourceProvider: $1) },
                             previewSourceHandler: { [weak self] in self?.open($0, sourceProvider: $2, preview: $1) }
@@ -71,7 +72,7 @@ final class LibraryDetailNavigation: NSObject, UINavigationControllerDelegate {
         if case .artist = route {
             page.view.backgroundColor = .black
         } else if let preview, preview.route == route,
-           preview.ownerID == nil || preview.ownerID == environment[NeteaseAccount.self]?.profile.map({ String($0.userID) }),
+           preview.matches(owner: environment[NeteaseAccount.self]?.profile.map { String($0.userID) }),
            let backdrop = preview.albumBackdrop {
             page.chrome.setAlbumBackdrop(backdrop)
         }
@@ -136,7 +137,7 @@ private struct LibraryNavigationPreviewScope: View {
     let account: NeteaseAccount?
     var body: some View {
         content.environment(\.libraryNavigationPreview,
-            preview?.ownerID == nil || preview?.ownerID == account?.profile.map({ String($0.userID) }) ? preview : nil)
+            preview?.matches(owner: account?.profile.map { String($0.userID) }) == true ? preview : nil)
     }
 }
 

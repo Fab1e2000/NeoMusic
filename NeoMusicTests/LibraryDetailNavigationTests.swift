@@ -1854,7 +1854,7 @@ final class LibraryDetailNavigationTests: XCTestCase {
         defer { window.isHidden = true }
         let player = PlayerTestFixtures.state(tracks: [PlayerTrack(id: "player-route", title: "Track",
             artists: "Artist", albumTitle: "Album", coverURL: nil, duration: 60)])
-        var openFromPlayer: ((LibraryRoute) -> Void)?
+        var openFromPlayer: ((LibraryRoute, LibraryNavigationPreview?) -> Void)?
         window.rootViewController = UIHostingController(rootView: AppShell(
             library: { TestRoot() }, detailDestination: { AnyView(TestDetail(route: $0)) },
             nowPlaying: nil, playlistLibrary: PlaylistLibrary(playlists: []), toasts: LibraryToastCenter(),
@@ -1877,16 +1877,20 @@ final class LibraryDetailNavigationTests: XCTestCase {
         let open = try XCTUnwrap(openFromPlayer)
         XCTAssertEqual(bridge.depth, 0)
 
-        open(.album("player-route"))
+        let color = AlbumArtworkBackdrop(red: 0.1, green: 0.2, blue: 0.3)
+        let preview = LibraryNavigationPreview(route: .album("player-route"), ownerID: nil, title: "Album",
+                                               artwork: .missing, albumBackdrop: color)
+        open(.album("player-route"), preview)
+        XCTAssertEqual(nav.topViewController?.view.backgroundColor, color.uiColor)
         XCTAssertEqual(bridge.depth, 1, "Player navigation must not wait for the close transition")
-        open(.album("player-route"))
+        open(.album("player-route"), preview)
         XCTAssertEqual(bridge.depth, 1, "A repeated request while closing must not push the page again")
 
         try await settle()
         XCTAssertEqual(bridge.depth, 1)
-        open(.album("player-route"))
+        open(.album("player-route"), preview)
         XCTAssertEqual(bridge.depth, 1, "A destination already on top must not be pushed again")
-        open(.artist("player-artist"))
+        open(.artist("player-artist"), nil)
         XCTAssertEqual(bridge.depth, 2, "A different destination still navigates")
     }
 

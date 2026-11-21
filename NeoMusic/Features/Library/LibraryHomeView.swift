@@ -13,6 +13,7 @@ struct LibraryShelfItem: Identifiable, Equatable {
     var songID: String? = nil
     var year: Int?
     var sourceOwnerID: String?
+    var albumArtist: String?
     var albumBackdrop: AlbumArtworkBackdrop? = nil
 }
 
@@ -379,7 +380,7 @@ private struct RecentSongCard: View {
                 identity: item.id,
                 menu: {
                     guard let song = songForMenu(songID) else { return UIMenu() }
-                    return actions.rowMenuSections(for: song) { open($0) }.nativeMenu(firstSectionIsRow: true)
+                    return actions.rowMenuSections(for: song) { open($0, preview: actions.albumPreview(song, $0)) }.nativeMenu(firstSectionIsRow: true)
                 },
                 preview: { AnyView(MenuPreviewCard(artwork: song?.artwork ?? item.artwork, lines: lines)) },
                 previewSize: { MenuPreviewCard.size(for: lines, compatibleWith: $0) },

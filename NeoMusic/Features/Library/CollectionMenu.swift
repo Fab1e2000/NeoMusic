@@ -387,6 +387,7 @@ struct SongMenuActions {
     var playLater: (LibrarySongItem) -> Void = { _ in }
     var delete: (LibrarySongItem) -> Void = { _ in }
     var playbackSource: () -> String? = { nil }
+    var albumPreview: (LibrarySongItem, LibraryRoute) -> LibraryNavigationPreview? = { _, _ in nil }
     var openAlbum: (LibrarySongItem, @escaping (LibraryRoute) -> Void) -> Void = { song, open in open(.album(song.albumID)) }
     var openArtist: (LibrarySongItem, @escaping (LibraryRoute) -> Void) -> Void = { _, _ in }
     var notify: (LibraryToast) -> Void = { _ in }
@@ -680,6 +681,6 @@ private struct SongNavigationMenu: View {
     @Environment(\.songMenuActions) private var actions
     @Environment(\.openLibraryRoute) private var open
     var body: some View {
-        LibraryMenuContents(sections: actions.rowMenuSections(for: song, removeFromPlaylist: onRemoveFromPlaylist) { open($0) })
+        LibraryMenuContents(sections: actions.rowMenuSections(for: song, removeFromPlaylist: onRemoveFromPlaylist) { open($0, preview: actions.albumPreview(song, $0)) })
     }
 }

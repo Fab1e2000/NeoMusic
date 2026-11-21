@@ -56,6 +56,13 @@ import Observation
         store?.onArtworkChange = { [weak self] in self?.publishArtwork($0) }
         LocalLibrary.catalog.openSongAlbum = { [weak self] song, open in self?.openSong(song, artist: nil, album: true, open: open) }
         LocalLibrary.catalog.openSongArtist = { [weak self] song, artist, open in self?.openSong(song, artist: artist, album: false, open: open) }
+        LocalLibrary.catalog.cachedAlbumItem = { [weak self] key in
+            guard let self, let store, store.userID == owner, store.sessionRevision == sessionRevision,
+                  case .album(let id) = CatalogRouteIdentity(key),
+                  let detail = detailStates["album:\(id)"]?.album else { return nil }
+            return LibraryShelfItem(id: key, title: detail.title, subtitle: detail.subtitle, artwork: detail.artwork,
+                                    sourceOwnerID: owner.map(String.init), albumBackdrop: detail.albumBackdrop)
+        }
         LocalLibrary.catalog.actions = collectionActions
         LocalLibrary.catalog.loadAlbumSongs = { [weak self] key in
             guard let self, let captured = self.owner else { throw NeteaseAccountError.authenticationRequired }
@@ -311,7 +318,7 @@ import Observation
         if case .file(let url) = cover, backdropSources[value.id] == url { retained = backdrops[value.id] }
         else { retained = nil }
         let albumRouteID = CatalogRouteIdentity.albumID(value.id)
-        return .init(id: albumRouteID, title: value.title, subtitle: value.artist, artwork: cover, route: .album(albumRouteID), isFavorite: subscribedAlbumIDs.contains(value.id), addedOrder: store?.albumAddedDate(value.id).map { Int($0.timeIntervalSince1970) } ?? 0, year: value.publishTime.map { Calendar.current.component(.year, from: $0) }, sourceOwnerID: owner.map(String.init), albumBackdrop: prepared ?? retained)
+        return .init(id: albumRouteID, title: value.title, subtitle: value.artist, artwork: cover, route: .album(albumRouteID), isFavorite: subscribedAlbumIDs.contains(value.id), addedOrder: store?.albumAddedDate(value.id).map { Int($0.timeIntervalSince1970) } ?? 0, year: value.publishTime.map { Calendar.current.component(.year, from: $0) }, sourceOwnerID: owner.map(String.init), albumArtist: value.artist, albumBackdrop: prepared ?? retained)
     }
     private func releaseItem(_ value: NeteaseArtistAlbum) -> LibraryShelfItem {
         var item = albumItem(value); item.subtitle = item.year.map { "\($0)年" }; return item

@@ -11,6 +11,47 @@ final class LibraryRecentAdditionsTests: XCTestCase {
         LibraryShelfItem(id: id, title: id, artwork: .missing, route: route, addedOrder: order)
     }
 
+    @MainActor func testSongAlbumPreviewUsesIndexedCompilationCoverAndOnlineSongColor() throws {
+        let saved = LocalLibrary.songLibrary.localSongs
+        let owner = LocalLibrary.playbackAccountID
+        defer {
+            LocalLibrary.songLibrary.replace(saved)
+            LocalLibrary.playbackAccountID = owner
+        }
+        var first = song("one")
+        first.artwork = .file(URL(fileURLWithPath: "/first.jpg"))
+        first.artworkBackdrop = .init(red: 0.3, green: 0.2, blue: 0.1)
+        var second = LibrarySongItem(id: "two", title: "Two", artist: "Guest", album: first.album,
+            albumArtist: first.albumArtist, trackNumber: 2, artwork: .file(URL(fileURLWithPath: "/second.jpg")),
+            artworkBackdrop: .init(red: 0.1, green: 0.2, blue: 0.3))
+        LocalLibrary.songLibrary.replace([second, first])
+        let local = try XCTUnwrap(LocalLibrary.songAlbumPreview(second, route: .album(second.albumID)))
+        XCTAssertEqual(local.artwork, first.artwork)
+        XCTAssertEqual(local.albumBackdrop, first.artworkBackdrop)
+
+        LocalLibrary.playbackAccountID = "42"
+        second.onlineAlbumID = 987654321
+        let online = try XCTUnwrap(LocalLibrary.songAlbumPreview(second, route: .album(second.albumID)))
+        XCTAssertEqual(online.artwork, second.artwork)
+        XCTAssertEqual(online.albumBackdrop, second.artworkBackdrop)
+        XCTAssertTrue(online.matches(owner: "42"))
+        XCTAssertFalse(online.matches(owner: "43"))
+    }
+
+    @MainActor func testReleaseNavigationUsesAlbumArtistForBothCardCaptions() {
+        var received: LibraryNavigationPreview?
+        let open = OpenLibraryRouteAction(handler: { _ in XCTFail("Expected card preview") },
+                                           previewSourceHandler: { _, preview, _ in received = preview })
+        for caption in ["2026年", "5 首歌曲"] {
+            var release = collection("release", order: 0, route: .album("release"))
+            release.subtitle = caption
+            release.albumArtist = "Album artist"
+            open(release, sourceProvider: { nil })
+            XCTAssertEqual(received?.subtitle, "Album artist")
+            XCTAssertEqual(release.subtitle, caption)
+        }
+    }
+
     func testNewestDatedItemLeadsAndEveryCollectionRemains() {
         let older = Date(timeIntervalSince1970: 1_700_000_000)
         let newer = Date(timeIntervalSince1970: 1_800_000_000)

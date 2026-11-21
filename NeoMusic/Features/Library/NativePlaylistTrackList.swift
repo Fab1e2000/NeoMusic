@@ -588,7 +588,7 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
             for: song,
             inAlbum: false,
             removeFromPlaylist: removeAction,
-            open: { open($0) }
+            open: { [actions = environment.songMenuActions] route in open(route, preview: actions.albumPreview(song, route)) }
         )
         return sections.nativeMenu(firstSectionIsRow: (sections.first?.count ?? 0) > 1)
     }

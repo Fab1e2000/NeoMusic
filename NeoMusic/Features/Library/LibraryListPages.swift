@@ -260,7 +260,7 @@ struct SongsListView: View {
         GenericCollectionList(
             items: ordered,
             menu: { song in
-                let sections = actions.rowMenuSections(for: song) { openLibraryRoute($0) }
+                let sections = actions.rowMenuSections(for: song) { openLibraryRoute($0, preview: actions.albumPreview(song, $0)) }
                 return sections.nativeMenu(firstSectionIsRow: (sections.first?.count ?? 0) > 1)
             },
             open: { song, _ in

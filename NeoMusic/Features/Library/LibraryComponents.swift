@@ -67,6 +67,13 @@ struct LibraryNavigationPreview: Equatable {
     var subtitle: String? = nil
     let artwork: Artwork
     let albumBackdrop: AlbumArtworkBackdrop?
+    var backdropFile: URL?
+    var requiresMatchingAccount = false
+
+    func matches(owner: String?) -> Bool {
+        ownerID == owner || (ownerID == nil && !requiresMatchingAccount)
+    }
+
     var contentID: String { "\(ownerID ?? "public"):\(route)" }
 
     @MainActor init(route: LibraryRoute, ownerID: String?, title: String, subtitle: String? = nil,
@@ -86,6 +93,11 @@ struct LibraryNavigationPreview: Equatable {
 
 struct OpenLibraryRouteAction {
     let handler: (LibraryRoute) -> Void
+    var previewHandler: ((LibraryRoute, LibraryNavigationPreview) -> Void)?
+    func callAsFunction(_ route: LibraryRoute, preview: LibraryNavigationPreview?) {
+        if let preview, let previewHandler { previewHandler(route, preview) }
+        else { handler(route) }
+    }
     var sourceHandler: ((LibraryRoute, UIView?) -> Void)?
     var sourceProviderHandler: ((LibraryRoute, @escaping () -> UIView?) -> Void)?
     var previewSourceHandler: ((LibraryRoute, LibraryNavigationPreview, @escaping () -> UIView?) -> Void)?
@@ -107,7 +119,7 @@ struct OpenLibraryRouteAction {
             artwork = .image(Image(uiImage: image))
         }
         let preview = LibraryNavigationPreview(route: route, ownerID: item.sourceOwnerID,
-            title: item.title, subtitle: item.subtitle, artwork: artwork,
+            title: item.title, subtitle: item.albumArtist ?? item.subtitle, artwork: artwork,
             albumBackdrop: item.albumBackdrop ?? LocalArtworkImages.cachedBackdrop(for: item.artwork))
         callAsFunction(route, preview: preview, sourceProvider: sourceProvider)
     }

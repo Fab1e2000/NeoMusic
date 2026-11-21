@@ -57,8 +57,19 @@ struct CollectionDetailView: View {
         if case .missing = detail.artwork, let matchingPreview { return matchingPreview.artwork }
         return detail.artwork
     }
+    @State private var preparedPreview: (LibraryNavigationPreview, AlbumArtworkBackdrop)?
+
+    private var pendingPreview: LibraryNavigationPreview? {
+        guard detail.kind == .album, detail.albumBackdrop == nil, let preview = matchingPreview,
+              preview.albumBackdrop == nil, preview.backdropFile != nil else { return nil }
+        return preview
+    }
+
     private var albumBackdrop: AlbumArtworkBackdrop? {
-        detail.kind == .album ? detail.albumBackdrop ?? matchingPreview?.albumBackdrop : nil
+        guard detail.kind == .album else { return nil }
+        if let color = detail.albumBackdrop ?? matchingPreview?.albumBackdrop { return color }
+        guard let preparedPreview, preparedPreview.0 == pendingPreview else { return nil }
+        return preparedPreview.1
     }
     private var albumColorScheme: ColorScheme? { albumBackdrop?.colorScheme }
     private var pageBackground: Color {
@@ -85,6 +96,11 @@ struct CollectionDetailView: View {
         .environment(\.colorScheme, albumColorScheme ?? colorScheme)
         .environment(\.collectionPagePalette, palette)
         .toolbarColorScheme(albumColorScheme, for: .navigationBar)
+        .task(id: pendingPreview) {
+            guard let preview = pendingPreview, let file = preview.backdropFile,
+                  let color = await LocalArtworkImages.loadBackdrop(for: file), !Task.isCancelled else { return }
+            preparedPreview = (preview, color)
+        }
         .onChange(of: albumBackdrop, initial: true) { _, backdrop in
             if detail.kind == .album { navigationChrome?.setAlbumBackdrop(backdrop) }
             else { navigationChrome?.setColorScheme(nil) }
