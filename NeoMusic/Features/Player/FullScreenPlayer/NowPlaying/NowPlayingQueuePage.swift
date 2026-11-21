@@ -203,10 +203,9 @@ private struct NowPlayingQueueModeControls: View {
                 systemImage: "infinity",
                 isSelected: player.isAutomaticContinuationEnabled && player.canAutomaticallyContinue,
                 isEnabled: player.canAutomaticallyContinue,
-                accessibilityLabel: "自动续播推荐音乐",
+                accessibilityLabel: player.isAutomaticContinuationEnabled ? "关闭心动模式" : "心动模式",
                 action: player.toggleAutomaticContinuation
             )
-            .accessibilityValue("当前版本暂未提供自动续播推荐音乐")
 
             modeButton(
                 systemImage: "circle.lefthalf.filled.righthalf.striped.horizontal",
@@ -294,25 +293,26 @@ struct NowPlayingQueueRow: View {
     let onPlay: () -> Void
 
     var body: some View {
-        SongMenuHost(track: entry.song, play: onPlay) { configuration in
+        let song = entry.song
+        SongMenuHost(track: song, play: onPlay) { configuration in
             HStack(spacing: 0) {
                 Button(action: onPlay) {
                     HStack(spacing: 12) {
                         ArtworkImage(
-                            url: entry.song.coverURL,
-                            contentID: entry.song.id,
-                            artworkLoadID: entry.song.artworkLoadID,
-                            cornerRadius: 6
+                            url: song.coverURL,
+                            contentID: song.id,
+                            artworkLoadID: song.artworkLoadID,
+                            cornerRadius: 6, decodeSize: CGSize(width: 48, height: 48)
                         )
                         .frame(width: 48, height: 48)
 
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(entry.song.title)
+                            Text(song.title)
                                 .font(.body)
                                 .nowPlayingPrimary()
                                 .lineLimit(1)
 
-                            NowPlayingVibrantLabel(text: entry.song.artists, fontSize: 13)
+                            NowPlayingVibrantLabel(text: song.artists, fontSize: 13)
                         }
 
                         Spacer(minLength: 4)

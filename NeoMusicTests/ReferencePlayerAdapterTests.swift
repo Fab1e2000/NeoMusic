@@ -543,12 +543,15 @@ private struct HitTarget: UIViewRepresentable {
         XCTAssertEqual(player.upcomingQueueEntries.map(\.song.id), ["a", "c", "d"])
         XCTAssertEqual(player.upcomingQueueEntries.map(\.queueIndex), [2, 3, 0])
 
+        let visible = player.upcomingQueueEntries
+        let version = player.upcomingQueueVersion
         var ready = owner.queue[3]
         let file = URL(fileURLWithPath: "/tmp/queue-cover.image")
         ready.artwork = .file(file)
         ready.artworkURL = file
         owner.updateArtwork([ready.id: ready])
-        XCTAssertEqual(player.upcomingQueueEntries.first { $0.song.id == "c" }?.song.coverURL, file)
+        XCTAssertEqual(player.upcomingQueueVersion, version)
+        XCTAssertEqual(visible.first { $0.song.id == "c" }?.song.coverURL, file)
 
         player.enqueue(track("b"), next: true)
         XCTAssertEqual(player.upcomingQueueEntries.map(\.song.id), ["b", "a", "c", "d"])

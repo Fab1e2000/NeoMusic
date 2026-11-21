@@ -473,6 +473,66 @@ import Synchronization
         XCTAssertEqual(HomePaginationProtocol.count("/eapi/v1/discovery/recommend/resource"), 0)
     }
 
+    func testQueuedHeartSongsReceiveArtworkEvenAfterPlaybackAdvances() async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let previousSongs = LocalLibrary.songLibrary.externalSongs
+        defer {
+            LocalLibrary.songLibrary.replaceExternalSongs(previousSongs)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let network = try paginationNetwork(count: 1)
+        defer { network.invalidateAndCancel() }
+        let remote = try XCTUnwrap(URL(string: "https://fixture.test/heart-cover"))
+        let ids: [Int64] = [2, 3, 4]
+        let details: [[String: Any]] = ids.map {
+            ["id": $0, "name": "Heart", "ar": [], "al": ["name": "Album", "picUrl": remote.absoluteString], "dt": 1000]
+        }
+        let response = try JSONSerialization.data(withJSONObject: ["code": 200, "songs": details])
+        let started = expectation(description: "Queued cover requested")
+        HomePaginationProtocol.state.withLock {
+            $0.responses["/eapi/playmode/intelligence/list"] = songResponse(ids, key: "data")
+            $0.responses["/eapi/v3/song/detail"] = response
+            $0.responses[remote.path] = Data("image".utf8)
+            $0.blocked.insert(remote.path)
+            $0.started = { if $0 == remote.path { started.fulfill() } }
+        }
+        let home = NeteaseHomeStore(client: NeteaseMusicClient(transport: NeteaseAccountClient(session: network)),
+                                    directory: root, artworkCache: NeteaseArtworkCache(directory: root.appendingPathComponent("images"), session: network))
+        let saved = try savedSession()
+        let account = NeteaseAccount(readSession: { saved }, saveSession: { _ in }, deleteSession: {},
+            validateCredential: { _ in saved.profile }, cachedAvatar: { _ in nil }, loadAvatar: { _ in Data() },
+            clearAvatarCache: {}, home: home)
+        await account.restore()
+        let seed = LibrarySongItem(id: "netease:42:1", title: "Seed", artist: "", album: "", albumArtist: "",
+                                   trackNumber: 0, artwork: .missing)
+        let player = NowPlayingModel(queue: [seed], currentIndex: 0, isPlaying: false)
+        defer { player.shutdownPlayback() }
+        player.restoreOnlineIdentity(ownerID: "42")
+        let integration = HomeMusicIntegration(account: account, player: player)
+        integration.connect()
+        home.updateLikedSongs(playlistID: 12, songs: [], likedAt: [:], likedIDs: [1])
+        let published = expectation(description: "Cover published to player")
+        let publishArtwork = home.onArtworkChange
+        home.onArtworkChange = { urls in
+            publishArtwork?(urls)
+            if urls.contains(remote) { published.fulfill() }
+        }
+        player.toggleAutomaticContinuation()
+        await player.recommendationTask?.value
+        await fulfillment(of: [started], timeout: 3)
+        XCTAssertEqual(home.cachedSongs.first { $0.id == 2 }?.artworkURL, remote)
+        XCTAssertNotNil(player.next?.artwork.loadID)
+        player.select(1)
+        HomePaginationProtocol.release(remote.path)
+        await fulfillment(of: [published], timeout: 3)
+        let file = try XCTUnwrap(home.cachedArtworkURL(remote: remote))
+        XCTAssertEqual(player.current.id, "netease:42:2")
+        XCTAssertEqual(player.current.artworkURL, file)
+        XCTAssertEqual(player.next?.artwork, .file(file))
+        XCTAssertEqual(HomePaginationProtocol.count(remote.path), 1)
+        try await account.logout()
+    }
+
     func testHeartModeSeedWithoutDatesReadsRealPlaylistOrder() async throws {
         let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -480,14 +540,20 @@ import Synchronization
         defer { network.invalidateAndCancel() }
         HomePaginationProtocol.state.withLock { $0.responses["/eapi/playmode/intelligence/list"] = songResponse([2], key: "data") }
         let store = NeteaseHomeStore(client: NeteaseMusicClient(transport: NeteaseAccountClient(session: network)), directory: root)
+        XCTAssertFalse(store.canRequestHeartRecommendations)
         await store.activate(try savedSession(), refresh: false)
+        XCTAssertFalse(store.canRequestHeartRecommendations)
         store.updateLikedSongs(playlistID: 12, songs: [], likedAt: [:], likedIDs: [1, 2, 3])
+        XCTAssertTrue(store.canRequestHeartRecommendations)
+        let batch = try await store.heartRecommendations(seedID: 3)
+        XCTAssertEqual(batch.map(\.id), [2])
+        XCTAssertEqual(HomePaginationProtocol.count("/eapi/v6/playlist/detail"), 0)
         guard case .songs(let values) = try await store.performQuickAction(.heartMode) else {
             return XCTFail("Heart mode should return a song batch")
         }
         XCTAssertEqual(values.map(\.id), [2])
         XCTAssertEqual(HomePaginationProtocol.count("/eapi/v6/playlist/detail"), 1)
-        XCTAssertEqual(HomePaginationProtocol.count("/eapi/playmode/intelligence/list"), 1)
+        XCTAssertEqual(HomePaginationProtocol.count("/eapi/playmode/intelligence/list"), 2)
     }
 
     func testHomeFeedNeverBuildsLocalLikedRecommendationSections() async throws {

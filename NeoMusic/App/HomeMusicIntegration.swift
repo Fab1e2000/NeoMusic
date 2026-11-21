@@ -49,6 +49,7 @@ import Observation
     private var owner: String?
     private var pendingFeedPlayback: (songs: [NeteaseMusicSong], index: Int, title: String)?
     private(set) var pendingQuickAction: HomeQuickAction?
+    @ObservationIgnored private var queueArtworkBindings: (revision: UInt64, songs: [String: [LibrarySongItem]])?
     @ObservationIgnored private var artworkSongs: [URL: [NeteaseMusicSong]] = [:]
     @ObservationIgnored private var feedPlaylistCovers = HomeFeedPlaylistCovers(session: nil)
     @ObservationIgnored private var feedArtwork: [URL: [ArtworkResourceState<Artwork>]] = [:]
@@ -92,6 +93,30 @@ import Observation
         model.play = { [weak self] section, item in self?.playFeed(section: section, item: item) }
         model.performQuickAction = { [weak self] action in self?.requestQuickAction(action) }
         model.prepareNavigation = { [weak self] in self?.prepareNavigation($0) }
+        player.recommendationOwner = { [weak self] song in
+            guard let self, let home = account.home, let user = account.profile?.userID,
+                  self.owner == String(user), !account.isLoggingOut, home.userID == user, home.canRequestHeartRecommendations,
+                  Self.currentOnlineSongID(song, owner: String(user)) != nil else { return nil }
+            return String(user)
+        }
+        player.fetchRecommendations = { [weak self] song in
+            guard let self, let home = account.home, let owner = player.recommendationOwner?(song),
+                  let seed = Self.currentOnlineSongID(song, owner: owner) else { throw CancellationError() }
+            let revision = home.sessionRevision
+            let songs = try await home.heartRecommendations(seedID: seed)
+            try Task.checkCancellation()
+            guard account.home === home, revision == home.sessionRevision, player.recommendationOwner?(song) == owner else {
+                throw CancellationError()
+            }
+            return songs.map(mapSong)
+        }
+        player.onRecommendationsQueued = { [weak self] songs in
+            guard let self else { return }
+            publish()
+            for id in Set(songs.compactMap({ $0.artwork.loadID })) {
+                requestArtwork(for: id)
+            }
+        }
         player.replenishQueue = { [weak self] continuation, advance, ended in
             self?.replenishRoaming(continuation: continuation, shouldAdvance: advance, playbackEnded: ended)
         }
@@ -128,6 +153,7 @@ import Observation
     private func observe() {
         withObservationTracking {
             _ = account.profile
+            _ = account.isLoggingOut
             _ = account.validationState
             _ = account.music?.userID
             _ = account.music?.likedIDs
@@ -171,7 +197,7 @@ import Observation
         let playlistSongs = LocalLibrary.playlistLibrary.playlists.filter { !$0.isReadOnly && !$0.isSystem }
             .flatMap { LocalLibrary.playlistLibrary.songs(in: $0.id) }
         let ids = Set((player.queue + playlistSongs).filter { $0.onlineOwnerID == owner }.compactMap(\.onlineSongID))
-        return home.retainReferencedSongs(ids: ids, adding: songs)
+        return home.retainReferencedSongs(ids: ids.union(songs.map(\.id)), adding: songs)
     }
     private func observeRecent() {
         withObservationTracking {
@@ -223,6 +249,7 @@ import Observation
     private func publish() {
         let currentOwner = account.profile.map { String($0.userID) }
         if owner != currentOwner {
+            if player.continuation?.ownerID != currentOwner { player.stopAutomaticContinuation() }
             roamingGeneration = UUID()
             roamingFill?.cancel()
             roamingFill = nil
@@ -233,6 +260,7 @@ import Observation
             }
             model.quickActionRoute = nil
             model.quickActionPreview = nil
+            queueArtworkBindings = nil
             owner = currentOwner
             for id in detailLibrary.playlists.map(\.id) where id.hasPrefix("home:") {
                 var item = LibraryPlaylistItem(id: id, title: "播放列表", artwork: .playlist, sourceOwnerID: currentOwner)
@@ -254,6 +282,11 @@ import Observation
         }
         if model.navigationOwnerID != currentOwner { model.navigationOwnerID = currentOwner }
         updateLikedSongs()
+        if player.isAutomaticContinuationEnabled {
+            let lostPlaylist = account.home?.userID == account.music?.userID
+                && account.home?.userID != nil && account.home?.canRequestHeartRecommendations == false
+            if account.isLoggingOut || lostPlaylist { player.stopAutomaticContinuation() }
+        }
         publishFeed()
         resumePendingPlayback()
         if LocalLibrary.playbackAccountID != currentOwner { LocalLibrary.playbackAccountID = currentOwner }
@@ -404,6 +437,25 @@ import Observation
             for value in value.1 where value.artworkURL.map(urls.contains) == true {
                 let item = makeSong(value)
                 songs[item.id] = item
+            }
+        }
+        // A download can finish before the asynchronous catalog index is published.
+        if queueArtworkBindings?.revision != player.queueRevision {
+            var bindings: [String: [LibrarySongItem]] = [:]
+            for queued in player.queue {
+                if let id = queued.artwork.loadID { bindings[id, default: []].append(queued) }
+            }
+            queueArtworkBindings = (player.queueRevision, bindings)
+        }
+        for remote in urls {
+            let id = DeferredArtworkKey(domain: .home, session: home.sessionRevision, url: remote).rawValue
+            guard let matches = queueArtworkBindings?.songs[id],
+                  let file = home.cachedArtworkURL(remote: remote) else { continue }
+            for queued in matches where queued.onlineOwnerID == owner && queued.artwork.loadID == id {
+                var replacement = queued
+                replacement.artwork = .file(file)
+                replacement.artworkURL = file
+                songs[queued.id] = replacement
             }
         }
         player.updateArtwork(songs)

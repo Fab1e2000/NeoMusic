@@ -46,7 +46,7 @@ import Observation
     @ObservationIgnored private var refreshIsForced = false
     @ObservationIgnored private var sourceTasks: [RetrySource: Task<Void, Never>] = [:]
     @ObservationIgnored private var sourceTaskIDs: [RetrySource: UUID] = [:]
-    @ObservationIgnored private var likedPlaylistID: Int64?
+    private var likedPlaylistID: Int64?
     @ObservationIgnored private var likedSongIDs: Set<Int64> = []
     @ObservationIgnored private var likedSeedID: Int64?
     @ObservationIgnored private var likedSongs: [Int64: NeteaseMusicSong] = [:]
@@ -54,7 +54,7 @@ import Observation
     @ObservationIgnored private var actionSongs: [NeteaseMusicSong] = []
     @ObservationIgnored private var referencedSongs: [Int64: NeteaseMusicSong] = [:]
     @ObservationIgnored private var roamingTask: Task<RoamingCache, Error>?
-    @ObservationIgnored private var roamingContinuations: [UUID: Task<[NeteaseMusicSong], Error>] = [:]
+    @ObservationIgnored private var continuationRequests: [UUID: Task<[NeteaseMusicSong], Error>] = [:]
     @ObservationIgnored private var roamingCache: RoamingCache?
     private struct RoamingCache: Codable, Sendable {
         let id: UUID
@@ -114,8 +114,8 @@ import Observation
             let oldActions = Array(quickActionTasks.values); quickActionTasks = [:]
             oldActions.forEach { $0.cancel() }
             let oldRoaming = roamingTask; roamingTask = nil; oldRoaming?.cancel(); roamingCache = nil
-            let oldContinuations = Array(roamingContinuations.values)
-            roamingContinuations.removeAll()
+            let oldContinuations = Array(continuationRequests.values)
+            continuationRequests.removeAll()
             oldContinuations.forEach { $0.cancel() }
             quickActionStates = [:]; likedPlaylistID = nil; likedSongIDs = []; likedSeedID = nil; likedSongs = [:]; actionSongs = []; referencedSongs = [:]
             let oldDetails = Array(detailTasks.values); detailTasks = [:]
@@ -411,15 +411,36 @@ import Observation
         return value
     }
 
+    var canRequestHeartRecommendations: Bool {
+        userID != nil && credential != nil && (likedPlaylistID ?? 0) > 0
+    }
+
+    func heartRecommendations(seedID: Int64) async throws -> [NeteaseMusicSong] {
+        guard let credential, let playlistID = likedPlaylistID, playlistID > 0, seedID > 0 else {
+            throw NeteaseHomeActionError.noFavoritePlaylist
+        }
+        let songs = try await continuationBatch { [client] in
+            try await client.intelligenceModeSongs(playlistID: playlistID, seedSongID: seedID, credential: credential)
+        }
+        guard likedPlaylistID == playlistID else { throw CancellationError() }
+        actionSongs = songs
+        rebuildSongCatalog()
+        return songs
+    }
+
     func nextRoamingSongs() async throws -> [NeteaseMusicSong] {
-        try Task.checkCancellation()
         guard restored, let credential else { throw NeteaseHomeActionError.loginRequired }
-        let revision = generation, id = UUID()
-        let task = Task { [client] in
+        return try await continuationBatch { [client] in
             try await client.personalFM(credential: credential, mode: "EXPLORE", limit: 30)
         }
-        roamingContinuations[id] = task
-        defer { roamingContinuations[id] = nil }
+    }
+
+    private func continuationBatch(_ fetch: @escaping @Sendable () async throws -> [NeteaseMusicSong]) async throws -> [NeteaseMusicSong] {
+        try Task.checkCancellation()
+        let revision = generation, id = UUID()
+        let task = Task { try await fetch() }
+        continuationRequests[id] = task
+        defer { continuationRequests[id] = nil }
         let songs = try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
         try Task.checkCancellation()
         guard generation == revision else { throw CancellationError() }

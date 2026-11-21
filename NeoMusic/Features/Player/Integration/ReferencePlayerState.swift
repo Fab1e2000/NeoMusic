@@ -13,8 +13,8 @@ import FullScreenPlayer
     var isLoading: Bool { model.isLoading }
     var issue: String? { model.errorMessage }
     var isCrossfadeEnabled: Bool { model.isCrossfadeEnabled }
-    let canAutomaticallyContinue = false
-    let isAutomaticContinuationEnabled = false
+    var canAutomaticallyContinue: Bool { model.canAutomaticallyContinue }
+    var isAutomaticContinuationEnabled: Bool { model.isAutomaticContinuationEnabled }
     var automaticContinuationDescription: String {
         model.sourceTitle.flatMap { $0.isEmpty ? nil : "来自\($0)" } ?? "接下来播放的歌曲"
     }
@@ -66,8 +66,10 @@ import FullScreenPlayer
             indices.append(contentsOf: model.queue.indices.prefix(currentQueueIndex).prefix(20 - indices.count))
         }
         let entries = indices.map { index in
-            PlayerQueueEntry(id: model.entryIDs[index], queueIndex: index,
-                               song: Self.convert(model.queue[index]))
+            let song = model.queue[index]
+            return PlayerQueueEntry(id: model.entryIDs[index], queueIndex: index, artworkIdentity: song.artworkIdentity) {
+                Self.convert(song)
+            }
         }
         queuePresentation = (version, entries)
         return entries
@@ -91,7 +93,7 @@ import FullScreenPlayer
     func toggleShuffle() { model.isShuffled.toggle() }
     func cycleRepeatMode() { model.cycleRepeat() }
     func toggleCrossfade() { model.toggleCrossfade() }
-    func toggleAutomaticContinuation() { }
+    func toggleAutomaticContinuation() { model.toggleAutomaticContinuation() }
     func moveUpcomingQueueItems(fromOffsets source: IndexSet, toOffset destination: Int) {
         model.reorderUpcoming(indices: upcomingQueueEntries.map(\.queueIndex), fromOffsets: source, toOffset: destination)
     }

@@ -8,6 +8,129 @@ final class QueuePersistenceTests: XCTestCase {
                         trackNumber: 0, artwork: artwork)
     }
 
+    func testAutomaticRecommendationsRespectEntryOwnershipAndRepeat() async {
+        let seed = song("seed"), original = song("original"), suggestion = song("suggestion")
+        let model = NowPlayingModel(queue: [seed, original], currentIndex: 0, isPlaying: false)
+        model.recommendationOwner = { $0.id == "local" ? nil : "42" }
+        model.fetchRecommendations = { item in
+            XCTAssertEqual(item.id, seed.id)
+            return [seed, suggestion, original, suggestion]
+        }
+        model.toggleAutomaticContinuation()
+        await model.recommendationTask?.value
+        XCTAssertEqual(model.repeatMode, .off)
+        XCTAssertEqual(model.current.id, seed.id)
+        XCTAssertFalse(model.isPlaying)
+        XCTAssertEqual(model.queue.map(\.id), ["seed", "suggestion", "original"])
+        model.insertNext([suggestion])
+        let manual = model.entryIDs[1]
+        model.cycleRepeat()
+        XCTAssertFalse(model.isAutomaticContinuationEnabled)
+        XCTAssertEqual(model.repeatMode, .all)
+        XCTAssertEqual(model.queue.map(\.id), ["seed", "suggestion", "original"])
+        XCTAssertEqual(model.entryIDs[1], manual)
+    }
+
+    func testTurningOffKeepsPlayingRecommendationAndDiscardsUnplayedOnes() async {
+        let model = NowPlayingModel(queue: [song("seed"), song("original")], currentIndex: 0, isPlaying: false)
+        model.recommendationOwner = { _ in "42" }
+        model.fetchRecommendations = { _ in ["a", "b", "c"].map { self.song($0) } }
+        model.toggleAutomaticContinuation()
+        await model.recommendationTask?.value
+        model.select(1)
+        let playing = model.entryIDs[1]
+        model.appendLater([song("manual")])
+        model.toggleAutomaticContinuation()
+        XCTAssertEqual(model.entryIDs[model.currentIndex], playing)
+        XCTAssertEqual(model.queue.map(\.id), ["seed", "a", "manual", "original"])
+    }
+
+    func testRefillSkipsHistoryAndEmptyResponseRestoresSourceOrder() async {
+        let model = NowPlayingModel(queue: ["seed", "b", "d"].map { song($0) }, currentIndex: 0, isPlaying: false)
+        model.appendLater([song("manual")])
+        model.recommendationOwner = { _ in "42" }
+        var batches = [["manual", "b", "a"], ["seed", "b", "a", "c"], []]
+        model.fetchRecommendations = { _ in batches.removeFirst().map { self.song($0) } }
+        model.toggleAutomaticContinuation()
+        await model.recommendationTask?.value
+        XCTAssertEqual(model.queue.map(\.id), ["seed", "manual", "b", "a"])
+        model.select(2)
+        await model.recommendationTask?.value
+        XCTAssertEqual(model.queue.map(\.id), ["seed", "manual", "b", "a", "c"])
+        model.select(3)
+        await model.recommendationTask?.value
+        XCTAssertFalse(model.isAutomaticContinuationEnabled)
+        XCTAssertEqual(model.queue.map(\.id), ["seed", "manual", "b", "a", "d"])
+    }
+
+    func testLocalSelectionAndQueueReplacementEndRecommendations() async {
+        let seed = song("netease:42:1"), local = song("local")
+        let model = NowPlayingModel(queue: [seed], currentIndex: 0, isPlaying: false)
+        model.appendLater([local])
+        model.recommendationOwner = { $0.onlineOwnerID }
+        model.fetchRecommendations = { _ in [self.song("netease:42:2")] }
+        model.toggleAutomaticContinuation()
+        await model.recommendationTask?.value
+        model.select(1)
+        XCTAssertFalse(model.canAutomaticallyContinue)
+        XCTAssertFalse(model.isAutomaticContinuationEnabled)
+        XCTAssertEqual(model.queue, [seed, local])
+        model.select(0)
+        model.toggleAutomaticContinuation()
+        let pending = model.recommendationTask
+        model.play([local], from: "Local", shuffled: false)
+        await pending?.value
+        XCTAssertEqual(model.queue, [local])
+        XCTAssertFalse(model.queueContinues)
+    }
+
+    func testRecommendationRestoreAndAccountChangeOnlyRemoveTaggedFutureEntries() async throws {
+        let url = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let seed = song("netease:42:1"), manual = song("netease:42:2")
+        let model = NowPlayingModel(queue: [seed, manual], currentIndex: 0, isPlaying: false)
+        let restored = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false)
+        defer { model.shutdownPlayback(); restored.shutdownPlayback() }
+        let originalEntries = model.entryIDs
+        model.configurePlayback(resolveURL: { _ in nil }, persistenceURL: url)
+        model.recommendationOwner = { $0.onlineOwnerID }
+        model.fetchRecommendations = { _ in [self.song("netease:42:3")] }
+        model.toggleAutomaticContinuation()
+        await model.recommendationTask?.value
+        await model.flushQueuePersistence()
+        restored.configurePlayback(resolveURL: { _ in nil }, persistenceURL: url)
+        XCTAssertTrue(restored.restoreQueue(songs: [seed, manual]))
+        restored.restoreOnlineIdentity(ownerID: "42")
+        XCTAssertTrue(restored.isAutomaticContinuationEnabled)
+        restored.restoreOnlineIdentity(ownerID: "43")
+        XCTAssertFalse(restored.isAutomaticContinuationEnabled)
+        XCTAssertEqual(restored.entryIDs, originalEntries)
+    }
+
+    func testRecommendationFailureAndLateAccountResponsePreserveQueue() async {
+        let model = NowPlayingModel(queue: [song("seed"), song("original")], currentIndex: 0, isPlaying: false)
+        XCTAssertFalse(model.canAutomaticallyContinue)
+        model.recommendationOwner = { _ in "42" }
+        model.fetchRecommendations = { _ in throw URLError(.notConnectedToInternet) }
+        model.toggleAutomaticContinuation()
+        await model.recommendationTask?.value
+        XCTAssertFalse(model.isAutomaticContinuationEnabled)
+        let started = expectation(description: "fetch started")
+        var reply: CheckedContinuation<[LibrarySongItem], Never>?
+        model.fetchRecommendations = { _ in
+            await withCheckedContinuation { reply = $0; started.fulfill() }
+        }
+        model.toggleAutomaticContinuation()
+        let pending = model.recommendationTask
+        await fulfillment(of: [started], timeout: 2)
+        model.invalidateOnlinePlayback(ownerID: "43")
+        XCTAssertEqual(pending?.isCancelled, true)
+        reply?.resume(returning: [song("late")])
+        await pending?.value
+        XCTAssertFalse(model.isAutomaticContinuationEnabled)
+        XCTAssertEqual(model.queue.map(\.id), ["seed", "original"])
+    }
+
     func testArtworkArrivalUpdatesOccurrencesWithoutSavingOrChangingPlaybackState() async {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -27,7 +150,9 @@ final class QueuePersistenceTests: XCTestCase {
                             "b": song("b", artwork: .playlist),
                             "outside": song("outside", artwork: .favorites)]
 
+        let revision = model.queueRevision
         model.updateArtwork(replacements)
+        XCTAssertEqual(model.queueRevision, revision)
         await model.flushQueuePersistence()
 
         XCTAssertEqual(model.queue.map(\.id), songs.map(\.id))

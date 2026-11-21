@@ -34,13 +34,24 @@ final class NowPlayingModel {
             }
         }
     }
-    var repeatMode = RepeatMode.all { didSet { if !applyingState { prepareNext() }; updateRemoteCommandAvailability(); saveQueue() } }
+    var repeatMode = RepeatMode.all {
+        didSet {
+            if !applyingState {
+                if repeatMode != .off { stopAutomaticContinuation() }
+                prepareNext()
+            }
+            updateRemoteCommandAvailability()
+            saveQueue()
+        }
+    }
     var isShuffled = false { didSet {
         guard !applyingState, oldValue != isShuffled, hasCurrent else { return }
-        if isShuffled { originalOrder = entryIDs }
+        if isShuffled { originalOrder = entryIDs + suspended.map(\.0) }
         let start = currentIndex + 1
         let pairs = Array(zip(entryIDs.dropFirst(start), queue.dropFirst(start)))
         let order = Dictionary(originalOrder.enumerated().map { ($0.element, $0.offset) }, uniquingKeysWith: { a, _ in a })
+        if isShuffled { suspended.shuffle() }
+        else { suspended.sort { order[$0.0, default: Int.max] < order[$1.0, default: Int.max] } }
         let reordered = isShuffled ? pairs.shuffled() : pairs.sorted { order[$0.0, default: Int.max] < order[$1.0, default: Int.max] }
         entryIDs = Array(entryIDs.prefix(start)) + reordered.map(\.0)
         queue = Array(queue.prefix(start)) + reordered.map(\.1)
@@ -53,6 +64,109 @@ final class NowPlayingModel {
     var onCollectionPlaybackStarted: ((PlaybackCollectionReference) -> Void)?
     var queueContinues: Bool { continuation != nil }
     var replenishQueue: ((_ continuation: PlaybackQueueContinuation, _ shouldAdvance: Bool, _ playbackEnded: Bool) -> Void)?
+    var recommendationOwner: ((LibrarySongItem) -> String?)?
+    var fetchRecommendations: (@MainActor (LibrarySongItem) async throws -> [LibrarySongItem])?
+    var onRecommendationsQueued: (([LibrarySongItem]) -> Void)?
+    var canAutomaticallyContinue: Bool { hasCurrent && recommendationOwner?(current) != nil }
+    var isAutomaticContinuationEnabled: Bool { continuation?.kind == .recommendations }
+    private var hasRecommendationBatch = false
+    private var suspended: [(UUID, LibrarySongItem)] = []
+    private var recommendedEntries = Set<UUID>()
+    @ObservationIgnored private(set) var recommendationTask: Task<Void, Never>?
+    private var advanceAfterRecommendations: UUID?
+    private var endedWaitingForRecommendations = false
+
+    func toggleAutomaticContinuation() {
+        if isAutomaticContinuationEnabled { stopAutomaticContinuation(); return }
+        guard hasCurrent, let owner = recommendationOwner?(current), fetchRecommendations != nil else { return }
+        repeatMode = .off
+        continuation = PlaybackQueueContinuation(ownerID: owner, kind: .recommendations)
+        saveQueue()
+        requestRecommendations()
+    }
+
+    func stopAutomaticContinuation() {
+        guard isAutomaticContinuationEnabled else { return }
+        let ended = endedWaitingForRecommendations && advanceAfterRecommendations == (hasCurrent ? entryIDs[currentIndex] : nil)
+        continuation = nil
+        hasRecommendationBatch = false
+        recommendationTask?.cancel()
+        recommendationTask = nil
+        advanceAfterRecommendations = nil
+        endedWaitingForRecommendations = false
+        let playingEntry = hasCurrent ? entryIDs[currentIndex] : nil
+        if let playingEntry { recommendedEntries.remove(playingEntry) }
+        let remove = recommendedEntries
+        recommendedEntries.removeAll()
+        if !remove.isEmpty {
+            queue = zip(entryIDs, queue).compactMap { remove.contains($0.0) ? nil : $0.1 }
+            entryIDs.removeAll { remove.contains($0) }
+            originalOrder.removeAll { remove.contains($0) }
+            if let playingEntry, let index = entryIDs.firstIndex(of: playingEntry) { currentIndex = index }
+        }
+        if !suspended.isEmpty {
+            var known = Set(queue.map(\.id))
+            let restored = suspended.filter { known.insert($0.1.id).inserted }
+            entryIDs.append(contentsOf: restored.map(\.0))
+            queue.append(contentsOf: restored.map(\.1))
+            suspended.removeAll()
+            let retained = Set(entryIDs)
+            originalOrder.removeAll { !retained.contains($0) }
+        }
+        prepareNext()
+        if ended { isPlaying = false }
+        saveQueue()
+    }
+
+    private func replenish(_ token: PlaybackQueueContinuation, _ advance: Bool, _ ended: Bool) {
+        guard token.kind == .recommendations else { replenishQueue?(token, advance, ended); return }
+        guard recommendationOwner?(current) == token.ownerID else { stopAutomaticContinuation(); return }
+        guard upcoming.count <= 1 else { return }
+        if advance && next == nil {
+            advanceAfterRecommendations = entryIDs[currentIndex]
+            endedWaitingForRecommendations = endedWaitingForRecommendations || ended
+        }
+        requestRecommendations()
+    }
+
+    private func requestRecommendations() {
+        guard let token = continuation, recommendationTask == nil, let fetchRecommendations else { return }
+        let seed = current
+        recommendationTask = Task { [weak self] in
+            guard !Task.isCancelled else { return }
+            let batch = try? await fetchRecommendations(seed)
+            guard let self, !Task.isCancelled, continuation == token else { return }
+            recommendationTask = nil
+            guard recommendationOwner?(current) == token.ownerID else { stopAutomaticContinuation(); return }
+            // Only the first successful response takes over the source queue.
+            let ordinary = hasRecommendationBatch ? [] : entryIDs.indices.dropFirst(currentIndex + 1).filter {
+                !userQueuedIDs.contains(entryIDs[$0]) && !recommendedEntries.contains(entryIDs[$0])
+            }
+            let parked = Set(ordinary.map { entryIDs[$0] })
+            var known = Set(zip(entryIDs, queue).compactMap { parked.contains($0.0) ? nil : $0.1.id })
+            let additions = (batch ?? []).filter { $0.unavailabilityReason == nil && known.insert($0.id).inserted }
+            guard !additions.isEmpty else {
+                stopAutomaticContinuation()
+                return
+            }
+            if !parked.isEmpty {
+                suspended = ordinary.map { (entryIDs[$0], queue[$0]) }
+                queue = zip(entryIDs, queue).compactMap { parked.contains($0.0) ? nil : $0.1 }
+                entryIDs.removeAll { parked.contains($0) }
+            }
+            hasRecommendationBatch = true
+            let advance = advanceAfterRecommendations == entryIDs[currentIndex]
+            let resume = advance && endedWaitingForRecommendations
+            advanceAfterRecommendations = nil
+            endedWaitingForRecommendations = false
+            appendToEnd(additions, userQueued: false, recommended: true)
+            onRecommendationsQueued?(additions)
+
+            if resume { isPlaying = true }
+            if advance { select(currentIndex + 1) }
+        }
+    }
+
     private var pendingCollection: PlaybackCollectionReference?
 
     struct PendingPlay: Identifiable {
@@ -112,17 +226,30 @@ final class NowPlayingModel {
     var upcoming: ArraySlice<LibrarySongItem> { queue[min(currentIndex + 1, queue.count)...] }
     var hasUserQueuedUpcoming: Bool { entryIDs.dropFirst(min(currentIndex + 1, entryIDs.count)).contains { userQueuedIDs.contains($0) } }
 
-    func togglePlayback() { guard hasCurrent else { return }; isPlaying.toggle(); if isPlaying { if loadedEntry == entryIDs[currentIndex], audio?.error == nil { audio?.play() } else { startCurrent(at: elapsed) } } else { audio?.pause(); saveQueue(); updateNowPlaying() } }
+    func togglePlayback() {
+        guard hasCurrent else { return }
+        isPlaying.toggle()
+        if isPlaying {
+            if loadedEntry == entryIDs[currentIndex], audio?.error == nil { audio?.play() }
+            else { startCurrent(at: elapsed) }
+        } else {
+            advanceAfterRecommendations = nil
+            endedWaitingForRecommendations = false
+            audio?.pause()
+            saveQueue()
+            updateNowPlaying()
+        }
+    }
 
     func skipForward() {
         guard canSkipForward else { return }
         guard next != nil else {
-            if let continuation { replenishQueue?(continuation, true, false); return }
+            if let continuation { replenish(continuation, true, false); return }
             if repeatMode == .all && hasCurrent { select(0) }
             return
         }
         select(currentIndex + 1)
-        if let continuation { replenishQueue?(continuation, false, false) }
+        if let continuation { replenish(continuation, false, false) }
     }
 
     func skipBackward() {
@@ -141,10 +268,11 @@ final class NowPlayingModel {
             return
         }
         currentIndex = index
+        recommendedEntries.remove(entryIDs[index])
         playbackGeneration &+= 1
         updatingTime = true; elapsed = 0; updatingTime = false
         startCurrent()
-        if let continuation { replenishQueue?(continuation, false, false) }
+        if let continuation { replenish(continuation, false, false) }
     }
 
     func reorderUpcoming(indices: [Int], fromOffsets: IndexSet, toOffset: Int) {
@@ -167,6 +295,7 @@ final class NowPlayingModel {
     func removeQueueEntry(at index: Int) {
         guard queue.indices.contains(index), index != currentIndex else { return }
         let entry = entryIDs.remove(at: index)
+        recommendedEntries.remove(entry)
         queue.remove(at: index)
         if index < currentIndex { currentIndex -= 1 }
         originalOrder.removeAll { $0 == entry }; userQueuedIDs.remove(entry)
@@ -212,6 +341,7 @@ final class NowPlayingModel {
               collection: PlaybackCollectionReference? = nil, continuation: PlaybackQueueContinuation? = nil) {
         guard !songs.isEmpty else { return }
         pendingPlay = nil
+        stopAutomaticContinuation()
         pendingCollection = collection
         queueRestorationFailed = false
         pendingRestoredSongs = [:]
@@ -237,6 +367,7 @@ final class NowPlayingModel {
               collection: PlaybackCollectionReference? = nil, continuation: PlaybackQueueContinuation? = nil) {
         guard songs.indices.contains(index) else { return }
         pendingPlay = nil
+        stopAutomaticContinuation()
         pendingCollection = collection
         queueRestorationFailed = false
         pendingRestoredSongs = [:]
@@ -277,7 +408,7 @@ final class NowPlayingModel {
         appendToEnd(songs, userQueued: false)
     }
 
-    private func appendToEnd(_ songs: [LibrarySongItem], userQueued: Bool) {
+    private func appendToEnd(_ songs: [LibrarySongItem], userQueued: Bool, recommended: Bool = false) {
         guard !songs.isEmpty else { return }
         let previousNextEntry = nextPlaybackIndex.map { entryIDs[$0] }
         queueRestorationFailed = false
@@ -285,8 +416,9 @@ final class NowPlayingModel {
         queue.append(contentsOf: songs)
         entryIDs.append(contentsOf: ids)
         originalOrder.append(contentsOf: ids)
+        if recommended { recommendedEntries.formUnion(ids) }
         if userQueued { userQueuedIDs.formUnion(ids) }
-        if nextPlaybackIndex.map({ entryIDs[$0] }) != previousNextEntry { prepareNext() }
+        if recommended || nextPlaybackIndex.map({ entryIDs[$0] }) != previousNextEntry { prepareNext() }
         saveQueue()
     }
 
@@ -344,6 +476,9 @@ final class NowPlayingModel {
         var entryIDs: [UUID]? = nil
         var originalOrder: [UUID]? = nil
         var userQueuedIDs: Set<UUID>? = nil
+        var suspendedCount: Int? = nil
+        var hasRecommendationBatch: Bool? = nil
+        var recommendedEntries: Set<UUID>? = nil
         var crossfadeEnabled: Bool? = nil
         var songs: [PlaybackSongSnapshot]? = nil
         var continuation: PlaybackQueueContinuation? = nil
@@ -436,6 +571,13 @@ final class NowPlayingModel {
             updated[index] = snapshot.song
             if updated[index].unavailabilityReason == nil { unavailableIDs.remove(item.id) }
         }
+        for index in suspended.indices {
+            let song = suspended[index].1
+            if let offline = offlineSong?(song.id) { suspended[index].1 = offline }
+            else if song.onlineOwnerID == ownerID, let snapshot = pendingRestoredSongs[song.id] {
+                suspended[index].1 = snapshot.song
+            }
+        }
         pendingRestoredSongs = [:]
         if updated != queue { queue = updated }
         updateNowPlaying()
@@ -451,7 +593,7 @@ final class NowPlayingModel {
         if let owner = pendingCollection?.ownerID, owner != ownerID { pendingCollection = nil }
         if let owner = pendingPlay?.collection?.ownerID, owner != ownerID { pendingPlay = nil }
         if let owner = pendingPlay?.continuation?.ownerID, owner != ownerID { pendingPlay = nil }
-        if let owner = continuation?.ownerID, owner != ownerID { continuation = nil }
+        if let owner = continuation?.ownerID, owner != ownerID { stopAutomaticContinuation(); continuation = nil }
         let retryOffline = hasCurrent && resolvingResource && offlineSong?(current.id) != nil
             && (ownerID == nil || current.onlineOwnerID != ownerID)
         if hasCurrent, current.isOnline, offlineSong?(current.id) == nil,
@@ -570,6 +712,7 @@ final class NowPlayingModel {
             guard let self, let entry = self.preparedEntry, let index = self.entryIDs.firstIndex(of: entry) else { return }
             let quality = self.preparedQuality
             self.currentIndex = index
+            self.recommendedEntries.remove(entry)
             self.playbackGeneration &+= 1
             self.loadedEntry = entry
             self.actualQuality = quality
@@ -577,7 +720,7 @@ final class NowPlayingModel {
             self.syncTransport()
             self.prepareNext()
             self.saveQueue()
-            if let continuation = self.continuation { self.replenishQueue?(continuation, false, false) }
+            if let continuation = self.continuation { self.replenish(continuation, false, false) }
         }
         engine.onFinished = { [weak self] in
             guard let self else { return }
@@ -589,10 +732,10 @@ final class NowPlayingModel {
             else if self.queue.indices.contains(self.currentIndex + 1) {
                 self.isPlaying = true
                 self.select(self.currentIndex + 1)
-                if let continuation = self.continuation { self.replenishQueue?(continuation, false, false) }
+                if let continuation = self.continuation { self.replenish(continuation, false, false) }
             } else if let continuation = self.continuation {
                 self.isPlaying = true
-                self.replenishQueue?(continuation, true, true)
+                self.replenish(continuation, true, true)
             } else if let index = self.nextPlaybackIndex { self.isPlaying = true; self.select(index) }
             else { self.syncTransport() }
         }
@@ -691,16 +834,18 @@ final class NowPlayingModel {
         guard !applyingState, !queueRestorationFailed else { return }
         if cachedQueueContent?.revision != queueRevision {
             var seen = Set<String>()
-            let metadata = queue.filter { seen.insert($0.id).inserted }.map { song in
+            let allSongs = queue + suspended.map(\.1)
+            let metadata = allSongs.filter { seen.insert($0.id).inserted }.map { song in
                 !hasResolvedOnlineIdentity ? pendingRestoredSongs[song.id] ?? PlaybackSongSnapshot(song) : PlaybackSongSnapshot(song)
             }
-            cachedQueueContent = (queueRevision, queue.map(\.id), metadata)
+            cachedQueueContent = (queueRevision, allSongs.map(\.id), metadata)
         }
         guard let content = cachedQueueContent else { return }
         let state = SavedQueue(ids: content.ids, index: currentIndex, elapsed: liveElapsed,
                                repeatMode: repeatMode, shuffled: isShuffled, source: sourceTitle,
-                               entryIDs: entryIDs, originalOrder: originalOrder, userQueuedIDs: userQueuedIDs,
-                               crossfadeEnabled: isCrossfadeEnabled, songs: content.songs, continuation: continuation)
+                               entryIDs: entryIDs + suspended.map(\.0), originalOrder: originalOrder, userQueuedIDs: userQueuedIDs,
+                               suspendedCount: suspended.count, hasRecommendationBatch: hasRecommendationBatch,
+                               recommendedEntries: recommendedEntries, crossfadeEnabled: isCrossfadeEnabled, songs: content.songs, continuation: continuation)
         let previous = queuePersistenceTask
         let persistence = queuePersistence
         queuePersistenceRevision += 1
@@ -766,6 +911,10 @@ final class NowPlayingModel {
                 PerformanceDiagnostics.restoration("queue.restore.empty")
                 return true
             }
+            recommendationTask?.cancel()
+            recommendationTask = nil
+            advanceAfterRecommendations = nil
+            endedWaitingForRecommendations = false
             let map = Dictionary(songs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             let snapshots = Dictionary((state.songs ?? []).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             pendingRestoredSongs = [:]
@@ -793,6 +942,11 @@ final class NowPlayingModel {
             configuringAudio = false
             queue = restoredSongs
             entryIDs = state.entryIDs?.count == queue.count && Set(state.entryIDs ?? []).count == queue.count ? state.entryIDs! : queue.map { _ in UUID() }
+            let count = min(max(0, state.suspendedCount ?? 0), max(0, queue.count - 1))
+            suspended = Array(zip(entryIDs.suffix(count), queue.suffix(count)))
+            entryIDs.removeLast(count)
+            queue.removeLast(count)
+            hasRecommendationBatch = state.hasRecommendationBatch ?? false
             originalOrder = state.originalOrder ?? entryIDs
             userQueuedIDs = state.userQueuedIDs ?? []
             currentIndex = min(max(0, state.index), max(0, queue.count - 1))
@@ -803,8 +957,9 @@ final class NowPlayingModel {
             isShuffled = state.shuffled
             queue = savedOrder
             sourceTitle = state.source
+            recommendedEntries = state.recommendedEntries ?? []
             continuation = state.continuation
-            if hasResolvedOnlineIdentity, continuation?.ownerID != resolvedOnlineOwnerID { continuation = nil }
+            if hasResolvedOnlineIdentity, continuation?.ownerID != resolvedOnlineOwnerID { stopAutomaticContinuation(); continuation = nil }
             isPlaying = false
             elapsed = state.elapsed.isFinite ? max(0, state.elapsed) : 0
             unavailableIDs = Set(state.ids).subtracting(Set(map.keys).union(snapshots.keys).union(offlineSongIDs))
@@ -822,17 +977,21 @@ final class NowPlayingModel {
         }
     }
 
+    @ObservationIgnored private var artworkQueueIndex: (revision: UInt64, indices: [String: [Int]])?
+
     func updateArtwork(_ replacements: [String: LibrarySongItem]) {
         guard !replacements.isEmpty else { return }
-        var updated = queue
+        if artworkQueueIndex?.revision != queueRevision {
+            artworkQueueIndex = (queueRevision, Dictionary(grouping: queue.indices, by: { queue[$0].id }))
+        }
         var changed = false
         var currentChanged = false
-        for index in queue.indices {
-            let existing = queue[index]
-            let offline = offlineSong?(existing.id)
-            if offline == nil, let owner = existing.onlineOwnerID,
+        for (id, incoming) in replacements {
+            guard let indices = artworkQueueIndex?.indices[id], let first = indices.first else { continue }
+            let offline = offlineSong?(id)
+            if offline == nil, let owner = queue[first].onlineOwnerID,
                !hasResolvedOnlineIdentity || owner != resolvedOnlineOwnerID { continue }
-            guard var replacement = replacements[existing.id] else { continue }
+            var replacement = incoming
             if let offline {
                 let file: URL?
                 if let url = offline.artworkURL { file = url }
@@ -842,18 +1001,15 @@ final class NowPlayingModel {
                     replacement = offline
                 }
             }
-            guard replacement.artwork != existing.artwork
-                    || replacement.artworkData != existing.artworkData
-                    || replacement.artworkURL != existing.artworkURL
-                    || replacement.artworkBackdrop != existing.artworkBackdrop else { continue }
-            updated[index].artwork = replacement.artwork
-            updated[index].artworkData = replacement.artworkData
-            updated[index].artworkURL = replacement.artworkURL
-            updated[index].artworkBackdrop = replacement.artworkBackdrop
-            changed = true
-            if index == currentIndex { currentChanged = true }
+            // Occurrences can share their artwork state. Check the playing occurrence first.
+            if hasCurrent, current.id == id {
+                currentChanged = current.publishArtwork(from: replacement) || currentChanged
+            }
+            for index in indices where index != currentIndex {
+                changed = queue[index].publishArtwork(from: replacement) || changed
+            }
         }
-        if changed { queue = updated }
+        if changed || currentChanged { cachedQueueContent = nil }
         if currentChanged { updateNowPlaying() }
     }
 
@@ -926,6 +1082,7 @@ final class NowPlayingModel {
     }
 
     func shutdownPlayback() {
+        recommendationTask?.cancel(); recommendationTask = nil
         pendingCollection = nil
         pendingPlay = nil
         queuePersistenceDebounceTask?.cancel(); queuePersistenceDebounceTask = nil

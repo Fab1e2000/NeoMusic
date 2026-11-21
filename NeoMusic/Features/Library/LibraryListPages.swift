@@ -9,6 +9,7 @@ struct LibrarySongItem: Identifiable, Equatable {
     let albumArtist: String
     let trackNumber: Int
     private var artworkState: SongArtworkState
+    var artworkIdentity: ObjectIdentifier { ObjectIdentifier(artworkState) }
     var artwork: Artwork {
         get { artworkState.value.artwork }
         set { var value = artworkState.snapshot; value.artwork = newValue; artworkState = SongArtworkState(value) }

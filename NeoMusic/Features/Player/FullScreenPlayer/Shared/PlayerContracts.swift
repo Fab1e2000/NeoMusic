@@ -43,12 +43,18 @@ public struct PlayerQueueVersion: Equatable, Sendable {
     }
 }
 
-public struct PlayerQueueEntry: Identifiable, Hashable, Sendable {
+public struct PlayerQueueEntry: Identifiable, Sendable {
     public let id: UUID
     public let queueIndex: Int
-    public let song: PlayerTrack
+    private let readSong: @MainActor @Sendable () -> PlayerTrack
+    let artworkIdentity: ObjectIdentifier?
+    @MainActor public var song: PlayerTrack { readSong() }
     public init(id: UUID, queueIndex: Int, song: PlayerTrack) {
-        self.id = id; self.queueIndex = queueIndex; self.song = song
+        self.id = id; self.queueIndex = queueIndex; self.readSong = { song }; self.artworkIdentity = nil
+    }
+    public init(id: UUID, queueIndex: Int, artworkIdentity: ObjectIdentifier,
+                song: @escaping @MainActor @Sendable () -> PlayerTrack) {
+        self.id = id; self.queueIndex = queueIndex; self.artworkIdentity = artworkIdentity; self.readSong = song
     }
 }
 

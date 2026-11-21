@@ -387,7 +387,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
                     + (list.entries.isEmpty ? [.empty] : list.entries.map { .track($0.id) })
                 nativeOrderMatches = currentItemIdentifiers == requestedItemIdentifiers
                 changedItems = Set(list.entries.compactMap { entry in
-                    previousEntries[entry.id].map { $0.song != entry.song } == true ? .track(entry.id) : nil
+                    previousEntries[entry.id].map { $0.artworkIdentity != entry.artworkIdentity || $0.song != entry.song } == true ? .track(entry.id) : nil
                 })
             }
             if headerChanged || insetChanged { changedItems.insert(.spacer) }

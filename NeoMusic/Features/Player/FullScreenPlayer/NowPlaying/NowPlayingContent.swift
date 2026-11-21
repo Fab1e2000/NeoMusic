@@ -245,32 +245,19 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
     }
 
     private func dismissalHandle(layout: ReferenceNowPlayingLayout) -> some View {
-        ZStack(alignment: .top) {
+        Button(action: closePlayer) {
             Capsule()
                 .fill(.white.opacity(NowPlayingVisualHierarchy.grabberOpacity))
                 .blendMode(.plusLighter)
                 .frame(width: layout.width(60), height: 3.8)
                 .padding(.top, layout.contentY(69))
-        }
-        .frame(maxWidth: .infinity)
-        .frame(height: 22, alignment: .top)
-        .overlay(alignment: .top) {
-            Color.clear
-                .frame(maxWidth: .infinity)
-                .frame(height: 44)
+                .frame(width: 76, height: 22, alignment: .top)
                 .contentShape(.rect)
-                .onTapGesture {
-                    closePlayer()
-                }
         }
-        .zIndex(1)
-        .accessibilityElement()
+        .buttonStyle(.plain)
         .accessibilityLabel("收起播放器")
         .accessibilityHint("返回上一页")
         .accessibilityIdentifier("player.dismiss")
-        .accessibilityAction {
-            closePlayer()
-        }
     }
 
     private func pageContent(for song: PlayerTrack, lyricsBottomExtension: CGFloat) -> some View {
