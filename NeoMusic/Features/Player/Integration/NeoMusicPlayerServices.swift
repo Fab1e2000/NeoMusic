@@ -5,18 +5,24 @@ import FullScreenPlayer
 
 @MainActor enum NeoMusicPlayerServices {
     static func make(actions: PlayerActions, library: PlayerLyricsController,
-                     prepareArtwork: @escaping (String) -> Void = { _ in }) -> PlayerServices {
+                     prepareArtwork: @escaping (String) -> Void = { _ in },
+                     prepareQueueArtwork: ((String, Bool) -> Task<Void, Never>?)? = nil) -> PlayerServices {
         PlayerServices(actions: actions, lyrics: library.source,
-                       artwork: artwork(prepare: prepareArtwork), diagnostics: diagnostics)
+                       artwork: artwork(prepare: prepareArtwork, prepareQueue: prepareQueueArtwork), diagnostics: diagnostics)
     }
 
-    static func artwork(prepare: @escaping (String) -> Void = { _ in }) -> PlayerArtworkProvider {
+    static func artwork(prepare: @escaping (String) -> Void = { _ in },
+                        prepareQueue: ((String, Bool) -> Task<Void, Never>?)? = nil) -> PlayerArtworkProvider {
         PlayerArtworkProvider(cached: { request in
             if request.url.isFileURL, !request.fits {
                 let pixels = LocalArtworkImages.pixelSize(CGFloat(max(request.pixelWidth, request.pixelHeight)))
-                if let cached = LocalArtworkImages.cached(request.url, pixels: pixels) { return cached }
+                if let cached = LocalArtworkImages.cachedThumbnail(request.url, pixels: pixels) { return cached }
             }
             return ImagePipeline.shared.cache[imageRequest(request)]?.image
+        }, displayFallback: { request in
+            guard request.url.isFileURL, !request.fits else { return nil }
+            let pixels = LocalArtworkImages.pixelSize(CGFloat(max(request.pixelWidth, request.pixelHeight)))
+            return LocalArtworkImages.cached(request.url, pixels: pixels)
         }, load: { request in
             if request.url.isFileURL, !request.fits {
                 let pixels = LocalArtworkImages.pixelSize(CGFloat(max(request.pixelWidth, request.pixelHeight)))
@@ -40,7 +46,7 @@ import FullScreenPlayer
                     group.addTask { await ArtworkImagePipeline.prefetch(remoteRequests) }
                 }
             }
-        }, prepare: prepare)
+        }, prepare: prepare, prepareQueue: prepareQueue)
     }
 
     private static func imageRequest(_ value: PlayerArtworkRequest) -> ImageRequest {

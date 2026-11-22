@@ -66,7 +66,7 @@ final class NowPlayingModel {
     var replenishQueue: ((_ continuation: PlaybackQueueContinuation, _ shouldAdvance: Bool, _ playbackEnded: Bool) -> Void)?
     var recommendationOwner: ((LibrarySongItem) -> String?)?
     var fetchRecommendations: (@MainActor (LibrarySongItem) async throws -> [LibrarySongItem])?
-    var onRecommendationsQueued: (([LibrarySongItem]) -> Void)?
+    var onRecommendationsQueued: (() -> Void)?
     var canAutomaticallyContinue: Bool { hasCurrent && recommendationOwner?(current) != nil }
     var isAutomaticContinuationEnabled: Bool { continuation?.kind == .recommendations }
     private var hasRecommendationBatch = false
@@ -160,7 +160,7 @@ final class NowPlayingModel {
             advanceAfterRecommendations = nil
             endedWaitingForRecommendations = false
             appendToEnd(additions, userQueued: false, recommended: true)
-            onRecommendationsQueued?(additions)
+            onRecommendationsQueued?()
 
             if resume { isPlaying = true }
             if advance { select(currentIndex + 1) }
@@ -745,7 +745,7 @@ final class NowPlayingModel {
         return engine
     }
 
-    private var nextPlaybackIndex: Int? {
+    var nextPlaybackIndex: Int? {
         guard hasCurrent else { return nil }
         if repeatMode == .one { return currentIndex }
         if queue.indices.contains(currentIndex + 1) { return currentIndex + 1 }

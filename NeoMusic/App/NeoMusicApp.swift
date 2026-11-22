@@ -60,7 +60,8 @@ struct NeoMusicApp: App {
             .environment(\.searchMusicIntegration, search)
             .environment(\.artworkLoadAction, ArtworkLoadAction(
                 handler: { id in runtime.requestArtwork(for: id) },
-                resolve: { id in await home.cachedArtworkFile(for: id) }
+                resolve: { id in await home.cachedArtworkFile(for: id) },
+                queueHandler: { id, foreground in runtime.requestQueueArtwork(for: id, foreground: foreground) }
             ))
     }
 }

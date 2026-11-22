@@ -328,7 +328,7 @@ import XCTest
                                   Data(#"{"code":200,"result":{"songs":[],"songCount":0}}"#.utf8)],
             "/eapi/v3/song/detail": [songs([1])],
             "/eapi/playlist/catalogue": [Data(#"{"code":200,"sub":[]}"#.utf8)],
-            remote.path: [Data("first artwork".utf8)], replacement.path: [Data("next artwork".utf8)]
+            remote.path: [NeteaseArtworkTestFixture.png], replacement.path: [NeteaseArtworkTestFixture.png]
         ])
         let images = NeteaseArtworkCache(directory: directory(), session: network, countLimit: 1)
         let suite = "search-artwork-test-\(UUID())"

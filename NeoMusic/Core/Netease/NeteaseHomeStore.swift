@@ -64,11 +64,12 @@ import Observation
     }
     @ObservationIgnored private var detailTasks: [Int64: Task<NeteasePlaylistDetail, Error>] = [:]
     @ObservationIgnored private var artworkTasks: [URL: Task<Void, Never>] = [:]
+    @ObservationIgnored private var queueArtworkTasks: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var artworkEvictionObserver: NSObjectProtocol?
     @ObservationIgnored private let artworkCache: NeteaseArtworkCache
     @ObservationIgnored private let pageCache: NeteasePageCache
     @ObservationIgnored private var cache = Cache()
-    @ObservationIgnored private var restored = false
+    private var restored = false
     @ObservationIgnored private let cacheIO = NeteaseCacheIO()
     @ObservationIgnored private var saveTasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var saveIDs: [String: UUID] = [:]
@@ -123,7 +124,8 @@ import Observation
             quickActionStates = [:]; likedPlaylistID = nil; likedSongIDs = []; likedSeedID = nil; likedSongs = [:]; actionSongs = []; referencedSongs = [:]
             let oldDetails = Array(detailTasks.values); detailTasks = [:]
             oldDetails.forEach { $0.cancel() }
-            let oldArtwork = Array(artworkTasks.values); artworkTasks = [:]
+            let oldArtwork = Array(artworkTasks.values) + Array(queueArtworkTasks.values)
+            artworkTasks = [:]; queueArtworkTasks = [:]
             oldArtwork.forEach { $0.cancel() }
             let oldSaves = Array(saveTasks.values); saveTasks = [:]; saveIDs = [:]
             oldSaves.forEach { $0.cancel() }
@@ -881,16 +883,46 @@ import Observation
                         artworkTasks[remote] = nil
                     }
                 }
-                do {
-                    _ = try await artworkCache.imageURL(for: remote, scope: owner)
-                    try Task.checkCancellation()
-                    guard generation == revision else { return }
-                    PerformanceDiagnostics.event("ArtworkReady")
-                    onArtworkChange?([remote])
-                } catch { }
+                await loadArtwork(remote, owner: owner, revision: revision, demand: .standard)
             }
         }
         if !cached.isEmpty { onArtworkChange?(cached) }
+    }
+
+    var canRequestQueueArtwork: Bool { restored && userID != nil }
+
+    func requestQueueArtwork(_ remote: URL, foreground: Bool,
+                             after pending: Task<Void, Never>? = nil) -> Task<Void, Never>? {
+        guard canRequestQueueArtwork, remote.scheme == "https", !Task.isCancelled else {
+            pending?.cancel()
+            return nil
+        }
+        if pending == nil, cachedArtworkURL(remote: remote) != nil {
+            onArtworkChange?([remote])
+            return nil
+        }
+        let revision = generation, owner = scope, id = UUID()
+        let task = Task { [self] in
+            defer { queueArtworkTasks[id] = nil }
+            if let pending {
+                // The next track already had foreground priority. Keep that request through promotion.
+                await withTaskCancellationHandler { await pending.value } onCancel: { pending.cancel() }
+                guard !Task.isCancelled, generation == revision, cachedArtworkURL(remote: remote) == nil else { return }
+            }
+            await loadArtwork(remote, owner: owner, revision: revision, demand: foreground ? .foreground : .prefetch)
+        }
+        queueArtworkTasks[id] = task
+        return task
+    }
+
+    private func loadArtwork(_ remote: URL, owner: String, revision: UUID, demand: NeteaseArtworkCache.Demand) async {
+        do {
+            _ = try await artworkCache.imageURL(for: remote, scope: owner, demand: demand)
+            try Task.checkCancellation()
+            guard generation == revision, scope == owner else { return }
+            PerformanceDiagnostics.event("ArtworkReady")
+            onArtworkChange?([remote])
+        } catch { }
     }
     func flush() async {
         for task in Array(saveTasks.values) { await task.value }

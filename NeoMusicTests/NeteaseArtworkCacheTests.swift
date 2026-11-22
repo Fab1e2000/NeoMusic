@@ -22,10 +22,10 @@ import XCTest
         defer { session.invalidateAndCancel() }
         let cache = NeteaseArtworkCache(directory: directory, session: session)
         await cache.restore(scope: "42")
-        let first = Task { try await cache.imageURL(for: remote, scope: "42") }
+        let first = Task { try await cache.imageURL(for: remote, scope: "42", demand: .prefetch) }
         let second = Task {
             secondStarted.fulfill()
-            return try await cache.imageURL(for: remote, scope: "42")
+            return try await cache.imageURL(for: remote, scope: "42", demand: .foreground)
         }
         await fulfillment(of: [started, secondStarted], timeout: 3)
         first.cancel()
@@ -33,7 +33,7 @@ import XCTest
         catch { XCTAssertTrue(error is CancellationError) }
         ArtworkCacheProtocol.finishPending()
         let file = try await second.value
-        XCTAssertEqual(try Data(contentsOf: file), Data("artwork".utf8))
+        XCTAssertEqual(try Data(contentsOf: file), NeteaseArtworkTestFixture.png)
         XCTAssertEqual(ArtworkCacheProtocol.state.withLock { $0.requests }, 1)
         XCTAssertEqual(cache.cachedURL(for: remote, scope: "42"), file)
     }
@@ -83,7 +83,7 @@ import XCTest
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let filename = "73475cb40a568e8da8a045ced110137e159f890ac4da883b6b17dc651b3a8049-104257710801dd3ee6320d3d1a845a651c66e8c477d15f4f618c118323f68843.image"
         let existing = directory.appendingPathComponent(filename)
-        let content = Data("cached artwork".utf8)
+        let content = NeteaseArtworkTestFixture.png
         try content.write(to: existing)
         let session = network(status: 503)
         defer { session.invalidateAndCancel() }
@@ -200,9 +200,9 @@ import XCTest
             XCTAssertEqual((error as? URLError)?.code, .badServerResponse)
             XCTAssertNil(cache.cachedURL(for: remote, scope: "42"))
         }
-        ArtworkCacheProtocol.state.withLock { $0.data = Data("artwork".utf8) }
+        ArtworkCacheProtocol.state.withLock { $0.data = NeteaseArtworkTestFixture.png }
         let file = try await cache.imageURL(for: remote, scope: "42")
-        XCTAssertEqual(try Data(contentsOf: file), Data("artwork".utf8))
+        XCTAssertEqual(try Data(contentsOf: file), NeteaseArtworkTestFixture.png)
         XCTAssertEqual(ArtworkCacheProtocol.state.withLock { $0.requests }, 3)
     }
 
@@ -253,7 +253,7 @@ import XCTest
         await fulfillment(of: [evicted], timeout: 3)
         let restored = try await cache.imageURL(for: remote, scope: "42")
         XCTAssertEqual(restored, first)
-        XCTAssertEqual(try Data(contentsOf: restored), Data("artwork".utf8))
+        XCTAssertEqual(try Data(contentsOf: restored), NeteaseArtworkTestFixture.png)
         XCTAssertEqual(ArtworkCacheProtocol.state.withLock { $0.requests }, 3)
     }
 
@@ -282,7 +282,7 @@ import XCTest
         }
         let cache = NeteaseArtworkCache(directory: directory, session: session)
         let file = try await cache.imageURL(for: canonical, scope: "42")
-        XCTAssertEqual(try Data(contentsOf: file), Data("artwork".utf8))
+        XCTAssertEqual(try Data(contentsOf: file), NeteaseArtworkTestFixture.png)
         XCTAssertEqual(cache.cachedURL(for: canonical, scope: "42"), file)
         let requested = ArtworkCacheProtocol.state.withLock { $0.urls.map(\.absoluteString) }
         XCTAssertEqual(requested, [sized.absoluteString, canonical.absoluteString])
@@ -298,7 +298,7 @@ private final class ArtworkCacheProtocol: URLProtocol, @unchecked Sendable {
     struct State {
         var blocked = false
         var status = 200
-        var data = Data("artwork".utf8)
+        var data = NeteaseArtworkTestFixture.png
         var started: @Sendable () -> Void = {}
         var stopped: @Sendable () -> Void = {}
         var requests = 0
@@ -347,4 +347,8 @@ private final class ArtworkCacheProtocol: URLProtocol, @unchecked Sendable {
         client?.urlProtocol(self, didLoad: data)
         client?.urlProtocolDidFinishLoading(self)
     }
+}
+
+enum NeteaseArtworkTestFixture {
+    static let png = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGP4z8AARAwQCgAf7gP9i18U1AAAAABJRU5ErkJggg==")!
 }

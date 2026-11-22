@@ -70,6 +70,65 @@ final class ArtworkRenderingTests: XCTestCase {
                name: "Player cover metadata refresh")
     }
 
+    func testPlayerShowsSmallCachedArtworkWhileDecodingTargetSize() async throws {
+        let url = fileURL()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let bounds = CGRect(x: 0, y: 0, width: 512, height: 512)
+        let source = UIGraphicsImageRenderer(size: bounds.size, format: format).image { context in
+            UIColor.red.setFill()
+            context.fill(bounds)
+        }
+        try XCTUnwrap(source.pngData()).write(to: url)
+        let small = await LocalArtworkImages.loadThumbnail(url, pixels: 64)
+        XCTAssertEqual(small?.cgImage?.width, 64)
+        let request = PlayerArtworkRequest(url: url, pixelWidth: 128, pixelHeight: 128)
+        let provider = NeoMusicPlayerServices.artwork()
+        XCTAssertEqual(provider.displayFallback(request)?.cgImage?.width, 64)
+        XCTAssertNil(provider.cached(request))
+
+        let started = expectation(description: "Player requested the target size")
+        let finished = expectation(description: "The target-size decode finished")
+        var resumeDecode: CheckedContinuation<Void, Never>?
+        defer { resumeDecode?.resume() }
+        let services = PlayerServices(actions: PlayerTestFixtures.actions(), lyrics: PlayerTestFixtures.library().source,
+            artwork: PlayerArtworkProvider(cached: provider.cached, displayFallback: provider.displayFallback, load: { request in
+                await withCheckedContinuation {
+                    resumeDecode = $0
+                    started.fulfill()
+                }
+                defer { finished.fulfill() }
+                return try await provider.load(request)
+            }))
+        let state = ArtworkRenderingState(.missing, contentID: "song")
+        let scene = try await applicationWindowScene()
+        let window = UIWindow(windowScene: scene)
+        let controller = UIHostingController(rootView: PlayerArtworkRenderingPage(state: state, services: services))
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        let host = ArtworkRenderingHost(window: window, controller: controller)
+        let initial = await frames(host, count: 3)
+        state.artwork = .file(url)
+        await fulfillment(of: [started], timeout: 3)
+        let pending = await frames(host, count: 3)
+        XCTAssertNil(provider.cached(request))
+
+        try XCTUnwrap(resumeDecode).resume()
+        resumeDecode = nil
+        await fulfillment(of: [finished], timeout: 3)
+        XCTAssertEqual(provider.cached(request)?.cgImage?.width, 128)
+        let upgraded = await frames(host, count: 3)
+        let decodedFrame = try XCTUnwrap(upgraded.last)
+        XCTAssertNotEqual(decodedFrame.pixels, initial.last?.pixels)
+        for frame in pending + upgraded { XCTAssertEqual(frame.pixels, decodedFrame.pixels) }
+
+        _ = try await provider.load(.init(url: url, pixelWidth: 512, pixelHeight: 512))
+        let largerThanSource = PlayerArtworkRequest(url: url, pixelWidth: 1_024, pixelHeight: 1_024)
+        XCTAssertEqual(provider.cached(largerThanSource)?.cgImage?.width, 512)
+    }
+
     func testMetadataRefreshKeepsAvailableCoverAndNewLoadIdentity() throws {
         let url = fileURL()
         try XCTUnwrap(solid(.red).pngData()).write(to: url)
@@ -451,8 +510,8 @@ private struct ArtworkRenderingPage: View {
 }
 
 private struct PlayerArtworkRenderingPage: View {
-    private let services = NeoMusicPlayerServices.make(actions: PlayerTestFixtures.actions(), library: PlayerTestFixtures.library())
     let state: ArtworkRenderingState
+    var services = NeoMusicPlayerServices.make(actions: PlayerTestFixtures.actions(), library: PlayerTestFixtures.library())
     private var url: URL? { if case .file(let url) = state.artwork { url } else { nil } }
     var body: some View {
         ArtworkImage(url: url, contentID: state.contentID, artworkLoadID: state.artwork.loadID, cornerRadius: 0)

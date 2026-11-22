@@ -4,11 +4,13 @@ import ImageIO
 @MainActor enum LocalArtworkImages {
     private final class Variants {
         var images: [Int: UIImage] = [:]
+        var sourcePixels: Int?
         var backdrop: AlbumArtworkBackdrop?
         var cost: Int { images.values.reduce(0) { $0 + ($1.cgImage?.bytesPerRow ?? 0) * ($1.cgImage?.height ?? 0) } }
 
         func image(for pixels: Int, allowingSmaller: Bool) -> UIImage? {
-            if let size = images.keys.filter({ $0 >= pixels }).min() { return images[size] }
+            let required = min(pixels, sourcePixels ?? pixels)
+            if let size = images.keys.filter({ $0 >= required }).min() { return images[size] }
             return allowingSmaller ? images.keys.max().flatMap { images[$0] } : nil
         }
     }
@@ -29,6 +31,10 @@ import ImageIO
 
     static func cached(_ url: URL, pixels: Int) -> UIImage? {
         images.object(forKey: url as NSURL)?.image(for: pixels, allowingSmaller: true)
+    }
+
+    static func cachedThumbnail(_ url: URL, pixels: Int) -> UIImage? {
+        images.object(forKey: url as NSURL)?.image(for: pixels, allowingSmaller: false)
     }
 
     private static var resolvedArtwork: [String: URL] = [:]
@@ -107,7 +113,8 @@ import ImageIO
                 defer { loading[request] = nil }
                 guard let prepared = await decoder.load(url, pixels: pixels, prepareBackdrop: prepareBackdrop) else { return nil }
                 let variants = images.object(forKey: url as NSURL) ?? Variants()
-                variants.images[pixels] = prepared.image
+                variants.images[prepared.pixels] = prepared.image
+                if let sourcePixels = prepared.sourcePixels { variants.sourcePixels = sourcePixels }
                 if let backdrop = prepared.backdrop { variants.backdrop = backdrop }
                 images.setObject(variants, forKey: url as NSURL, cost: variants.cost)
                 return prepared.image
@@ -123,6 +130,8 @@ private actor LocalArtworkDecoder {
     struct Prepared: Sendable {
         let image: UIImage
         let backdrop: AlbumArtworkBackdrop?
+        let pixels: Int
+        let sourcePixels: Int?
     }
     private let backdrops = AlbumArtworkBackdropPreparer(
         cacheURL: URL.cachesDirectory.appending(path: "ArtworkBackdrops.json"))
@@ -148,7 +157,14 @@ private actor LocalArtworkDecoder {
                     kCGImageSourceShouldCacheImmediately: true,
                     kCGImageSourceThumbnailMaxPixelSize: pixels
                   ] as CFDictionary) else { return nil }
-            return Prepared(image: UIImage(cgImage: thumbnail), backdrop: colors?[url.absoluteString])
+            let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
+            let sourcePixels: Int?
+            if let width = properties?[kCGImagePropertyPixelWidth] as? Int,
+               let height = properties?[kCGImagePropertyPixelHeight] as? Int, width > 0, height > 0 {
+                sourcePixels = max(width, height)
+            } else { sourcePixels = nil }
+            return Prepared(image: UIImage(cgImage: thumbnail), backdrop: colors?[url.absoluteString],
+                            pixels: max(thumbnail.width, thumbnail.height), sourcePixels: sourcePixels)
         }
     }
 }

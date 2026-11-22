@@ -928,7 +928,7 @@ private final class LoadingProtocol: URLProtocol, @unchecked Sendable {
     private func respond(_ body: String) {
         let status = Self.state.withLock { $0.statuses[request.url!.path] ?? 200 }
         client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: Data(body.utf8))
+        client?.urlProtocol(self, didLoad: body == "image" ? NeteaseArtworkTestFixture.png : Data(body.utf8))
         client?.urlProtocolDidFinishLoading(self)
         let completed = Self.state.withLock { $0.completed }
         completed(request.url!.path)

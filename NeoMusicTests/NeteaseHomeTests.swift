@@ -492,7 +492,7 @@ import Synchronization
         HomePaginationProtocol.state.withLock {
             $0.responses["/eapi/playmode/intelligence/list"] = songResponse(ids, key: "data")
             $0.responses["/eapi/v3/song/detail"] = response
-            $0.responses[remote.path] = Data("image".utf8)
+            $0.responses[remote.path] = NeteaseArtworkTestFixture.png
             $0.blocked.insert(remote.path)
             $0.started = { if $0 == remote.path { started.fulfill() } }
         }
@@ -531,6 +531,91 @@ import Synchronization
         XCTAssertEqual(player.current.artworkURL, file)
         XCTAssertEqual(player.next?.artwork, .file(file))
         XCTAssertEqual(HomePaginationProtocol.count(remote.path), 1)
+        try await account.logout()
+    }
+
+    func testHeartTrackRetriesFailedQueuePrefetchWhenItBecomesCurrent() async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let previousSongs = LocalLibrary.songLibrary.externalSongs
+        let previousOwner = LocalLibrary.playbackAccountID
+        let network = try paginationNetwork(count: 1)
+        defer {
+            network.invalidateAndCancel()
+            LocalLibrary.songLibrary.replaceExternalSongs(previousSongs)
+            LocalLibrary.playbackAccountID = previousOwner
+            try? FileManager.default.removeItem(at: root)
+        }
+        let nextCover = URL(string: "https://fixture.test/heart-next")!
+        let promotedCover = URL(string: "https://fixture.test/heart-promoted")!
+        let ids: [Int64] = [2, 3, 4]
+        let details: [[String: Any]] = ids.map { id in
+            var album = ["name": "Album"]
+            if id == 2 { album["picUrl"] = nextCover.absoluteString }
+            if id == 4 { album["picUrl"] = promotedCover.absoluteString }
+            return ["id": id, "name": "Heart", "ar": [], "al": album, "dt": 1000]
+        }
+        let detailResponse = try JSONSerialization.data(withJSONObject: ["code": 200, "songs": details])
+        let prefetchStarted = expectation(description: "Queue prefetch is blocked")
+        let nextReady = expectation(description: "Next track artwork loaded with the queue closed")
+        HomePaginationProtocol.state.withLock {
+            $0.responses["/eapi/playmode/intelligence/list"] = songResponse(ids, key: "data")
+            $0.responses["/eapi/v3/song/detail"] = detailResponse
+            $0.responses[nextCover.path] = NeteaseArtworkTestFixture.png
+            $0.responses[promotedCover.path] = Data("invalid image payload".utf8)
+            $0.blocked.insert(promotedCover.path)
+            $0.started = { if $0 == promotedCover.path { prefetchStarted.fulfill() } }
+        }
+        let home = NeteaseHomeStore(client: NeteaseMusicClient(transport: NeteaseAccountClient(session: network)),
+                                    directory: root, artworkSession: network)
+        let saved = try savedSession()
+        let account = NeteaseAccount(readSession: { saved }, saveSession: { _ in }, deleteSession: {},
+            validateCredential: { _ in saved.profile }, cachedAvatar: { _ in nil }, loadAvatar: { _ in Data() },
+            clearAvatarCache: {}, home: home)
+        await account.restore()
+        let seed = LibrarySongItem(id: "netease:42:1", title: "Seed", artist: "", album: "", albumArtist: "",
+                                   trackNumber: 0, artwork: .missing)
+        let player = NowPlayingModel(queue: [seed], currentIndex: 0, isPlaying: false)
+        defer { player.shutdownPlayback() }
+        player.restoreOnlineIdentity(ownerID: "42")
+        let integration = HomeMusicIntegration(account: account, player: player)
+        integration.connect()
+        home.updateLikedSongs(playlistID: 12, songs: [], likedAt: [:], likedIDs: [1])
+        let publishArtwork = home.onArtworkChange
+        var promotedPublications = 0
+        home.onArtworkChange = { urls in
+            publishArtwork?(urls)
+            if urls.contains(nextCover) { nextReady.fulfill() }
+            if urls.contains(promotedCover) { promotedPublications += 1 }
+        }
+        player.toggleAutomaticContinuation()
+        await player.recommendationTask?.value
+        await fulfillment(of: [nextReady], timeout: 3)
+        let index = try XCTUnwrap(player.queue.firstIndex { $0.id == "netease:42:4" })
+        XCTAssertEqual(HomePaginationProtocol.count(promotedCover.path), 0)
+        let identity = try XCTUnwrap(player.queue[index].artwork.loadID)
+        let prefetch = try XCTUnwrap(integration.requestQueueArtwork(for: identity, foreground: false))
+        await fulfillment(of: [prefetchStarted], timeout: 3)
+        XCTAssertEqual(player.queue.count, 4)
+        HomePaginationProtocol.release(promotedCover.path)
+        await prefetch.value
+        XCTAssertEqual(promotedPublications, 0)
+        XCTAssertNil(home.cachedArtworkURL(remote: promotedCover))
+
+        let promotedReady = expectation(description: "Current track retries and publishes valid artwork")
+        home.onArtworkChange = { urls in
+            publishArtwork?(urls)
+            if urls.contains(promotedCover) { promotedReady.fulfill() }
+        }
+        HomePaginationProtocol.state.withLock {
+            $0.started = { _ in }
+            $0.responses[promotedCover.path] = NeteaseArtworkTestFixture.png
+        }
+        player.select(index)
+        await fulfillment(of: [promotedReady], timeout: 3)
+        await integration.artworkPublishTask?.value
+        let file = try XCTUnwrap(home.cachedArtworkURL(remote: promotedCover))
+        XCTAssertEqual(player.current.artworkURL, file)
+        XCTAssertEqual(HomePaginationProtocol.count(promotedCover.path), 2)
         try await account.logout()
     }
 
@@ -1116,7 +1201,7 @@ import Synchronization
         let network = try paginationNetwork(count: 1)
         defer { network.invalidateAndCancel() }
         let remote = URL(string: "https://fixture.test/first-cover")!
-        HomePaginationProtocol.state.withLock { $0.responses[remote.path] = Data("image".utf8) }
+        HomePaginationProtocol.state.withLock { $0.responses[remote.path] = NeteaseArtworkTestFixture.png }
         let pages = NeteasePageCache(directory: root.appendingPathComponent("home"))
         let playlist = NeteaseMusicPlaylist(id: 12, title: "List", creator: "Other", creatorID: 99,
             artworkURL: nil, trackCount: 1, isFavorites: false)
@@ -1143,7 +1228,7 @@ import Synchronization
         let network = try paginationNetwork(count: 1)
         defer { network.invalidateAndCancel() }
         let remote = try XCTUnwrap(URL(string: "https://fixture.test/restored-artwork"))
-        HomePaginationProtocol.state.withLock { $0.responses[remote.path] = Data("image".utf8) }
+        HomePaginationProtocol.state.withLock { $0.responses[remote.path] = NeteaseArtworkTestFixture.png }
         let artworkDirectory = root.appendingPathComponent("artwork")
         let writer = NeteaseArtworkCache(directory: artworkDirectory, session: network)
         let saved = try await writer.imageURL(for: remote, scope: "42")

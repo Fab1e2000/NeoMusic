@@ -389,7 +389,7 @@ import XCTest
             override func startLoading() {
                 let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
                 client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-                client?.urlProtocol(self, didLoad: Data([1, 2, 3]))
+                client?.urlProtocol(self, didLoad: NeteaseArtworkTestFixture.png)
                 client?.urlProtocolDidFinishLoading(self)
             }
             override func stopLoading() {}

@@ -93,6 +93,14 @@ final class AppRuntime {
         }
     }
 
+    func requestQueueArtwork(for id: String, foreground: Bool) -> Task<Void, Never>? {
+        if DeferredArtworkKey(rawValue: id)?.domain == .home {
+            return home.requestQueueArtwork(for: id, foreground: foreground)
+        }
+        if foreground { requestArtwork(for: id) }
+        return nil
+    }
+
     func sceneDidChange(from previous: ScenePhase, to phase: ScenePhase) {
         guard startupTask != nil else { return }
         if phase == .background {

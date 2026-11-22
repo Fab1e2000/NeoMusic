@@ -36,6 +36,18 @@ enum NeteaseArtworkPrefetch {
 
 @MainActor
 final class NeteaseArtworkCache {
+    enum Demand: Equatable {
+        case standard, prefetch, foreground
+
+        var priority: ImageRequest.Priority {
+            switch self {
+            case .standard: .normal
+            case .prefetch: .low
+            case .foreground: .high
+            }
+        }
+    }
+
     static let shared = NeteaseArtworkCache(
         directory: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("NeteaseArtwork", isDirectory: true),
@@ -74,6 +86,7 @@ final class NeteaseArtworkCache {
     private var revision = -1
     private var restored = false
     private var loading: [String: LoadingScope] = [:]
+    private var prefetches: [String: Int] = [:]
 
     init(directory: URL, session: URLSession? = nil,
          byteLimit: Int = 192 * 1_024 * 1_024, countLimit: Int = 512) {
@@ -114,13 +127,16 @@ final class NeteaseArtworkCache {
         return cachedURL(for: remote, scope: scope)
     }
 
-    func imageURL(for remote: URL, scope: String) async throws -> URL {
+    func imageURL(for remote: URL, scope: String, demand: Demand = .standard) async throws -> URL {
         try Task.checkCancellation()
         guard remote.scheme == "https" else { throw URLError(.unsupportedURL) }
         await restore(scope: scope)
         try Task.checkCancellation()
         if let cached = cachedURL(for: remote, scope: scope) { return cached }
 
+        let key = key(remote, scope: scope)
+        let joinedPrefetch = demand == .foreground && prefetches[key] != nil
+        if demand == .prefetch { prefetches[key, default: 0] += 1 }
         let pipeline: ImagePipeline
         if var existing = loading[scope] {
             existing.consumers += 1
@@ -135,23 +151,26 @@ final class NeteaseArtworkCache {
             loading[scope] = LoadingScope(pipeline: pipeline, consumers: 1)
         }
         defer {
+            if demand == .prefetch, let count = prefetches[key] {
+                prefetches[key] = count == 1 ? nil : count - 1
+            }
             if var existing = loading[scope] {
                 existing.consumers -= 1
                 loading[scope] = existing.consumers == 0 ? nil : existing
             }
         }
 
-        let download = NeteaseArtworkURL.downloadURL(for: remote)
         let data: Data
         do {
-            data = try await loadArtworkData(from: download, pipeline: pipeline)
-        } catch is CancellationError {
-            throw CancellationError()
+            data = try await Self.downloadArtwork(remote, pipeline: pipeline, priority: demand.priority)
         } catch {
-            guard download != remote else { throw error }
-            data = try await loadArtworkData(from: remote, pipeline: pipeline)
+            try Task.checkCancellation()
+            guard joinedPrefetch, !(error is CancellationError) else { throw error }
+            // A foreground consumer gets its own attempt if the shared prefetch fails.
+            if let cached = cachedURL(for: remote, scope: scope) { return cached }
+            data = try await Self.downloadArtwork(remote, pipeline: pipeline, priority: demand.priority)
         }
-        let key = key(remote, scope: scope)
+        try Task.checkCancellation()
         let snapshot = try await storage.store(data, key: key)
         apply(snapshot)
         try Task.checkCancellation()
@@ -198,10 +217,23 @@ final class NeteaseArtworkCache {
         }
     }
 
-    private func loadArtworkData(from url: URL, pipeline: ImagePipeline) async throws -> Data {
+    private static func downloadArtwork(_ remote: URL, pipeline: ImagePipeline,
+                                        priority: ImageRequest.Priority) async throws -> Data {
+        let download = NeteaseArtworkURL.downloadURL(for: remote)
+        do {
+            return try await loadArtworkData(from: download, pipeline: pipeline, priority: priority)
+        } catch {
+            try Task.checkCancellation()
+            guard download != remote, !(error is CancellationError) else { throw error }
+            return try await loadArtworkData(from: remote, pipeline: pipeline, priority: priority)
+        }
+    }
+
+    private static func loadArtworkData(from url: URL, pipeline: ImagePipeline,
+                                        priority: ImageRequest.Priority) async throws -> Data {
         let data: Data
         let response: URLResponse?
-        do { (data, response) = try await pipeline.data(for: ImageRequest(url: url)) }
+        do { (data, response) = try await pipeline.data(for: ImageRequest(url: url, priority: priority)) }
         catch {
             try Task.checkCancellation()
             switch error {
@@ -214,7 +246,14 @@ final class NeteaseArtworkCache {
         try Task.checkCancellation()
         guard let response = response as? HTTPURLResponse,
               (200..<300).contains(response.statusCode), !data.isEmpty else { throw URLError(.badServerResponse) }
+        guard await canDecodeArtwork(data) else {
+            throw URLError(.cannotDecodeContentData)
+        }
         return data
+    }
+
+    @concurrent private static func canDecodeArtwork(_ data: Data) async -> Bool {
+        ImageRequest.ThumbnailOptions(maxPixelSize: 64).makeThumbnail(with: data) != nil
     }
 
     private func key(_ remote: URL, scope: String) -> String {

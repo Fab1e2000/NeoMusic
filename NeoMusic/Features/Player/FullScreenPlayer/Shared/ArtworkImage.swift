@@ -13,6 +13,7 @@ struct ArtworkImage: View {
     @Environment(PlayerServices.self) private var services: PlayerServices?
     @State private var displayedImage: UIImage?
     @State private var displayedContentID: String?
+    @State private var displayedURL: URL?
     @State private var failed = false
 
     private struct LoadID: Equatable {
@@ -25,10 +26,9 @@ struct ArtworkImage: View {
         Group {
             if let fixedSize = decodeSize {
                 let request = imageRequest(for: fixedSize)
-                let cached = request.flatMap { services?.artwork.cached($0) }
                 Color.clear
                     .overlay {
-                        content(image: cached ?? retainedImage)
+                        content(image: displayImage(for: request))
                     }
                     .task(id: LoadID(content: contentID, artwork: artworkLoadID, request: request)) {
                         await loadArtwork(request: request)
@@ -36,8 +36,7 @@ struct ArtworkImage: View {
             } else {
                 GeometryReader { proxy in
                     let request = imageRequest(for: proxy.size)
-                    let cached = request.flatMap { services?.artwork.cached($0) }
-                    content(image: cached ?? retainedImage)
+                    content(image: displayImage(for: request))
                         .frame(width: proxy.size.width, height: proxy.size.height)
                         .task(id: LoadID(content: contentID, artwork: artworkLoadID, request: request)) {
                             await loadArtwork(request: request)
@@ -51,25 +50,40 @@ struct ArtworkImage: View {
     }
 
     private func loadArtwork(request: PlayerArtworkRequest?) async {
+        guard !Task.isCancelled else { return }
         failed = false
         guard let request, let provider = services?.artwork else {
-            if url == nil && artworkLoadID == nil { displayedImage = nil; displayedContentID = nil }
+            if url == nil && artworkLoadID == nil { remember(nil) }
             return
         }
         do {
             let image: UIImage
-            if let cached = provider.cached(request) { image = cached }
-            else { image = try await provider.load(request) }
+            if let cached = provider.cached(request) {
+                image = cached
+            } else {
+                if retainedImage == nil, let fallback = provider.displayFallback(request) { remember(fallback) }
+                image = try await provider.load(request)
+            }
             try Task.checkCancellation()
-            displayedImage = image
-            displayedContentID = contentID
+            remember(image)
         } catch is CancellationError { }
         catch { if !Task.isCancelled { failed = true } }
     }
 
+    private func displayImage(for request: PlayerArtworkRequest?) -> UIImage? {
+        guard let request, let provider = services?.artwork else { return retainedImage }
+        return provider.cached(request) ?? retainedImage ?? provider.displayFallback(request)
+    }
+
+    private func remember(_ image: UIImage?) {
+        displayedImage = image
+        displayedContentID = image == nil ? nil : contentID
+        displayedURL = image == nil ? nil : url
+    }
+
     private var retainedImage: UIImage? {
-        guard url != nil || artworkLoadID != nil,
-              let contentID, displayedContentID == contentID else { return nil }
+        guard displayedContentID == contentID, url != nil || artworkLoadID != nil else { return nil }
+        if contentID == nil, url == nil || url != displayedURL { return nil }
         return displayedImage
     }
 

@@ -50,6 +50,13 @@ import Observation
     private var pendingFeedPlayback: (songs: [NeteaseMusicSong], index: Int, title: String)?
     private(set) var pendingQuickAction: HomeQuickAction?
     @ObservationIgnored private var queueArtworkBindings: (revision: UInt64, songs: [String: [LibrarySongItem]])?
+    private struct PlaybackArtworkDemand: Hashable {
+        let entry: UUID
+        let identity: String
+        let isCurrent: Bool
+    }
+    @ObservationIgnored private var playbackArtworkDemands: Set<PlaybackArtworkDemand> = []
+    @ObservationIgnored private var playbackArtworkTasks: [PlaybackArtworkDemand: Task<Void, Never>] = [:]
     @ObservationIgnored private var artworkSongs: [URL: [NeteaseMusicSong]] = [:]
     @ObservationIgnored private var feedPlaylistCovers = HomeFeedPlaylistCovers(session: nil)
     @ObservationIgnored private var feedArtwork: [URL: [ArtworkResourceState<Artwork>]] = [:]
@@ -118,13 +125,7 @@ import Observation
             }
             return songs.map(mapSong)
         }
-        player.onRecommendationsQueued = { [weak self] songs in
-            guard let self else { return }
-            publish()
-            for id in Set(songs.compactMap({ $0.artwork.loadID })) {
-                requestArtwork(for: id)
-            }
-        }
+        player.onRecommendationsQueued = { [weak self] in self?.publish() }
         player.replenishQueue = { [weak self] continuation, advance, ended in
             self?.replenishRoaming(continuation: continuation, shouldAdvance: advance, playbackEnded: ended)
         }
@@ -155,7 +156,36 @@ import Observation
         detailLibrary.unsubscribeOnlinePlaylist = { [weak self] id in self?.changeCollection(id, subscribed: false) }
         observe()
         observeCurrentSong()
+        observePlaybackArtwork()
         observeRecent()
+    }
+
+    private func observePlaybackArtwork() {
+        let demands: Set<PlaybackArtworkDemand> = withObservationTracking {
+            guard !account.isLoggingOut, let userID = account.profile?.userID,
+                  let home = account.home, home.canRequestQueueArtwork,
+                  home.userID == userID, account.sessionOwnerID == userID, player.hasCurrent else { return [] }
+            let current = player.currentIndex
+            let indices = [current] + [player.nextPlaybackIndex].compactMap { $0 }
+            var seen = Set<String>()
+            return Set(indices.compactMap { index in
+                let song = player.queue[index]
+                guard song.onlineOwnerID == String(userID), let identity = song.artwork.loadID,
+                      seen.insert(identity).inserted else { return nil }
+                return PlaybackArtworkDemand(entry: player.entryIDs[index], identity: identity, isCurrent: index == current)
+            })
+        } onChange: { [weak self] in
+            Task { @MainActor in self?.observePlaybackArtwork() }
+        }
+        for demand in demands.subtracting(playbackArtworkDemands) {
+            let previous = PlaybackArtworkDemand(entry: demand.entry, identity: demand.identity, isCurrent: !demand.isCurrent)
+            let pending = playbackArtworkTasks.removeValue(forKey: previous)
+            playbackArtworkTasks[demand] = requestQueueArtwork(for: demand.identity, foreground: true, after: pending)
+        }
+        for demand in playbackArtworkDemands.subtracting(demands) {
+            playbackArtworkTasks.removeValue(forKey: demand)?.cancel()
+        }
+        playbackArtworkDemands = demands
     }
 
     private func observe() {
@@ -238,6 +268,16 @@ import Observation
               key.matches(domain: .home, session: home.sessionRevision),
               let url = key.remoteURL else { return }
         home.requestArtwork([url])
+    }
+
+    func requestQueueArtwork(for id: String, foreground: Bool,
+                             after pending: Task<Void, Never>? = nil) -> Task<Void, Never>? {
+        guard !account.isLoggingOut, let home = account.home,
+              let userID = home.userID, userID == account.sessionOwnerID,
+              let key = DeferredArtworkKey(rawValue: id),
+              key.matches(domain: .home, session: home.sessionRevision),
+              let url = key.remoteURL else { pending?.cancel(); return nil }
+        return home.requestQueueArtwork(url, foreground: foreground, after: pending)
     }
     func cachedArtworkFile(for id: String) async -> URL? {
         guard let home = account.home, home.userID == account.sessionOwnerID, !Task.isCancelled else { return nil }

@@ -21,6 +21,7 @@ enum ArtworkPlaceholder: Equatable { case missing, playlist }
 struct ArtworkLoadAction {
     var handler: (@MainActor (String) -> Void)?
     var resolve: (@MainActor (String) async -> URL?)? = nil
+    var queueHandler: (@MainActor (String, Bool) -> Task<Void, Never>?)? = nil
     @MainActor func callAsFunction(_ id: String?) {
         guard let id else { return }
         handler?(id)

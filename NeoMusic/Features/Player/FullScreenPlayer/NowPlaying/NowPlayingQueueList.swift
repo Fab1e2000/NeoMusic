@@ -53,6 +53,11 @@ struct NowPlayingQueueList: UIViewRepresentable {
         context.coordinator.update(with: self)
     }
 
+    static func dismantleUIView(_ container: OverflowContainer, coordinator: Coordinator) {
+        container.collectionView.prefetchDataSource = nil
+        coordinator.cancelArtworkRequests()
+    }
+
     private final class QueueEdgeMaskLayer: CAGradientLayer {
         override init() {
             super.init()
@@ -276,7 +281,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
     }
 
     @MainActor
-    final class Coordinator: NSObject, UICollectionViewDelegate {
+    final class Coordinator: NSObject, UICollectionViewDelegate, UICollectionViewDataSourcePrefetching {
         nonisolated enum Section: Sendable { case header, queue }
         nonisolated enum Item: Hashable, Sendable {
             case spacer
@@ -295,6 +300,18 @@ struct NowPlayingQueueList: UIViewRepresentable {
         private var nativeOrderMatches = true
         private var contentRevision: UInt64 = 0
         private(set) var snapshotApplicationCount = 0
+        private var prefetchedArtwork: [IndexPath: Task<Void, Never>] = [:]
+        private struct VisibleArtwork {
+            let identity: String
+            let task: Task<Void, Never>?
+            let prefetch: Task<Void, Never>?
+
+            func cancel() {
+                task?.cancel()
+                prefetch?.cancel()
+            }
+        }
+        private var visibleArtwork: [ObjectIdentifier: VisibleArtwork] = [:]
 
         func trailingActions(at indexPath: IndexPath) -> UISwipeActionsConfiguration? {
             guard case .track(let id) = dataSource?.itemIdentifier(for: indexPath),
@@ -337,7 +354,6 @@ struct NowPlayingQueueList: UIViewRepresentable {
                 self?.didReorder(transaction)
             }
             self.dataSource = dataSource
-
             update(with: initial)
         }
 
@@ -356,6 +372,11 @@ struct NowPlayingQueueList: UIViewRepresentable {
             let headerChanged = previousList?.headerHeight != list.headerHeight
             let subtitleChanged = previousList?.subtitle != list.subtitle
             let becameActive = list.visualsActive && previousList?.visualsActive == false
+            let servicesChanged = previousList?.services !== list.services
+            if !list.visualsActive || servicesChanged { cancelArtworkRequests() }
+            if !hasApplied || previousList?.visualsActive != list.visualsActive {
+                collectionView?.prefetchDataSource = list.visualsActive ? self : nil
+            }
             let dependenciesChanged = previousList.map {
                 $0.player !== list.player || $0.actions !== list.actions
             } ?? false
@@ -368,7 +389,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
                     updateScrollIndicatorInsets()
                     list.onScroll(0)
                 }
-                if becameActive || entriesChanged || trackChanged { requestVisibleArtwork() }
+                if becameActive || entriesChanged || trackChanged || servicesChanged { requestVisibleArtwork() }
             }
             updateScrollIndicatorInsets()
             if let nativeOrder {
@@ -395,6 +416,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
             if insetChanged { changedItems.insert(.empty) }
 
             if !hasApplied || !nativeOrderMatches {
+                cancelPrefetches()
                 var snapshot = NSDiffableDataSourceSnapshot<Section, Item>()
                 snapshot.appendSections([.header, .queue])
                 snapshot.appendItems([.spacer, .title], toSection: .header)
@@ -445,23 +467,66 @@ struct NowPlayingQueueList: UIViewRepresentable {
                             forItemAt indexPath: IndexPath) {
             guard let cell = cell as? UICollectionViewListCell,
                   let item = dataSource?.itemIdentifier(for: indexPath) else { return }
-            requestArtwork(for: item)
+            requestVisibleArtwork(for: cell, item: item, at: indexPath)
             if let prepared = cell as? EdgeFadedListCell,
                prepared.contentRevision == contentRevision { return }
             configure(cell, item: item)
         }
 
         private func requestVisibleArtwork() {
-            guard let latest, latest.visualsActive, let collectionView, let dataSource else { return }
+            guard latest?.visualsActive == true, let collectionView, let dataSource else { return }
             for indexPath in collectionView.indexPathsForVisibleItems {
-                if let item = dataSource.itemIdentifier(for: indexPath) { requestArtwork(for: item) }
+                guard let item = dataSource.itemIdentifier(for: indexPath),
+                      let cell = collectionView.cellForItem(at: indexPath) else { continue }
+                requestVisibleArtwork(for: cell, item: item, at: indexPath)
             }
         }
 
-        private func requestArtwork(for item: Item) {
-            guard let latest, latest.visualsActive, case .track(let id) = item,
-                  let entry = entriesByID[id] else { return }
-            latest.services?.artwork.prepare(entry.song.artworkLoadID)
+        func collectionView(_ collectionView: UICollectionView, prefetchItemsAt indexPaths: [IndexPath]) {
+            guard let latest, latest.visualsActive, let dataSource else { return }
+            for indexPath in indexPaths where prefetchedArtwork[indexPath] == nil {
+                guard let item = dataSource.itemIdentifier(for: indexPath),
+                      let identity = artworkIdentity(for: item) else { continue }
+                prefetchedArtwork[indexPath] = latest.services?.artwork.prepareQueue(identity, foreground: false)
+            }
+        }
+
+        func collectionView(_ collectionView: UICollectionView, cancelPrefetchingForItemsAt indexPaths: [IndexPath]) {
+            for indexPath in indexPaths { prefetchedArtwork.removeValue(forKey: indexPath)?.cancel() }
+        }
+
+        func collectionView(_ collectionView: UICollectionView, didEndDisplaying cell: UICollectionViewCell,
+                            forItemAt indexPath: IndexPath) {
+            visibleArtwork.removeValue(forKey: ObjectIdentifier(cell))?.cancel()
+        }
+
+        private func requestVisibleArtwork(for cell: UICollectionViewCell, item: Item, at indexPath: IndexPath) {
+            guard let latest, latest.visualsActive else { return }
+            let cellID = ObjectIdentifier(cell)
+            let identity = artworkIdentity(for: item)
+            guard visibleArtwork[cellID]?.identity != identity else { return }
+            visibleArtwork.removeValue(forKey: cellID)?.cancel()
+            if let identity {
+                let task = latest.services?.artwork.prepareQueue(identity, foreground: true)
+                let prefetch = prefetchedArtwork.removeValue(forKey: indexPath)
+                visibleArtwork[cellID] = VisibleArtwork(identity: identity, task: task, prefetch: prefetch)
+            }
+        }
+
+        private func artworkIdentity(for item: Item) -> String? {
+            guard case .track(let id) = item else { return nil }
+            return entriesByID[id]?.song.artworkLoadID
+        }
+
+        private func cancelPrefetches() {
+            for task in prefetchedArtwork.values { task.cancel() }
+            prefetchedArtwork.removeAll()
+        }
+
+        func cancelArtworkRequests() {
+            cancelPrefetches()
+            for request in visibleArtwork.values { request.cancel() }
+            visibleArtwork.removeAll()
         }
 
         func configure(_ cell: UICollectionViewListCell, item: Item) {
@@ -551,6 +616,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
         private func didReorder(
             _ transaction: NSDiffableDataSourceTransaction<Section, Item>
         ) {
+            cancelPrefetches()
             currentItemIdentifiers = transaction.finalSnapshot.itemIdentifiers
             nativeOrderMatches = currentItemIdentifiers == requestedItemIdentifiers
             guard let section = transaction.sectionTransactions.first(where: { $0.sectionIdentifier == .queue }) else { return }

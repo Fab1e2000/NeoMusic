@@ -31,16 +31,23 @@ public struct PlayerArtworkRequest: Hashable, Sendable {
 
 @MainActor public final class PlayerArtworkProvider {
     private let cachedAction: (PlayerArtworkRequest) -> UIImage?
+    private let displayFallbackAction: (PlayerArtworkRequest) -> UIImage?
     private let loadAction: (PlayerArtworkRequest) async throws -> UIImage
     private let prefetchAction: (([PlayerArtworkRequest]) async -> Void)?
     private let prepareAction: (String) -> Void
+    private let prepareQueueAction: ((String, Bool) -> Task<Void, Never>?)?
     public init(cached: @escaping (PlayerArtworkRequest) -> UIImage?,
+                displayFallback: @escaping (PlayerArtworkRequest) -> UIImage? = { _ in nil },
                 load: @escaping (PlayerArtworkRequest) async throws -> UIImage,
                 prefetch: (([PlayerArtworkRequest]) async -> Void)? = nil,
-                prepare: @escaping (String) -> Void = { _ in }) {
+                prepare: @escaping (String) -> Void = { _ in },
+                prepareQueue: ((String, Bool) -> Task<Void, Never>?)? = nil) {
         cachedAction = cached; loadAction = load; prepareAction = prepare; prefetchAction = prefetch
+        displayFallbackAction = displayFallback; prepareQueueAction = prepareQueue
     }
+    /// A cached decode that satisfies the requested size.
     public func cached(_ request: PlayerArtworkRequest) -> UIImage? { cachedAction(request) }
+    public func displayFallback(_ request: PlayerArtworkRequest) -> UIImage? { displayFallbackAction(request) }
     public func load(_ request: PlayerArtworkRequest) async throws -> UIImage { try await loadAction(request) }
     public func prefetch(_ requests: [PlayerArtworkRequest]) async {
         if let prefetchAction { await prefetchAction(requests) }
@@ -52,6 +59,11 @@ public struct PlayerArtworkRequest: Hashable, Sendable {
         }
     }
     public func prepare(_ identity: String?) { if let identity { prepareAction(identity) } }
+    func prepareQueue(_ identity: String, foreground: Bool) -> Task<Void, Never>? {
+        if let prepareQueueAction { return prepareQueueAction(identity, foreground) }
+        if foreground { prepare(identity) }
+        return nil
+    }
 }
 
 @MainActor public final class PlayerDiagnostics {

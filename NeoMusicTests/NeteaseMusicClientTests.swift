@@ -917,7 +917,7 @@ private final class MusicFixtureProtocol: URLProtocol, @unchecked Sendable {
     }
     func finish(_ response: String) {
         client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: Data(response.utf8))
+        client?.urlProtocol(self, didLoad: response == "cached artwork" ? NeteaseArtworkTestFixture.png : Data(response.utf8))
         client?.urlProtocolDidFinishLoading(self)
     }
     override func stopLoading() {}

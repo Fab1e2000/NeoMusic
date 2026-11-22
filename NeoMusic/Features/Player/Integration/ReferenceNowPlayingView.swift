@@ -2,7 +2,7 @@ import SwiftUI
 import FullScreenPlayer
 
 @MainActor private final class ArtworkPrepareRelay {
-    var handler: (String) -> Void = { _ in }
+    var action = ArtworkLoadAction()
 }
 
 struct PlayerNowPlayingHostView: View {
@@ -17,7 +17,7 @@ struct PlayerNowPlayingHostView: View {
     @State private var cachedServices: PlayerServices?
 
     private var resolvedServices: PlayerServices {
-        prepareRelay.handler = { loadArtwork($0) }
+        prepareRelay.action = loadArtwork
         if let cachedServices,
            cachedServices.actions === actions,
            cachedServices.lyrics === library.source {
@@ -26,7 +26,12 @@ struct PlayerNowPlayingHostView: View {
         return NeoMusicPlayerServices.make(
             actions: actions,
             library: library,
-            prepareArtwork: { [prepareRelay] id in prepareRelay.handler(id) }
+            prepareArtwork: { [prepareRelay] id in prepareRelay.action(id) },
+            prepareQueueArtwork: { [prepareRelay] id, foreground in
+                if let handler = prepareRelay.action.queueHandler { return handler(id, foreground) }
+                if foreground { prepareRelay.action(id) }
+                return nil
+            }
         )
     }
 
