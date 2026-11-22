@@ -1,6 +1,36 @@
 import SwiftUI
 import UIKit
 
+extension View {
+    func detailLoadingMask(awaitingDetail: Bool, pageColor: Color) -> some View {
+        modifier(DetailLoadingMask(awaitingDetail: awaitingDetail, pageColor: pageColor))
+    }
+}
+
+private struct DetailLoadingMask: ViewModifier {
+    let awaitingDetail: Bool
+    let pageColor: Color
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content
+            .allowsHitTesting(!awaitingDetail)
+            .accessibilityHidden(awaitingDetail)
+            .overlay {
+                // Keep the scroll view and any cover zoom target laid out beneath the color.
+                pageColor.ignoresSafeArea()
+                    .opacity(awaitingDetail ? 1 : 0)
+                    .transaction(value: awaitingDetail) {
+                        // Detail publication may disable animations for the content underneath.
+                        $0.disablesAnimations = false
+                        $0.animation = reduceMotion || awaitingDetail ? nil : .easeInOut
+                    }
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+    }
+}
+
 struct CollectionDetail {
     enum Kind { case album, playlist }
 
@@ -18,19 +48,104 @@ struct CollectionDetail {
 }
 
 struct CollectionDetailView: View {
-    let detail: CollectionDetail
+    let detail: CollectionDetail?
+    var awaitingDetail = false
+    var loadError: String? = nil
+    var retry: (() -> Void)? = nil
     var hasMoreSongs: Bool = false
     var totalSongCount: Int? = nil
     var onReachedEnd: (() -> Void)? = nil
     var onPrepareCompleteCollection: (() async -> Void)? = nil
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.songMenuActions) private var songActions
-    @Environment(\.collectionMenuActions) private var collectionActions
-    @Environment(\.libraryDownloads) private var downloads
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.closeLibraryDetail) private var closeLibraryDetail
     @Environment(\.libraryNavigationChrome) private var navigationChrome
     @Environment(\.libraryNavigationPreview) private var navigationPreview
+    @State private var preparedPreview: (LibraryNavigationPreview, AlbumArtworkBackdrop)?
+
+    private var matchingPreview: LibraryNavigationPreview? {
+        guard let navigationPreview, navigationPreview.route == detail?.route else { return nil }
+        return navigationPreview
+    }
+
+    private var pendingPreview: LibraryNavigationPreview? {
+        guard detail?.kind == .album, detail?.albumBackdrop == nil, let preview = matchingPreview,
+              preview.albumBackdrop == nil, preview.backdropFile != nil else { return nil }
+        return preview
+    }
+
+    private var albumBackdrop: AlbumArtworkBackdrop? {
+        guard detail?.kind == .album else { return nil }
+        if let color = detail?.albumBackdrop ?? matchingPreview?.albumBackdrop { return color }
+        guard let preparedPreview, preparedPreview.0 == pendingPreview else { return nil }
+        return preparedPreview.1
+    }
+
+    private func pageBackground(for backdrop: AlbumArtworkBackdrop?) -> Color {
+        if let backdrop { return backdrop.color }
+        if case .favorites? = detail?.artwork, colorScheme == .light { return Artwork.favoritesBackground }
+        return Color(.systemBackground)
+    }
+
+    var body: some View {
+        let backdrop = albumBackdrop
+        let pageColor = pageBackground(for: backdrop)
+        ZStack {
+            if let detail {
+                CollectionDetailContent(detail: detail, awaitingDetail: awaitingDetail, pageBackground: pageColor,
+                    albumBackdrop: backdrop, matchingPreview: matchingPreview, hasMoreSongs: hasMoreSongs,
+                    totalSongCount: totalSongCount, onReachedEnd: onReachedEnd,
+                    onPrepareCompleteCollection: onPrepareCompleteCollection)
+            } else if let loadError {
+                ContentUnavailableView {
+                    Label("暂时无法读取", systemImage: "exclamationmark.circle")
+                } description: {
+                    Text(loadError)
+                } actions: {
+                    if let retry { Button("重试", action: retry) }
+                }
+            } else {
+                Color.clear.ignoresSafeArea(.container, edges: .vertical)
+            }
+        }
+        .background(pageColor)
+        .detailLoadingMask(awaitingDetail: awaitingDetail, pageColor: pageColor)
+        .environment(\.colorScheme, backdrop?.colorScheme ?? colorScheme)
+        .toolbarColorScheme(backdrop?.colorScheme, for: .navigationBar)
+        .task(id: pendingPreview) {
+            guard let preview = pendingPreview, let file = preview.backdropFile,
+                  let color = await LocalArtworkImages.loadBackdrop(for: file), !Task.isCancelled else { return }
+            preparedPreview = (preview, color)
+        }
+        .onChange(of: backdrop, initial: true) { _, backdrop in
+            if detail?.kind == .album { navigationChrome?.setAlbumBackdrop(backdrop) }
+            else { navigationChrome?.setColorScheme(nil) }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if detail != nil, let loadError {
+                HStack {
+                    Text(loadError).font(.subheadline).foregroundStyle(.secondary)
+                    Spacer(minLength: 12)
+                    if let retry { Button("重试", action: retry) }
+                }.padding().background(.regularMaterial)
+            }
+        }
+    }
+}
+
+private struct CollectionDetailContent: View {
+    let detail: CollectionDetail
+    let awaitingDetail: Bool
+    let pageBackground: Color
+    let albumBackdrop: AlbumArtworkBackdrop?
+    let matchingPreview: LibraryNavigationPreview?
+    let hasMoreSongs: Bool
+    let totalSongCount: Int?
+    let onReachedEnd: (() -> Void)?
+    let onPrepareCompleteCollection: (() async -> Void)?
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.songMenuActions) private var songActions
+    @Environment(\.collectionMenuActions) private var collectionActions
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.closeLibraryDetail) private var closeLibraryDetail
     @Environment(\.dynamicTypeSize) private var textSize
     @State private var query = ""
     @State private var isConfirmingAlbumDeletion = false
@@ -38,7 +153,6 @@ struct CollectionDetailView: View {
     @State private var searchProjection = AsyncListProjection<TrackFilterProjectionInput, TrackFilterProjectionResult>()
 
     private var displayedSongs: [LibrarySongItem] {
-        guard detail.kind != .album else { return detail.songs }
         let input = TrackFilterProjectionInput(tracks: detail.songs, query: query)
         return searchProjection.currentValue(for: input, fastPath: TrackFilterProjection.fastPath, placeholder: { _ in .empty }).tracks
     }
@@ -48,39 +162,15 @@ struct CollectionDetailView: View {
         return false
     }
 
-    private var usesFavoritesBackground: Bool { isFavorites && colorScheme == .light }
-    private var matchingPreview: LibraryNavigationPreview? {
-        guard let navigationPreview, navigationPreview.route == detail.route else { return nil }
-        return navigationPreview
-    }
     private var displayedArtwork: Artwork {
         if case .missing = detail.artwork, let matchingPreview { return matchingPreview.artwork }
         return detail.artwork
-    }
-    @State private var preparedPreview: (LibraryNavigationPreview, AlbumArtworkBackdrop)?
-
-    private var pendingPreview: LibraryNavigationPreview? {
-        guard detail.kind == .album, detail.albumBackdrop == nil, let preview = matchingPreview,
-              preview.albumBackdrop == nil, preview.backdropFile != nil else { return nil }
-        return preview
-    }
-
-    private var albumBackdrop: AlbumArtworkBackdrop? {
-        guard detail.kind == .album else { return nil }
-        if let color = detail.albumBackdrop ?? matchingPreview?.albumBackdrop { return color }
-        guard let preparedPreview, preparedPreview.0 == pendingPreview else { return nil }
-        return preparedPreview.1
-    }
-    private var albumColorScheme: ColorScheme? { albumBackdrop?.colorScheme }
-    private var pageBackground: Color {
-        if let albumBackdrop { return albumBackdrop.color }
-        return usesFavoritesBackground ? Artwork.favoritesBackground : Color(.systemBackground)
     }
 
     private var palette: CollectionPagePalette {
         CollectionPagePalette(
             background: UIColor(pageBackground),
-            isDark: (albumColorScheme ?? colorScheme) == .dark
+            isDark: colorScheme == .dark
         )
     }
 
@@ -92,23 +182,11 @@ struct CollectionDetailView: View {
         Group {
             if detail.kind == .album { nativeAlbumList } else { legacyList }
         }
-        .background(pageBackground)
-        .environment(\.colorScheme, albumColorScheme ?? colorScheme)
         .environment(\.collectionPagePalette, palette)
-        .toolbarColorScheme(albumColorScheme, for: .navigationBar)
-        .task(id: pendingPreview) {
-            guard let preview = pendingPreview, let file = preview.backdropFile,
-                  let color = await LocalArtworkImages.loadBackdrop(for: file), !Task.isCancelled else { return }
-            preparedPreview = (preview, color)
-        }
-        .onChange(of: albumBackdrop, initial: true) { _, backdrop in
-            if detail.kind == .album { navigationChrome?.setAlbumBackdrop(backdrop) }
-            else { navigationChrome?.setColorScheme(nil) }
-        }
         .libraryTitleDisplayMode(.inline)
         .modifier(FavoritesTitleHidden(isHidden: isFavorites))
         .librarySearchable(text: $query, prompt: "搜索", enabled: detail.kind != .album)
-        .toolbar { detailToolbar }
+        .toolbar { if !awaitingDetail { detailToolbar } }
         .libraryRootAccountButton()
     }
 
@@ -144,7 +222,7 @@ struct CollectionDetailView: View {
             }.frame(maxWidth: .infinity)),
             footer: AnyView(Text(summary).font(.subheadline).foregroundStyle(.primary)
                 .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 20).padding(.top, 20).padding(.bottom, 32)),
-            pageColor: UIColor(pageBackground), scheme: albumColorScheme ?? colorScheme)
+            pageColor: UIColor(pageBackground), scheme: colorScheme)
             .ignoresSafeArea(.container, edges: .vertical)
     }
 
@@ -177,7 +255,7 @@ struct CollectionDetailView: View {
                 .padding(.bottom, 32)),
             showsAddMusicRow: false,
             pageColor: UIColor(pageBackground),
-            scheme: albumColorScheme ?? colorScheme,
+            scheme: colorScheme,
             rowCornerRadius: 6,
             headerSeparatorInset: 20,
             lastSongSeparatorLeading: 20,

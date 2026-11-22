@@ -24,7 +24,6 @@ struct PlaylistDetailView: View {
     var externalArtwork: AnyView? = nil
     var recentlyPlayedSongs: [LibrarySongItem] = []
     @Environment(\.artworkLoadAction) private var loadArtwork
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.displayScale) private var displayScale
     @Environment(\.dismiss) private var dismiss
     @Environment(\.closeLibraryDetail) private var closeLibraryDetail
@@ -212,16 +211,7 @@ struct PlaylistDetailView: View {
         )
         .ignoresSafeArea(.container, edges: .vertical)
         .background(pageBackground)
-        .allowsHitTesting(!awaitingDetail)
-        .accessibilityHidden(awaitingDetail)
-        .overlay {
-            // Keep the scroll view and its cover zoom target laid out beneath the loading color.
-            pageBackground.ignoresSafeArea()
-                .opacity(awaitingDetail ? 1 : 0)
-                .animation(reduceMotion || awaitingDetail ? nil : .easeInOut, value: awaitingDetail)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
-        }
+        .detailLoadingMask(awaitingDetail: awaitingDetail, pageColor: pageBackground)
         .environment(\.colorScheme, scheme)
         .environment(\.collectionPagePalette, palette)
         .modifier(PlaylistRootChrome(isRoot: chrome?.isRoot == true))

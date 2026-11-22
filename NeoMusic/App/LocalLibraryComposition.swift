@@ -648,12 +648,20 @@ struct LocalFavoritesDetail: View {
 
     var body: some View {
         if let detail = LocalLibrary.playlistDetail("favorites") {
-            let hasMore = LocalLibrary.playlistLibrary.onlineHasMore.contains("favorites")
-            let totalCount = LocalLibrary.playlistLibrary.onlineTrackCounts["favorites"]
+            let library = LocalLibrary.playlistLibrary
+            let request = loadRequest
+            let awaitingOnlineDetail = request.map { request in
+                !library.hasReceivedPlaylistDetail(for: "favorites")
+                    && account.music?.playlistErrors[request.playlistID] == nil
+                    && account.music?.error == nil
+            } ?? false
+            let awaitingDetail = detail.songs.isEmpty
+                && (!LocalLibrary.runtime.isInitialLibraryReady || awaitingOnlineDetail)
             CollectionDetailView(
                 detail: detail,
-                hasMoreSongs: hasMore,
-                totalSongCount: totalCount,
+                awaitingDetail: awaitingDetail,
+                hasMoreSongs: library.onlineHasMore.contains("favorites"),
+                totalSongCount: library.onlineTrackCounts["favorites"],
                 onReachedEnd: {
                     guard LocalLibrary.playlistLibrary.onlineHasMore.contains("favorites"),
                           LocalLibrary.playlistLibrary.onlineErrors["favorites"] == nil else { return }
@@ -663,8 +671,8 @@ struct LocalFavoritesDetail: View {
                     _ = await LocalLibrary.playlistLibrary.prepareCompleteCollection("favorites")
                 }
             )
-                .task(id: loadRequest) {
-                    guard loadRequest != nil else { return }
+                .task(id: request) {
+                    guard request != nil else { return }
                     await loadFavorites()
                 }
                 .refreshable { await loadFavorites(force: true) }

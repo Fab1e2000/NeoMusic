@@ -644,30 +644,16 @@ private struct ArtistCatalogDestination: View {
         }
     }
 
-    @ViewBuilder private func album(_ id: Int64) -> some View {
+    private func album(_ id: Int64) -> some View {
         let preview = navigationPreview.flatMap { $0.route == route ? $0 : nil }
-        let detail = integration.albumDetail(id) ?? preview.map {
+        let loadedDetail = integration.albumDetail(id)
+        let error = integration.error(route)
+        let detail = loadedDetail ?? preview.map {
             CollectionDetail(kind: .album, title: $0.title, subtitle: $0.subtitle, artwork: $0.artwork,
                              tint: .clear, albumBackdrop: $0.albumBackdrop, songs: [], route: route)
         }
-        if let detail {
-            CollectionDetailView(detail: detail)
-                .environment(\.collectionMenuActions, integration.collectionActions)
-                .environment(\.songMenuActions, integration.songActions(route))
-                .safeAreaInset(edge: .bottom) {
-                    if let error = integration.error(route) {
-                        HStack {
-                            Text(error).font(.subheadline).foregroundStyle(.secondary)
-                            Spacer(minLength: 12)
-                            Button("重试") { Task { await integration.load(route) } }
-                        }.padding().background(.regularMaterial)
-                    }
-                }
-        } else if let error = integration.error(route) {
-            ContentUnavailableView { Label("暂时无法读取", systemImage: "exclamationmark.circle") }
-                description: { Text(error) }
-                actions: { Button("重试") { Task { await integration.load(route) } } }
-        } else { CatalogLoadingFeedback(title: "正在载入专辑") }
+        return CollectionDetailView(detail: detail, awaitingDetail: loadedDetail == nil && error == nil,
+                                    loadError: error, retry: { Task { await integration.load(route) } })
     }
 }
 

@@ -1453,7 +1453,7 @@ final class LibraryDetailNavigationTests: XCTestCase {
         XCTAssertTrue(nav.topViewController === root)
     }
 
-    func testLibraryAlbumCardOpensWithCoverBeforeDetailLoads() async throws {
+    func testLibraryAlbumMasksCoverWhileKeepingItsZoomTarget() async throws {
         let bridge = LibraryDetailNavigation()
         let integration = ArtistMusicIntegration(account: account)
         let scene = try await applicationWindowScene()
@@ -1480,14 +1480,30 @@ final class LibraryDetailNavigationTests: XCTestCase {
                        "The native destination background must be ready when the zoom starts")
         try await settle()
         XCTAssertEqual(nav.viewControllers.count, 2)
-        XCTAssertNotNil(nav.topViewController?.view.libraryArtworkAlignmentRect())
         XCTAssertNil(integration.albumDetail(88))
         let view = try XCTUnwrap(nav.topViewController?.view)
-        let image = UIGraphicsImageRenderer(bounds: view.bounds).image { _ in
-            view.drawHierarchy(in: view.bounds, afterScreenUpdates: true)
+        let cover = try XCTUnwrap(view.libraryArtworkAlignmentRect())
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let image = UIGraphicsImageRenderer(bounds: view.bounds, format: format).image { _ in
+            XCTAssertTrue(view.drawHierarchy(in: view.bounds, afterScreenUpdates: true))
         }
+        let sample = CGRect(x: floor(cover.midX - view.bounds.minX), y: floor(cover.midY - view.bounds.minY),
+                            width: 1, height: 1)
+        let maskedPixel = try XCTUnwrap(image.cgImage?.cropping(to: sample))
+        var rgba = [UInt8](repeating: 0, count: 4)
+        try rgba.withUnsafeMutableBytes { bytes in
+            let context = try XCTUnwrap(CGContext(data: bytes.baseAddress, width: 1, height: 1,
+                bitsPerComponent: 8, bytesPerRow: 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue))
+            context.draw(maskedPixel, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+        }
+        for (actual, expected) in zip(rgba, [backdrop.red, backdrop.green, backdrop.blue, 1]) {
+            XCTAssertEqual(Double(actual) / 255, expected, accuracy: 2.0 / 255)
+        }
+
         let attachment = XCTAttachment(image: image)
-        attachment.name = "Library album cover before detail response"
+        attachment.name = "Library album mask before detail response"
         attachment.lifetime = .keepAlways
         add(attachment)
     }

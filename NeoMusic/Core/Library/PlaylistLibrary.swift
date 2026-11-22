@@ -150,9 +150,13 @@ final class PlaylistLibrary {
 
     private var receivedPlaylistDetails: Set<String> = []
 
+    func hasReceivedPlaylistDetail(for id: String) -> Bool {
+        receivedPlaylistDetails.contains(id)
+    }
+
     func isAwaitingInitialOnlineDetail(for item: LibraryPlaylistItem) -> Bool {
         item.isReadOnly && !item.isDownloadedSnapshot
-            && onlineErrors[item.id] == nil && !receivedPlaylistDetails.contains(item.id)
+            && onlineErrors[item.id] == nil && !hasReceivedPlaylistDetail(for: item.id)
     }
 
     func setPlaylistDetailReceived(_ received: Bool, for id: String) {
