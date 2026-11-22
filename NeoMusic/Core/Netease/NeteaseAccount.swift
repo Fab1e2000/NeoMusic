@@ -272,7 +272,7 @@ final class NeteaseAccount {
             }
         }
         validationTask = task
-        await task.value
+        await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
     }
 
     private func activateContent(_ session: NeteaseSavedSession?, refresh: Bool = true) async {
@@ -285,6 +285,7 @@ final class NeteaseAccount {
     private func activateLibraryContent(_ session: NeteaseSavedSession?, refresh: Bool) async {
         guard !Task.isCancelled else { return }
         await downloads?.activate(session)
+        guard !Task.isCancelled else { return }
         await activateSearch(session)
         guard !Task.isCancelled else { return }
         async let artistContent: Void? = artists?.activate(session, refresh: refresh)

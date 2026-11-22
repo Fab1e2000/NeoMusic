@@ -113,6 +113,13 @@ final class NeteaseSearchStore {
         guard sessionTask == nil else { return nil }
         return artworkCache.cachedURL(for: remote, scope: owner == "guest" ? "public" : owner)
     }
+    func cachedArtworkFile(_ remote: URL) async -> URL? {
+        guard sessionTask == nil, !Task.isCancelled else { return nil }
+        let generation = generation
+        let file = await artworkCache.cachedFileURL(for: remote, scope: owner == "guest" ? "public" : owner)
+        guard generation == self.generation, !Task.isCancelled else { return nil }
+        return file
+    }
     func requestArtwork(_ remote: URL) {
         guard sessionTask == nil else { return }
         guard artworkTasks[remote] == nil else { return }

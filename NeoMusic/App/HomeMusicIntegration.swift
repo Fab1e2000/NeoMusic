@@ -279,17 +279,21 @@ import Observation
               let url = key.remoteURL else { pending?.cancel(); return nil }
         return home.requestQueueArtwork(url, foreground: foreground, after: pending)
     }
-    func cachedArtworkFile(for id: String) async -> URL? {
+    func resolveArtworkFile(for id: String) async -> URL? {
         guard let home = account.home, home.userID == account.sessionOwnerID, !Task.isCancelled else { return nil }
         let revision = home.sessionRevision, owner = home.userID
         guard let key = DeferredArtworkKey(rawValue: id), key.session == revision.uuidString else { return nil }
-        if key.domain == .homePlaylist, let number = key.playlistID {
-            let file = try? await home.playlistArtworkFile(id: number)
-            guard revision == home.sessionRevision, account.sessionOwnerID == owner, !Task.isCancelled else { return nil }
-            return file
+        let file: URL?
+        switch key.domain {
+        case .home:
+            guard let remote = key.remoteURL else { return nil }
+            file = await home.cachedArtworkFile(remote)
+        case .homePlaylist:
+            guard let number = key.playlistID else { return nil }
+            file = try? await home.playlistArtworkFile(id: number)
+        default:
+            return nil
         }
-        guard key.domain == .home, let url = key.remoteURL else { return nil }
-        let file = await home.cachedArtworkFile(url)
         guard revision == home.sessionRevision, home.userID == owner,
               account.sessionOwnerID == owner, !Task.isCancelled else { return nil }
         return file

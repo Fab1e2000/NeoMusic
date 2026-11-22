@@ -84,7 +84,8 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
         marked = try markConfigurations(in: host.view, source: source)
         inputs.subtitle = "Updated subtitle"
         try await settle(host)
-        XCTAssertEqual(reconfiguredCells(marked), [.title])
+        XCTAssertTrue(reconfiguredCells(marked).isEmpty)
+        XCTAssertNotNil((list as? NowPlayingQueueList.EdgeFadedCollectionView)?.queueHeader)
 
         marked = try markConfigurations(in: host.view, source: source)
         inputs.visualsActive = false
@@ -132,10 +133,6 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
         XCTAssertEqual(source.snapshot().itemIdentifiers(inSection: .queue), [.track(b.id), .track(a.id)])
         XCTAssertFalse(coordinator.update(with: try XCTUnwrap(coordinator.latest)))
 
-        coordinator.configure(trackCell, item: .title)
-        XCTAssertTrue(trackCell.accessories.isEmpty)
-        coordinator.configure(trackCell, item: .track(b.id))
-        try assertReorderAccessory(in: trackCell)
         coordinator.configure(trackCell, item: .track(a.id))
         try assertReorderAccessory(in: trackCell)
         coordinator.configure(trackCell, item: .spacer)
@@ -280,7 +277,7 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
         }
     }
 
-    func testScrollIndicatorTracksVisibleViewportWithoutChangingContent() async throws {
+    func testPinnedHeaderAndScrollIndicatorTrackViewportWithoutChangingContent() async throws {
         for count in [0, 3, 50, 2_000] {
             let inputs = QueueListTestInputs()
             inputs.entries = (0..<count).map { index in
@@ -291,25 +288,70 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
             let (window, host) = try mount(inputs)
             defer { window.isHidden = true }
             try await settle(host)
-            let list = try XCTUnwrap(collection(in: host.view))
-            let coordinator = try coordinator(in: host.view)
+            let list = try XCTUnwrap(collection(in: host.view) as? NowPlayingQueueList.EdgeFadedCollectionView)
             let contentInset = list.contentInset
             let size = list.contentSize
+            let top = -list.adjustedContentInset.top
+            let bottom = max(top, size.height + list.adjustedContentInset.bottom - list.bounds.height)
             let offsets: [CGFloat] = count > 3
-                ? [0, inputs.headerHeight - 1, inputs.headerHeight, 300, max(0, size.height - list.bounds.height)]
-                : [0]
+                ? [top, top + inputs.headerHeight - 1, top + inputs.headerHeight, 300, bottom]
+                : [top]
             for offset in offsets {
                 list.contentOffset.y = offset
                 let position = list.contentOffset
-                coordinator.scrollViewDidScroll(list)
-                XCTAssertEqual(list.verticalScrollIndicatorInsets.top,
-                               max(0, inputs.headerHeight - position.y) + 44 + 24)
-                XCTAssertEqual(list.verticalScrollIndicatorInsets.bottom, 80)
+                list.layoutIfNeeded()
+                let header = try XCTUnwrap(list.queueHeader)
+                let frame = list.convert(header.bounds, from: header).offsetBy(dx: 0, dy: -list.bounds.minY)
+                XCTAssertEqual(frame.minY, contentInset.top + max(0, inputs.headerHeight - (offset - top)),
+                               accuracy: 1)
+                XCTAssertEqual(list.verticalScrollIndicatorInsets.top, frame.maxY + NowPlayingQueueList.topFadeHeight,
+                               accuracy: 1)
+                XCTAssertEqual(list.verticalScrollIndicatorInsets.bottom, NowPlayingQueueList.bottomFadeHeight)
                 XCTAssertEqual(list.contentOffset, position)
                 XCTAssertEqual(list.contentInset, contentInset)
                 XCTAssertEqual(list.contentSize, size)
             }
+            if count > 3 {
+                let last = IndexPath(item: count - 1, section: 1)
+                let row = try XCTUnwrap(list.layoutAttributesForItem(at: last))
+                XCTAssertLessThanOrEqual(row.frame.maxY, list.bounds.maxY - NowPlayingQueueList.bottomFadeHeight + 1)
+            }
         }
+    }
+
+    func testUpwardSwipeSnapsShortProjectionAndPreservesMomentumPastSongHeader() async throws {
+        let inputs = QueueListTestInputs()
+        inputs.entries = (0..<30).map { index in
+            PlayerQueueEntry(id: UUID(), queueIndex: index,
+                song: PlayerTrack(id: "song-\(index)", title: "Song", artists: "Artist",
+                                 albumTitle: "Album", coverURL: nil, duration: 60))
+        }
+        let (window, host) = try mount(inputs)
+        defer { window.isHidden = true }
+        try await settle(host)
+        let list = try XCTUnwrap(collection(in: host.view))
+        let coordinator = try coordinator(in: host.view)
+        let top = -list.adjustedContentInset.top
+
+        func target(afterReleasingAt offset: CGFloat, velocity: CGFloat,
+                    projectedOffset: CGFloat? = nil) -> CGFloat {
+            list.contentOffset.y = top + offset
+            var target = CGPoint(x: list.contentOffset.x, y: top + (projectedOffset ?? offset))
+            coordinator.scrollViewWillEndDragging(list, withVelocity: CGPoint(x: 0, y: velocity),
+                                                  targetContentOffset: &target)
+            return target.y
+        }
+
+        let collapsed = top + inputs.headerHeight
+        XCTAssertEqual(target(afterReleasingAt: 1, velocity: 0.001), collapsed)
+        XCTAssertEqual(target(afterReleasingAt: 1, velocity: 0.5, projectedOffset: inputs.headerHeight), collapsed)
+        XCTAssertEqual(target(afterReleasingAt: 1, velocity: 0.5, projectedOffset: 200), top + 200)
+        XCTAssertEqual(target(afterReleasingAt: inputs.headerHeight - 1, velocity: -0.001), top)
+        XCTAssertEqual(target(afterReleasingAt: 200, velocity: 0.5, projectedOffset: 300), top + 300)
+        XCTAssertEqual(target(afterReleasingAt: 200, velocity: -0.5, projectedOffset: 100), top + 100)
+
+        list.panGestureRecognizer.setTranslation(CGPoint(x: 0, y: -1), in: list)
+        XCTAssertEqual(target(afterReleasingAt: 1, velocity: 0), collapsed)
     }
 
     func testEdgeMasksFollowChangingCompositingLayersWithoutReplacingCustomMasks() throws {
@@ -317,7 +359,7 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
             frame: CGRect(x: 0, y: 0, width: 320, height: 400),
             collectionViewLayout: UICollectionViewFlowLayout()
         )
-        let cell = UICollectionViewCell(frame: CGRect(x: 0, y: 20, width: 320, height: 60))
+        let cell = UICollectionViewCell(frame: CGRect(x: 0, y: 2, width: 320, height: 60))
         list.addSubview(cell)
         let group = CALayer(), vibrant = CALayer(), nested = CALayer(), plain = CALayer()
         let custom = CALayer(), customChild = CALayer(), customMask = CAShapeLayer()
@@ -364,7 +406,7 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
             frame: CGRect(x: 0, y: 0, width: 320, height: 400),
             collectionViewLayout: UICollectionViewFlowLayout()
         )
-        let cell = NowPlayingQueueList.EdgeFadedListCell(frame: CGRect(x: 0, y: 20, width: 320, height: 60))
+        let cell = NowPlayingQueueList.EdgeFadedListCell(frame: CGRect(x: 0, y: 2, width: 320, height: 60))
         cell.edgeFadeCollectionView = list
         list.addSubview(cell)
 

@@ -1195,7 +1195,7 @@ import Synchronization
         await store.activate(nil, refresh: false)
     }
 
-    func testPlaylistCoverDownloadsOnCacheMissAndReusesFile() async throws {
+    func testRuntimeResolvesHomePlaylistAndCachedArtworkDomains() async throws {
         let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let network = try paginationNetwork(count: 1)
@@ -1207,19 +1207,44 @@ import Synchronization
             artworkURL: nil, trackCount: 1, isFavorites: false)
         let song = NeteaseMusicSong(id: 1, title: "Song", artist: "Artist", album: "Album", artworkURL: remote, duration: 10)
         try await pages.save(NeteasePlaylistDetail(playlist: playlist, songs: [song], addedTimes: [:]), scope: "42", key: "playlist:12")
-        let images = NeteaseArtworkCache(directory: root.appendingPathComponent("artwork"), session: network)
+        let artistDirectory = root.appendingPathComponent("artists")
+        let images = NeteaseArtworkCache(directory: artistDirectory.appendingPathComponent("Artwork"), session: network)
         let store = NeteaseHomeStore(directory: root.appendingPathComponent("home"), artworkCache: images)
-        await store.activate(try savedSession(), refresh: false)
+        let music = NeteaseMusicStore(directory: root.appendingPathComponent("music"), artworkCache: images)
+        let artists = NeteaseArtistStore(directory: artistDirectory, artworkSession: network)
+        let saved = try savedSession()
+        let account = NeteaseAccount(readSession: { saved }, saveSession: { _ in }, deleteSession: {},
+            validateCredential: { _ in saved.profile }, cachedAvatar: { _ in nil },
+            loadAvatar: { _ in Data() }, clearAvatarCache: {}, music: music, home: store, artists: artists)
+        await account.restoreCachedContent()
+        await account.restoreHomeCachedContent()
+        let runtime = AppRuntime(account: account)
+        let resolve = try XCTUnwrap(runtime.artworkLoadAction.resolve)
+        let playlistKey = DeferredArtworkKey(domain: .homePlaylist, session: store.sessionRevision, playlistID: 12)
         var publications = 0
         store.onDetailChange = { _ in publications += 1 }
         XCTAssertNil(store.cachedArtworkURL(remote: remote))
-        let first = try await store.playlistArtworkFile(id: 12)
+        let first = await resolve(playlistKey.rawValue)
         XCTAssertNotNil(first)
-        let second = try await store.playlistArtworkFile(id: 12)
-        XCTAssertEqual(first, second)
+        let keys = [
+            playlistKey,
+            DeferredArtworkKey(domain: .home, session: store.sessionRevision, url: remote),
+            DeferredArtworkKey(domain: .music, session: music.sessionRevision, url: remote),
+            DeferredArtworkKey(domain: .artists, session: artists.sessionRevision, url: remote)
+        ]
+        for key in keys {
+            let file = await resolve(key.rawValue)
+            XCTAssertEqual(file, first, "\(key.domain)")
+        }
+        let unknown = await resolve("unknown-domain:x:y")
+        XCTAssertNil(unknown)
         XCTAssertEqual(HomePaginationProtocol.count(remote.path), 1)
         XCTAssertEqual(publications, 0)
-        await store.activate(nil, refresh: false)
+        try await account.logout()
+        for key in keys {
+            let file = await resolve(key.rawValue)
+            XCTAssertNil(file, "Old \(key.domain) keys must stop resolving after logout")
+        }
     }
 
     func testArtworkIndexRestoresOnDemandAndPublishesAnAlreadyCachedCover() async throws {

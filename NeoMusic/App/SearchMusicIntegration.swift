@@ -231,8 +231,15 @@ final class SearchMusicIntegration {
         return .deferred(id: key, placeholder: .missing)
     }
     func requestArtwork(for id: String) {
-        guard let url = artworkURLs[id] else { return }
-        store?.requestArtwork(url)
+        guard let store, sessionID == store.sessionID, let url = artworkURLs[id] else { return }
+        store.requestArtwork(url)
+    }
+    func cachedArtworkFile(for id: String) async -> URL? {
+        guard let store, let sessionID, sessionID == store.sessionID,
+              let url = artworkURLs[id] else { return nil }
+        let file = await store.cachedArtworkFile(url)
+        guard sessionID == store.sessionID, !Task.isCancelled else { return nil }
+        return file
     }
     private func publishArtwork(_ urls: Set<URL>) {
         guard sessionID == store?.sessionID else { return }

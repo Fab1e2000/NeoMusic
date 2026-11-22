@@ -144,6 +144,7 @@ final class DownloadMusicIntegration {
 
     func restore() async {
         await account.downloads?.restore()
+        guard !Task.isCancelled else { return }
         await publishMetadataAsync()
     }
 

@@ -320,6 +320,46 @@ import XCTest
         player.shutdownPlayback()
     }
 
+    func testRuntimeResolvesSearchArtworkFromDiskOnlyForItsSession() async throws {
+        let remote = try XCTUnwrap(URL(string: "https://example.com/a.jpg"))
+        let (client, network) = client(responses: [
+            "/eapi/search/get": [Data(#"{"code":200,"result":{"songs":[{"id":1,"name":"Song 1"}],"songCount":1}}"#.utf8)],
+            "/eapi/v3/song/detail": [songs([1])],
+            "/eapi/playlist/catalogue": [Data(#"{"code":200,"sub":[]}"#.utf8)],
+            remote.path: [NeteaseArtworkTestFixture.png]
+        ])
+        let root = directory()
+        let writer = NeteaseArtworkCache(directory: root, session: network)
+        let saved = try await writer.imageURL(for: remote, scope: "public")
+        let images = NeteaseArtworkCache(directory: root, session: network)
+        let suite = "search-artwork-routing-\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let store = NeteaseSearchStore(client: client, defaults: defaults, artworkCache: images)
+        let account = NeteaseAccount(readSession: { nil }, saveSession: { _ in }, deleteSession: {},
+            validateCredential: { _ in throw NeteaseAccountError.authenticationRequired }, cachedAvatar: { _ in nil },
+            loadAvatar: { _ in Data() }, clearAvatarCache: {}, search: store)
+        let previousExternal = LocalLibrary.songLibrary.externalSongs
+        defer {
+            LocalLibrary.songLibrary.replaceExternalSongs([], source: "search")
+            LocalLibrary.songLibrary.replaceExternalSongs(previousExternal)
+            defaults.removePersistentDomain(forName: suite)
+            network.invalidateAndCancel()
+        }
+        let runtime = AppRuntime(account: account)
+        runtime.search.connect()
+        runtime.search.model.kind = .song
+        runtime.search.model.submit("First")
+        try await waitForPublication { runtime.search.model.groups.first?.items.first?.song != nil }
+        let id = try XCTUnwrap(runtime.search.model.groups.first?.items.first?.artwork.loadID)
+        let resolve = try XCTUnwrap(runtime.artworkLoadAction.resolve)
+        let resolved = await resolve(id)
+        XCTAssertEqual(resolved, saved)
+
+        await store.setSession(owner: 42, credential: try .init(musicU: "fixture"))
+        let stale = await resolve(id)
+        XCTAssertNil(stale)
+    }
+
     func testClosedSearchPublishesLateArtworkToQueueAndRetainedPlaylistThenEvictsIt() async throws {
         let remote = URL(string: "https://example.com/a.jpg")!
         let replacement = URL(string: "https://example.com/next.jpg")!

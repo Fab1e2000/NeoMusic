@@ -9,7 +9,6 @@ final class AppRuntime {
     let home: HomeMusicIntegration
     let search: SearchMusicIntegration
     let downloads: DownloadMusicIntegration
-    private(set) var restorationTask: Task<Void, Never>?
     private(set) var startupTask: Task<Void, Never>?
 
     init(account: NeteaseAccount? = nil) {
@@ -26,17 +25,13 @@ final class AppRuntime {
 
     func start() {
         guard startupTask == nil else { return }
-        downloads.connect()
-        restorationTask = Task {
-            await downloads.restore()
-            await account.restoreCachedContent()
-        }
         startupTask = Task {
+            guard !Task.isCancelled else { return }
             downloads.requestLogin = { [weak self] in self?.home.showsLogin = true }
             onlineLibrary.onPublication = { [weak self] in self?.downloads.scheduleMetadataPublication() }
-            await downloads.restore()
             search.prepareNavigation = { [weak self] in self?.home.prepareNavigation($0) }
             search.onPublication = { [weak self] in self?.downloads.scheduleMetadataPublication() }
+            downloads.connect()
             search.connect()
             home.connect()
             artists.connect()
@@ -46,7 +41,7 @@ final class AppRuntime {
                 let interval = PerformanceDiagnostics.begin("StartupRestore")
                 defer { PerformanceDiagnostics.end("StartupRestore", interval) }
                 async let local: Void = restoreInitialLibrary()
-                async let online: Void = account.restoreCachedContent()
+                async let online: Void = restoreInitialOnlineContent()
                 _ = await (local, online)
                 guard !Task.isCancelled else { return }
                 completeRestoredPlayback()
@@ -58,38 +53,42 @@ final class AppRuntime {
         }
     }
 
+    var artworkLoadAction: ArtworkLoadAction {
+        ArtworkLoadAction(
+            handler: requestArtwork,
+            resolve: resolveArtworkFile,
+            queueHandler: requestQueueArtwork
+        )
+    }
+
     func requestArtwork(for id: String) {
         switch DeferredArtworkKey(rawValue: id)?.domain {
         case .music:
             onlineLibrary.requestArtwork(for: id)
-        case .home, .homePlaylist:
+        case .home:
             home.requestArtwork(for: id)
         case .artists:
             artists.requestArtwork(for: id)
         case .search:
             search.requestArtwork(for: id)
-        case nil:
-            home.requestArtwork(for: id)
-            artists.requestArtwork(for: id)
-            onlineLibrary.requestArtwork(for: id)
-            search.requestArtwork(for: id)
+        case .homePlaylist, nil:
+            break
         }
     }
 
-    func cachedArtworkFile(for id: String) async -> URL? {
+    // Playlist IDs may require a detail fetch to discover their cover URL.
+    func resolveArtworkFile(for id: String) async -> URL? {
         switch DeferredArtworkKey(rawValue: id)?.domain {
         case .music:
             return await onlineLibrary.cachedArtworkFile(for: id)
         case .home, .homePlaylist:
-            return await home.cachedArtworkFile(for: id)
+            return await home.resolveArtworkFile(for: id)
         case .artists:
             return await artists.cachedArtworkFile(for: id)
         case .search:
-            return nil
+            return await search.cachedArtworkFile(for: id)
         case nil:
-            if let found = await onlineLibrary.cachedArtworkFile(for: id) { return found }
-            if let found = await artists.cachedArtworkFile(for: id) { return found }
-            return await home.cachedArtworkFile(for: id)
+            return nil
         }
     }
 
@@ -114,7 +113,7 @@ final class AppRuntime {
     }
 
     func completeRestoredPlayback() {
-        guard startupTask != nil else { return }
+        guard startupTask?.isCancelled == false else { return }
         let owner: String?
         switch account.restoredPlaybackIdentity {
         case .pending:
@@ -138,6 +137,13 @@ final class AppRuntime {
         (Array(LocalLibrary.pinned.prefix(6)) + Array(LocalLibrary.recentlyAdded.prefix(4))).map(\.artwork)
     }
 
+    private func restoreInitialOnlineContent() async {
+        guard !Task.isCancelled else { return }
+        await downloads.restore()
+        guard !Task.isCancelled else { return }
+        await account.restoreCachedContent()
+    }
+
     private func prepareInitialOnlineArtwork() async {
         var ids: [String] = []
         func collect(_ artwork: Artwork) {
@@ -147,7 +153,7 @@ final class AppRuntime {
         initialLibraryArtwork.forEach(collect)
         for id in ids {
             guard !Task.isCancelled else { return }
-            guard let file = await cachedArtworkFile(for: id), !Task.isCancelled else { continue }
+            guard let file = await resolveArtworkFile(for: id), !Task.isCancelled else { continue }
             _ = await LocalArtworkImages.load(file, pixels: 512)
             guard !Task.isCancelled else { return }
             requestArtwork(for: id)

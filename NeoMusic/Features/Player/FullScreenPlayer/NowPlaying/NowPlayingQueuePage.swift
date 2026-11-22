@@ -47,7 +47,6 @@ struct NowPlayingQueuePage: View {
                 subtitle: player.automaticContinuationDescription,
                 headerHeight: songHeaderHeight,
                 horizontalInset: Self.contentHorizontalInset,
-                bottomInset: 50,
                 onPlay: { player.playFromQueue(at: $0) },
                 onMove: moveQueueItems,
                 onScroll: updateSongHeaderState
@@ -90,7 +89,7 @@ struct NowPlayingQueuePage: View {
 
     private var bottomContentInset: CGFloat {
         presentation == .portrait
-            ? max(0, layout.contentSize.height - 3 - layout.contentY(557)) + controlsOverflow
+            ? max(0, layout.contentSize.height - 3 - layout.contentY(554)) + controlsOverflow
             : 12
     }
 
@@ -123,7 +122,7 @@ private struct QueueHeaderControls: View {
     var body: some View {
         NowPlayingQueueModeControls()
             .padding(.vertical, 3)
-            .frame(height: 44)
+            .frame(height: NowPlayingQueueList.modeControlsHeight)
             .modifier(QueueControlsScrollPosition(scroll: scroll, headerHeight: headerHeight))
     }
 }
