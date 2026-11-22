@@ -216,6 +216,8 @@ final class NowPlayingModel {
     }
     var liveElapsed: Double { timelineAnchor.elapsed() }
     var isLoading: Bool { resolvingResource || (audio?.isLoading ?? false) || (audio?.isActivating ?? false) }
+    var spectrumAnalyzer: ThreadSafeSpectrumAnalyzer? { audio?.spectrumAnalyzer }
+
     func spectrumLevels() -> [Float] { audio?.spectrumLevels() ?? Array(repeating: 0, count: 5) }
     private(set) var isCrossfadeEnabled = false
     func toggleCrossfade() { isCrossfadeEnabled.toggle(); audio?.crossfadeEnabled = isCrossfadeEnabled; saveQueue() }
@@ -464,9 +466,10 @@ final class NowPlayingModel {
     @ObservationIgnored private var pendingRestoredSongs: [String: PlaybackSongSnapshot] = [:] {
         didSet { cachedQueueContent = nil }
     }
-    @ObservationIgnored private var cachedQueueContent: (revision: UInt64, ids: [String], songs: [PlaybackSongSnapshot])?
+    @ObservationIgnored private var cachedQueueContent: (revision: UInt64, id: UUID, entries: [UUID], ids: [String], songs: [PlaybackSongSnapshot])?
 
     struct SavedQueue: Codable, Sendable {
+        var snapshotID: UUID? = nil
         var ids: [String]
         var index: Int
         var elapsed: Double
@@ -838,12 +841,12 @@ final class NowPlayingModel {
             let metadata = allSongs.filter { seen.insert($0.id).inserted }.map { song in
                 !hasResolvedOnlineIdentity ? pendingRestoredSongs[song.id] ?? PlaybackSongSnapshot(song) : PlaybackSongSnapshot(song)
             }
-            cachedQueueContent = (queueRevision, allSongs.map(\.id), metadata)
+            cachedQueueContent = (queueRevision, UUID(), entryIDs + suspended.map(\.0), allSongs.map(\.id), metadata)
         }
         guard let content = cachedQueueContent else { return }
         let state = SavedQueue(ids: content.ids, index: currentIndex, elapsed: liveElapsed,
                                repeatMode: repeatMode, shuffled: isShuffled, source: sourceTitle,
-                               entryIDs: entryIDs + suspended.map(\.0), originalOrder: originalOrder, userQueuedIDs: userQueuedIDs,
+                               entryIDs: content.entries, originalOrder: originalOrder, userQueuedIDs: userQueuedIDs,
                                suspendedCount: suspended.count, hasRecommendationBatch: hasRecommendationBatch,
                                recommendedEntries: recommendedEntries, crossfadeEnabled: isCrossfadeEnabled, songs: content.songs, continuation: continuation)
         let previous = queuePersistenceTask
@@ -853,7 +856,7 @@ final class NowPlayingModel {
         queuePersistenceTask = Task { [weak self] in
             await previous?.value
             do {
-                try await persistence.save(state, to: persistenceURL)
+                try await persistence.save(state, contentID: content.id, to: persistenceURL)
                 if self?.errorMessage?.hasPrefix("播放状态保存失败：") == true {
                     self?.errorMessage = nil
                 }
@@ -905,7 +908,7 @@ final class NowPlayingModel {
         do {
             let saved: SavedQueue?
             if let restoredState { saved = try restoredState.get() }
-            else { saved = FileManager.default.fileExists(atPath: persistenceURL.path) ? try JSONDecoder().decode(SavedQueue.self, from: Data(contentsOf: persistenceURL)) : nil }
+            else { saved = try PlaybackQueuePersistence.load(from: persistenceURL) }
             queueRestorationFailed = false
             guard let state = saved else {
                 PerformanceDiagnostics.restoration("queue.restore.empty")

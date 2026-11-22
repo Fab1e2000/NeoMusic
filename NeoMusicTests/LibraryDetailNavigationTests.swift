@@ -430,6 +430,18 @@ final class LibraryDetailNavigationTests: XCTestCase {
         XCTAssertEqual(tabs.popupBar.popupItem?.accessibilityHint, "打开正在播放")
     }
 
+    func testDismissAlreadyHiddenPopupDoesNotStartDisplayLink() async throws {
+        let window = UIWindow(windowScene: try await applicationWindowScene())
+        defer { window.isHidden = true }
+        let host = UIViewController()
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        _ = host.popupBar
+        let controller = try XCTUnwrap(host.value(forKey: "ln_popupController") as? NSObject)
+        host.dismissPopupBar(animated: false)
+        XCTAssertNil(controller.value(forKey: "displayLinkFor120Hz"))
+    }
+
     func testMiniPlayerTrackSwipeHitTestAndPopupGestureCoordination() async throws {
         let scene = try await applicationWindowScene()
         let window = UIWindow(windowScene: scene)

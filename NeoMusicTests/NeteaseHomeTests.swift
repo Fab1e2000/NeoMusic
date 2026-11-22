@@ -525,6 +525,7 @@ import Synchronization
         player.select(1)
         HomePaginationProtocol.release(remote.path)
         await fulfillment(of: [published], timeout: 3)
+        await integration.artworkPublishTask?.value
         let file = try XCTUnwrap(home.cachedArtworkURL(remote: remote))
         XCTAssertEqual(player.current.id, "netease:42:2")
         XCTAssertEqual(player.current.artworkURL, file)

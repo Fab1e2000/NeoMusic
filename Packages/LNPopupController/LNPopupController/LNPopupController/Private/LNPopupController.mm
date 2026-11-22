@@ -2306,8 +2306,6 @@ id __LNPopupEmptyBlurFilter(void)
 
 - (void)_dismissPopupBarAnimated:(BOOL)animated completion:(void(^)(void))completionBlock
 {
-	[self _start120HzHack];
-	
 	if(_dismissalOverride == YES)
 	{
 		if(completionBlock != nil) { completionBlock(); }
@@ -2316,6 +2314,7 @@ id __LNPopupEmptyBlurFilter(void)
 	
 	if(_popupControllerInternalState != LNPopupPresentationStateBarHidden)
 	{
+		[self _start120HzHack];
 		self.popupBar.acceptsSizing = NO;
 		if(!LNPopupEnvironmentHasGlass())
 		{

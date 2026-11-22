@@ -12,11 +12,13 @@ final class NeteaseMusicClient: Sendable {
         var offset = 0, seen = Set<Int64>(), result: [NeteaseMusicPlaylist] = []
         while true {
             let page: Response = try await read("/api/user/playlist", ["uid": userID, "limit": 200, "offset": offset], credential)
+            let previousCount = result.count
             result += page.playlist.filter { seen.insert($0.id).inserted }.map { item in
                 let value = item.model
                 return NeteaseMusicPlaylist(id: value.id, title: value.title, creator: value.creator, creatorID: value.creatorID, artworkURL: value.artworkURL, trackCount: value.trackCount, isFavorites: value.isFavorites && value.creatorID == userID, isSubscribed: item.subscribed == true && item.creator.userId != userID && item.specialType != 5, createTime: value.createTime, updateTime: value.updateTime)
             }
             if !page.more { return result }
+            guard result.count > previousCount else { throw NeteaseAccountError.invalidResponse }
             offset += 200
         }
     }

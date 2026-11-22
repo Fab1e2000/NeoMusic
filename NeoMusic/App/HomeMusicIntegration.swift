@@ -57,9 +57,17 @@ import Observation
     @ObservationIgnored private var retainedArtworkSession: UUID?
     @ObservationIgnored private var cachedSongsPublishTask: Task<Void, Never>?
     @ObservationIgnored private var cachedSongsGeneration = 0
-    @ObservationIgnored private var lastPublishedCachedSongsInput: [NeteaseMusicSong] = []
-    @ObservationIgnored private var lastPublishedCachedSongsOwner: String?
-    @ObservationIgnored private var lastPublishedCachedSongsSession: UUID?
+    private struct CatalogVersion: Equatable {
+        let session: UUID?
+        let revision: UInt64?
+    }
+    @ObservationIgnored private var projectedCatalog: CatalogVersion?
+    @ObservationIgnored private var projectedLikedIDs: Set<Int64> = []
+    @ObservationIgnored private var projectedLikedAt: [Int64: Date] = [:]
+    @ObservationIgnored private var cachedSongIndices: [String: Int] = [:]
+    @ObservationIgnored private var artworkBatchSession: UUID?
+    @ObservationIgnored private var pendingArtworkURLs: Set<URL> = []
+    @ObservationIgnored private(set) var artworkPublishTask: Task<Void, Never>?
     @ObservationIgnored private var hasConnectedPublish = false
     @ObservationIgnored private let projectionCache = OnlineSongProjectionCache()
     @ObservationIgnored private var roamingFill: Task<Void, Never>?
@@ -129,7 +137,7 @@ import Observation
         }
         account.home?.onChange = { [weak self] in self?.publish() }
         account.home?.onDetailChange = { [weak self] in self?.publishDetail($0) }
-        account.home?.onArtworkChange = { [weak self] in self?.publishArtwork($0) }
+        account.home?.onArtworkChange = { [weak self] in self?.scheduleArtworkPublish($0) }
         detailLibrary.loadOnlinePlaylist = { [weak self] id in
             guard let self else { return }
             do {
@@ -272,9 +280,11 @@ import Observation
             loaded = [:]
             cachedSongs = []
             projectionCache.removeAll()
-            lastPublishedCachedSongsInput = []
-            lastPublishedCachedSongsOwner = nil
-            lastPublishedCachedSongsSession = nil
+            projectedCatalog = nil
+            cachedSongIndices.removeAll()
+            artworkPublishTask?.cancel()
+            artworkPublishTask = nil
+            pendingArtworkURLs.removeAll()
             cachedSongsPublishTask?.cancel()
             cachedSongsPublishTask = nil
             cachedSongsGeneration &+= 1
@@ -305,7 +315,7 @@ import Observation
         let values = account.home?.userID == account.profile?.userID ? account.home?.cachedSongs ?? [] : []
         let allowAsync = hasConnectedPublish && account.home?.userID != nil
         hasConnectedPublish = true
-        syncCachedSongs(values, home: account.home, preferAsync: allowAsync)
+        syncCachedSongs(values, home: account.home?.userID == account.profile?.userID ? account.home : nil, preferAsync: allowAsync)
         refreshRetainedArtwork(contentChanged: true)
     }
 
@@ -327,21 +337,28 @@ import Observation
         let currentOwner = owner
         let likedIDs = account.music?.likedIDs ?? []
         let likedAt = account.music?.likedAt ?? [:]
+        let version = CatalogVersion(session: session, revision: home?.songCatalogRevision)
+        if projectedCatalog == version, preferAsync || cachedSongsPublishTask == nil {
+            // A pending group commits with the latest favorites.
+            guard cachedSongsPublishTask == nil,
+                  projectedLikedIDs != likedIDs || projectedLikedAt != likedAt else { return }
+            commitCachedSongs(values, artworkByURL: artworkSongs, uniqueURLs: Array(artworkSongs.keys),
+                              home: home, likedIDs: likedIDs, likedAt: likedAt)
+            return
+        }
+        projectedCatalog = version
         if values.count > 120, preferAsync, let home, home.userID == account.profile?.userID {
             cachedSongsPublishTask?.cancel()
             cachedSongsGeneration &+= 1
             let generation = cachedSongsGeneration
             cachedSongsPublishTask = Task { @MainActor [weak self] in
-                let prepared = await Task.detached(priority: .userInitiated) {
-                    let grouped = OnlineSongProjector.groupByArtworkURL(values)
-                    return (artworkByURL: grouped.byURL, uniqueURLs: grouped.uniqueURLs)
-                }.value
+                guard let prepared = try? await OnlineSongProjector.groupArtworkInBackground(values) else { return }
                 guard let self, !Task.isCancelled, self.cachedSongsGeneration == generation,
                       let currentHome = self.account.home, currentHome.sessionRevision == session,
                       currentHome.userID == self.account.profile?.userID,
                       self.owner == currentOwner else { return }
                 self.cachedSongsPublishTask = nil
-                self.commitCachedSongs(values, artworkByURL: prepared.artworkByURL,
+                self.commitCachedSongs(values, artworkByURL: prepared.byURL,
                                        uniqueURLs: prepared.uniqueURLs, home: currentHome,
                                        likedIDs: self.account.music?.likedIDs ?? [],
                                        likedAt: self.account.music?.likedAt ?? [:])
@@ -362,6 +379,8 @@ import Observation
                                    home: NeteaseHomeStore?,
                                    likedIDs: Set<Int64>,
                                    likedAt: [Int64: Date]) {
+        projectedLikedIDs = likedIDs
+        projectedLikedAt = likedAt
         artworkSongs = artworkByURL
         let revision = home?.sessionRevision
         let cachedCovers: [URL: URL]
@@ -397,7 +416,10 @@ import Observation
             songs.append(item)
         }
         projectionCache.prune(keeping: liveIDs)
-        if cachedSongs != songs { cachedSongs = songs }
+        if cachedSongs != songs {
+            cachedSongs = songs
+            cachedSongIndices = Dictionary(uniqueKeysWithValues: songs.indices.map { (songs[$0].id, $0) })
+        }
         LocalLibrary.songLibrary.replaceExternalSongs(songs)
     }
 
@@ -411,6 +433,28 @@ import Observation
         retainedArtworkIDs = ids
         retainedArtworkSession = home.sessionRevision
         Self.updateRetainedArtwork(in: LocalLibrary.playlistLibrary, home: home, owner: owner)
+    }
+
+    private func scheduleArtworkPublish(_ urls: Set<URL>) {
+        guard !urls.isEmpty, let home = account.home, home.userID == account.profile?.userID else { return }
+        let session = home.sessionRevision
+        if artworkBatchSession != session {
+            artworkPublishTask?.cancel()
+            artworkPublishTask = nil
+            pendingArtworkURLs.removeAll()
+            artworkBatchSession = session
+        }
+        pendingArtworkURLs.formUnion(urls)
+        guard artworkPublishTask == nil else { return }
+        artworkPublishTask = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
+            guard let self else { return }
+            let batch = pendingArtworkURLs
+            pendingArtworkURLs.removeAll(keepingCapacity: true)
+            artworkPublishTask = nil
+            guard account.home === home, home.sessionRevision == session else { return }
+            publishArtwork(batch)
+        }
     }
 
     private func publishArtwork(_ urls: Set<URL>) {
@@ -475,8 +519,8 @@ import Observation
         if let owner {
             Self.updateRetainedArtwork(in: LocalLibrary.playlistLibrary, home: home, owner: owner, urls: urls, songs: songs)
         }
-        for item in cachedSongs {
-            if let replacement = songs[item.id] { item.publishArtwork(from: replacement) }
+        for (id, replacement) in songs {
+            if let index = cachedSongIndices[id] { cachedSongs[index].publishArtwork(from: replacement) }
         }
         LocalLibrary.songLibrary.updateOnlineArtwork(songs, source: "home")
     }
@@ -949,8 +993,7 @@ import Observation
             default:
                 throw NeteaseAccountError.invalidResponse
             }
-            cachedSongs = home.cachedSongs.map(mapSong)
-            LocalLibrary.songLibrary.replaceExternalSongs(cachedSongs)
+            syncCachedSongs(home.cachedSongs, home: home, preferAsync: false)
         } catch {
             guard !Task.isCancelled, home.userID == homeOwner, account.profile?.userID == profileOwner,
                   owner == profileOwner.map(String.init) else { throw CancellationError() }

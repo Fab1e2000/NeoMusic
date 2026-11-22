@@ -674,6 +674,8 @@ private final class PlaybackAudioBackend {
         onFinished?()
     }
 
+    var spectrumAnalyzer: ThreadSafeSpectrumAnalyzer { backend.graph.analyzer }
+
     func spectrumLevels() -> [Float] {
         guard isPlaying, !isLoading, error == nil else { return Array(repeating: 0, count: 5) }
         return backend.graph.spectrumLevels()

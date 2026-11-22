@@ -2,7 +2,7 @@
 
 @PlaybackAudioActor final class SharedAudioGraph {
     lazy var engine = AVAudioEngine()
-    private nonisolated let analyzer = ThreadSafeSpectrumAnalyzer()
+    nonisolated let analyzer = ThreadSafeSpectrumAnalyzer()
     private var tapInstalled = false
 
     nonisolated init() {}
@@ -75,8 +75,19 @@
     }
 }
 
-private final class ThreadSafeSpectrumAnalyzer: @unchecked Sendable {
+final class ThreadSafeSpectrumAnalyzer: @unchecked Sendable {
     private let raw = AudioSpectrumAnalyzer()
+
+    func subscribe() -> Subscription { Subscription(raw) }
+
+    final class Subscription {
+        private let raw: AudioSpectrumAnalyzer
+        fileprivate init(_ raw: AudioSpectrumAnalyzer) {
+            self.raw = raw
+            raw.addConsumer()
+        }
+        deinit { raw.removeConsumer() }
+    }
 
     func consume(_ buffer: AVAudioPCMBuffer) {
         raw.consume(buffer)

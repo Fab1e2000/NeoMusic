@@ -251,7 +251,7 @@ final class LocalLibraryRuntime {
 
     private func restoreStores() async throws {
         async let savedPlaylists = cache.restore(PlaylistLibrary.Snapshot.self, from: store.appending(path: "playlists.json"))
-        async let savedQueue = cache.restore(NowPlayingModel.SavedQueue.self, from: store.appending(path: "playback.json"))
+        async let savedQueue = cache.restoreQueue(from: store.appending(path: "playback.json"))
         let (playlists, queue) = await (savedPlaylists, savedQueue)
         try Task.checkCancellation()
         let songs = localSongs
@@ -292,6 +292,10 @@ final class LocalLibraryRuntime {
 actor LocalLibraryTrackCache {
     private var saved: (url: URL, tracks: [LocalTrack])?
     private var backdropPreparer: AlbumArtworkBackdropPreparer?
+
+    func restoreQueue(from url: URL) -> Result<NowPlayingModel.SavedQueue?, Error> {
+        Result { try Task.checkCancellation(); return try PlaybackQueuePersistence.load(from: url) }
+    }
 
     func restore<Value: Decodable & Sendable>(_ type: Value.Type, from url: URL) -> Result<Value?, Error> {
         do {

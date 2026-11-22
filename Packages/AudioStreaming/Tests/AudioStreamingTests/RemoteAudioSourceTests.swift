@@ -3,6 +3,20 @@ import XCTest
 @testable import AudioStreaming
 
 final class RemoteAudioSourceTests: XCTestCase {
+    func testConsecutiveFailuresBackOffAndExhaustTheirBudgetUntilReset() {
+        let retrier = Retrier(queue: .main)
+        for delay in 1...5 {
+            XCTAssertEqual(retrier.nextDelay, delay)
+            XCTAssertTrue(retrier.schedule { XCTFail("Cancelled retry fired") })
+            XCTAssertTrue(retrier.schedule { XCTFail("Duplicate retry fired") })
+            retrier.cancelPending()
+        }
+        XCTAssertNil(retrier.nextDelay)
+        XCTAssertFalse(retrier.schedule { XCTFail("Exhausted retry fired") })
+        retrier.reset()
+        XCTAssertEqual(retrier.nextDelay, 1)
+    }
+
     func testProbeConnectionFailureIsReported() {
         let failed = expectation(description: "report transport error before headers")
         let (source, networking) = makeSource { request in

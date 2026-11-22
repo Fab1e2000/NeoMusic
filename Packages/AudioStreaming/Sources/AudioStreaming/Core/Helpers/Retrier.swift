@@ -5,58 +5,33 @@
 
 import Foundation
 
-/// An object that coordinates the retrying of a method (closure)
+/// Access is serialized by the owning source's request lock.
 final class Retrier {
-    private var interval: DispatchTimeInterval = .seconds(1)
-    private var callback: (() -> Void)?
+    private let queue: DispatchQueue
+    private var pending: DispatchWorkItem?
+    private var attempts = 0
 
-    private let maxInterval: Int
-    private let timeoutTimer: DispatchTimerSource
+    init(queue: DispatchQueue) { self.queue = queue }
 
-    /// Initializes a new object with the given parameters
-    /// - Parameters:
-    ///   - interval: The Mach absolute time at which to execute the dispatch source's event handler.
-    ///   - maxInterval: The maximum interval in which the internal timer will retry the callback.
-    ///   - underlyingQueue: An optional `DispatchQueue` objects to be assigned on the timer.
-    init(interval: DispatchTimeInterval, maxInterval: Int, underlyingQueue: DispatchQueue?) {
-        self.interval = interval
-        self.maxInterval = maxInterval
-        timeoutTimer = DispatchTimerSource(queue: underlyingQueue)
+    var nextDelay: Int? { attempts < 5 ? attempts + 1 : nil }
+
+    func schedule(_ callback: @escaping () -> Void) -> Bool {
+        if pending != nil { return true }
+        guard let delay = nextDelay else { return false }
+        attempts += 1
+        let work = DispatchWorkItem(block: callback)
+        pending = work
+        queue.asyncAfter(deadline: .now() + .seconds(delay), execute: work)
+        return true
     }
 
-    /// Starts the process of retrying, this should be called each time the need for retry.
-    ///
-    /// Each time the timer fires the interval will increment
-    /// itself by 1 with a maximum value of the given `maxInterval`
-    ///
-    /// - Parameter callback: The method to be executed when timer is fired.
-    func retry(callback: @escaping () -> Void) {
-        guard !timeoutTimer.isRunning else { return }
-        self.callback = callback
-        internalRetry()
+    func cancelPending() {
+        pending?.cancel()
+        pending = nil
     }
 
-    /// Cancels retrying
-    func cancel() {
-        interval = .seconds(1)
-        timeoutTimer.removeHandler()
-        timeoutTimer.suspend()
-    }
-
-    // MARK: - Private
-
-    private func internalRetry() {
-        cancel()
-        timeoutTimer.schedule(interval: interval, repeats: false)
-        timeoutTimer.add { [weak self] in
-            self?.callback?()
-        }
-        timeoutTimer.activate()
-        switch interval {
-        case let .seconds(value):
-            interval = .seconds(min(value + 1, maxInterval))
-        default:
-            interval = .seconds(1)
-        }
+    func reset() {
+        cancelPending()
+        attempts = 0
     }
 }

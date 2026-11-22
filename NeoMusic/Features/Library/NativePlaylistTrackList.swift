@@ -230,6 +230,7 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
     private let bannerHost = UIHostingController(rootView: AnyView(EmptyView()))
     private var prefetchTasks: [IndexPath: Task<Void, Never>] = [:]
     private var observedSongID: String?
+    private weak var observedAnalyzer: ThreadSafeSpectrumAnalyzer?
     private var observedActive = false
     private var playbackObservationToken = 0
     private var lastReachedEndCount: Int?
@@ -529,6 +530,7 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
             moreColor: secondary,
             isCurrent: isCurrent,
             isPlayingActive: isCurrent && observedActive,
+            analyzer: environment.songRowPlayback?.spectrumAnalyzer,
             samples: { [weak self] in self?.environment.songRowPlayback?.spectrumLevels() ?? [] },
             downloads: environment.libraryDownloads,
             loadAction: environment.artworkLoadAction,
@@ -549,8 +551,8 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
         let sceneActive = environment.scenePhase == .active
         let indicatorsActive = environment.songPlaybackIndicatorsActive
         let reduceMotion = environment.accessibilityReduceMotion
-        let (hasCurrent, currentID, isPlaying, isLoading) = withObservationTracking {
-            (playback?.hasCurrent == true, playback?.current.id, playback?.isPlaying == true, playback?.isLoading == true)
+        let (hasCurrent, currentID, isPlaying, isLoading, analyzer) = withObservationTracking {
+            (playback?.hasCurrent == true, playback?.current.id, playback?.isPlaying == true, playback?.isLoading == true, playback?.spectrumAnalyzer)
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self, self.playbackObservationToken == token else { return }
@@ -561,15 +563,17 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
         let nextActive = indicatorsActive && isPlaying && !isLoading && sceneActive && !reduceMotion
         let oldID = observedSongID
         let oldActive = observedActive
+        let analyzerChanged = analyzer !== observedAnalyzer
+        observedAnalyzer = analyzer
         observedSongID = nextID
         observedActive = nextActive
-        guard oldID != nextID || oldActive != nextActive else { return }
+        guard oldID != nextID || oldActive != nextActive || analyzerChanged else { return }
         for path in collectionView.indexPathsForVisibleItems {
             guard case .song(let id) = source.itemIdentifier(for: path),
                   id == oldID || id == nextID,
                   let cell = collectionView.cellForItem(at: path) as? PlaylistTrackCell else { continue }
             let isCurrent = nextID == id
-            cell.updatePlaybackState(isCurrent: isCurrent, isActive: isCurrent && nextActive) { [weak self] in
+            cell.updatePlaybackState(isCurrent: isCurrent, isActive: isCurrent && nextActive, analyzer: analyzer) { [weak self] in
                 self?.environment.songRowPlayback?.spectrumLevels() ?? []
             }
         }
@@ -630,6 +634,13 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
     }
 
     override func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
+        if let cell = cell as? PlaylistTrackCell, case .song(let id) = source.itemIdentifier(for: indexPath) {
+            cell.setSpectrumDisplayed(true)
+            cell.updatePlaybackState(isCurrent: observedSongID == id, isActive: observedActive,
+                                     analyzer: observedAnalyzer) { [weak self] in
+                self?.environment.songRowPlayback?.spectrumLevels() ?? []
+            }
+        }
         let prefetchThreshold = min(15, max(3, uniqueSongIDs.count / 4))
         guard let onReachedEnd = model?.onReachedEnd, !uniqueSongIDs.isEmpty,
               case .song(let id) = source.itemIdentifier(for: indexPath),
@@ -637,6 +648,10 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
               lastReachedEndCount != uniqueSongIDs.count else { return }
         lastReachedEndCount = uniqueSongIDs.count
         onReachedEnd()
+    }
+
+    override func collectionView(_ collectionView: UICollectionView, didEndDisplaying cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
+        (cell as? PlaylistTrackCell)?.setSpectrumDisplayed(false)
     }
 
     override func scrollViewDidScroll(_ scrollView: UIScrollView) {
@@ -702,6 +717,11 @@ private final class PlaylistTrackCell: UICollectionViewListCell {
     private let artworkImageView = UIImageView()
     private let playbackOverlay = UIView()
     private let spectrumView = SpectrumBarsView()
+    private var spectrumDisplayed = false
+    func setSpectrumDisplayed(_ displayed: Bool) {
+        spectrumDisplayed = displayed
+        if !displayed { spectrumView.active = false }
+    }
     private let titleLabel = UILabel()
     private let subtitleLabel = UILabel()
     private let textStack = UIStackView()
@@ -873,8 +893,7 @@ private final class PlaylistTrackCell: UICollectionViewListCell {
         loadedImageURL = nil
         artworkImageView.image = nil
         playbackOverlay.isHidden = true
-        spectrumView.active = false
-        spectrumView.stop()
+        setSpectrumDisplayed(false)
         setPreparingPlayback(false)
         song = nil
         downloads = nil
@@ -888,6 +907,7 @@ private final class PlaylistTrackCell: UICollectionViewListCell {
                    moreColor: UIColor,
                    isCurrent: Bool,
                    isPlayingActive: Bool,
+                   analyzer: ThreadSafeSpectrumAnalyzer? = nil,
                    samples: @escaping () -> [Float],
                    downloads: LibraryDownloads?,
                    loadAction: ArtworkLoadAction,
@@ -919,7 +939,7 @@ private final class PlaylistTrackCell: UICollectionViewListCell {
         accessibilityLabel = CollectionTrackUI.songAccessibilityLabel(for: song)
         accessibilityTraits.insert(.button)
 
-        updatePlaybackState(isCurrent: isCurrent, isActive: isPlayingActive, samples: samples)
+        updatePlaybackState(isCurrent: isCurrent, isActive: isPlayingActive, analyzer: analyzer, samples: samples)
         observeArtwork(retainingImage: sameSong)
         observeDownloads()
         setNeedsUpdateConfiguration()
@@ -933,11 +953,12 @@ private final class PlaylistTrackCell: UICollectionViewListCell {
         else { playbackPreparationIndicator.stopAnimating() }
     }
 
-    func updatePlaybackState(isCurrent: Bool, isActive: Bool, samples: @escaping () -> [Float]) {
+    func updatePlaybackState(isCurrent: Bool, isActive: Bool, analyzer: ThreadSafeSpectrumAnalyzer? = nil, samples: @escaping () -> [Float]) {
+        spectrumView.analyzer = analyzer
         playbackOverlay.isHidden = !isCurrent
         if isCurrent {
             spectrumView.samples = samples
-            spectrumView.active = isActive
+            spectrumView.active = isActive && spectrumDisplayed
         } else {
             spectrumView.active = false
             spectrumView.stop()

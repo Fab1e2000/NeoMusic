@@ -201,6 +201,34 @@ final class QueuePersistenceTests: XCTestCase {
         XCTAssertNil(model.errorMessage)
     }
 
+    func testProgressOnlyWritesSidecarAndRestoresOnlyMatchingSnapshotAndOccurrence() async throws {
+        let directory = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("queue.json")
+        let sidecar = url.appendingPathExtension("progress")
+        let model = NowPlayingModel(queue: [song("a"), song("a")], currentIndex: 1, isPlaying: false, elapsed: 3)
+        defer { model.shutdownPlayback() }
+        model.configurePlayback(resolveURL: { _ in nil }, persistenceURL: url)
+        model.saveQueue()
+        await model.flushQueuePersistence()
+        let base = try Data(contentsOf: url)
+        model.elapsed = 17
+        await model.flushQueuePersistence()
+        XCTAssertEqual(try Data(contentsOf: url), base)
+        XCTAssertEqual(try PlaybackQueuePersistence.load(from: url)?.elapsed, 17)
+        let progress = try Data(contentsOf: sidecar)
+        var invalid = try XCTUnwrap(JSONSerialization.jsonObject(with: progress) as? [String: Any])
+        invalid["entryID"] = model.entryIDs[0].uuidString
+        try JSONSerialization.data(withJSONObject: invalid).write(to: sidecar)
+        XCTAssertEqual(try PlaybackQueuePersistence.load(from: url)?.elapsed, 3)
+        try progress.write(to: sidecar)
+        model.repeatMode = .one
+        model.elapsed = 24
+        await model.flushQueuePersistence()
+        XCTAssertNotEqual(try Data(contentsOf: url), base)
+        XCTAssertEqual(try PlaybackQueuePersistence.load(from: url)?.elapsed, 24)
+    }
+
     func testRapidChangesPersistLatestSnapshotAndRestoreQueueOccurrences() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

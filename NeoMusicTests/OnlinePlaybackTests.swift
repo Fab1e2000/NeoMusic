@@ -409,7 +409,7 @@ final class OnlinePlaybackTests: XCTestCase {
         XCTAssertEqual(model.elapsed, 6.375, accuracy: 0.002)
         XCTAssertEqual((backendState.currentPlaybackTime ?? 0), 6.375, accuracy: 0.002)
         await model.flushQueuePersistence()
-        let saved = try JSONDecoder().decode(NowPlayingModel.SavedQueue.self, from: Data(contentsOf: stateURL))
+        let saved = try XCTUnwrap(PlaybackQueuePersistence.load(from: stateURL))
         XCTAssertEqual(saved.elapsed, 6.375, accuracy: 0.002)
     }
 

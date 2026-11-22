@@ -318,6 +318,18 @@ import XCTest
         XCTAssertEqual(try XCTUnwrap(library.externalSongs.first).title, home.title)
     }
 
+    func testArtworkGroupingStopsOnCancellation() async {
+        let track = NeteaseMusicSong(id: 9, title: "Song", artist: "", album: "", artworkURL: nil, duration: 20)
+        let cancelled = await Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            do {
+                _ = try await OnlineSongProjector.groupArtworkInBackground([track])
+                return false
+            } catch { return error is CancellationError }
+        }.value
+        XCTAssertTrue(cancelled)
+    }
+
     func testUnchangedHomeStoreCallbacksDoNotRepublishVisibleContent() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -361,6 +373,11 @@ import XCTest
         }
         home.onChange?()
         home.onArtworkChange?([URL(string: "https://example.com/unrelated-cover.jpg")!])
+        let batch = try XCTUnwrap(integration.artworkPublishTask)
+        home.onArtworkChange?([URL(string: "https://example.com/second-cover.jpg")!])
+        XCTAssertEqual(integration.artworkPublishTask, batch)
+        await batch.value
+        XCTAssertNil(integration.artworkPublishTask)
         XCTAssertEqual(changes.withLock { $0 }, 0)
         XCTAssertTrue(integration.cachedSongs.isEmpty)
     }

@@ -148,6 +148,34 @@ final class NeteaseMusicClientTests: XCTestCase, @unchecked Sendable {
         let albums = try await client.artistAlbums(id: 4, credential: nil)
         XCTAssertEqual(albums.map(\.id), [2, 1, 3])
     }
+    @MainActor func testPaginationRejectsNonFinalPagesWithoutNewIDs() async throws {
+        let token = try credential()
+        let requests: [(String, String, @MainActor (NeteaseMusicClient) async throws -> Void)] = [
+            ("playlist", "more", { _ = try await $0.playlists(userID: 1, credential: token) }),
+            ("hotAlbums", "more", { _ = try await $0.artistAlbums(id: 1, credential: token) }),
+            ("data", "hasMore", { _ = try await $0.subscribedArtists(credential: token) }),
+            ("data", "hasMore", { _ = try await $0.subscribedAlbums(credential: token) })
+        ]
+        let item: [String: Any] = ["id": 1, "name": "Item", "creator": ["userId": 1, "nickname": "User"], "trackCount": 0]
+        for (itemsKey, moreKey, fetch) in requests {
+            for duplicate in [false, true] {
+                let pages = duplicate ? [[item], [item]] : [[]]
+                let fixtures = try pages.map { items in
+                    let data = try JSONSerialization.data(withJSONObject: ["code": 200, itemsKey: items, moreKey: true])
+                    return String(decoding: data, as: UTF8.self)
+                }
+                let client = makeClient(fixtures)
+                do {
+                    try await fetch(client)
+                    XCTFail("Accepted incomplete pagination for \(itemsKey)")
+                } catch {
+                    XCTAssertEqual(error as? NeteaseAccountError, .invalidResponse)
+                }
+                XCTAssertEqual(MusicFixtureProtocol.requests.withLock { $0.count }, pages.count)
+            }
+        }
+    }
+
     @MainActor func testSongDetailsRetainMultipleArtistIdentities() async throws {
         let client = makeClient([#"{"code":200,"songs":[{"id":12,"name":"Song","ar":[{"id":1,"name":"Same"},{"id":2,"name":"Same"}],"al":{"id":3,"name":"Album"},"dt":90000}]}"#])
         let song = try await client.songDetail(id: 12, credential: nil)

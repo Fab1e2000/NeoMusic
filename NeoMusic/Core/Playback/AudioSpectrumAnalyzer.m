@@ -11,6 +11,7 @@ typedef struct {
     int filled;
     double rate;
     BOOL supported;
+    _Atomic(unsigned int) consumers;
     _Atomic(float) levels[5];
     _Atomic(unsigned long) samples;
 } Analysis;
@@ -65,7 +66,7 @@ static void prepareTap(MTAudioProcessingTapRef tap, CMItemCount maxFrames, const
 static void processTap(MTAudioProcessingTapRef tap, CMItemCount frames, MTAudioProcessingTapFlags flags, AudioBufferList *buffers, CMItemCount *outFrames, MTAudioProcessingTapFlags *outFlags) {
     if(MTAudioProcessingTapGetSourceAudio(tap,frames,buffers,outFlags,NULL,outFrames)!=noErr) { *outFrames=0; return; }
     Analysis *s=MTAudioProcessingTapGetStorage(tap);
-    if(!s->supported || !buffers->mNumberBuffers) return;
+    if(!atomic_load_explicit(&s->consumers, memory_order_relaxed) || !s->supported || !buffers->mNumberBuffers) return;
     for(int i=0;i<*outFrames;i++) {
         float mono=0;
         int count=0;
@@ -101,9 +102,15 @@ static void processTap(MTAudioProcessingTapRef tap, CMItemCount frames, MTAudioP
     }
     return self;
 }
+- (void)addConsumer {
+    if (_state) atomic_fetch_add_explicit(&_state->consumers, 1, memory_order_relaxed);
+}
+- (void)removeConsumer {
+    if (_state) atomic_fetch_sub_explicit(&_state->consumers, 1, memory_order_relaxed);
+}
 - (void)consumeBuffer:(AVAudioPCMBuffer *)buffer {
     Analysis *s = _state;
-    if (!s || _tap || buffer.format.commonFormat != AVAudioPCMFormatFloat32) return;
+    if (!s || !atomic_load_explicit(&s->consumers, memory_order_relaxed) || _tap || buffer.format.commonFormat != AVAudioPCMFormatFloat32) return;
     double rate = buffer.format.sampleRate;
     if (rate <= 0) return;
     if (s->rate != rate) {
@@ -136,6 +143,7 @@ static void processTap(MTAudioProcessingTapRef tap, CMItemCount frames, MTAudioP
     if (!s) return NO;
     s->fft=vDSP_create_fftsetup(11,kFFTRadix2);
     if (!s->fft) { free(s); return NO; }
+    atomic_init(&s->consumers, atomic_load(&_state->consumers));
     initializeWindow(s);
     MTAudioProcessingTapCallbacks callbacks={kMTAudioProcessingTapCallbacksVersion_0,s,initTap,finalizeTap,prepareTap,NULL,processTap};
     if(MTAudioProcessingTapCreate(kCFAllocatorDefault,&callbacks,kMTAudioProcessingTapCreationFlag_PostEffects,&_tap)!=noErr) {

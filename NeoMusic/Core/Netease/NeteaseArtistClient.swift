@@ -48,9 +48,10 @@ extension NeteaseMusicClient {
         var result: [NeteaseArtistAlbum] = [], offset = 0, seen = Set<Int64>()
         while true {
             let response: Response = try await read("/api/artist/albums/\(id)", ["limit": 100, "offset": offset, "total": true], credential)
+            let previousCount = result.count
             result += response.hotAlbums.filter { seen.insert($0.id).inserted }.map(\.model)
             if !response.more { return result }
-            guard !response.hotAlbums.isEmpty else { throw NeteaseAccountError.invalidResponse }
+            guard result.count > previousCount else { throw NeteaseAccountError.invalidResponse }
             offset += response.hotAlbums.count
         }
     }
@@ -70,9 +71,10 @@ extension NeteaseMusicClient {
         var result: [NeteaseArtistReference] = [], offset = 0, seen = Set<Int64>()
         while true {
             let page: Response = try await read("/api/artist/sublist", ["limit": 100, "offset": offset, "total": true], credential)
+            let previousCount = result.count
             result += page.data.filter { seen.insert($0.id).inserted }.map(\.model)
             if !page.hasMore { return result }
-            guard !page.data.isEmpty else { throw NeteaseAccountError.invalidResponse }
+            guard result.count > previousCount else { throw NeteaseAccountError.invalidResponse }
             offset += page.data.count
         }
     }
@@ -81,9 +83,10 @@ extension NeteaseMusicClient {
         var result: [NeteaseArtistAlbum] = [], offset = 0, seen = Set<Int64>()
         while true {
             let page: Response = try await read("/api/album/sublist", ["limit": 100, "offset": offset, "total": true], credential)
+            let previousCount = result.count
             result += page.data.filter { seen.insert($0.id).inserted }.map(\.model)
             if !page.hasMore { return result }
-            guard !page.data.isEmpty else { throw NeteaseAccountError.invalidResponse }
+            guard result.count > previousCount else { throw NeteaseAccountError.invalidResponse }
             offset += page.data.count
         }
     }

@@ -28,10 +28,20 @@ enum OnlineSongProjector {
         )
     }
 
-    static func groupByArtworkURL(_ songs: some Sequence<NeteaseMusicSong>) -> (byURL: [URL: [NeteaseMusicSong]], uniqueURLs: [URL]) {
+    @concurrent static func groupArtworkInBackground(_ songs: [NeteaseMusicSong]) async throws -> (byURL: [URL: [NeteaseMusicSong]], uniqueURLs: [URL]) {
+        try groupByArtworkURL(songs, checkCancellation: { try Task.checkCancellation() })
+    }
+
+    nonisolated static func groupByArtworkURL(_ songs: some Sequence<NeteaseMusicSong>) -> (byURL: [URL: [NeteaseMusicSong]], uniqueURLs: [URL]) {
+        groupByArtworkURL(songs, checkCancellation: {})
+    }
+
+    nonisolated private static func groupByArtworkURL(_ songs: some Sequence<NeteaseMusicSong>,
+                                              checkCancellation: () throws -> Void) rethrows -> (byURL: [URL: [NeteaseMusicSong]], uniqueURLs: [URL]) {
         var byURL: [URL: [NeteaseMusicSong]] = [:]
         var uniqueURLs: Set<URL> = []
         for song in songs {
+            try checkCancellation()
             guard let url = song.artworkURL else { continue }
             byURL[url, default: []].append(song)
             uniqueURLs.insert(url)

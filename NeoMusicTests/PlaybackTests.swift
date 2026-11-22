@@ -437,7 +437,7 @@ final class PlaybackTests: XCTestCase {
             XCTAssertFalse(model.isPlaying)
             XCTAssertEqual(model.elapsed, 0, accuracy: 0.01)
             await model.flushQueuePersistence()
-            let saved = try JSONDecoder().decode(NowPlayingModel.SavedQueue.self, from: Data(contentsOf: state))
+            let saved = try XCTUnwrap(PlaybackQueuePersistence.load(from: state))
             XCTAssertEqual(saved.index, index)
         }
     }

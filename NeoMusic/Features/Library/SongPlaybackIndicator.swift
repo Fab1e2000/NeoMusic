@@ -18,7 +18,7 @@ struct AlbumSongPosition: View {
     var body: some View {
         Group {
             if let playback, playback.hasCurrent, playback.current.id == song.id {
-                SongPlaybackIndicator(active: indicatorsActive && playback.isPlaying && !playback.isLoading && scenePhase == .active && !reduceMotion,
+                SongPlaybackIndicator(analyzer: playback.spectrumAnalyzer, active: indicatorsActive && playback.isPlaying && !playback.isLoading && scenePhase == .active && !reduceMotion,
                                       samples: { [weak playback] in playback?.spectrumLevels() ?? [] })
                     .frame(width: 16, height: 20)
                     .accessibilityLabel(playback.isPlaying ? "正在播放" : "已暂停")
@@ -61,6 +61,7 @@ private struct SongPlaybackOverlay: ViewModifier {
                         .fill(.black.opacity(0.4))
                         .overlay {
                             SongPlaybackIndicator(
+                                analyzer: playback.spectrumAnalyzer,
                                 active: indicatorsActive && playback.isPlaying && !playback.isLoading && scenePhase == .active && !reduceMotion,
                                 samples: { [weak playback] in playback?.spectrumLevels() ?? [] },
                                 color: .white
@@ -82,6 +83,7 @@ extension View {
 }
 
 struct SongPlaybackIndicator: UIViewRepresentable {
+    var analyzer: ThreadSafeSpectrumAnalyzer? = nil
     var active: Bool
     var samples: () -> [Float]
     var color: UIColor = .label
@@ -90,6 +92,7 @@ struct SongPlaybackIndicator: UIViewRepresentable {
     func updateUIView(_ view: SpectrumBarsView, context: Context) {
         view.barColor = color
         view.samples = samples
+        view.analyzer = analyzer
         view.active = active
     }
     static func dismantleUIView(_ view: SpectrumBarsView, coordinator: ()) { view.stop() }
@@ -106,6 +109,12 @@ final class SpectrumBarsView: UIView {
         bar.cornerCurve = .circular
         return bar
     }
+    var analyzer: ThreadSafeSpectrumAnalyzer? {
+        didSet {
+            if oldValue !== analyzer, displayLink != nil { subscription = analyzer?.subscribe() }
+        }
+    }
+    private var subscription: ThreadSafeSpectrumAnalyzer.Subscription?
     private var displayLink: CADisplayLink?
     var hasActiveDisplayLink: Bool { displayLink?.isPaused == false }
     private lazy var target = DisplayTarget(view: self)
@@ -156,9 +165,11 @@ final class SpectrumBarsView: UIView {
         link.preferredFrameRateRange = CAFrameRateRange(minimum: 120, maximum: 120, preferred: 120)
         link.add(to: .main, forMode: .common)
         displayLink = link
+        subscription = analyzer?.subscribe()
     }
     func stop() {
         displayLink?.invalidate(); displayLink = nil
+        subscription = nil
         levels = Array(repeating: 0, count: 5)
         layoutBars()
     }

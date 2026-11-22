@@ -9,6 +9,29 @@ final class AudioSpectrumTests: XCTestCase {
         XCTAssertEqual(AudioSpectrumAnalyzer.levels(forPCM: data, sampleRate: 44100).map(\.floatValue), [0,0,0,0,0])
     }
 
+    func testBufferAnalysisRunsOnlyWhileAtLeastOneConsumerIsActive() throws {
+        let analyzer = AudioSpectrumAnalyzer()
+        let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1))
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 2048))
+        buffer.frameLength = buffer.frameCapacity
+        buffer.floatChannelData![0].initialize(repeating: 0, count: Int(buffer.frameLength))
+        analyzer.consume(buffer)
+        XCTAssertEqual(analyzer.sampleCount(), 0)
+        analyzer.addConsumer()
+        analyzer.addConsumer()
+        analyzer.consume(buffer)
+        analyzer.removeConsumer()
+        analyzer.consume(buffer)
+        XCTAssertEqual(analyzer.sampleCount(), 4096)
+        analyzer.removeConsumer()
+        analyzer.consume(buffer)
+        XCTAssertEqual(analyzer.sampleCount(), 4096)
+        analyzer.addConsumer()
+        analyzer.consume(buffer)
+        XCTAssertEqual(analyzer.sampleCount(), 6144)
+        analyzer.removeConsumer()
+    }
+
     func testFiveTonesLandInTheirOwnFrequencyBands() {
         for (band, frequency) in [70.0, 200, 600, 1800, 6000].enumerated() {
             let samples = (0..<2048).map { Float(0.1 * sin(2 * .pi * frequency * Double($0) / 44100)) }
@@ -100,6 +123,8 @@ final class AudioSpectrumTests: XCTestCase {
         }
         let engine = LocalPlaybackEngine()
         defer { engine.shutdown() }
+        let subscription = engine.spectrumAnalyzer.subscribe()
+        defer { withExtendedLifetime(subscription) {} }
         engine.load(url: first, nextURL: second, autoplay: true)
         try await awaitBand(1, engine: engine)
         engine.pause()

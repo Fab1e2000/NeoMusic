@@ -74,7 +74,10 @@ import Observation
     @ObservationIgnored private var saveIDs: [String: UUID] = [:]
     @ObservationIgnored private var refreshedDetails: [Int64: Date] = [:]
     @ObservationIgnored private var lastRefresh: Date?
-    @ObservationIgnored private var songCatalog: [NeteaseMusicSong] = []
+    @ObservationIgnored private(set) var songCatalogRevision: UInt64 = 0
+    @ObservationIgnored private var songCatalog: [NeteaseMusicSong] = [] {
+        didSet { if oldValue != songCatalog { songCatalogRevision &+= 1 } }
+    }
     private struct Cache: Codable, Sendable {
         var recommendations: [NeteaseMusicPlaylist] = []
         var snapshots: [String: NeteaseDailySnapshot] = [:]
