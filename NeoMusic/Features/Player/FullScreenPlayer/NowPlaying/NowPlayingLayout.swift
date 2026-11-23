@@ -31,6 +31,7 @@ private struct NowPlayingLayoutKey: EnvironmentKey {
 extension EnvironmentValues {
     @Entry var playerVisualsActive = true
     @Entry public var playerVolumeHUDRefreshID = 0
+    @Entry public var playerArtworkTransitionTargetVisible = true
     @Entry var nowPlayingControlsOverflow: CGFloat = 0
 
     var nowPlayingLayout: ReferenceNowPlayingLayout {

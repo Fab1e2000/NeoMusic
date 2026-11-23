@@ -9,7 +9,7 @@
 import SwiftUI
 import ObjectiveC
 
-private
+internal
 class LNPopupUITransitionHelperView : UIView {
 	enum HelperType {
 		case background
@@ -17,9 +17,11 @@ class LNPopupUITransitionHelperView : UIView {
 	}
 	
 	let helperType: HelperType
+	var isEnabled: Bool
 	
-	init(_ helperType: HelperType) {
+	init(_ helperType: HelperType, isEnabled: Bool) {
 		self.helperType = helperType
+		self.isEnabled = isEnabled
 		
 		super.init(frame: .zero)
 		
@@ -67,20 +69,28 @@ var ancestorKey: String = {
 
 internal
 struct LNPopupUITransitionBackground: UIViewRepresentable {
-	func makeUIView(context: Context) -> UIView {
-		return LNPopupUITransitionHelperView(.background)
+	let isEnabled: Bool
+
+	func makeUIView(context: Context) -> LNPopupUITransitionHelperView {
+		return LNPopupUITransitionHelperView(.background, isEnabled: isEnabled)
 	}
 	
-	func updateUIView(_ uiView: UIView, context: Context) {}
+	func updateUIView(_ uiView: LNPopupUITransitionHelperView, context: Context) {
+		uiView.isEnabled = isEnabled
+	}
 }
 
 internal
 struct LNPopupUITransitionForeground: UIViewRepresentable {
-	func makeUIView(context: Context) -> UIView {
-		return LNPopupUITransitionHelperView(.foreground)
+	let isEnabled: Bool
+
+	func makeUIView(context: Context) -> LNPopupUITransitionHelperView {
+		return LNPopupUITransitionHelperView(.foreground, isEnabled: isEnabled)
 	}
 	
-	func updateUIView(_ uiView: UIView, context: Context) {}
+	func updateUIView(_ uiView: LNPopupUITransitionHelperView, context: Context) {
+		uiView.isEnabled = isEnabled
+	}
 }
 
 internal
@@ -131,8 +141,8 @@ var swizzleCALayer: () -> Void = {
 
 internal
 protocol LNPopupContentHostingControllerTransitionSupport: AnyObject {
-	var backgroundViewForTransitionViewLookup: UIView? { get set }
-	var foregroundViewForTransitionViewLookup: UIView? { get set }
+	var backgroundViewForTransitionViewLookup: LNPopupUITransitionHelperView? { get set }
+	var foregroundViewForTransitionViewLookup: LNPopupUITransitionHelperView? { get set }
 }
 
 extension LNPopupContentHostingController: LNPopupContentHostingControllerTransitionSupport { }

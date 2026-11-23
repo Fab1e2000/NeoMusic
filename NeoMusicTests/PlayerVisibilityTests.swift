@@ -5,6 +5,54 @@ import SwiftUI
 
 @MainActor
 final class PlayerVisibilityTests: XCTestCase {
+    func testPopupArtworkTargetTracksQueueCoverVisibility() async throws {
+        let songs = (0..<30).map { index in
+            LibrarySongItem(id: "queue-cover-\(index)", title: "Song \(index)", artist: "Artist",
+                            album: "Album", albumArtist: "Artist", trackNumber: index + 1, artwork: .missing, duration: 180)
+        }
+        let player = PlayerState(model: NowPlayingModel(queue: songs, currentIndex: 0, isPlaying: false, elapsed: 0))
+        let services = NeoMusicPlayerServices.make(actions: PlayerTestFixtures.actions(), library: PlayerTestFixtures.library())
+        let visible = expectation(description: "Visible queue cover supplies a popup target")
+        let hidden = expectation(description: "Scrolled-out queue cover withdraws the popup target")
+        let restored = expectation(description: "Returning the queue cover restores the popup target")
+        var reportedVisibility: [Bool] = []
+        let host = UIHostingController(rootView:
+            FullScreenPlayerView(player: player, services: services, initialPage: .queue,
+                                 artworkTransition: PopupArtworkVisibilityProbe { isVisible in
+                guard reportedVisibility.last != isVisible,
+                      isVisible || !reportedVisibility.isEmpty else { return }
+                reportedVisibility.append(isVisible)
+                switch reportedVisibility {
+                case [true]: visible.fulfill()
+                case [true, false]: hidden.fulfill()
+                case [true, false, true]: restored.fulfill()
+                default: break
+                }
+            })
+            .environment(\.scenePhase, .active)
+        )
+        let window = UIWindow(windowScene: try await applicationWindowScene())
+        window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        window.rootViewController = host
+        window.isHidden = false
+        defer { window.isHidden = true }
+        host.view.layoutIfNeeded()
+        await fulfillment(of: [visible], timeout: 2)
+
+        let list = try XCTUnwrap(queueCollection(in: host.view))
+        let rest = list.queueRestOffset
+        list.setContentOffset(CGPoint(x: 0, y: rest + NowPlayingQueuePage.songHeaderHeight), animated: false)
+        await fulfillment(of: [hidden], timeout: 2)
+        list.setContentOffset(CGPoint(x: 0, y: rest), animated: false)
+        await fulfillment(of: [restored], timeout: 2)
+        XCTAssertEqual(reportedVisibility, [true, false, true])
+    }
+
+    private func queueCollection(in view: UIView) -> NowPlayingQueueList.EdgeFadedCollectionView? {
+        if let list = view as? NowPlayingQueueList.EdgeFadedCollectionView { return list }
+        return view.subviews.lazy.compactMap { self.queueCollection(in: $0) }.first
+    }
+
     func testReversingArtworkAndQueueKeepsTheOriginalArtworkEndpoint() {
         for (source, destination) in [(NowPlayingPage.artwork, NowPlayingPage.queue), (.queue, .artwork)] {
             for originalOffscreen in [true, false] {
@@ -98,5 +146,14 @@ final class PlayerVisibilityTests: XCTestCase {
         XCTAssertEqual(receivedFrame?.height ?? 0, 338, accuracy: 0.5)
         XCTAssertEqual(receivedFrame?.midX ?? 0, 169, accuracy: 0.5)
         XCTAssertEqual(receivedFrame?.minY ?? 0, 11, accuracy: 0.5)
+    }
+}
+
+private struct PopupArtworkVisibilityProbe: ViewModifier {
+    @Environment(\.playerArtworkTransitionTargetVisible) private var isVisible
+    let onVisibilityChange: (Bool) -> Void
+
+    func body(content: Content) -> some View {
+        content.onChange(of: isVisible, initial: true) { _, isVisible in onVisibilityChange(isVisible) }
     }
 }

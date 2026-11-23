@@ -63,5 +63,9 @@ import FullScreenPlayer
 }
 
 struct NeoMusicArtworkTransition: ViewModifier {
-    func body(content: Content) -> some View { content.popupTransitionTarget() }
+    @Environment(\.playerArtworkTransitionTargetVisible) private var targetVisible
+
+    func body(content: Content) -> some View {
+        content.popupTransitionTarget(isEnabled: targetVisible)
+    }
 }

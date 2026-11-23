@@ -729,6 +729,8 @@ private final class QueueHeaderOffset {
         let top = NowPlayingSongHeader.topInset + points
         return top + NowPlayingSongHeader.referenceHeight <= 0 || (viewportHeight > 0 && top >= viewportHeight)
     }
+
+    var hasVisibleArtwork: Bool { viewportHeight > 0 && !isArtworkOffscreen }
 }
 
 private struct PlaybackLinkedBackdrop: View {
@@ -782,7 +784,7 @@ private struct QueueLinkedArtwork<ArtworkTransition: ViewModifier>: View {
     }
 
     var body: some View {
-        GeometryReader { _ in
+        GeometryReader { geometry in
             if frame.width > 0 {
                 NowPlayingPortraitArtwork(
                     song: song,
@@ -795,6 +797,7 @@ private struct QueueLinkedArtwork<ArtworkTransition: ViewModifier>: View {
                         mass: 1, stiffness: expanded ? 180 : 153, damping: expanded ? 16.4 : 22.8
                     ), value: expanded)
                     .modifier(artworkTransition)
+                    .environment(\.playerArtworkTransitionTargetVisible, hasPopupArtworkTarget(in: geometry.size))
                     .modifier(QueueArtworkScrollPosition(page: geometryPage, offset: offset, frame: frame))
             }
         }
@@ -815,6 +818,15 @@ private struct QueueLinkedArtwork<ArtworkTransition: ViewModifier>: View {
         .accessibilityHidden(!isVisible)
         .allowsHitTesting(false)
         .padding(.horizontal, -CGFloat(32))
+    }
+
+    private func hasPopupArtworkTarget(in viewport: CGSize) -> Bool {
+        guard pageChange == nil, viewport.width > 0, viewport.height > 0 else { return false }
+        if page == .queue {
+            // At rest the queue cell renders the cover; the shared view supplies its aligned LN endpoint.
+            return offset.hasVisibleArtwork
+        }
+        return isVisible && frame.intersects(CGRect(origin: .zero, size: viewport))
     }
 }
 
