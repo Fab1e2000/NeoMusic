@@ -5,6 +5,23 @@ import SwiftUI
 
 @MainActor
 final class PlayerVisibilityTests: XCTestCase {
+    func testReversingArtworkAndQueueKeepsTheOriginalArtworkEndpoint() {
+        for (source, destination) in [(NowPlayingPage.artwork, NowPlayingPage.queue), (.queue, .artwork)] {
+            for originalOffscreen in [true, false] {
+                let endpoint = NowPlayingPageChange.resolveStationaryArtworkPage(
+                    from: source, to: destination, queueArtworkOffscreen: originalOffscreen, interrupting: nil
+                )
+                XCTAssertEqual(endpoint, originalOffscreen ? .artwork : nil)
+                let inFlight = NowPlayingPageChange(
+                    source: source, destination: destination, stationaryArtworkPage: endpoint, startsFromRest: true
+                )
+                XCTAssertEqual(NowPlayingPageChange.resolveStationaryArtworkPage(
+                    from: destination, to: source, queueArtworkOffscreen: !originalOffscreen, interrupting: inFlight
+                ), endpoint)
+            }
+        }
+    }
+
     func testPortraitPlayerReferenceScreenshots() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

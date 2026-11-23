@@ -63,9 +63,24 @@ struct NowPlayingPageChange {
     let id = UUID()
     let source: NowPlayingPage
     let destination: NowPlayingPage
-    // No visible queue artwork to match: render the other page's cover at its own endpoint.
+    // The queue has no visible artwork to match. Keep the other page's artwork size.
     let stationaryArtworkPage: NowPlayingPage?
     let startsFromRest: Bool
 
     static let stationaryFade = Animation.easeInOut(duration: 0.18)
+
+    static func resolveStationaryArtworkPage(
+        from source: NowPlayingPage,
+        to destination: NowPlayingPage,
+        queueArtworkOffscreen: Bool,
+        interrupting change: Self?
+    ) -> NowPlayingPage? {
+        guard source == .queue || destination == .queue else { return nil }
+        let otherPage = source == .queue ? destination : source
+        // A reversal keeps the original endpoints even if the list reports a new viewport.
+        if otherPage == .artwork, let change, change.source == destination, change.destination == source {
+            return change.stationaryArtworkPage
+        }
+        return queueArtworkOffscreen ? otherPage : nil
+    }
 }
