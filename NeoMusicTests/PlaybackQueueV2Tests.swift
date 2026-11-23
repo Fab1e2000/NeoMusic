@@ -80,7 +80,7 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
                       "Displaying an already prepared cell must preserve its hosting configuration")
         inputs.headerHeight += 20
         try await settle(host)
-        XCTAssertEqual(reconfiguredCells(marked), [.spacer])
+        XCTAssertEqual(reconfiguredCells(marked), [.songHeader])
         marked = try markConfigurations(in: host.view, source: source)
         inputs.subtitle = "Updated subtitle"
         try await settle(host)
@@ -90,11 +90,12 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
         marked = try markConfigurations(in: host.view, source: source)
         inputs.visualsActive = false
         try await settle(host)
-        XCTAssertTrue(reconfiguredCells(marked).isEmpty)
+        XCTAssertEqual(reconfiguredCells(marked), [.songHeader])
+        marked = try markConfigurations(in: host.view, source: source)
         marked = try markConfigurations(in: host.view, source: source)
         inputs.actions = PlayerTestFixtures.actions()
         try await settle(host)
-        XCTAssertEqual(reconfiguredCells(marked), Set(inputs.entries.map { Coordinator.Item.track($0.id) }))
+        XCTAssertEqual(reconfiguredCells(marked), Set(inputs.entries.map { Coordinator.Item.track($0.id) } + [.songHeader]))
         XCTAssertFalse(coordinator.update(with: try XCTUnwrap(coordinator.latest)))
     }
 
@@ -135,7 +136,7 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
 
         coordinator.configure(trackCell, item: .track(a.id))
         try assertReorderAccessory(in: trackCell)
-        coordinator.configure(trackCell, item: .spacer)
+        coordinator.configure(trackCell, item: .songHeader)
         XCTAssertTrue(trackCell.accessories.isEmpty)
         coordinator.configure(trackCell, item: .track(a.id))
         try assertReorderAccessory(in: trackCell)
@@ -237,7 +238,7 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
             }
             XCTAssertFalse(inputs.artworkRequests.isEmpty, "Initial visible rows request their deferred covers")
             XCTAssertTrue(Set(inputs.artworkRequests).isSubset(of: visibleArtworkIDs()))
-            let marked = try markConfigurations(in: host.view, source: source)
+            let marked = try markConfigurations(in: host.view, source: source).filter { $0.key != .songHeader }
             for _ in 0..<10 {
                 inputs.artworkRequests.removeAll()
                 inputs.visualsActive.toggle()
@@ -246,7 +247,7 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
                 XCTAssertEqual(coordinator.snapshotApplicationCount, applications,
                                "Visibility must not submit the \(count)-entry snapshot")
                 XCTAssertTrue(reconfiguredCells(marked).isEmpty,
-                              "Page visibility must preserve prepared hosting content")
+                              "Page visibility must preserve prepared queue rows")
                 XCTAssertEqual(Set(inputs.artworkRequests), inputs.visualsActive ? visibleArtworkIDs() : [])
             }
             XCTAssertEqual(coordinator.dataSource?.snapshot().numberOfItems(inSection: .queue), count)
@@ -293,9 +294,11 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
             let size = list.contentSize
             let top = -list.adjustedContentInset.top
             let bottom = max(top, size.height + list.adjustedContentInset.bottom - list.bounds.height)
+            let collapsed = top + inputs.headerHeight
+            XCTAssertGreaterThanOrEqual(bottom, collapsed - 1)
             let offsets: [CGFloat] = count > 3
-                ? [top, top + inputs.headerHeight - 1, top + inputs.headerHeight, 300, bottom]
-                : [top]
+                ? [top, collapsed - 1, collapsed, 300, bottom]
+                : [top, collapsed]
             for offset in offsets {
                 list.contentOffset.y = offset
                 let position = list.contentOffset
@@ -332,26 +335,328 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
         let list = try XCTUnwrap(collection(in: host.view))
         let coordinator = try coordinator(in: host.view)
         let top = -list.adjustedContentInset.top
+        let scroll = QueueDragTestScrollView(matching: list)
 
         func target(afterReleasingAt offset: CGFloat, velocity: CGFloat,
                     projectedOffset: CGFloat? = nil) -> CGFloat {
-            list.contentOffset.y = top + offset
-            var target = CGPoint(x: list.contentOffset.x, y: top + (projectedOffset ?? offset))
-            coordinator.scrollViewWillEndDragging(list, withVelocity: CGPoint(x: 0, y: velocity),
-                                                  targetContentOffset: &target)
-            return target.y
+            scroll.contentOffset.y = top + offset
+            coordinator.scrollViewWillBeginDragging(scroll)
+            return scroll.release(using: coordinator, projectedY: top + (projectedOffset ?? offset),
+                                  velocity: velocity, willDecelerate: velocity != 0)
         }
 
         let collapsed = top + inputs.headerHeight
         XCTAssertEqual(target(afterReleasingAt: 1, velocity: 0.001), collapsed)
+        XCTAssertEqual(scroll.animatedContentOffset?.y, collapsed)
         XCTAssertEqual(target(afterReleasingAt: 1, velocity: 0.5, projectedOffset: inputs.headerHeight), collapsed)
         XCTAssertEqual(target(afterReleasingAt: 1, velocity: 0.5, projectedOffset: 200), top + 200)
+        XCTAssertNil(scroll.animatedContentOffset)
+        XCTAssertEqual(target(afterReleasingAt: -10, velocity: 0.5, projectedOffset: 200), top + 200)
         XCTAssertEqual(target(afterReleasingAt: inputs.headerHeight - 1, velocity: -0.001), top)
+        XCTAssertEqual(scroll.animatedContentOffset?.y, top)
         XCTAssertEqual(target(afterReleasingAt: 200, velocity: 0.5, projectedOffset: 300), top + 300)
         XCTAssertEqual(target(afterReleasingAt: 200, velocity: -0.5, projectedOffset: 100), top + 100)
+        XCTAssertEqual(target(afterReleasingAt: 200, velocity: -0.5, projectedOffset: inputs.headerHeight - 1), top)
 
-        list.panGestureRecognizer.setTranslation(CGPoint(x: 0, y: -1), in: list)
+        let midpoint = inputs.headerHeight / 2
+        let shortProjection = inputs.headerHeight / 4
+        let longProjection = inputs.headerHeight * 3 / 4
+        XCTAssertEqual(target(afterReleasingAt: midpoint, velocity: 0.5, projectedOffset: shortProjection),
+                       collapsed)
+        XCTAssertEqual(target(afterReleasingAt: midpoint, velocity: -0.5, projectedOffset: longProjection),
+                       top)
+        XCTAssertEqual(target(afterReleasingAt: -10, velocity: 0.5, projectedOffset: shortProjection),
+                       top + shortProjection, "Top overscroll stays with UIKit when there is no History")
+
+        scroll.panGestureRecognizer.setTranslation(CGPoint(x: 0, y: -1), in: scroll)
         XCTAssertEqual(target(afterReleasingAt: 1, velocity: 0), collapsed)
+        scroll.contentOffset.y = top + 1
+        coordinator.scrollViewWillBeginDragging(scroll)
+        coordinator.scrollViewDidEndDragging(scroll, willDecelerate: false)
+        XCTAssertEqual(scroll.animatedContentOffset?.y, collapsed)
+    }
+
+    func testHistorySnapsAtTheRestBoundariesAndScrollsNormallyBeyondThem() async throws {
+        let inputs = QueueListTestInputs()
+        inputs.entries = (0..<30).map { index in
+            PlayerQueueEntry(id: UUID(), queueIndex: index + 1, song: inputs.song)
+        }
+        inputs.history = (0..<24).map { _ in PlayerHistoryEntry(id: UUID(), song: inputs.entries[0].song) }
+        let (window, host) = try mount(inputs)
+        defer { window.isHidden = true }
+        try await settle(host)
+        let list = try XCTUnwrap(collection(in: host.view) as? NowPlayingQueueList.EdgeFadedCollectionView)
+        let coordinator = try coordinator(in: host.view)
+        let source = try XCTUnwrap(coordinator.dataSource)
+        let rest = list.queueRestOffset
+        XCTAssertEqual(list.contentOffset.y, rest, accuracy: 1)
+        XCTAssertEqual(source.snapshot().sectionIdentifiers, [.history, .header, .queue])
+        XCTAssertEqual(source.snapshot().itemIdentifiers(inSection: .history),
+                       inputs.history.map { .history($0.id) })
+        let songPath = try XCTUnwrap(source.indexPath(for: .songHeader))
+        let songCell = try XCTUnwrap(list.cellForItem(at: songPath))
+        XCTAssertEqual(list.convert(songCell.bounds, from: songCell).minY, list.bounds.minY, accuracy: 1)
+        XCTAssertNil(coordinator.trailingActions(at: songPath))
+        let queueHeader = try XCTUnwrap(list.queueHeader)
+        XCTAssertEqual(list.convert(queueHeader.bounds, from: queueHeader).minY,
+                       list.convert(songCell.bounds, from: songCell).maxY, accuracy: 1)
+
+        let scroll = QueueDragTestScrollView(matching: list)
+        func release(from start: CGFloat, at offset: CGFloat, projected: CGFloat,
+                     velocity: CGFloat = 0, willDecelerate: Bool = true) -> CGFloat {
+            scroll.contentOffset.y = rest + start
+            coordinator.scrollViewWillBeginDragging(scroll)
+            scroll.contentOffset.y = rest + offset
+            return scroll.release(using: coordinator, projectedY: rest + projected,
+                                  velocity: velocity, willDecelerate: willDecelerate)
+        }
+
+        let readableHeight = list.bounds.height - list.adjustedContentInset.top - NowPlayingQueueList.bottomFadeHeight
+        let reveal = min(list.historyHeight, max(160, readableHeight))
+        let historyRest = -reveal
+        XCTAssertGreaterThan(list.historyHeight - reveal, 20)
+        XCTAssertEqual(release(from: 0, at: -20, projected: -30), rest)
+        XCTAssertEqual(scroll.animatedContentOffset?.y, rest)
+        XCTAssertEqual(release(from: 0, at: -20, projected: 200, velocity: 1.8), rest)
+        XCTAssertEqual(scroll.animatedContentOffset?.y, rest, "Pull-back starts at Continue Playing")
+        XCTAssertEqual(release(from: 0, at: -20, projected: max(historyRest, -200), velocity: -1.8), rest + historyRest)
+        XCTAssertNil(scroll.animatedContentOffset, "UIKit carries the fast downward release into History")
+        XCTAssertEqual(release(from: 0, at: -20, projected: -160, velocity: -1), rest + historyRest)
+        XCTAssertNil(scroll.animatedContentOffset)
+        XCTAssertEqual(release(from: 0, at: -20, projected: -160, velocity: -0.99), rest + historyRest)
+        XCTAssertEqual(scroll.animatedContentOffset?.y, rest + historyRest)
+        XCTAssertEqual(release(from: 0, at: -20, projected: -159, velocity: -0.1), rest)
+        XCTAssertEqual(release(from: 0, at: -20, projected: -100, velocity: -0.5), rest)
+        XCTAssertEqual(release(from: 80, at: 20, projected: -600, velocity: -2.66), rest)
+        XCTAssertEqual(release(from: 80, at: 0, projected: -600, velocity: -2.66), rest)
+        XCTAssertEqual(release(from: 80, at: -170, projected: -600, velocity: -2.66), rest)
+        XCTAssertEqual(release(from: 0, at: -170, projected: -600, velocity: -2.66), rest - 600)
+        XCTAssertEqual(release(from: 0, at: historyRest - 10, projected: historyRest - 20, velocity: -1.8),
+                       rest + historyRest - 20)
+        XCTAssertEqual(release(from: 0, at: historyRest, projected: historyRest - 200), rest + historyRest - 200)
+        XCTAssertEqual(release(from: 0, at: -160, projected: -100, velocity: 0.5), rest + historyRest)
+        XCTAssertEqual(release(from: 0, at: -160, projected: -161), rest + historyRest)
+        XCTAssertEqual(release(from: historyRest, at: historyRest + 159, projected: 120, velocity: 0.5), rest)
+        XCTAssertEqual(scroll.animatedContentOffset?.y, rest)
+        XCTAssertEqual(release(from: historyRest, at: historyRest + 159, projected: historyRest + 160, velocity: 0.1),
+                       rest)
+        XCTAssertEqual(release(from: historyRest, at: -10, projected: 200, velocity: 1.8), rest)
+        XCTAssertNil(scroll.animatedContentOffset, "UIKit carries the fast release into Continue Playing")
+        XCTAssertEqual(release(from: historyRest, at: -10, projected: 200,
+                               velocity: 1.8, willDecelerate: false), rest)
+        XCTAssertEqual(scroll.animatedContentOffset?.y, rest)
+        XCTAssertEqual(release(from: historyRest, at: -10, projected: 200, velocity: 1), rest)
+        XCTAssertNil(scroll.animatedContentOffset)
+        XCTAssertEqual(release(from: historyRest, at: -10, projected: 200, velocity: 0.99), rest)
+        XCTAssertEqual(scroll.animatedContentOffset?.y, rest)
+        XCTAssertEqual(release(from: historyRest, at: -10, projected: -20, velocity: -1.8), rest)
+        XCTAssertEqual(scroll.animatedContentOffset?.y, rest)
+        XCTAssertEqual(release(from: historyRest, at: 200, projected: 300, velocity: 1.8), rest)
+        XCTAssertEqual(scroll.animatedContentOffset?.y, rest, "An overshoot returns with the short snap")
+        XCTAssertEqual(release(from: historyRest, at: 0, projected: 300, velocity: 1.8), rest)
+        XCTAssertNil(scroll.animatedContentOffset)
+        XCTAssertEqual(release(from: historyRest, at: 0, projected: 0, velocity: 0.1), rest)
+        XCTAssertEqual(release(from: historyRest, at: historyRest + 160, projected: -20), rest)
+        XCTAssertEqual(release(from: historyRest - 20, at: historyRest - 10, projected: historyRest + 10),
+                       rest + historyRest)
+        XCTAssertEqual(release(from: historyRest, at: historyRest - 10, projected: historyRest - 20),
+                       rest + historyRest - 20)
+        XCTAssertEqual(release(from: 0, at: 1, projected: 120, velocity: 0.5), rest + 120)
+        XCTAssertEqual(release(from: 80, at: 20, projected: -100), rest)
+
+        list.contentOffset.y = 80
+        try await settle(host)
+        let header = try XCTUnwrap(list.historyHeader)
+        XCTAssertEqual(list.convert(header.bounds, from: header).minY, list.bounds.minY, accuracy: 1)
+        let path = try XCTUnwrap(list.indexPathsForVisibleItems.first {
+            if case .history = source.itemIdentifier(for: $0) { return true }
+            return false
+        })
+        let row = try XCTUnwrap(list.cellForItem(at: path) as? UICollectionViewListCell)
+        XCTAssertTrue(row.accessories.isEmpty)
+        XCTAssertNil(coordinator.trailingActions(at: path))
+        inputs.history = []
+        try await settle(host)
+        XCTAssertEqual(source.snapshot().sectionIdentifiers, [.header, .queue])
+        XCTAssertEqual(list.contentOffset.y, -list.adjustedContentInset.top, accuracy: 1)
+    }
+
+    func testHistoryRevealThresholdControlsLiveFeedbackAndRelease() async throws {
+        let inputs = QueueListTestInputs()
+        let (window, host) = try mount(inputs)
+        defer { window.isHidden = true }
+        try await settle(host)
+        let coordinator = try coordinator(in: host.view)
+        let list = try XCTUnwrap(collection(in: host.view) as? NowPlayingQueueList.EdgeFadedCollectionView)
+        let scroll = QueueDragTestScrollView(frame: CGRect(x: 0, y: 0, width: 320, height: 400))
+        scroll.contentInset.top = 8
+        scroll.contentSize.height = 800
+
+        for (rowCount, threshold): (Int, CGFloat) in [(10, 160), (2, 168), (1, 112)] {
+            inputs.history = (0..<rowCount).map { _ in PlayerHistoryEntry(id: UUID(), song: inputs.song) }
+            try await settle(host)
+            let rest = list.historyHeight - scroll.adjustedContentInset.top
+            var feedbackCount = 0
+            coordinator.scrollFeedbackHandler = { feedbackCount += 1 }
+
+            func didScroll(revealing distance: CGFloat) {
+                scroll.contentOffset.y = rest - distance
+                coordinator.scrollViewDidScroll(scroll)
+            }
+
+            func beginDrag(revealing distance: CGFloat = 0) {
+                didScroll(revealing: distance)
+                coordinator.scrollViewWillBeginDragging(scroll)
+                scroll.isSimulatingDrag = true
+            }
+
+            func release(projectedReveal: CGFloat, velocity: CGFloat = 0) -> CGFloat {
+                scroll.release(using: coordinator, projectedY: rest - projectedReveal, velocity: velocity)
+            }
+
+            let reveal = min(list.historyHeight, 312)
+            let historyRest = rest - reveal
+            beginDrag()
+            didScroll(revealing: threshold - 1)
+            XCTAssertEqual(feedbackCount, 0)
+            XCTAssertEqual(release(projectedReveal: threshold, velocity: -1.8), historyRest)
+            XCTAssertNil(scroll.animatedContentOffset)
+            didScroll(revealing: threshold)
+            XCTAssertEqual(feedbackCount, 0, "Scroll updates after release are silent")
+
+            beginDrag()
+            didScroll(revealing: threshold)
+            XCTAssertEqual(feedbackCount, 1, "Feedback fires at the threshold while dragging")
+            didScroll(revealing: threshold - 1)
+            didScroll(revealing: threshold + 1)
+            XCTAssertEqual(feedbackCount, 1, "Crossing again in the same drag is silent")
+            XCTAssertEqual(release(projectedReveal: threshold - 1, velocity: 0.001), historyRest)
+
+            beginDrag()
+            didScroll(revealing: threshold)
+            XCTAssertEqual(feedbackCount, 2)
+            didScroll(revealing: threshold - 1)
+            XCTAssertEqual(release(projectedReveal: threshold), rest, "Release uses the current distance")
+
+            beginDrag()
+            didScroll(revealing: threshold)
+            XCTAssertEqual(feedbackCount, 3)
+            XCTAssertEqual(release(projectedReveal: threshold), historyRest, "A stationary release settles in History")
+
+            beginDrag()
+            didScroll(revealing: threshold)
+            scroll.isSimulatingDrag = false
+            coordinator.scrollViewDidEndDragging(scroll, willDecelerate: false)
+            let animatedTarget = reveal == threshold ? nil : CGPoint(x: 0, y: historyRest)
+            XCTAssertEqual(scroll.animatedContentOffset, animatedTarget)
+            scroll.animatedContentOffset = nil
+
+            beginDrag()
+            didScroll(revealing: threshold)
+            didScroll(revealing: threshold - 1)
+            var projected = CGPoint(x: 0, y: historyRest)
+            coordinator.scrollViewWillEndDragging(scroll, withVelocity: .zero, targetContentOffset: &projected)
+            XCTAssertEqual(projected.y, scroll.contentOffset.y)
+            scroll.isSimulatingDrag = false
+            coordinator.scrollViewDidEndDragging(scroll, willDecelerate: false)
+            XCTAssertEqual(scroll.animatedContentOffset, CGPoint(x: 0, y: rest))
+            scroll.animatedContentOffset = nil
+
+            let returnThreshold = min(reveal, 160)
+            beginDrag(revealing: reveal)
+            didScroll(revealing: reveal - returnThreshold + 1)
+            XCTAssertEqual(feedbackCount, 5)
+            XCTAssertEqual(release(projectedReveal: -120, velocity: 0.5), rest)
+
+            beginDrag(revealing: reveal)
+            didScroll(revealing: reveal - returnThreshold)
+            XCTAssertEqual(feedbackCount, 6, "Returning to Continue Playing has its own live threshold")
+            didScroll(revealing: reveal - returnThreshold + 1)
+            didScroll(revealing: reveal - returnThreshold)
+            XCTAssertEqual(feedbackCount, 6)
+            XCTAssertEqual(release(projectedReveal: reveal), rest)
+            didScroll(revealing: 0)
+            XCTAssertEqual(feedbackCount, 6)
+
+            beginDrag(revealing: reveal)
+            didScroll(revealing: reveal - returnThreshold + 1)
+            scroll.isSimulatingDrag = false
+            coordinator.scrollViewDidEndDragging(scroll, willDecelerate: false)
+            XCTAssertEqual(scroll.animatedContentOffset, CGPoint(x: 0, y: historyRest))
+            scroll.animatedContentOffset = nil
+
+            beginDrag()
+            didScroll(revealing: threshold - 1)
+            XCTAssertEqual(scroll.release(using: coordinator, projectedY: rest - threshold,
+                                          velocity: -1.8, willDecelerate: false), historyRest)
+            XCTAssertEqual(scroll.animatedContentOffset?.y, historyRest)
+
+            beginDrag(revealing: reveal)
+            didScroll(revealing: reveal - 1)
+            XCTAssertEqual(scroll.release(using: coordinator, projectedY: historyRest + 1,
+                                          velocity: 0.5, willDecelerate: false), historyRest)
+
+            if reveal > returnThreshold {
+                beginDrag(revealing: reveal)
+                didScroll(revealing: reveal - returnThreshold)
+                XCTAssertEqual(release(projectedReveal: reveal - returnThreshold - 1, velocity: 0.1), rest,
+                               "A gentle release after crossing the return threshold still settles at Continue Playing")
+            }
+        }
+    }
+
+    func testPopupDismissalAcceptsEitherMarginAtAnyQueueOffset() async throws {
+        let inputs = QueueListTestInputs()
+        inputs.history = [PlayerHistoryEntry(id: UUID(), song: inputs.entries[0].song)]
+        let (window, host) = try mount(inputs)
+        defer { window.isHidden = true }
+        try await settle(host)
+        let list = try XCTUnwrap(collection(in: host.view) as? NowPlayingQueueList.EdgeFadedCollectionView)
+        let container = try XCTUnwrap(list.superview as? NowPlayingQueueList.OverflowContainer)
+        let rowContent = UIView()
+        list.addSubview(rowContent)
+
+        let popup = PlayerPopupInteractionDelegate()
+        let popupPan = UIPanGestureRecognizer()
+        let queuePan = list.panGestureRecognizer
+        let top = -list.adjustedContentInset.top
+        func canHandOffToPopup() -> Bool {
+            popup.gestureRecognizer(popupPan, shouldRecognizeSimultaneouslyWith: queuePan)
+        }
+        func assertMarginsAllowDismissal() {
+            for x in [container.bounds.minX - 8, container.bounds.maxX + 8] {
+                let hit = container.hitTest(CGPoint(x: x, y: container.bounds.midY), with: nil)
+                XCTAssertTrue(hit === container)
+                XCTAssertTrue(popup.shouldReceiveTouch(in: hit))
+                XCTAssertFalse(canHandOffToPopup(), "The margin goes directly to the popup pan")
+            }
+        }
+
+        XCTAssertGreaterThan(list.queueRestOffset, top)
+        assertMarginsAllowDismissal()
+        XCTAssertFalse(popup.shouldReceiveTouch(in: rowContent))
+        XCTAssertFalse(canHandOffToPopup(), "Continue Playing has History above it")
+
+        list.contentOffset.y = top + 10
+        assertMarginsAllowDismissal()
+        XCTAssertFalse(popup.shouldReceiveTouch(in: rowContent))
+        list.contentOffset.y = top
+        XCTAssertFalse(canHandOffToPopup(), "The same drag stays with the list when it reaches the top")
+        XCTAssertFalse(popup.shouldReceiveTouch(in: rowContent))
+        XCTAssertTrue(canHandOffToPopup(), "A fresh drag at the top of History can dismiss")
+        assertMarginsAllowDismissal()
+
+        inputs.history = []
+        try await settle(host)
+        XCTAssertEqual(list.contentOffset.y, -list.adjustedContentInset.top, accuracy: 0.01)
+        XCTAssertFalse(popup.shouldReceiveTouch(in: rowContent))
+        XCTAssertTrue(canHandOffToPopup(), "Continue Playing is the top when History is empty")
+        assertMarginsAllowDismissal()
+        list.contentOffset.y = list.queueRestOffset + inputs.headerHeight
+        assertMarginsAllowDismissal()
+
+        XCTAssertTrue(popup.shouldReceiveTouch(in: host.view))
+        XCTAssertFalse(canHandOffToPopup())
     }
 
     func testCollapseFeedbackFiresOnFirstUpwardMovementOncePerDrag() async throws {
@@ -365,7 +670,7 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
         scroll.contentSize.height = 800
         let top = -scroll.adjustedContentInset.top
         var feedbackCount = 0
-        coordinator.collapseFeedbackHandler = { feedbackCount += 1 }
+        coordinator.scrollFeedbackHandler = { feedbackCount += 1 }
 
         func didScroll(to offset: CGFloat) {
             scroll.contentOffset.y = top + offset
@@ -384,13 +689,10 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
         didScroll(to: 2)
         XCTAssertEqual(feedbackCount, 1)
 
-        var target = scroll.contentOffset
-        coordinator.scrollViewWillEndDragging(scroll, withVelocity: CGPoint(x: 0, y: 0.1),
-                                              targetContentOffset: &target)
-        scroll.isSimulatingDrag = false
-        XCTAssertEqual(target.y, top + inputs.headerHeight)
+        XCTAssertEqual(scroll.release(using: coordinator, projectedY: scroll.contentOffset.y, velocity: 0.1),
+                       top + inputs.headerHeight)
         didScroll(to: inputs.headerHeight)
-        XCTAssertEqual(feedbackCount, 1, "Release and deceleration do not trigger feedback again")
+        XCTAssertEqual(feedbackCount, 1, "The snap does not trigger feedback again")
 
         coordinator.scrollViewWillBeginDragging(scroll)
         scroll.isSimulatingDrag = true
@@ -486,7 +788,43 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
 
 private final class QueueDragTestScrollView: UIScrollView {
     var isSimulatingDrag = false
+    var animatedContentOffset: CGPoint?
     override var isDragging: Bool { isSimulatingDrag }
+
+    convenience init(matching scrollView: UIScrollView) {
+        self.init(frame: scrollView.bounds)
+        contentSize = scrollView.contentSize
+        contentInset = scrollView.adjustedContentInset
+    }
+
+    func release(using coordinator: NowPlayingQueueList.Coordinator, projectedY: CGFloat,
+                 velocity: CGFloat, willDecelerate: Bool = true) -> CGFloat {
+        animatedContentOffset = nil
+        let releaseOffset = contentOffset
+        var target = CGPoint(x: releaseOffset.x, y: projectedY)
+        coordinator.scrollViewWillEndDragging(self, withVelocity: CGPoint(x: 0, y: velocity),
+                                              targetContentOffset: &target)
+        XCTAssertEqual(contentOffset, releaseOffset)
+        XCTAssertNil(animatedContentOffset)
+        isSimulatingDrag = false
+        coordinator.scrollViewDidEndDragging(self, willDecelerate: willDecelerate)
+        XCTAssertEqual(contentOffset, releaseOffset, "Release must not jump before the snap animation")
+        if let animatedContentOffset {
+            if willDecelerate {
+                XCTAssertEqual(target, releaseOffset, "The short snap takes over at the release offset")
+            }
+            return animatedContentOffset.y
+        }
+        return target.y
+    }
+
+    override func setContentOffset(_ contentOffset: CGPoint, animated: Bool) {
+        if animated {
+            animatedContentOffset = contentOffset
+        } else {
+            super.setContentOffset(contentOffset, animated: false)
+        }
+    }
 }
 
 @MainActor @Observable
@@ -496,7 +834,10 @@ private final class QueueListTestInputs {
         PlayerQueueEntry(id: UUID(), queueIndex: index + 1,
                            song: PlayerTrack(id: id, title: id, artists: "Artist", albumTitle: "Album", coverURL: nil, duration: 60))
     } { didSet { revision &+= 1 } }
-    var headerHeight: CGFloat = 40
+    let song = PlayerTrack(id: "current", title: "Current song", artists: "Artist",
+                           albumTitle: "Album", coverURL: nil, duration: 60)
+    var headerHeight: CGFloat = NowPlayingQueuePage.songHeaderHeight
+    var history: [PlayerHistoryEntry] = []
     var subtitle = "Next songs"
     var visualsActive = true
     var actions = PlayerTestFixtures.actions()
@@ -504,20 +845,24 @@ private final class QueueListTestInputs {
     var onMove: (IndexSet, Int) -> Void = { _, _ in }
     @ObservationIgnored var artworkRequests: [String] = []
     let library = PlayerTestFixtures.library()
+    @ObservationIgnored lazy var services = NeoMusicPlayerServices.make(actions: actions, library: library,
+        prepareArtwork: { [weak self] in self?.artworkRequests.append($0) })
 }
 
 private struct QueueListTestView: View {
+    @Namespace private var artworkNamespace
     let inputs: QueueListTestInputs
     var body: some View {
         NowPlayingQueueList(entries: inputs.entries,
                             version: PlayerQueueVersion(revision: inputs.revision, index: 0, repeatMode: .all),
+                            history: inputs.history,
                             subtitle: inputs.subtitle,
+                            songHeader: NowPlayingQueueSongHeader(song: inputs.song, artworkNamespace: artworkNamespace),
                             headerHeight: inputs.headerHeight, horizontalInset: 32,
                             onPlay: { _ in }, onMove: inputs.onMove, onScroll: { _ in })
             .environment(inputs.player)
             .environment(inputs.actions)
-            .environment(NeoMusicPlayerServices.make(actions: inputs.actions, library: inputs.library,
-                prepareArtwork: { inputs.artworkRequests.append($0) }))
+            .environment(inputs.services)
             .environment(\.playerVisualsActive, inputs.visualsActive)
             .environment(\.artworkLoadAction, ArtworkLoadAction(handler: { inputs.artworkRequests.append($0) }))
     }

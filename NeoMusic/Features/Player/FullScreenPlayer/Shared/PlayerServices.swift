@@ -69,12 +69,16 @@ public struct PlayerArtworkRequest: Hashable, Sendable {
 @MainActor public final class PlayerDiagnostics {
     private let beginAction: (StaticString, Bool) -> (() -> Void)
     private let eventAction: (StaticString) -> Void
+    private let queueScrollAction: (() -> String) -> Void
     public init(begin: @escaping (StaticString, Bool) -> (() -> Void),
-                event: @escaping (StaticString) -> Void) {
+                event: @escaping (StaticString) -> Void,
+                queueScroll: @escaping (() -> String) -> Void = { _ in }) {
         beginAction = begin; eventAction = event
+        queueScrollAction = queueScroll
     }
     func begin(_ name: StaticString, animation: Bool = false) -> (() -> Void) { beginAction(name, animation) }
     func event(_ name: StaticString) { eventAction(name) }
+    func queueScroll(_ message: @autoclosure () -> String) { queueScrollAction(message) }
 }
 
 @MainActor @Observable public final class PlayerServices {

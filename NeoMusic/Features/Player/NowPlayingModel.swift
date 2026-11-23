@@ -7,6 +7,49 @@ import UIKit
 final class NowPlayingModel {
     enum RepeatMode: String, Codable, Sendable { case off, all, one }
 
+    struct TrackPlaybackEvent: Identifiable {
+        let id = UUID()
+        let song: LibrarySongItem
+    }
+
+    private var trackPlaybackEvents: [TrackPlaybackEvent] = []
+    private var lastRecordedPlayback: (generation: UInt64, entryID: UUID, eventID: UUID)?
+
+    var playbackHistory: [TrackPlaybackEvent] {
+        let currentEventID = currentRecordedPlayback?.eventID
+        return trackPlaybackEvents.filter { $0.id != currentEventID && isInHistoryScope($0.song) }
+    }
+
+    private var currentRecordedPlayback: (generation: UInt64, entryID: UUID, eventID: UUID)? {
+        guard let lastRecordedPlayback, lastRecordedPlayback.generation == playbackGeneration,
+              hasCurrent, entryIDs[currentIndex] == lastRecordedPlayback.entryID else { return nil }
+        return lastRecordedPlayback
+    }
+
+    private func isInHistoryScope(_ song: LibrarySongItem) -> Bool {
+        guard let owner = song.onlineOwnerID else { return true }
+        return owner == resolvedOnlineOwnerID
+    }
+
+    func clearPlaybackHistory() {
+        let ownerID = resolvedOnlineOwnerID
+        trackPlaybackEvents.removeAll {
+            guard let owner = $0.song.onlineOwnerID else { return true }
+            return owner == ownerID
+        }
+    }
+
+    func playFromHistory(_ eventID: UUID) {
+        guard let event = playbackHistory.first(where: { $0.id == eventID }) else { return }
+        if hasCurrent {
+            insertNext([event.song])
+            select(currentIndex + 1)
+            if !isPlaying, errorMessage == nil { togglePlayback() }
+        } else {
+            play([event.song], from: "历史记录", shuffled: false)
+        }
+    }
+
     private(set) var queue: [LibrarySongItem] { didSet { queueRevision &+= 1; updateRemoteCommandAvailability() } }
     private(set) var queueRevision: UInt64 = 0
     private(set) var playbackGeneration: UInt64 = 0
@@ -461,7 +504,7 @@ final class NowPlayingModel {
     @ObservationIgnored private var hasResolvedOnlineIdentity = false {
         didSet { cachedQueueContent = nil }
     }
-    @ObservationIgnored private var resolvedOnlineOwnerID: String?
+    private var resolvedOnlineOwnerID: String?
     @ObservationIgnored private var queueRestorationFailed = false
     @ObservationIgnored private var pendingRestoredSongs: [String: PlaybackSongSnapshot] = [:] {
         didSet { cachedQueueContent = nil }
@@ -783,6 +826,12 @@ final class NowPlayingModel {
             updatingTime = false
         }
         if !audio.isActivating, isPlaying != audio.isPlaying { isPlaying = audio.isPlaying }
+        if audio.isPlaybackConfirmed, !audio.isLoading, !resolvingResource, hasCurrent, currentRecordedPlayback == nil,
+           let loadedEntry, loadedEntry == entryIDs[currentIndex], isInHistoryScope(current) {
+            let event = TrackPlaybackEvent(song: current)
+            lastRecordedPlayback = (playbackGeneration, loadedEntry, event.id)
+            trackPlaybackEvents.append(event)
+        }
         if audio.isPlaying, let collection = pendingCollection {
             pendingCollection = nil
             onCollectionPlaybackStarted?(collection)

@@ -58,6 +58,16 @@ public struct PlayerQueueEntry: Identifiable, Sendable {
     }
 }
 
+public struct PlayerHistoryEntry: Identifiable, Equatable, Sendable {
+    public let id: UUID
+    public let song: PlayerTrack
+
+    public init(id: UUID, song: PlayerTrack) {
+        self.id = id
+        self.song = song
+    }
+}
+
 public struct PlayerLyricLine: Identifiable, Equatable, Sendable {
     public let id: Int
     public let time: TimeInterval
@@ -140,12 +150,15 @@ public struct PlayerTimelineAnchor: Equatable, Sendable {
     var upcoming: [PlayerAdjacentTrack] { get }
     var upcomingQueueVersion: PlayerQueueVersion { get }
     var upcomingQueueEntries: [PlayerQueueEntry] { get }
+    var playbackHistory: [PlayerHistoryEntry] { get }
     func togglePlayback()
     func seek(to value: Double)
     func next()
     func previous()
     func skip(toQueueIndex index: Int)
     func playFromQueue(at index: Int)
+    func playFromHistory(_ eventID: UUID)
+    func clearPlaybackHistory()
     func enqueue(_ track: PlayerTrack, next: Bool)
     func toggleShuffle()
     func cycleRepeatMode()
@@ -157,6 +170,9 @@ public struct PlayerTimelineAnchor: Equatable, Sendable {
 
 public extension PlayerPlaybackSource {
     var playbackGeneration: UInt64 { 0 }
+    var playbackHistory: [PlayerHistoryEntry] { [] }
+    func playFromHistory(_ eventID: UUID) {}
+    func clearPlaybackHistory() {}
     var timelineAnchor: PlayerTimelineAnchor {
         PlayerTimelineAnchor(baseElapsed: progress, rate: 0, duration: duration)
     }
@@ -199,12 +215,15 @@ public extension PlayerPlaybackSource {
     public var upcoming: [PlayerAdjacentTrack] { source.upcoming }
     public var upcomingQueueVersion: PlayerQueueVersion { source.upcomingQueueVersion }
     public var upcomingQueueEntries: [PlayerQueueEntry] { source.upcomingQueueEntries }
+    public var playbackHistory: [PlayerHistoryEntry] { source.playbackHistory }
     public func togglePlayback() { self.source.togglePlayback() }
     public func seek(to value: Double) { self.source.seek(to: value) }
     public func next() { self.source.next() }
     public func previous() { self.source.previous() }
     public func skip(toQueueIndex index: Int) { self.source.skip(toQueueIndex: index) }
     public func playFromQueue(at index: Int) { self.source.playFromQueue(at: index) }
+    public func playFromHistory(_ eventID: UUID) { source.playFromHistory(eventID) }
+    public func clearPlaybackHistory() { source.clearPlaybackHistory() }
     public func enqueue(_ track: PlayerTrack, next: Bool) { self.source.enqueue(track, next: next) }
     public func toggleShuffle() { self.source.toggleShuffle() }
     public func cycleRepeatMode() { self.source.cycleRepeatMode() }
@@ -216,4 +235,5 @@ public extension PlayerPlaybackSource {
 
 public enum PlayerInteraction {
     public static let trackSwipeGestureName = "FullScreenPlayer.TrackSwipe"
+    public static let queueScrollGestureName = "FullScreenPlayer.QueueScroll"
 }

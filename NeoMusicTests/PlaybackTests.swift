@@ -9,6 +9,102 @@ final class PlaybackTests: XCTestCase {
     func song(_ id: String) -> LibrarySongItem {
         LibrarySongItem(id: id, title: id, artist: "", album: "", albumArtist: "", trackNumber: 0, artwork: .missing)
     }
+
+    func testTrackHistoryRecordsConfirmedOccurrencesAndReplaysWithoutReplacingUpcomingQueue() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = try PlayerTestFixtures.silentAudio(at: directory.appendingPathComponent("history.wav"), seconds: 10)
+        let engine = LocalPlaybackEngine(activateSession: { true })
+        let player = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false, makeAudioEngine: { engine })
+        defer { player.shutdownPlayback() }
+        player.configurePlayback(resolveURL: { $0 == "missing" ? nil : url },
+                                 persistenceURL: directory.appendingPathComponent("queue.json"))
+        player.play([song("a"), song("a"), song("b"), song("missing")], from: "Album", shuffled: false)
+        try await waitForTrackHistory { engine.isPlaybackConfirmed }
+        XCTAssertTrue(player.playbackHistory.isEmpty)
+
+        player.togglePlayback()
+        player.togglePlayback()
+        try await waitForTrackHistory { engine.isPlaybackConfirmed }
+        player.skipForward()
+        try await waitForTrackHistory { player.currentIndex == 1 && engine.isPlaybackConfirmed }
+        player.skipForward()
+        try await waitForTrackHistory { player.currentIndex == 2 && engine.isPlaybackConfirmed }
+
+        let history = player.playbackHistory
+        XCTAssertEqual(history.map(\.song.id), ["a", "a"])
+        XCTAssertEqual(history.map(\.song.title), ["a", "a"])
+        XCTAssertEqual(Set(history.map(\.id)).count, 2)
+        let first = try XCTUnwrap(history.first)
+        let upcoming = Array(player.entryIDs.dropFirst(player.currentIndex + 1))
+        player.playFromHistory(first.id)
+        try await waitForTrackHistory { player.current.id == "a" && engine.isPlaybackConfirmed }
+        XCTAssertEqual(Array(player.entryIDs.dropFirst(player.currentIndex + 1)), upcoming)
+        XCTAssertEqual(player.playbackHistory.map(\.song.id), ["a", "a", "b"])
+
+        player.clearPlaybackHistory()
+        player.togglePlayback()
+        player.togglePlayback()
+        try await waitForTrackHistory { engine.isPlaybackConfirmed }
+        player.skipForward()
+        XCTAssertEqual(player.current.id, "missing")
+        XCTAssertNotNil(player.errorMessage)
+        XCTAssertTrue(player.playbackHistory.isEmpty)
+        player.playFromHistory(first.id)
+        XCTAssertEqual(player.current.id, "missing")
+        player.select(0)
+        player.togglePlayback()
+        try await waitForTrackHistory { engine.isPlaybackConfirmed }
+        XCTAssertTrue(player.playbackHistory.isEmpty, "The failed track must leave no history row")
+        await player.flushQueuePersistence()
+    }
+
+    func testTrackHistoryClearAndReplayRespectOnlineAccountScope() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = try PlayerTestFixtures.silentAudio(at: directory.appendingPathComponent("history.wav"), seconds: 10)
+        let engine = LocalPlaybackEngine(activateSession: { true })
+        let player = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false, makeAudioEngine: { engine })
+        defer { player.shutdownPlayback() }
+        player.configurePlayback(resolveURL: { _ in url }, persistenceURL: directory.appendingPathComponent("queue.json"))
+
+        func play(_ id: String) async throws {
+            player.play([song(id)], from: "Album", shuffled: false)
+            try await waitForTrackHistory { engine.isPlaybackConfirmed }
+        }
+
+        let firstOwnerSong = OnlineSongIdentity.format(owner: 42, song: 1)
+        let secondOwnerSong = OnlineSongIdentity.format(owner: 43, song: 1)
+        player.restoreOnlineIdentity(ownerID: "42")
+        try await play(firstOwnerSong)
+        try await play("local")
+        let firstOwnerEvent = try XCTUnwrap(player.playbackHistory.first)
+        XCTAssertEqual(firstOwnerEvent.song.id, firstOwnerSong)
+
+        player.invalidateOnlinePlayback(ownerID: nil)
+        try await play("another-local")
+        XCTAssertEqual(player.playbackHistory.map(\.song.id), ["local"])
+        player.playFromHistory(firstOwnerEvent.id)
+        XCTAssertEqual(player.current.id, "another-local")
+
+        player.restoreOnlineIdentity(ownerID: "43")
+        try await play(secondOwnerSong)
+        try await play("current-local")
+        XCTAssertEqual(player.playbackHistory.map(\.song.id), ["local", "another-local", secondOwnerSong])
+        player.clearPlaybackHistory()
+        XCTAssertTrue(player.playbackHistory.isEmpty)
+        player.restoreOnlineIdentity(ownerID: "42")
+        XCTAssertEqual(player.playbackHistory.map(\.id), [firstOwnerEvent.id])
+        await player.flushQueuePersistence()
+    }
+
+    private func waitForTrackHistory(_ condition: () -> Bool) async throws {
+        for _ in 0..<100 {
+            if condition() { return }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTFail("Track playback did not reach the expected audio state")
+    }
     func testCrossfadePreferencePersistsAndOldRecordsDefaultOff() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

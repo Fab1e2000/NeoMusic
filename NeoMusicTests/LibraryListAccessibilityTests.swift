@@ -163,6 +163,7 @@ final class LibraryListAccessibilityTests: XCTestCase {
 
 @MainActor
 private struct QueueLabelTestView: View {
+    @Namespace private var artworkNamespace
     let entries: [PlayerQueueEntry]
     private let actions = PlayerTestFixtures.actions()
     private let player = PlayerTestFixtures.state(tracks: [])
@@ -172,7 +173,8 @@ private struct QueueLabelTestView: View {
         NowPlayingQueueList(entries: entries,
                             version: PlayerQueueVersion(revision: 1, index: 0, repeatMode: .all),
                             subtitle: "接下来播放的歌曲",
-                            headerHeight: 40, horizontalInset: 32,
+                            songHeader: NowPlayingQueueSongHeader(song: entries[0].song, artworkNamespace: artworkNamespace),
+                            headerHeight: NowPlayingQueuePage.songHeaderHeight, horizontalInset: 32,
                             onPlay: { _ in }, onMove: { _, _ in }, onScroll: { _ in })
             .environment(player)
             .environment(actions)

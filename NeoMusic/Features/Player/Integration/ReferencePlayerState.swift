@@ -75,6 +75,10 @@ import FullScreenPlayer
         return entries
     }
 
+    var playbackHistory: [PlayerHistoryEntry] {
+        model.playbackHistory.map { PlayerHistoryEntry(id: $0.id, song: Self.convert($0.song)) }
+    }
+
     init(model: NowPlayingModel) { self.model = model }
     private func item(at index: Int) -> PlayerAdjacentTrack? {
         guard model.queue.indices.contains(index) else { return nil }
@@ -86,6 +90,8 @@ import FullScreenPlayer
     func previous() { if progress > 3 { seek(to: 0) } else if let previousInOrder { skip(toQueueIndex: previousInOrder.index) } }
     func skip(toQueueIndex index: Int) { model.select(index) }
     func playFromQueue(at index: Int) { skip(toQueueIndex: index); isPlaying = currentTrack != nil }
+    func playFromHistory(_ eventID: UUID) { model.playFromHistory(eventID) }
+    func clearPlaybackHistory() { model.clearPlaybackHistory() }
     func enqueue(_ track: PlayerTrack, next: Bool) {
         guard let song = model.queue.first(where: { $0.id == track.id }) else { return }
         if next { model.insertNext([song]) } else { model.appendLater([song]) }

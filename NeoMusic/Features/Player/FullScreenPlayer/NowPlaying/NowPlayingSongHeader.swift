@@ -46,10 +46,6 @@ struct NowPlayingSongHeader: View {
     static let bottomSpacing: CGFloat = 4.75
     static let height = referenceHeight
 
-    static func scrollFadeOpacity(scrolled: CGFloat) -> Double {
-        1 - min(1, max(0, scrolled / 30))
-    }
-
     let song: PlayerTrack
     let artworkNamespace: Namespace.ID
     let usesReferenceLayout: Bool
@@ -107,12 +103,7 @@ struct NowPlayingSongHeader: View {
     @ViewBuilder
     private var artwork: some View {
         if showsArtwork {
-            ArtworkImage(
-                url: song.coverURL,
-                contentID: song.id,
-                artworkLoadID: song.artworkLoadID,
-                cornerRadius: usesReferenceLayout ? 12 : 10
-            )
+            NowPlayingPortraitArtwork(song: song, isArtworkPage: false)
             .nowPlayingArtworkTransition(
                 id: song.id,
                 in: artworkNamespace,

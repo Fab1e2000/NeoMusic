@@ -59,7 +59,7 @@ import FullScreenPlayer
     static let diagnostics = PlayerDiagnostics(begin: { name, animation in
         let interval = animation ? PerformanceDiagnostics.beginAnimation(name) : PerformanceDiagnostics.begin(name)
         return { PerformanceDiagnostics.end(name, interval) }
-    }, event: { PerformanceDiagnostics.event($0) })
+    }, event: { PerformanceDiagnostics.event($0) }, queueScroll: PerformanceDiagnostics.queueScroll)
 }
 
 struct NeoMusicArtworkTransition: ViewModifier {

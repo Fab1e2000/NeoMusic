@@ -5,9 +5,16 @@ enum PerformanceDiagnostics {
     private static let signposter = OSSignposter(subsystem: "com.elsterlee.NeoMusic", category: "Performance")
 
     private static let restorationLogger = Logger(subsystem: "com.elsterlee.NeoMusic", category: "PlaybackRestoration")
+    private static let queueScrollLogger = Logger(subsystem: "com.elsterlee.NeoMusic", category: "QueueScroll")
 
     static func restoration(_ stage: String) {
         restorationLogger.notice("\(stage, privacy: .public)")
+    }
+
+    static func queueScroll(_ message: () -> String) {
+        guard queueScrollLogger.isEnabled(type: .debug) else { return }
+        let text = message()
+        queueScrollLogger.debug("\(text, privacy: .public)")
     }
 
     static func begin(_ name: StaticString) -> OSSignpostIntervalState {

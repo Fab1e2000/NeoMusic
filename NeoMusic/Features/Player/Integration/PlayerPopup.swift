@@ -302,6 +302,30 @@ struct MiniPlayerControls: View {
 }
 
 @MainActor final class PlayerPopupInteractionDelegate: NSObject, UIGestureRecognizerDelegate {
+    private weak var queuePanAllowedToDismiss: UIPanGestureRecognizer?
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        shouldReceiveTouch(in: touch.view)
+    }
+
+    func shouldReceiveTouch(in hitView: UIView?) -> Bool {
+        queuePanAllowedToDismiss = nil
+        var view = hitView
+        while let candidate = view {
+            if let scrollView = candidate as? UIScrollView,
+               scrollView.panGestureRecognizer.name == PlayerInteraction.queueScrollGestureName {
+                // LN can drive dismissal from this scroll pan. Sample the top before the list moves
+                // so a drag that only reaches the top cannot also dismiss the player.
+                if scrollView.contentOffset.y <= -scrollView.adjustedContentInset.top {
+                    queuePanAllowedToDismiss = scrollView.panGestureRecognizer
+                }
+                return false
+            }
+            view = candidate.superview
+        }
+        return true
+    }
+
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return true }
         let travel = pan.translation(in: pan.view)
@@ -312,6 +336,9 @@ struct MiniPlayerControls: View {
         _ gestureRecognizer: UIGestureRecognizer,
         shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
     ) -> Bool {
-        otherGestureRecognizer.name != PlayerInteraction.trackSwipeGestureName
+        if otherGestureRecognizer.name == PlayerInteraction.queueScrollGestureName {
+            return otherGestureRecognizer === queuePanAllowedToDismiss
+        }
+        return otherGestureRecognizer.name != PlayerInteraction.trackSwipeGestureName
     }
 }

@@ -507,6 +507,8 @@ private final class PlaybackAudioBackend {
     @ObservationIgnored private let activateSession: @Sendable () async throws -> Bool
     @ObservationIgnored private(set) var activation: Task<Void, Never>?
     @ObservationIgnored private var playRequested = false
+    // Only accepted backend snapshots can confirm playback, after loading and activation.
+    @ObservationIgnored private(set) var isPlaybackConfirmed = false
     @ObservationIgnored private var reportsActivationFailure = true
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var commandSequence: UInt64 = 0
@@ -618,6 +620,7 @@ private final class PlaybackAudioBackend {
         }
         let rawElapsed = snapshot.elapsed ?? timelineAnchor.elapsed(at: snapshot.hostTimestamp)
         let rate: Double = (isPlaying && !isLoading && error == nil && snapshot.isAdvancing) ? 1.0 : 0.0
+        isPlaybackConfirmed = rate > 0
         let resolvedElapsed: Double = if rate == 0, !previousLoading, !isLoading,
                                          timelineAnchor.rate == 0,
                                          abs(rawElapsed - timelineAnchor.baseElapsed) < 0.05 {
@@ -653,6 +656,7 @@ private final class PlaybackAudioBackend {
         }
         let resolvedElapsed = snapshot.elapsed ?? 0
         let rate: Double = (isPlaying && !isLoading && error == nil && snapshot.isAdvancing) ? 1.0 : 0.0
+        isPlaybackConfirmed = rate > 0
         updateAnchor(baseElapsed: resolvedElapsed, rate: rate, duration: duration, hostTimestamp: snapshot.hostTimestamp)
         onAdvanced?()
     }
@@ -663,6 +667,7 @@ private final class PlaybackAudioBackend {
         playRequested = false
         cancelActivation()
         isPlaying = false
+        isPlaybackConfirmed = false
         isCrossfading = false
         isLoading = false
         if let newDuration = snapshot.duration, newDuration.isFinite {
@@ -717,6 +722,7 @@ private final class PlaybackAudioBackend {
         let continuing = playRequested
         let expectedGen = generation
         generation += 1
+        isPlaybackConfirmed = false
         let nextGen = generation
         cancelActivation()
         preparedURL = nil
@@ -773,6 +779,7 @@ private final class PlaybackAudioBackend {
             guard let self, self.generation == expectedGen else { return false }
             let wantResume = self.playRequested && shouldResume()
             self.generation = nextGen
+            self.isPlaybackConfirmed = false
             self.cancelActivation()
             self.isCrossfading = false
             self.isLoading = true
@@ -882,6 +889,7 @@ private final class PlaybackAudioBackend {
         cancelActivation()
         let frozenElapsed = elapsed
         isPlaying = false
+        isPlaybackConfirmed = false
         updateAnchor(baseElapsed: frozenElapsed, rate: 0, duration: duration)
         let gen = generation
         let seq = nextSequence()
@@ -899,6 +907,7 @@ private final class PlaybackAudioBackend {
             cancelActivation()
             let frozenElapsed = elapsed
             isPlaying = false
+            isPlaybackConfirmed = false
             updateAnchor(baseElapsed: frozenElapsed, rate: 0, duration: duration)
             let gen = generation
             let seq = nextSequence()
@@ -926,6 +935,7 @@ private final class PlaybackAudioBackend {
         hasLoadedItem = false
         preparedURL = nil
         isPlaying = false
+        isPlaybackConfirmed = false
         isCrossfading = false
         isLoading = false
         duration = 0

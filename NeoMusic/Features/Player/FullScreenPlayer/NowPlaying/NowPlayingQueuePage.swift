@@ -6,153 +6,42 @@ struct NowPlayingQueuePage: View {
     @Environment(\.nowPlayingLayout) private var layout
     @Environment(\.nowPlayingControlsOverflow) private var controlsOverflow
 
-    let song: PlayerTrack
-    let presentation: NowPlayingLyricsPresentation
-    let artworkNamespace: Namespace.ID
-    let usesArtworkTransition: Bool
-    let showsSongHeader: Bool
-    let onSongHeaderHiddenChange: (Bool) -> Void
-    let onSongHeaderOffsetChange: (CGFloat) -> Void
+    let header: NowPlayingQueueSongHeader
+    let onImportLyrics: (() -> Void)?
+    let onScroll: (CGFloat) -> Void
 
-    private static let contentHorizontalInset: CGFloat = 32
-
-    @State private var headerScroll = QueueHeaderScrollState()
-
-    init(
-        song: PlayerTrack,
-        presentation: NowPlayingLyricsPresentation,
-        artworkNamespace: Namespace.ID,
-        usesArtworkTransition: Bool = true,
-        showsSongHeader: Bool = true,
-        onSongHeaderHiddenChange:
-            @escaping (Bool) -> Void = { _ in },
-        onSongHeaderOffsetChange:
-            @escaping (CGFloat) -> Void = { _ in }
-    ) {
-        self.song = song
-        self.presentation = presentation
-        self.artworkNamespace = artworkNamespace
-        self.usesArtworkTransition = usesArtworkTransition
-        self.showsSongHeader = showsSongHeader
-        self.onSongHeaderHiddenChange = onSongHeaderHiddenChange
-        self.onSongHeaderOffsetChange = onSongHeaderOffsetChange
-    }
+    // Keep the artwork inside both the collection viewport and the transition mask.
+    static let songHeaderTopInset: CGFloat = 1
+    static let songHeaderHeight = songHeaderTopInset + NowPlayingSongHeader.referenceHeight
+        + NowPlayingSongHeader.bottomSpacing
 
     var body: some View {
-        VStack(spacing: 0) {
-            NowPlayingQueueList(
-                entries: player.upcomingQueueEntries,
-                version: player.upcomingQueueVersion,
-                trackTransitionKey: player.currentTrackTransitionKey,
-                subtitle: player.automaticContinuationDescription,
-                headerHeight: songHeaderHeight,
-                horizontalInset: Self.contentHorizontalInset,
-                onPlay: { player.playFromQueue(at: $0) },
-                onMove: moveQueueItems,
-                onScroll: updateSongHeaderState
-            )
-            .overlay(alignment: .top) {
-                QueueHeaderControls(scroll: headerScroll, headerHeight: songHeaderHeight)
-            }
-            .overlay(alignment: .top) {
-                if presentation == .portrait && showsSongHeader {
-                    QueueSongHeader(scroll: headerScroll, song: song,
-                                    artworkNamespace: artworkNamespace,
-                                    usesArtworkTransition: usesArtworkTransition,
-                                    headerHeight: songHeaderHeight)
-                }
-            }
-            .padding(.bottom, bottomContentInset)
-        }
-        .onAppear {
-            resetSongHeaderState()
-        }
-        .onChange(of: player.currentTrackTransitionKey) { _, _ in
-            resetSongHeaderState()
-        }
+        NowPlayingQueueList(
+            entries: player.upcomingQueueEntries,
+            version: player.upcomingQueueVersion,
+            history: player.playbackHistory,
+            trackTransitionKey: player.currentTrackTransitionKey,
+            subtitle: player.automaticContinuationDescription,
+            songHeader: header,
+            onImportLyrics: onImportLyrics,
+            headerHeight: Self.songHeaderHeight,
+            horizontalInset: 32,
+            onPlay: { player.playFromQueue(at: $0) },
+            onMove: { player.moveUpcomingQueueItems(fromOffsets: $0, toOffset: $1) },
+            onScroll: onScroll
+        )
+        .padding(.bottom, Self.bottomContentInset(layout: layout, controlsOverflow: controlsOverflow))
     }
 
-    private func resetSongHeaderState() {
-        if presentation == .portrait {
-            headerScroll.offset = 0
-            onSongHeaderHiddenChange(false)
-            onSongHeaderOffsetChange(0)
-        }
-    }
-
-    private var songHeaderHeight: CGFloat {
-        presentation == .portrait
-            ? NowPlayingSongHeader.topInset + NowPlayingSongHeader.referenceHeight
-                + NowPlayingSongHeader.bottomSpacing
-            : 0
-    }
-
-    private var bottomContentInset: CGFloat {
-        presentation == .portrait
-            ? max(0, layout.contentSize.height - 3 - layout.contentY(554)) + controlsOverflow
-            : 12
-    }
-
-    private func updateSongHeaderState(for offset: CGFloat) {
-        guard presentation == .portrait, headerScroll.offset != offset else { return }
-        let wasHidden = songHeaderHeight > 0 && headerScroll.offset >= songHeaderHeight
-        headerScroll.offset = offset
-        onSongHeaderOffsetChange(-min(offset, max(songHeaderHeight, 0)))
-        let isHidden = songHeaderHeight > 0 && offset >= songHeaderHeight
-        if wasHidden != isHidden { onSongHeaderHiddenChange(isHidden) }
-    }
-
-    private func moveQueueItems(
-        from source: IndexSet,
-        to destination: Int
-    ) {
-        player.moveUpcomingQueueItems(fromOffsets: source, toOffset: destination)
+    static func bottomContentInset(layout: ReferenceNowPlayingLayout, controlsOverflow: CGFloat) -> CGFloat {
+        max(0, layout.contentSize.height - 3 - layout.contentY(554)) + controlsOverflow
     }
 }
 
-@MainActor @Observable
-private final class QueueHeaderScrollState {
-    var offset: CGFloat = 0
-}
-
-private struct QueueHeaderControls: View {
-    let scroll: QueueHeaderScrollState
-    let headerHeight: CGFloat
-
-    var body: some View {
-        NowPlayingQueueModeControls()
-            .padding(.vertical, 3)
-            .frame(height: NowPlayingQueueList.modeControlsHeight)
-            .modifier(QueueControlsScrollPosition(scroll: scroll, headerHeight: headerHeight))
-    }
-}
-
-private struct QueueControlsScrollPosition: ViewModifier {
-    let scroll: QueueHeaderScrollState
-    let headerHeight: CGFloat
-
-    func body(content: Content) -> some View {
-        content.offset(y: max(headerHeight - scroll.offset, 0))
-    }
-}
-
-private struct QueueSongHeader: View {
-    let scroll: QueueHeaderScrollState
+struct NowPlayingQueueSongHeader: Equatable {
     let song: PlayerTrack
     let artworkNamespace: Namespace.ID
-    let usesArtworkTransition: Bool
-    let headerHeight: CGFloat
-
-    var body: some View {
-        NowPlayingSongHeader(song: song, artworkNamespace: artworkNamespace,
-                             usesReferenceLayout: true,
-                             usesArtworkTransition: usesArtworkTransition && scroll.offset <= 0.5)
-            .frame(height: NowPlayingSongHeader.referenceHeight)
-            .padding(.top, NowPlayingSongHeader.topInset)
-            .frame(height: headerHeight, alignment: .top)
-            .offset(y: -scroll.offset)
-            .opacity(NowPlayingSongHeader.scrollFadeOpacity(scrolled: scroll.offset))
-    }
+    var showsArtwork = true
 }
 
 struct NowPlayingQueueTopFade: View {
@@ -173,7 +62,7 @@ struct NowPlayingQueueTopFade: View {
     }
 }
 
-private struct NowPlayingQueueModeControls: View {
+struct NowPlayingQueueModeControls: View {
     @Environment(PlayerState.self) private var player
 
     var body: some View {
@@ -288,41 +177,44 @@ private struct NowPlayingQueueModeControls: View {
 }
 
 struct NowPlayingQueueRow: View {
-    let entry: PlayerQueueEntry
+    let song: PlayerTrack
+    var showsMenu = true
     let onPlay: () -> Void
 
     var body: some View {
-        let song = entry.song
-        SongMenuHost(track: song, play: onPlay) { configuration in
-            HStack(spacing: 0) {
-                Button(action: onPlay) {
-                    HStack(spacing: 12) {
-                        ArtworkImage(
-                            url: song.coverURL,
-                            contentID: song.id,
-                            artworkLoadID: song.artworkLoadID,
-                            cornerRadius: 6, decodeSize: CGSize(width: 48, height: 48)
-                        )
-                        .frame(width: 48, height: 48)
-
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(song.title)
-                                .font(.body)
-                                .nowPlayingPrimary()
-                                .lineLimit(1)
-
-                            NowPlayingVibrantLabel(text: song.artists, fontSize: 13)
-                        }
-
-                        Spacer(minLength: 4)
-                    }
-                    .contentShape(.rect)
-                }
-                .buttonStyle(.plain)
-
+        if showsMenu {
+            SongMenuHost(track: song, play: onPlay) { configuration in
+                row.contextMenu { ReferenceSongMenuContents(configuration: configuration) }
             }
-            .contextMenu { ReferenceSongMenuContents(configuration: configuration) }
-
+        } else {
+            row
         }
+    }
+
+    private var row: some View {
+        Button(action: onPlay) {
+            HStack(spacing: 12) {
+                ArtworkImage(
+                    url: song.coverURL,
+                    contentID: song.id,
+                    artworkLoadID: song.artworkLoadID,
+                    cornerRadius: 6, decodeSize: CGSize(width: 48, height: 48)
+                )
+                .frame(width: 48, height: 48)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(song.title)
+                        .font(.body)
+                        .nowPlayingPrimary()
+                        .lineLimit(1)
+
+                    NowPlayingVibrantLabel(text: song.artists, fontSize: 13)
+                }
+
+                Spacer(minLength: 4)
+            }
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
     }
 }
