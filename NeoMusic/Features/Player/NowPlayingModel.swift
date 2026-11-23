@@ -301,7 +301,19 @@ final class NowPlayingModel {
         if liveElapsed > 3 || previous == nil {
             seek(to: 0, source: .previous)
         } else {
-            select(currentIndex - 1)
+            let targetIndex = currentIndex - 1
+            if queue.indices.contains(targetIndex) {
+                if let currentEventID = currentRecordedPlayback?.eventID {
+                    trackPlaybackEvents.removeAll { $0.id == currentEventID }
+                }
+                let targetEntry = entryIDs[targetIndex]
+                let targetSongID = queue[targetIndex].id
+                if let lastScopedEvent = trackPlaybackEvents.last(where: { isInHistoryScope($0.song) }),
+                   lastScopedEvent.song.id == targetSongID {
+                    lastRecordedPlayback = (generation: playbackGeneration, entryID: targetEntry, eventID: lastScopedEvent.id)
+                }
+            }
+            select(targetIndex)
         }
     }
 

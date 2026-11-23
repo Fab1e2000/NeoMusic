@@ -92,7 +92,7 @@ import FullScreenPlayer
     func togglePlayback() { guard currentTrack != nil else { return }; isPlaying.toggle() }
     func seek(to value: Double) { guard value.isFinite else { return }; model.elapsed = min(duration, max(0, value)) }
     func next() { model.skipForward() }
-    func previous() { if progress > 3 { seek(to: 0) } else if let previousInOrder { skip(toQueueIndex: previousInOrder.index) } }
+    func previous() { model.skipBackward() }
     func skip(toQueueIndex index: Int) { model.select(index) }
     func playFromQueue(at index: Int) { skip(toQueueIndex: index); isPlaying = currentTrack != nil }
     func playFromHistory(_ eventID: UUID) { model.playFromHistory(eventID) }

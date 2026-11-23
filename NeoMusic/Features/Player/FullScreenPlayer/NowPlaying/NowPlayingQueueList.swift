@@ -129,16 +129,24 @@ struct NowPlayingQueueList: UIViewRepresentable {
     final class EdgeFadedListCell: UICollectionViewListCell {
         weak var edgeFadeCollectionView: EdgeFadedCollectionView?
         var contentRevision: UInt64?
+        var isAnimatingTrackTransition = false
+        var transitionGeneration: UInt64 = 0
 
         override func prepareForReuse() {
             super.prepareForReuse()
+            isAnimatingTrackTransition = false
+            transitionGeneration &+= 1
+            transform = .identity
+            alpha = 1
+            contentView.transform = .identity
+            contentView.alpha = 1
             contentRevision = nil
             edgeFadeCollectionView?.clearEdgeMasks(for: self)
         }
 
         override func layoutSublayers(of layer: CALayer) {
             super.layoutSublayers(of: layer)
-            if layer === self.layer {
+            if layer === self.layer, !isAnimatingTrackTransition {
                 edgeFadeCollectionView?.updateEdgeMask(for: self)
             }
         }
@@ -193,14 +201,9 @@ struct NowPlayingQueueList: UIViewRepresentable {
             let historyMetrics = historyHeight > 0 ? rowFadeMetrics(inHistory: true) : queueMetrics
             let viewportMetrics = viewportFadeMetrics()
             for cell in visibleCells {
-                let y = convert(cell.bounds, from: cell).minY
-                let metrics = if y < historyHeight {
-                    historyMetrics
-                } else if y < historyHeight + songHeaderHeight {
-                    viewportMetrics
-                } else {
-                    queueMetrics
-                }
+                if (cell as? EdgeFadedListCell)?.isAnimatingTrackTransition == true { continue }
+                let metrics = edgeFadeMetrics(for: cell, historyMetrics: historyMetrics,
+                                              viewportMetrics: viewportMetrics, queueMetrics: queueMetrics)
                 applyEdgeMask(to: cell, metrics: metrics)
             }
             if let queueHeader {
@@ -210,15 +213,82 @@ struct NowPlayingQueueList: UIViewRepresentable {
 
         func updateEdgeMask(for cell: UICollectionViewCell) {
             guard !isUpdatingEdgeMasks, bounds.height > 0, cell.superview != nil else { return }
+            if (cell as? EdgeFadedListCell)?.isAnimatingTrackTransition == true { return }
             isUpdatingEdgeMasks = true
             defer { isUpdatingEdgeMasks = false }
-            let y = convert(cell.bounds, from: cell).minY
-            let metrics = if y >= historyHeight, y < historyHeight + songHeaderHeight {
-                viewportFadeMetrics()
-            } else {
-                rowFadeMetrics(inHistory: y < historyHeight)
-            }
+            let queueMetrics = rowFadeMetrics(inHistory: false)
+            let historyMetrics = historyHeight > 0 ? rowFadeMetrics(inHistory: true) : queueMetrics
+            let viewportMetrics = viewportFadeMetrics()
+            let metrics = edgeFadeMetrics(for: cell, historyMetrics: historyMetrics,
+                                          viewportMetrics: viewportMetrics, queueMetrics: queueMetrics)
             applyEdgeMask(to: cell, metrics: metrics)
+        }
+
+        private func edgeFadeMetrics(
+            for cell: UICollectionViewCell,
+            historyMetrics: EdgeFadeMetrics,
+            viewportMetrics: EdgeFadeMetrics,
+            queueMetrics: EdgeFadeMetrics
+        ) -> EdgeFadeMetrics {
+            switch section(for: cell) {
+            case .history:
+                return historyMetrics
+            case .header:
+                return viewportMetrics
+            case .queue:
+                return queueMetrics
+            case nil:
+                let y = convert(cell.bounds, from: cell).minY
+                if y < historyHeight {
+                    return historyMetrics
+                } else if y < historyHeight + songHeaderHeight {
+                    return viewportMetrics
+                } else {
+                    return queueMetrics
+                }
+            }
+        }
+
+        fileprivate func prepareTransitionEdgeMask(for cell: UICollectionViewCell, deltaY: CGFloat) {
+            guard bounds.height > 0, cell.superview != nil else { return }
+            let queueMetrics = rowFadeMetrics(inHistory: false)
+            let historyMetrics = historyHeight > 0 ? rowFadeMetrics(inHistory: true) : queueMetrics
+            let viewportMetrics = viewportFadeMetrics()
+            let metrics = edgeFadeMetrics(for: cell, historyMetrics: historyMetrics,
+                                          viewportMetrics: viewportMetrics, queueMetrics: queueMetrics)
+            // cell.transform is currently translation(0, deltaY); its final frame at t=1 is shifted by -deltaY.
+            let currentFrame = convert(cell.bounds, from: cell)
+            let sweepMinY = min(currentFrame.minY, currentFrame.minY - deltaY)
+            let sweepMaxY = max(currentFrame.maxY, currentFrame.maxY - deltaY)
+            let touchesFadeZone = sweepMinY < metrics.fadeTopEnd || sweepMaxY > metrics.fadeBottomStart
+            applyEdgeMask(to: cell, metrics: metrics, forceMask: touchesFadeZone)
+        }
+
+        fileprivate func animateTransitionEdgeMask(for cell: UICollectionViewCell, matching spring: CABasicAnimation?) {
+            guard bounds.height > 0, cell.superview != nil, maskedCells.contains(cell) else { return }
+            let queueMetrics = rowFadeMetrics(inHistory: false)
+            let historyMetrics = historyHeight > 0 ? rowFadeMetrics(inHistory: true) : queueMetrics
+            let viewportMetrics = viewportFadeMetrics()
+            let metrics = edgeFadeMetrics(for: cell, historyMetrics: historyMetrics,
+                                          viewportMetrics: viewportMetrics, queueMetrics: queueMetrics)
+            var targets: [CALayer] = []
+            collectEdgeMaskTargets(in: cell.layer, targets: &targets)
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            for target in targets {
+                let oldPosition = (target.mask as? QueueEdgeMaskLayer)?.position
+                setEdgeMask(on: target, metrics: metrics)
+                if let spring, let oldPosition, let maskLayer = target.mask as? QueueEdgeMaskLayer,
+                   let maskAnimation = spring.copy() as? CABasicAnimation {
+                    maskAnimation.isAdditive = false
+                    maskAnimation.valueFunction = nil
+                    maskAnimation.keyPath = "position"
+                    maskAnimation.fromValue = NSValue(cgPoint: oldPosition)
+                    maskAnimation.toValue = NSValue(cgPoint: maskLayer.position)
+                    maskLayer.add(maskAnimation, forKey: "trackTransitionMask")
+                }
+            }
+            CATransaction.commit()
         }
 
         fileprivate func clearEdgeMasks(for cell: UICollectionViewCell) {
@@ -246,7 +316,20 @@ struct NowPlayingQueueList: UIViewRepresentable {
         }
 
         private func rowFadeMetrics(inHistory: Bool) -> EdgeFadeMetrics {
-            edgeFadeMetrics(top: topFadeStart(inHistory: inHistory), topFadeHeight: NowPlayingQueueList.topFadeHeight)
+            if inHistory, historyHeight > 0 {
+                let bottomEnd = min(bounds.maxY, historyHeight)
+                let bottomStart = min(
+                    bounds.maxY - NowPlayingQueueList.bottomFadeHeight,
+                    historyHeight - NowPlayingQueueList.historyBottomInset
+                )
+                return edgeFadeMetrics(
+                    top: topFadeStart(inHistory: true),
+                    topFadeHeight: NowPlayingQueueList.topFadeHeight,
+                    bottomEnd: bottomEnd,
+                    bottomFadeHeight: max(0, bottomEnd - bottomStart)
+                )
+            }
+            return edgeFadeMetrics(top: topFadeStart(inHistory: false), topFadeHeight: NowPlayingQueueList.topFadeHeight)
         }
 
         private func viewportFadeMetrics() -> EdgeFadeMetrics {
@@ -254,10 +337,15 @@ struct NowPlayingQueueList: UIViewRepresentable {
             return edgeFadeMetrics(top: bounds.minY, topFadeHeight: min(24, scrolledPastSongHeader))
         }
 
-        private func edgeFadeMetrics(top fadeTop: CGFloat, topFadeHeight: CGFloat) -> EdgeFadeMetrics {
+        private func edgeFadeMetrics(
+            top fadeTop: CGFloat,
+            topFadeHeight: CGFloat,
+            bottomEnd: CGFloat? = nil,
+            bottomFadeHeight: CGFloat = NowPlayingQueueList.bottomFadeHeight
+        ) -> EdgeFadeMetrics {
             let fadeTopEnd = fadeTop + topFadeHeight
-            let fadeBottomEnd = bounds.maxY
-            let fadeBottomStart = fadeBottomEnd - NowPlayingQueueList.bottomFadeHeight
+            let fadeBottomEnd = bottomEnd ?? bounds.maxY
+            let fadeBottomStart = fadeBottomEnd - bottomFadeHeight
             let viewportRect = CGRect(
                 x: bounds.minX - 64,
                 y: fadeTop,
@@ -288,9 +376,9 @@ struct NowPlayingQueueList: UIViewRepresentable {
             )
         }
 
-        private func applyEdgeMask(to cell: UICollectionViewCell, metrics: EdgeFadeMetrics) {
+        private func applyEdgeMask(to cell: UICollectionViewCell, metrics: EdgeFadeMetrics, forceMask: Bool = false) {
             let cellFrame = convert(cell.bounds, from: cell)
-            if cellFrame.minY >= metrics.fadeTopEnd && cellFrame.maxY <= metrics.fadeBottomStart {
+            if !forceMask, cellFrame.minY >= metrics.fadeTopEnd && cellFrame.maxY <= metrics.fadeBottomStart {
                 if maskedCells.contains(cell) {
                     CATransaction.begin()
                     CATransaction.setDisableActions(true)
@@ -616,6 +704,31 @@ struct NowPlayingQueueList: UIViewRepresentable {
             if !hasApplied || !nativeOrderMatches {
                 cancelPrefetches()
                 let previousHistoryStop = collectionView.flatMap { historyStops(in: $0)?.rest }
+                let previousHistoryIDs = previousHistory.map(\.id)
+                let historyIDs = history.map(\.id)
+                let historyAppendedCount = (history.count > previousHistory.count
+                    && Array(historyIDs.prefix(previousHistory.count)) == previousHistoryIDs)
+                    ? (history.count - previousHistory.count) : 0
+                let historyPoppedCount = (previousHistory.count > history.count
+                    && Array(previousHistoryIDs.prefix(history.count)) == historyIDs)
+                    ? (previousHistory.count - history.count) : 0
+                let previousEntryIDs = previousList?.entries.map(\.id) ?? []
+                let entryIDs = list.entries.map(\.id)
+                let queueStep: Int = if trackChanged {
+                    if let firstNew = entryIDs.first, let step = previousEntryIDs.firstIndex(of: firstNew), step > 0 {
+                        step
+                    } else if let firstOld = previousEntryIDs.first, let step = entryIDs.firstIndex(of: firstOld), step > 0 {
+                        -step
+                    } else if previousEntryIDs.count == 1, entryIDs.isEmpty {
+                        1
+                    } else if previousEntryIDs.isEmpty, entryIDs.count == 1 {
+                        -1
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                }
                 var snapshot = NSDiffableDataSourceSnapshot<Section, Item>()
                 if !history.isEmpty {
                     snapshot.appendSections([.history])
@@ -632,15 +745,20 @@ struct NowPlayingQueueList: UIViewRepresentable {
                 list.services?.diagnostics?.event("QueueSnapshot")
                 snapshotTargetOffset = nil
                 let historySectionToggled = previousHistory.isEmpty != history.isEmpty
+                let followsNewestHistory = staysInHistory
+                    && previousHistoryStop != nil
+                    && previousQueueOffset >= (previousHistoryStop ?? 0) - 0.5
+                    && (historyAppendedCount > 0 || historyPoppedCount > 0)
+                    && collectionView?.isTracking != true
+                    && collectionView?.isDecelerating != true
                 if staysInHistory, let collectionView {
-                    // Keep older rows in place. At the newest end, follow the inserted row.
+                    // Keep older rows in place. When viewing the newest end, keep SongHeader anchored on screen.
                     snapshotTargetOffset = min(previousContentOffset, collectionView.queueRestOffset - 0.5)
-                    if let previousHistoryStop, let historyStop = historyStops(in: collectionView)?.rest,
-                       previousQueueOffset >= previousHistoryStop - 0.5,
-                       history.count > previousHistory.count,
-                       !collectionView.isTracking, !collectionView.isDecelerating {
-                        snapshotTargetOffset = collectionView.queueRestOffset + historyStop
-                            + max(0, previousQueueOffset - previousHistoryStop)
+                    if followsNewestHistory {
+                        snapshotTargetOffset = max(
+                            -collectionView.adjustedContentInset.top,
+                            collectionView.queueRestOffset + previousQueueOffset
+                        )
                     }
                 } else if !staysInHistory, historyOrderChanged, !historySectionToggled, let collectionView {
                     snapshotTargetOffset = collectionView.queueRestOffset + targetQueueOffset
@@ -648,10 +766,56 @@ struct NowPlayingQueueList: UIViewRepresentable {
                 snapshotApplicationCount += 1
                 let application = snapshotApplicationCount
                 let animatesDifferences = hasApplied && !returnsToQueue && !isReturningAfterHistoryClear
-                    && (!historyOrderChanged || staysInHistory || (!historySectionToggled && entriesChanged))
-                dataSource.apply(snapshot, animatingDifferences: animatesDifferences) { [weak self] in
-                    guard let self, self.snapshotApplicationCount == application else { return }
+                    && !historyOrderChanged && !trackChanged
+                if animatesDifferences {
+                    dataSource.apply(snapshot, animatingDifferences: true) { [weak self] in
+                        guard let self, self.snapshotApplicationCount == application else { return }
+                        self.snapshotTargetOffset = nil
+                    }
+                } else {
+                    UIView.performWithoutAnimation {
+                        dataSource.apply(snapshot, animatingDifferences: false)
+                        if let collectionView, !returnsToQueue {
+                            if staysInHistory, let target = snapshotTargetOffset {
+                                collectionView.layoutIfNeeded()
+                                if abs(collectionView.contentOffset.y - target) > 0.5 {
+                                    collectionView.setContentOffset(CGPoint(x: collectionView.contentOffset.x, y: target), animated: false)
+                                }
+                            } else if !staysInHistory && !isReturningAfterHistoryClear {
+                                collectionView.layoutIfNeeded()
+                                let reason = trackChanged ? "trackChanged" : "historyOrderChanged"
+                                setQueueOffset(targetQueueOffset, in: collectionView, reason: reason)
+                            }
+                            collectionView.layoutIfNeeded()
+                        }
+                    }
                     self.snapshotTargetOffset = nil
+                    if hasApplied, !returnsToQueue, !isReturningAfterHistoryClear, let collectionView {
+                        let historySlideY: CGFloat = if followsNewestHistory {
+                            if historyAppendedCount > 0 {
+                                CGFloat(min(historyAppendedCount, 2)) * NowPlayingQueueList.historyRowHeight
+                            } else if historyPoppedCount > 0 {
+                                -CGFloat(min(historyPoppedCount, 2)) * NowPlayingQueueList.historyRowHeight
+                            } else {
+                                0
+                            }
+                        } else {
+                            0
+                        }
+                        let queueSlideY = queueStep != 0
+                            ? CGFloat(max(-2, min(2, queueStep))) * NowPlayingQueueList.historyRowHeight
+                            : 0
+                        let insertedHistoryIDs = (followsNewestHistory && historyAppendedCount > 0)
+                            ? Set(history.suffix(historyAppendedCount).map(\.id))
+                            : []
+                        animateTrackTransitionRows(
+                            in: collectionView,
+                            insertedHistoryIDs: insertedHistoryIDs,
+                            historySlideY: historySlideY,
+                            queueSlideY: queueSlideY,
+                            animateSongHeader: trackChanged && !sameSong
+                        )
+                    }
                 }
                 currentItemIdentifiers = requestedItemIdentifiers
                 nativeOrderMatches = true
@@ -953,6 +1117,88 @@ struct NowPlayingQueueList: UIViewRepresentable {
             }
         }
 
+        private func animateTrackTransitionRows(
+            in collectionView: EdgeFadedCollectionView,
+            insertedHistoryIDs: Set<PlayerHistoryEntry.ID>,
+            historySlideY: CGFloat,
+            queueSlideY: CGFloat,
+            animateSongHeader: Bool
+        ) {
+            guard historySlideY != 0 || queueSlideY != 0 || animateSongHeader, let dataSource else { return }
+
+            var animatedRows: [(cell: EdgeFadedListCell, generation: UInt64)] = []
+            var songHeaderCell: UICollectionViewCell?
+
+            UIView.performWithoutAnimation {
+                for indexPath in collectionView.indexPathsForVisibleItems {
+                    guard let item = dataSource.itemIdentifier(for: indexPath),
+                          let cell = collectionView.cellForItem(at: indexPath) else { continue }
+                    switch item {
+                    case .history(let id) where historySlideY != 0:
+                        guard let listCell = cell as? EdgeFadedListCell else { continue }
+                        listCell.layoutIfNeeded()
+                        listCell.transitionGeneration &+= 1
+                        listCell.isAnimatingTrackTransition = true
+                        listCell.transform = CGAffineTransform(translationX: 0, y: historySlideY)
+                        listCell.alpha = insertedHistoryIDs.contains(id) ? 0.35 : 1
+                        collectionView.prepareTransitionEdgeMask(for: listCell, deltaY: historySlideY)
+                        animatedRows.append((listCell, listCell.transitionGeneration))
+
+                    case .track where queueSlideY != 0:
+                        guard let listCell = cell as? EdgeFadedListCell else { continue }
+                        listCell.layoutIfNeeded()
+                        listCell.transitionGeneration &+= 1
+                        listCell.isAnimatingTrackTransition = true
+                        listCell.transform = CGAffineTransform(translationX: 0, y: queueSlideY)
+                        listCell.alpha = 1
+                        collectionView.prepareTransitionEdgeMask(for: listCell, deltaY: queueSlideY)
+                        animatedRows.append((listCell, listCell.transitionGeneration))
+
+                    case .songHeader where animateSongHeader:
+                        cell.layoutIfNeeded()
+                        cell.contentView.transform = .identity
+                        cell.contentView.alpha = 0.15
+                        songHeaderCell = cell
+
+                    default:
+                        break
+                    }
+                }
+            }
+
+            if !animatedRows.isEmpty {
+                UIView.animate(
+                    withDuration: 0.28,
+                    delay: 0,
+                    usingSpringWithDamping: 1,
+                    initialSpringVelocity: 0,
+                    options: [.allowUserInteraction, .beginFromCurrentState]
+                ) {
+                    for (cell, _) in animatedRows {
+                        cell.transform = .identity
+                        cell.alpha = 1
+                        let spring = cell.layer.animation(forKey: "transform") as? CABasicAnimation
+                        collectionView.animateTransitionEdgeMask(for: cell, matching: spring)
+                    }
+                } completion: { _ in
+                    for (cell, generation) in animatedRows where cell.transitionGeneration == generation {
+                        cell.isAnimatingTrackTransition = false
+                        collectionView.updateEdgeMask(for: cell)
+                    }
+                }
+            }
+
+            if let songHeaderCell {
+                UIView.animate(
+                    withDuration: 0.22,
+                    delay: 0,
+                    options: [.curveEaseOut, .allowUserInteraction, .beginFromCurrentState]
+                ) {
+                    songHeaderCell.contentView.alpha = 1
+                }
+            }
+        }
+
         private func animateReturnToQueue(in collectionView: EdgeFadedCollectionView, reason: String) {
             collectionView.layoutIfNeeded()
             setQueueOffset(0, in: collectionView, reason: reason, animated: true)
@@ -1021,14 +1267,18 @@ struct NowPlayingQueueList: UIViewRepresentable {
                 finishHistoryClear()
             }
             let headerOffset = clampedHeaderOffset(for: offset, headerHeight: latest.headerHeight)
-            if scrollView.isDragging, let start = dragStartOffset, !didPlayHistoryFeedback,
-               let stops = historyStops(in: scrollView),
-               stops.crossedThreshold(from: start, at: offset) {
-                didPlayHistoryFeedback = true
-                playScrollFeedback()
+            if scrollView.isDragging, let start = dragStartOffset,
+               let stops = historyStops(in: scrollView) {
+                let armed = stops.isArmed(from: start, at: offset)
+                if armed != isHistoryThresholdArmed {
+                    isHistoryThresholdArmed = armed
+                    if armed {
+                        playScrollFeedback()
+                    }
+                }
             }
             if scrollView.isDragging, let previousOffset = pendingCollapseFeedbackOffset {
-                pendingCollapseFeedbackOffset = headerOffset
+                pendingCollapseFeedbackOffset = max(Self.collapseFeedbackDeadzone, headerOffset)
                 if headerOffset > previousOffset, maximumScrollOffset(in: scrollView) >= latest.headerHeight {
                     pendingCollapseFeedbackOffset = nil
                     playScrollFeedback()
@@ -1047,29 +1297,35 @@ struct NowPlayingQueueList: UIViewRepresentable {
         var scrollFeedbackHandler: (() -> Void)?
         private var pendingCollapseFeedbackOffset: CGFloat?
         private var dragStartOffset: CGFloat?
-        private var didPlayHistoryFeedback = false
+        private var isHistoryThresholdArmed = false
         private var releaseSnap: (offset: CGFloat, preservesVelocity: Bool)?
         // UIScrollViewDelegate reports release velocity in points per millisecond.
-        private static let fastHistoryExitVelocity: CGFloat = 1
+        private static let nativeSnapVelocity: CGFloat = 0.25
+        private static let fastSnapVelocity: CGFloat = 0.75
+        private static let headerSnapVelocity: CGFloat = 0.08
+        private static let headerDirectionalBias: CGFloat = 16
+        private static let collapseFeedbackDeadzone: CGFloat = 6
 
         // Positions are relative to Continue Playing.
         private struct HistoryStops {
-            static let triggerDistance: CGFloat = 160
+            static let triggerDistance: CGFloat = 96
+            static let minFlickDisplacement: CGFloat = 24
+            static let flickVelocity: CGFloat = 0.35
             static let restTolerance: CGFloat = 0.5
             let rest: CGFloat
             let revealThreshold: CGFloat
-            private var returnThreshold: CGFloat { min(0, rest + Self.triggerDistance) }
+            var exitThreshold: CGFloat { max(rest, -Self.triggerDistance) }
 
             init(height: CGFloat, readableHeight: CGFloat) {
                 rest = -min(height, max(Self.triggerDistance, readableHeight))
-                revealThreshold = height <= readableHeight ? rest : -min(height, Self.triggerDistance)
+                revealThreshold = -min(height, Self.triggerDistance)
             }
 
-            func crossedThreshold(from start: CGFloat, at offset: CGFloat) -> Bool {
+            func isArmed(from start: CGFloat, at offset: CGFloat) -> Bool {
                 if start >= -Self.restTolerance {
                     return start <= Self.restTolerance && offset <= revealThreshold
                 }
-                return offset >= returnThreshold
+                return offset >= exitThreshold
             }
 
             func releaseTarget(from start: CGFloat, at offset: CGFloat, projected: CGFloat,
@@ -1080,16 +1336,28 @@ struct NowPlayingQueueList: UIViewRepresentable {
                     // Returning from within the queue lands here. A new drag from rest can reveal History.
                     if start > Self.restTolerance { return 0 }
                     if projected < rest, movingDeeper || offset <= rest { return nil }
-                    let reveal = offset <= revealThreshold || (movingDeeper && projected <= revealThreshold)
+                    let flickReveal = movingDeeper && velocity <= -Self.flickVelocity
+                        && offset <= -Self.minFlickDisplacement && projected <= revealThreshold
+                    let reveal = offset <= revealThreshold
+                        || (movingDeeper && projected <= revealThreshold)
+                        || flickReveal
                     return reveal ? rest : 0
                 }
 
                 // The gesture that exits History ends at Continue Playing, even if the finger passed it.
                 if offset >= 0 || projected >= 0 { return 0 }
-                if movingDeeper, projected < rest { return nil }
-                guard max(offset, projected) > rest else { return nil }
                 let returning = velocity > 0 && projected > offset
-                return offset >= returnThreshold || (returning && projected >= returnThreshold) ? 0 : rest
+                // Below the boundary magnet zone, allow free scrolling and stopping anywhere in History.
+                if offset <= exitThreshold {
+                    return returning && projected >= exitThreshold ? 0 : nil
+                }
+                if movingDeeper {
+                    return projected < exitThreshold ? nil : exitThreshold
+                }
+                if returning {
+                    return 0
+                }
+                return offset >= exitThreshold / 2 ? 0 : exitThreshold
             }
         }
 
@@ -1135,12 +1403,19 @@ struct NowPlayingQueueList: UIViewRepresentable {
             let isScrollingDown = velocity > 0 || (velocity == 0 && fingerTranslation < 0)
             let isScrollingUp = velocity < 0 || (velocity == 0 && fingerTranslation > 0)
             let canHideHeader = maximumScrollOffset(in: scrollView) >= headerHeight
+            let bias = min(Self.headerDirectionalBias, headerHeight / 2)
 
-            if isScrollingDown, offset < headerHeight, canHideHeader {
+            if velocity >= Self.headerSnapVelocity, offset < headerHeight, canHideHeader {
                 return queueRest + headerHeight
             }
-            if isScrollingUp, offset > 0 {
+            if velocity <= -Self.headerSnapVelocity, offset > 0 {
                 return queueRest
+            }
+            if isScrollingDown, offset < headerHeight, canHideHeader {
+                return queueRest + (target >= bias ? headerHeight : 0)
+            }
+            if isScrollingUp, offset > 0 {
+                return queueRest + (target <= headerHeight - bias && canHideHeader ? 0 : (canHideHeader ? headerHeight : 0))
             }
 
             guard target > 0, target < headerHeight else { return nil }
@@ -1157,20 +1432,14 @@ struct NowPlayingQueueList: UIViewRepresentable {
             let target = snapTarget(in: scrollView, projectedY: projectedY, velocity: velocity.y)
             let offset = scrollView.contentOffset.y
             if let target {
-                let historyHeight = collectionView?.historyHeight ?? 0
-                let queueRest = historyHeight - scrollView.adjustedContentInset.top
-                let start = dragStartOffset ?? 0
-                let fastHistoryExit = start < -HistoryStops.restTolerance
-                    && target == queueRest && offset < queueRest
-                    && velocity.y >= Self.fastHistoryExitVelocity
-                let fastHistoryEntry = start >= -HistoryStops.restTolerance && target < queueRest
-                    && velocity.y <= -Self.fastHistoryExitVelocity
-                let fastQueueReturn = start > HistoryStops.restTolerance
-                    && target == queueRest && offset > queueRest + (latest?.headerHeight ?? 0)
-                    && velocity.y <= -Self.fastHistoryExitVelocity
-                let preservesVelocity = (historyHeight > 0 && (fastHistoryExit || fastHistoryEntry)) || fastQueueReturn
+                let displacement = target - offset
+                let projectedDisplacement = projectedY - offset
+                let movesTowardTarget = displacement * velocity.y > 0
+                let hasMomentum = abs(velocity.y) >= Self.nativeSnapVelocity
+                    && (abs(projectedDisplacement) >= abs(displacement) * 0.35 || abs(velocity.y) >= Self.fastSnapVelocity)
+                let preservesVelocity = movesTowardTarget && hasMomentum
                 releaseSnap = (target, preservesVelocity)
-                // Leave the ordinary snap to UIKit's short animated scroll at drag end.
+                // Hand forward-moving snaps with sufficient momentum directly to UIKit's native deceleration.
                 targetContentOffset.pointee.y = preservesVelocity ? target : offset
             } else {
                 releaseSnap = nil
@@ -1209,14 +1478,22 @@ struct NowPlayingQueueList: UIViewRepresentable {
 
         func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
             finishHistoryClear()
+            if let collectionView {
+                for case let cell as EdgeFadedListCell in collectionView.visibleCells where cell.isAnimatingTrackTransition {
+                    cell.transitionGeneration &+= 1
+                    cell.isAnimatingTrackTransition = false
+                    collectionView.updateEdgeMask(for: cell)
+                }
+            }
             guard let latest else { return }
             let historyHeight = collectionView?.historyHeight ?? 0
             let offset = scrollView.contentOffset.y - (historyHeight - scrollView.adjustedContentInset.top)
             dragStartOffset = offset
             releaseSnap = nil
-            didPlayHistoryFeedback = false
+            isHistoryThresholdArmed = historyStops(in: scrollView)?.isArmed(from: offset, at: offset) ?? false
+            let clamped = clampedHeaderOffset(for: offset, headerHeight: latest.headerHeight)
             pendingCollapseFeedbackOffset = offset >= -HistoryStops.restTolerance
-                ? clampedHeaderOffset(for: offset, headerHeight: latest.headerHeight)
+                ? max(Self.collapseFeedbackDeadzone, clamped)
                 : nil
             scrollFeedback?.prepare()
             latest.services?.diagnostics?.queueScroll(

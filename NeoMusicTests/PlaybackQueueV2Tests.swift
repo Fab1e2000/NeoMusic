@@ -357,17 +357,24 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
         }
 
         let collapsed = top + inputs.headerHeight
-        XCTAssertEqual(target(afterReleasingAt: 1, velocity: 0.001), collapsed)
+        XCTAssertEqual(target(afterReleasingAt: 1, velocity: 0.001), top,
+                       "Micro-nudges below the 16pt directional bias settle back to expanded")
+        XCTAssertEqual(scroll.animatedContentOffset?.y, top)
+        XCTAssertEqual(target(afterReleasingAt: 16, velocity: 0.001), collapsed)
         XCTAssertEqual(scroll.animatedContentOffset?.y, collapsed)
         XCTAssertEqual(target(afterReleasingAt: 1, velocity: 0.5, projectedOffset: inputs.headerHeight), collapsed)
+        XCTAssertNil(scroll.animatedContentOffset, "Forward thumb flicks preserve velocity into the collapsed header")
         XCTAssertEqual(target(afterReleasingAt: 1, velocity: 0.5, projectedOffset: 200), top + 200)
         XCTAssertNil(scroll.animatedContentOffset)
         XCTAssertEqual(target(afterReleasingAt: -10, velocity: 0.5, projectedOffset: 200), top + 200)
-        XCTAssertEqual(target(afterReleasingAt: inputs.headerHeight - 1, velocity: -0.001), top)
+        XCTAssertEqual(target(afterReleasingAt: inputs.headerHeight - 1, velocity: -0.001), collapsed,
+                       "Micro-nudges near collapsed settle back to collapsed")
+        XCTAssertEqual(target(afterReleasingAt: inputs.headerHeight - 16, velocity: -0.001), top)
         XCTAssertEqual(scroll.animatedContentOffset?.y, top)
         XCTAssertEqual(target(afterReleasingAt: 200, velocity: 0.5, projectedOffset: 300), top + 300)
         XCTAssertEqual(target(afterReleasingAt: 200, velocity: -0.5, projectedOffset: 100), top + 100)
         XCTAssertEqual(target(afterReleasingAt: 200, velocity: -0.5, projectedOffset: inputs.headerHeight - 1), top)
+        XCTAssertNil(scroll.animatedContentOffset, "Returning from the queue preserves downward momentum into expanded")
 
         let midpoint = inputs.headerHeight / 2
         let shortProjection = inputs.headerHeight / 4
@@ -380,8 +387,8 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
                        top + shortProjection, "Top overscroll stays with UIKit when there is no History")
 
         scroll.panGestureRecognizer.setTranslation(CGPoint(x: 0, y: -1), in: scroll)
-        XCTAssertEqual(target(afterReleasingAt: 1, velocity: 0), collapsed)
-        scroll.contentOffset.y = top + 1
+        XCTAssertEqual(target(afterReleasingAt: 16, velocity: 0), collapsed)
+        scroll.contentOffset.y = top + 16
         coordinator.scrollViewWillBeginDragging(scroll)
         coordinator.scrollViewDidEndDragging(scroll, willDecelerate: false)
         XCTAssertEqual(scroll.animatedContentOffset?.y, collapsed)
@@ -423,25 +430,25 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
         }
 
         let readableHeight = list.bounds.height - list.adjustedContentInset.top - NowPlayingQueueList.bottomFadeHeight
-        let reveal = min(list.historyHeight, max(160, readableHeight))
+        let reveal = min(list.historyHeight, max(96, readableHeight))
         let historyRest = -reveal
         XCTAssertGreaterThan(list.historyHeight - reveal, 20)
         XCTAssertEqual(release(from: 0, at: -20, projected: -30), rest)
         XCTAssertEqual(scroll.animatedContentOffset?.y, rest)
         XCTAssertEqual(release(from: 0, at: -20, projected: 200, velocity: 1.8), rest)
-        XCTAssertEqual(scroll.animatedContentOffset?.y, rest, "Pull-back starts at Continue Playing")
-        XCTAssertEqual(release(from: 0, at: -20, projected: max(historyRest, -200), velocity: -1.8), rest + historyRest)
-        XCTAssertNil(scroll.animatedContentOffset, "UIKit carries the fast downward release into History")
-        XCTAssertEqual(release(from: 0, at: -20, projected: -160, velocity: -1), rest + historyRest)
+        XCTAssertNil(scroll.animatedContentOffset, "Forward return to Continue Playing preserves release velocity")
+        XCTAssertEqual(release(from: 0, at: -25, projected: max(historyRest, -200), velocity: -0.8), rest + historyRest)
+        XCTAssertNil(scroll.animatedContentOffset, "UIKit carries the downward flick into History")
+        XCTAssertEqual(release(from: 0, at: -25, projected: -96, velocity: -0.75), rest + historyRest)
         XCTAssertNil(scroll.animatedContentOffset)
-        XCTAssertEqual(release(from: 0, at: -20, projected: -160, velocity: -0.99), rest + historyRest)
+        XCTAssertEqual(release(from: 0, at: -96, projected: -96, velocity: -0.1), rest + historyRest)
         XCTAssertEqual(scroll.animatedContentOffset?.y, rest + historyRest)
-        XCTAssertEqual(release(from: 0, at: -20, projected: -159, velocity: -0.1), rest)
-        XCTAssertEqual(release(from: 0, at: -20, projected: -100, velocity: -0.5), rest)
+        XCTAssertEqual(release(from: 0, at: -20, projected: -95, velocity: -0.1), rest)
+        XCTAssertEqual(release(from: 0, at: -20, projected: -60, velocity: -0.2), rest)
         XCTAssertEqual(release(from: 80, at: 20, projected: -600, velocity: -2.66), rest)
-        XCTAssertEqual(release(from: 300, at: 200, projected: -600, velocity: -2.66), rest)
-        XCTAssertNil(scroll.animatedContentOffset, "A fast return from deep in the queue preserves release velocity to Continue Playing")
-        XCTAssertEqual(release(from: 0.33, at: -160, projected: -200, velocity: -1.8), rest + historyRest,
+        XCTAssertEqual(release(from: 300, at: 200, projected: -600, velocity: -0.5), rest)
+        XCTAssertNil(scroll.animatedContentOffset, "Returning from deep in the queue preserves release velocity to Continue Playing")
+        XCTAssertEqual(release(from: 0.33, at: -96, projected: -200, velocity: -0.8), rest + historyRest,
                        "Sub-point pixel rounding at Continue Playing rest still reveals History")
         XCTAssertEqual(release(from: 80, at: 0, projected: -600, velocity: -2.66), rest)
         XCTAssertEqual(release(from: 80, at: -170, projected: -600, velocity: -2.66), rest)
@@ -449,31 +456,35 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
         XCTAssertEqual(release(from: 0, at: historyRest - 10, projected: historyRest - 20, velocity: -1.8),
                        rest + historyRest - 20)
         XCTAssertEqual(release(from: 0, at: historyRest, projected: historyRest - 200), rest + historyRest - 200)
-        XCTAssertEqual(release(from: 0, at: -160, projected: -100, velocity: 0.5), rest + historyRest)
-        XCTAssertEqual(release(from: 0, at: -160, projected: -161), rest + historyRest)
-        XCTAssertEqual(release(from: historyRest, at: historyRest + 159, projected: 120, velocity: 0.5), rest)
+        XCTAssertEqual(release(from: 0, at: -96, projected: -60, velocity: 0.5), rest + historyRest)
+        XCTAssertEqual(release(from: 0, at: -96, projected: -97), rest + historyRest)
+
+        // Plan A: Free stopping anywhere inside History below the -96pt boundary magnet zone.
+        XCTAssertEqual(release(from: historyRest, at: -220, projected: -180, velocity: 0.2), rest - 180,
+                       "Users can stop freely in mid-History to view recent history alongside Continue Playing")
+        XCTAssertNil(scroll.animatedContentOffset)
+        XCTAssertEqual(release(from: historyRest, at: -200, projected: -96, velocity: 0.4), rest,
+                       "Upward flicks projecting into the -96pt boundary magnet snap cleanly to Continue Playing")
+        XCTAssertNil(scroll.animatedContentOffset)
+        XCTAssertEqual(release(from: historyRest, at: -95, projected: -90, velocity: 0.1), rest)
         XCTAssertEqual(scroll.animatedContentOffset?.y, rest)
-        XCTAssertEqual(release(from: historyRest, at: historyRest + 159, projected: historyRest + 160, velocity: 0.1),
-                       rest)
-        XCTAssertEqual(release(from: historyRest, at: -10, projected: 200, velocity: 1.8), rest)
-        XCTAssertNil(scroll.animatedContentOffset, "UIKit carries the fast release into Continue Playing")
+        XCTAssertEqual(release(from: historyRest, at: -10, projected: 200, velocity: 0.4), rest)
+        XCTAssertNil(scroll.animatedContentOffset, "UIKit carries the upward release into Continue Playing")
         XCTAssertEqual(release(from: historyRest, at: -10, projected: 200,
                                velocity: 1.8, willDecelerate: false), rest)
         XCTAssertEqual(scroll.animatedContentOffset?.y, rest)
-        XCTAssertEqual(release(from: historyRest, at: -10, projected: 200, velocity: 1), rest)
-        XCTAssertNil(scroll.animatedContentOffset)
-        XCTAssertEqual(release(from: historyRest, at: -10, projected: 200, velocity: 0.99), rest)
-        XCTAssertEqual(scroll.animatedContentOffset?.y, rest)
-        XCTAssertEqual(release(from: historyRest, at: -10, projected: -20, velocity: -1.8), rest)
-        XCTAssertEqual(scroll.animatedContentOffset?.y, rest)
+        XCTAssertEqual(release(from: historyRest, at: -10, projected: -20, velocity: -0.1), rest - 96,
+                       "Pulling back downward inside the boundary magnet settles at the -96pt boundary")
+        XCTAssertEqual(scroll.animatedContentOffset?.y, rest - 96)
         XCTAssertEqual(release(from: historyRest, at: 200, projected: 300, velocity: 1.8), rest)
         XCTAssertEqual(scroll.animatedContentOffset?.y, rest, "An overshoot returns with the short snap")
         XCTAssertEqual(release(from: historyRest, at: 0, projected: 300, velocity: 1.8), rest)
         XCTAssertNil(scroll.animatedContentOffset)
         XCTAssertEqual(release(from: historyRest, at: 0, projected: 0, velocity: 0.1), rest)
-        XCTAssertEqual(release(from: historyRest, at: historyRest + 160, projected: -20), rest)
+        XCTAssertEqual(release(from: historyRest, at: -40, projected: -40), rest)
+        XCTAssertEqual(release(from: historyRest, at: -60, projected: -60), rest - 96)
         XCTAssertEqual(release(from: historyRest - 20, at: historyRest - 10, projected: historyRest + 10),
-                       rest + historyRest)
+                       rest + historyRest + 10)
         XCTAssertEqual(release(from: historyRest, at: historyRest - 10, projected: historyRest - 20),
                        rest + historyRest - 20)
         XCTAssertEqual(release(from: 0, at: 1, projected: 120, velocity: 0.5), rest + 120)
@@ -541,6 +552,34 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
         XCTAssertEqual(list.contentOffset.y, latestOffset + NowPlayingQueueList.historyRowHeight, accuracy: 1)
         XCTAssertLessThan(list.contentOffset.y, list.queueRestOffset)
 
+        let midHistoryOffset = list.queueRestOffset - 292
+        list.contentOffset.y = midHistoryOffset
+        list.layoutIfNeeded()
+        let songHeaderPath = try XCTUnwrap(source.indexPath(for: .songHeader))
+        let songCellBefore = try XCTUnwrap(list.cellForItem(at: songHeaderPath))
+        let screenYBefore = songCellBefore.frame.minY - list.contentOffset.y
+        update.trackTransitionKey = "next-at-mid-history"
+        update.history.append(PlayerHistoryEntry(id: UUID(), song: inputs.song))
+        coordinator.update(with: update)
+        let songCellImmediate = try XCTUnwrap(list.cellForItem(at: songHeaderPath))
+        XCTAssertNil(songCellImmediate.layer.animation(forKey: "position"),
+                     "SongHeader must not animate its layout position when a history row is appended")
+        let screenYImmediate = songCellImmediate.frame.minY - list.contentOffset.y
+        XCTAssertEqual(screenYImmediate, screenYBefore, accuracy: 0.5,
+                       "SongHeader must not jump upward and slide back down when a history row is appended")
+        func verifyNonAdditiveMaskAnimations(in layer: CALayer) {
+            if let mask = layer.mask,
+               let anim = mask.animation(forKey: "trackTransitionMask") as? CABasicAnimation {
+                XCTAssertFalse(anim.isAdditive, "Track transition mask animation must not be additive")
+                let fromPos = (anim.fromValue as? NSValue)?.cgPointValue
+                let toPos = (anim.toValue as? NSValue)?.cgPointValue
+                XCTAssertEqual(fromPos?.x, mask.position.x)
+                XCTAssertEqual(toPos?.x, mask.position.x)
+            }
+            for sub in layer.sublayers ?? [] { verifyNonAdditiveMaskAnimations(in: sub) }
+        }
+        for cell in list.visibleCells { verifyNonAdditiveMaskAnimations(in: cell.layer) }
+
         coordinator.playFromHistory(selectableHistoryEntry.id)
         XCTAssertEqual(inputs.player.currentTrack?.id, selectableHistoryEntry.song.id)
         // A coalesced presentation can carry a different key from the one observed at the tap.
@@ -595,7 +634,7 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
         scroll.contentInset.top = 8
         scroll.contentSize.height = 800
 
-        for (rowCount, threshold): (Int, CGFloat) in [(10, 160), (2, 168), (1, 112)] {
+        for (rowCount, threshold): (Int, CGFloat) in [(10, 96), (2, 96), (1, 96)] {
             inputs.history = (0..<rowCount).map { _ in PlayerHistoryEntry(id: UUID(), song: inputs.song) }
             try await settle(host)
             let rest = list.historyHeight - scroll.adjustedContentInset.top
@@ -622,7 +661,7 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
             beginDrag()
             didScroll(revealing: threshold - 1)
             XCTAssertEqual(feedbackCount, 0)
-            XCTAssertEqual(release(projectedReveal: threshold, velocity: -1.8), historyRest)
+            XCTAssertEqual(release(projectedReveal: threshold, velocity: -0.8), historyRest)
             XCTAssertNil(scroll.animatedContentOffset)
             didScroll(revealing: threshold)
             XCTAssertEqual(feedbackCount, 0, "Scroll updates after release are silent")
@@ -632,18 +671,18 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
             XCTAssertEqual(feedbackCount, 1, "Feedback fires at the threshold while dragging")
             didScroll(revealing: threshold - 1)
             didScroll(revealing: threshold + 1)
-            XCTAssertEqual(feedbackCount, 1, "Crossing again in the same drag is silent")
+            XCTAssertEqual(feedbackCount, 2, "Pulling back and re-crossing the threshold fires reversible feedback")
             XCTAssertEqual(release(projectedReveal: threshold - 1, velocity: 0.001), historyRest)
 
             beginDrag()
             didScroll(revealing: threshold)
-            XCTAssertEqual(feedbackCount, 2)
+            XCTAssertEqual(feedbackCount, 3)
             didScroll(revealing: threshold - 1)
             XCTAssertEqual(release(projectedReveal: threshold), rest, "Release uses the current distance")
 
             beginDrag()
             didScroll(revealing: threshold)
-            XCTAssertEqual(feedbackCount, 3)
+            XCTAssertEqual(feedbackCount, 4)
             XCTAssertEqual(release(projectedReveal: threshold), historyRest, "A stationary release settles in History")
 
             beginDrag()
@@ -665,46 +704,27 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
             XCTAssertEqual(scroll.animatedContentOffset, CGPoint(x: 0, y: rest))
             scroll.animatedContentOffset = nil
 
-            let returnThreshold = min(reveal, 160)
+            let exitThreshold = min(reveal, 96)
             beginDrag(revealing: reveal)
-            didScroll(revealing: reveal - returnThreshold + 1)
-            XCTAssertEqual(feedbackCount, 5)
+            didScroll(revealing: exitThreshold + 1)
+            XCTAssertEqual(feedbackCount, 6)
             XCTAssertEqual(release(projectedReveal: -120, velocity: 0.5), rest)
 
             beginDrag(revealing: reveal)
-            didScroll(revealing: reveal - returnThreshold)
-            XCTAssertEqual(feedbackCount, 6, "Returning to Continue Playing has its own live threshold")
-            didScroll(revealing: reveal - returnThreshold + 1)
-            didScroll(revealing: reveal - returnThreshold)
-            XCTAssertEqual(feedbackCount, 6)
-            XCTAssertEqual(release(projectedReveal: reveal), rest)
+            didScroll(revealing: exitThreshold)
+            XCTAssertEqual(feedbackCount, 7, "Entering the 96pt boundary magnet zone triggers return feedback")
+            didScroll(revealing: exitThreshold + 1)
+            didScroll(revealing: exitThreshold)
+            XCTAssertEqual(feedbackCount, 8, "Re-entering the boundary magnet zone fires feedback again")
+            XCTAssertEqual(release(projectedReveal: exitThreshold - 1, velocity: 0.1), rest)
             didScroll(revealing: 0)
-            XCTAssertEqual(feedbackCount, 6)
-
-            beginDrag(revealing: reveal)
-            didScroll(revealing: reveal - returnThreshold + 1)
-            scroll.isSimulatingDrag = false
-            coordinator.scrollViewDidEndDragging(scroll, willDecelerate: false)
-            XCTAssertEqual(scroll.animatedContentOffset, CGPoint(x: 0, y: historyRest))
-            scroll.animatedContentOffset = nil
+            XCTAssertEqual(feedbackCount, 8)
 
             beginDrag()
             didScroll(revealing: threshold - 1)
             XCTAssertEqual(scroll.release(using: coordinator, projectedY: rest - threshold,
                                           velocity: -1.8, willDecelerate: false), historyRest)
             XCTAssertEqual(scroll.animatedContentOffset?.y, historyRest)
-
-            beginDrag(revealing: reveal)
-            didScroll(revealing: reveal - 1)
-            XCTAssertEqual(scroll.release(using: coordinator, projectedY: historyRest + 1,
-                                          velocity: 0.5, willDecelerate: false), historyRest)
-
-            if reveal > returnThreshold {
-                beginDrag(revealing: reveal)
-                didScroll(revealing: reveal - returnThreshold)
-                XCTAssertEqual(release(projectedReveal: reveal - returnThreshold - 1, velocity: 0.1), rest,
-                               "A gentle release after crossing the return threshold still settles at Continue Playing")
-            }
         }
     }
 
@@ -787,9 +807,12 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
         didScroll(to: 0)
         XCTAssertEqual(feedbackCount, 0, "Returning from top overscroll does not collapse the header")
         didScroll(to: 1)
-        XCTAssertEqual(feedbackCount, 1, "The first collapse movement triggers feedback while dragging")
+        didScroll(to: 5)
+        XCTAssertEqual(feedbackCount, 0, "Touch-down micro-jitter within the 6pt deadzone is silent")
+        didScroll(to: 7)
+        XCTAssertEqual(feedbackCount, 1, "Crossing the 6pt collapse deadzone triggers feedback once per drag")
         didScroll(to: 0)
-        didScroll(to: 2)
+        didScroll(to: 16)
         XCTAssertEqual(feedbackCount, 1)
 
         XCTAssertEqual(scroll.release(using: coordinator, projectedY: scroll.contentOffset.y, velocity: 0.1),
