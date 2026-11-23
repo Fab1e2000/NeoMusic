@@ -741,7 +741,6 @@ private struct QueueLinkedArtwork<ArtworkTransition: ViewModifier>: View {
                     decodeSize: artworkPageFrame.width > 0 ? artworkPageFrame.size : nil
                 )
                     .frame(width: frame.width, height: frame.height)
-                    .geometryGroup()
                     .scaleEffect(playbackScale)
                     .animation(reducesMotion ? nil : .interpolatingSpring(
                         mass: 1, stiffness: expanded ? 180 : 153, damping: expanded ? 16.4 : 22.8
