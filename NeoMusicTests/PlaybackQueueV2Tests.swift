@@ -354,6 +354,54 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
         XCTAssertEqual(target(afterReleasingAt: 1, velocity: 0), collapsed)
     }
 
+    func testCollapseFeedbackFiresOnFirstUpwardMovementOncePerDrag() async throws {
+        let inputs = QueueListTestInputs()
+        let (window, host) = try mount(inputs)
+        defer { window.isHidden = true }
+        try await settle(host)
+        let coordinator = try coordinator(in: host.view)
+        let scroll = QueueDragTestScrollView(frame: CGRect(x: 0, y: 0, width: 320, height: 400))
+        scroll.contentInset.top = NowPlayingQueueList.modeControlsHeight
+        scroll.contentSize.height = 800
+        let top = -scroll.adjustedContentInset.top
+        var feedbackCount = 0
+        coordinator.collapseFeedbackHandler = { feedbackCount += 1 }
+
+        func didScroll(to offset: CGFloat) {
+            scroll.contentOffset.y = top + offset
+            coordinator.scrollViewDidScroll(scroll)
+        }
+
+        didScroll(to: 0)
+        coordinator.scrollViewWillBeginDragging(scroll)
+        scroll.isSimulatingDrag = true
+        didScroll(to: -5)
+        didScroll(to: 0)
+        XCTAssertEqual(feedbackCount, 0, "Returning from top overscroll does not collapse the header")
+        didScroll(to: 1)
+        XCTAssertEqual(feedbackCount, 1, "The first collapse movement triggers feedback while dragging")
+        didScroll(to: 0)
+        didScroll(to: 2)
+        XCTAssertEqual(feedbackCount, 1)
+
+        var target = scroll.contentOffset
+        coordinator.scrollViewWillEndDragging(scroll, withVelocity: CGPoint(x: 0, y: 0.1),
+                                              targetContentOffset: &target)
+        scroll.isSimulatingDrag = false
+        XCTAssertEqual(target.y, top + inputs.headerHeight)
+        didScroll(to: inputs.headerHeight)
+        XCTAssertEqual(feedbackCount, 1, "Release and deceleration do not trigger feedback again")
+
+        coordinator.scrollViewWillBeginDragging(scroll)
+        scroll.isSimulatingDrag = true
+        didScroll(to: 100)
+        didScroll(to: 80)
+        didScroll(to: inputs.headerHeight - 1)
+        XCTAssertEqual(feedbackCount, 1, "Scrolling past the header or revealing it is silent")
+        didScroll(to: 100)
+        XCTAssertEqual(feedbackCount, 2, "A new drag can collapse the header even in one scroll update")
+    }
+
     func testEdgeMasksFollowChangingCompositingLayersWithoutReplacingCustomMasks() throws {
         let list = NowPlayingQueueList.EdgeFadedCollectionView(
             frame: CGRect(x: 0, y: 0, width: 320, height: 400),
@@ -434,6 +482,11 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
         XCTAssertTrue(loadedArtwork.mask is CAGradientLayer, "Async replaced artwork layer must receive the edge fade mask")
         XCTAssertTrue(vibrantArtist.mask is CAGradientLayer)
     }
+}
+
+private final class QueueDragTestScrollView: UIScrollView {
+    var isSimulatingDrag = false
+    override var isDragging: Bool { isSimulatingDrag }
 }
 
 @MainActor @Observable

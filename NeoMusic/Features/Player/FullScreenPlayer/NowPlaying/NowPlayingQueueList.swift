@@ -350,7 +350,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
         func attach(to collectionView: EdgeFadedCollectionView, initial: NowPlayingQueueList) {
             latest = initial
             self.collectionView = collectionView
-            snapFeedback = UIImpactFeedbackGenerator(style: .soft, view: collectionView)
+            collapseFeedback = UIImpactFeedbackGenerator(style: .soft, view: collectionView)
             let registration = UICollectionView.CellRegistration<EdgeFadedListCell, Item> {
                 [weak self] cell, _, item in
                 cell.edgeFadeCollectionView = self?.collectionView
@@ -670,16 +670,36 @@ struct NowPlayingQueueList: UIViewRepresentable {
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
             guard let latest else { return }
             let offset = scrollView.contentOffset.y + scrollView.adjustedContentInset.top
-            latest.onScroll(min(max(offset, 0), latest.headerHeight))
+            let headerOffset = min(max(offset, 0), latest.headerHeight)
+            if scrollView.isDragging, let previousOffset = pendingCollapseFeedbackOffset {
+                pendingCollapseFeedbackOffset = headerOffset
+                if headerOffset > previousOffset, maximumScrollOffset(in: scrollView) >= latest.headerHeight {
+                    pendingCollapseFeedbackOffset = nil
+                    if let collapseFeedbackHandler {
+                        collapseFeedbackHandler()
+                    } else {
+                        collapseFeedback?.impactOccurred()
+                    }
+                }
+            }
+            latest.onScroll(headerOffset)
         }
 
-        private var snapFeedback: UIImpactFeedbackGenerator?
+        private var collapseFeedback: UIImpactFeedbackGenerator?
+        var collapseFeedbackHandler: (() -> Void)?
+        private var pendingCollapseFeedbackOffset: CGFloat?
+
+        private func maximumScrollOffset(in scrollView: UIScrollView) -> CGFloat {
+            scrollView.contentSize.height + scrollView.adjustedContentInset.bottom
+                - scrollView.bounds.height + scrollView.adjustedContentInset.top
+        }
 
         func scrollViewWillEndDragging(
             _ scrollView: UIScrollView,
             withVelocity velocity: CGPoint,
             targetContentOffset: UnsafeMutablePointer<CGPoint>
         ) {
+            pendingCollapseFeedbackOffset = nil
             guard let headerHeight = latest?.headerHeight, headerHeight > 0 else { return }
             let top = -scrollView.adjustedContentInset.top
             let target = targetContentOffset.pointee.y - top
@@ -688,14 +708,12 @@ struct NowPlayingQueueList: UIViewRepresentable {
             let fingerTranslation = scrollView.panGestureRecognizer.translation(in: scrollView).y
             let isScrollingDown = velocity.y > 0 || (velocity.y == 0 && fingerTranslation < 0)
             let isScrollingUp = velocity.y < 0 || (velocity.y == 0 && fingerTranslation > 0)
-            let maxOffset = scrollView.contentSize.height + scrollView.adjustedContentInset.bottom
-                - scrollView.bounds.height - top
+            let maxOffset = maximumScrollOffset(in: scrollView)
 
             if isScrollingDown, offset >= 0, offset < headerHeight, maxOffset >= headerHeight {
                 if target < headerHeight {
                     targetContentOffset.pointee.y = top + headerHeight
                 }
-                snapFeedback?.impactOccurred()
                 return
             }
             if isScrollingUp, offset > 0, min(offset, target) <= headerHeight {
@@ -709,7 +727,10 @@ struct NowPlayingQueueList: UIViewRepresentable {
         }
 
         func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
-            snapFeedback?.prepare()
+            guard let latest else { return }
+            let offset = scrollView.contentOffset.y + scrollView.adjustedContentInset.top
+            pendingCollapseFeedbackOffset = min(max(offset, 0), latest.headerHeight)
+            collapseFeedback?.prepare()
         }
     }
 }
