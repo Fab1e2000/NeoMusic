@@ -14,7 +14,6 @@ if [[ "${GITHUB_REF_TYPE:-}" == tag ]]; then
     echo "标签 $GITHUB_REF_NAME 与 project.yml 的版本 $tag 不一致" >&2
     exit 1
   fi
-  test -f "docs/releases/$tag.md"
 fi
 
 xcodegen generate

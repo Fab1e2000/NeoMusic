@@ -42,21 +42,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.package.outputs.tag }}
         run: |
-          notes=(--title "NeoMusic $TAG" --notes-file "docs/releases/$TAG.md")
           if release=$(gh api --include --jq '.draft' "repos/{owner}/{repo}/releases/tags/$TAG"); then
             if [[ "${release##*$'\n'}" != true ]]; then
               echo "该版本已发布或草稿状态无效，停止更新。" >&2
               exit 1
             fi
             gh release upload "$TAG" dist/*.ipa dist/SHA256SUMS.txt --clobber
-            gh release edit "$TAG" --draft "${notes[@]}"
+            gh release edit "$TAG" --draft --title "NeoMusic $TAG"
           else
             if [[ "${release%%$'\n'*}" != HTTP/*" 404 "* ]]; then
               echo "读取 Release 状态失败，停止更新。" >&2
               exit 1
             fi
             gh release create "$TAG" dist/*.ipa dist/SHA256SUMS.txt \
-              --draft --verify-tag "${notes[@]}"
+              --draft --verify-tag --title "NeoMusic $TAG" --generate-notes
           fi
       - name: Upload build log
         if: failure()

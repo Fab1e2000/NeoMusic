@@ -110,7 +110,6 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
             lyricsControlTouchCount = 0
         }
         .onChange(of: player.currentTrackTransitionKey) { _, _ in
-            showsLyricsControls = true
             lyricsControlTouchCount = 0
             progressInteraction.resetForTrackChange()
         }
