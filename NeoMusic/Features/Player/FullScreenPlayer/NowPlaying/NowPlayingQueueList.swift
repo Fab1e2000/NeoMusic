@@ -62,8 +62,13 @@ struct NowPlayingQueueList: UIViewRepresentable {
                 let headerHeight = max(coordinator?.latest?.headerHeight ?? NowPlayingQueuePage.songHeaderHeight, 1)
                 let rowSize = NSCollectionLayoutSize(widthDimension: .fractionalWidth(1),
                                                      heightDimension: .absolute(headerHeight))
-                let group = NSCollectionLayoutGroup.vertical(layoutSize: rowSize,
-                    subitems: [NSCollectionLayoutItem(layoutSize: rowSize)])
+                // Shift only the song cell within its group; the following section and snap distance stay put.
+                let group = NSCollectionLayoutGroup.custom(layoutSize: rowSize) { environment in
+                    [NSCollectionLayoutGroupCustomItem(frame: CGRect(
+                        x: 0, y: -NowPlayingSongHeader.lift,
+                        width: environment.container.effectiveContentSize.width, height: headerHeight + NowPlayingSongHeader.lift
+                    ))]
+                }
                 return NSCollectionLayoutSection(group: group)
             }
             let listSection = NSCollectionLayoutSection.list(
@@ -89,7 +94,9 @@ struct NowPlayingQueueList: UIViewRepresentable {
         collectionView.panGestureRecognizer.name = PlayerInteraction.queueScrollGestureName
         collectionView.backgroundColor = .clear
         collectionView.contentInsetAdjustmentBehavior = .never
+        collectionView.contentInset.top = NowPlayingSongHeader.lift
         collectionView.contentInset.bottom = Self.bottomFadeHeight
+        collectionView.contentOffset.y = -collectionView.contentInset.top
         collectionView.topEdgeEffect.isHidden = true
         collectionView.bottomEdgeEffect.isHidden = true
         collectionView.allowsSelection = false
@@ -1042,7 +1049,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
                     .animation(nil, value: latest.songHeader.isVisible)
                     .frame(height: NowPlayingSongHeader.referenceHeight)
                     .padding(.top, NowPlayingSongHeader.topInset)
-                    .frame(height: latest.headerHeight, alignment: .top)
+                    .frame(height: latest.headerHeight + NowPlayingSongHeader.lift, alignment: .top)
                     .environment(latest.player)
                     .environment(latest.actions)
                     .environment(latest.services)
