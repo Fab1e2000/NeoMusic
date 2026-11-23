@@ -178,21 +178,34 @@ struct NowPlayingQueueModeControls: View {
 }
 
 struct NowPlayingQueueRow: View {
-    let song: PlayerTrack
+    private let readSong: @MainActor () -> PlayerTrack
     var showsMenu = true
     let onPlay: () -> Void
 
+    init(song: PlayerTrack, showsMenu: Bool = true, onPlay: @escaping () -> Void) {
+        self.readSong = { song }
+        self.showsMenu = showsMenu
+        self.onPlay = onPlay
+    }
+
+    init(song: @escaping @MainActor () -> PlayerTrack, showsMenu: Bool = true, onPlay: @escaping () -> Void) {
+        self.readSong = song
+        self.showsMenu = showsMenu
+        self.onPlay = onPlay
+    }
+
     var body: some View {
+        let song = readSong()
         if showsMenu {
             SongMenuHost(track: song, play: onPlay) { configuration in
-                row.contextMenu { ReferenceSongMenuContents(configuration: configuration) }
+                row(for: song).contextMenu { ReferenceSongMenuContents(configuration: configuration) }
             }
         } else {
-            row
+            row(for: song)
         }
     }
 
-    private var row: some View {
+    private func row(for song: PlayerTrack) -> some View {
         Button(action: onPlay) {
             HStack(spacing: 12) {
                 ArtworkImage(

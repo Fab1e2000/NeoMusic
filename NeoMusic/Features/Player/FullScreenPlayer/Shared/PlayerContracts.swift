@@ -60,11 +60,28 @@ public struct PlayerQueueEntry: Identifiable, Sendable {
 
 public struct PlayerHistoryEntry: Identifiable, Equatable, Sendable {
     public let id: UUID
-    public let song: PlayerTrack
+    private let snapshot: PlayerTrack
+    private let readSong: (@MainActor @Sendable () -> PlayerTrack)?
+    let artworkIdentity: ObjectIdentifier?
+    @MainActor public var song: PlayerTrack { readSong?() ?? snapshot }
 
     public init(id: UUID, song: PlayerTrack) {
         self.id = id
-        self.song = song
+        self.snapshot = song
+        self.readSong = nil
+        self.artworkIdentity = nil
+    }
+
+    public init(id: UUID, artworkIdentity: ObjectIdentifier, song: PlayerTrack,
+                liveSong: @escaping @MainActor @Sendable () -> PlayerTrack) {
+        self.id = id
+        self.snapshot = song
+        self.readSong = liveSong
+        self.artworkIdentity = artworkIdentity
+    }
+
+    public static func == (lhs: PlayerHistoryEntry, rhs: PlayerHistoryEntry) -> Bool {
+        lhs.id == rhs.id && lhs.artworkIdentity == rhs.artworkIdentity && lhs.snapshot == rhs.snapshot
     }
 }
 

@@ -299,9 +299,19 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
             let offsets: [CGFloat] = count > 3
                 ? [top, collapsed - 1, collapsed, 300, bottom]
                 : [top, collapsed]
-            for offset in offsets {
-                list.contentOffset.y = offset
+            for rawOffset in offsets {
+                list.contentOffset.y = rawOffset
+                list.layoutIfNeeded()
+                let offset: CGFloat
+                if rawOffset == bottom, count > 3 {
+                    offset = max(top, list.contentSize.height + list.adjustedContentInset.bottom - list.bounds.height)
+                    list.contentOffset.y = offset
+                    list.layoutIfNeeded()
+                } else {
+                    offset = rawOffset
+                }
                 let position = list.contentOffset
+                let settledSize = list.contentSize
                 list.layoutIfNeeded()
                 let header = try XCTUnwrap(list.queueHeader)
                 let frame = list.convert(header.bounds, from: header).offsetBy(dx: 0, dy: -list.bounds.minY)
@@ -312,7 +322,8 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
                 XCTAssertEqual(list.verticalScrollIndicatorInsets.bottom, NowPlayingQueueList.bottomFadeHeight)
                 XCTAssertEqual(list.contentOffset, position)
                 XCTAssertEqual(list.contentInset, contentInset)
-                XCTAssertEqual(list.contentSize, size)
+                XCTAssertEqual(list.contentSize, settledSize)
+                XCTAssertEqual(list.contentSize.width, size.width)
             }
             if count > 3 {
                 let last = IndexPath(item: count - 1, section: 1)
@@ -428,9 +439,13 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
         XCTAssertEqual(release(from: 0, at: -20, projected: -159, velocity: -0.1), rest)
         XCTAssertEqual(release(from: 0, at: -20, projected: -100, velocity: -0.5), rest)
         XCTAssertEqual(release(from: 80, at: 20, projected: -600, velocity: -2.66), rest)
+        XCTAssertEqual(release(from: 300, at: 200, projected: -600, velocity: -2.66), rest)
+        XCTAssertNil(scroll.animatedContentOffset, "A fast return from deep in the queue preserves release velocity to Continue Playing")
+        XCTAssertEqual(release(from: 0.33, at: -160, projected: -200, velocity: -1.8), rest + historyRest,
+                       "Sub-point pixel rounding at Continue Playing rest still reveals History")
         XCTAssertEqual(release(from: 80, at: 0, projected: -600, velocity: -2.66), rest)
         XCTAssertEqual(release(from: 80, at: -170, projected: -600, velocity: -2.66), rest)
-        XCTAssertEqual(release(from: 0, at: -170, projected: -600, velocity: -2.66), rest - 600)
+        XCTAssertEqual(release(from: 0, at: -170, projected: -600, velocity: -2.66), rest + min(historyRest, -600))
         XCTAssertEqual(release(from: 0, at: historyRest - 10, projected: historyRest - 20, velocity: -1.8),
                        rest + historyRest - 20)
         XCTAssertEqual(release(from: 0, at: historyRest, projected: historyRest - 200), rest + historyRest - 200)
@@ -555,6 +570,17 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
         try await settle(host)
         XCTAssertEqual(source.snapshot().sectionIdentifiers, [.header, .queue])
         XCTAssertEqual(list.contentOffset.y, list.queueRestOffset, accuracy: 1)
+
+        let deepQueueOffset = list.queueRestOffset + inputs.headerHeight + 120
+        list.contentOffset.y = deepQueueOffset
+        update.trackTransitionKey = "passive-switch-while-browsing-queue"
+        update.songHeader = NowPlayingQueueSongHeader(
+            song: PlayerTrack(id: "next-current", title: "Next", artists: "Artist", albumTitle: "Album", coverURL: nil, duration: 60),
+            artworkNamespace: update.songHeader.artworkNamespace
+        )
+        coordinator.update(with: update)
+        XCTAssertEqual(list.contentOffset.y, deepQueueOffset, accuracy: 1,
+                       "A track change while browsing deep in the queue must preserve the user's scroll position")
         await model.flushQueuePersistence()
     }
 
@@ -863,10 +889,25 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
     }
 }
 
+private final class QueueDragTestPanGestureRecognizer: UIPanGestureRecognizer {
+    private var simulatedTranslation: CGPoint = .zero
+
+    override func setTranslation(_ translation: CGPoint, in view: UIView?) {
+        simulatedTranslation = translation
+        super.setTranslation(translation, in: view)
+    }
+
+    override func translation(in view: UIView?) -> CGPoint {
+        state == .possible ? simulatedTranslation : super.translation(in: view)
+    }
+}
+
 private final class QueueDragTestScrollView: UIScrollView {
     var isSimulatingDrag = false
     var animatedContentOffset: CGPoint?
+    private let simulatedPan = QueueDragTestPanGestureRecognizer()
     override var isDragging: Bool { isSimulatingDrag }
+    override var panGestureRecognizer: UIPanGestureRecognizer { simulatedPan }
 
     convenience init(matching scrollView: UIScrollView) {
         self.init(frame: scrollView.bounds)

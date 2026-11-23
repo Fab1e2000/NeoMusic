@@ -38,9 +38,25 @@ final class PlaybackTests: XCTestCase {
         let first = try XCTUnwrap(history.first)
         let upcoming = Array(player.entryIDs.dropFirst(player.currentIndex + 1))
         player.playFromHistory(first.id)
+        XCTAssertFalse(player.hasUserQueuedUpcoming, "Playing from History must not mark the track as a pending user-queued item")
         try await waitForTrackHistory { player.current.id == "a" && engine.isPlaybackConfirmed }
         XCTAssertEqual(Array(player.entryIDs.dropFirst(player.currentIndex + 1)), upcoming)
         XCTAssertEqual(player.playbackHistory.map(\.song.id), ["a", "a", "b"])
+        player.skipForward()
+        XCTAssertEqual(player.current.id, "missing")
+        player.select(player.currentIndex - 1)
+        XCTAssertEqual(player.playbackHistory.map(\.song.id), ["a", "a", "b"],
+                       "Returning to the last confirmed entry after an unconfirmed switch must not duplicate it in History")
+        player.togglePlayback()
+        try await waitForTrackHistory { engine.isPlaybackConfirmed }
+
+        var updatedArtwork = song("a")
+        let coverFile = directory.appendingPathComponent("history-cover.png")
+        updatedArtwork.artwork = .file(coverFile)
+        updatedArtwork.artworkURL = coverFile
+        player.updateArtwork(["a": updatedArtwork])
+        XCTAssertEqual(player.playbackHistory.first?.song.artworkURL, coverFile,
+                       "History entries must receive live artwork updates")
 
         player.clearPlaybackHistory()
         player.togglePlayback()

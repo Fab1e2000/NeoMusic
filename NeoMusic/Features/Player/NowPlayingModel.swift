@@ -42,7 +42,7 @@ final class NowPlayingModel {
     func playFromHistory(_ eventID: UUID) {
         guard let event = playbackHistory.first(where: { $0.id == eventID }) else { return }
         if hasCurrent {
-            insertNext([event.song])
+            insertNext([event.song], userQueued: false)
             select(currentIndex + 1)
             if !isPlaying, errorMessage == nil { togglePlayback() }
         } else {
@@ -312,9 +312,14 @@ final class NowPlayingModel {
            audio?.advancePrepared() == true {
             return
         }
+        let selectedEntry = entryIDs[index]
         currentIndex = index
-        recommendedEntries.remove(entryIDs[index])
+        recommendedEntries.remove(selectedEntry)
+        userQueuedIDs.remove(selectedEntry)
         playbackGeneration &+= 1
+        if lastRecordedPlayback?.entryID == selectedEntry {
+            lastRecordedPlayback?.generation = playbackGeneration
+        }
         updatingTime = true; elapsed = 0; updatingTime = false
         startCurrent()
         if let continuation { replenish(continuation, false, false) }
@@ -432,7 +437,7 @@ final class NowPlayingModel {
         startCurrent()
     }
 
-    func insertNext(_ songs: [LibrarySongItem]) {
+    func insertNext(_ songs: [LibrarySongItem], userQueued: Bool = true) {
         guard !songs.isEmpty else { return }
         queueRestorationFailed = false
         let ids = songs.map { _ in UUID() }
@@ -440,7 +445,7 @@ final class NowPlayingModel {
         queue.insert(contentsOf: songs, at: position)
         entryIDs.insert(contentsOf: ids, at: position)
         originalOrder.append(contentsOf: ids)
-        userQueuedIDs.formUnion(ids)
+        if userQueued { userQueuedIDs.formUnion(ids) }
         prepareNext()
         saveQueue()
     }
@@ -759,7 +764,11 @@ final class NowPlayingModel {
             let quality = self.preparedQuality
             self.currentIndex = index
             self.recommendedEntries.remove(entry)
+            self.userQueuedIDs.remove(entry)
             self.playbackGeneration &+= 1
+            if self.lastRecordedPlayback?.entryID == entry {
+                self.lastRecordedPlayback?.generation = self.playbackGeneration
+            }
             self.loadedEntry = entry
             self.actualQuality = quality
             self.errorMessage = nil
@@ -1039,10 +1048,7 @@ final class NowPlayingModel {
         var changed = false
         var currentChanged = false
         for (id, incoming) in replacements {
-            guard let indices = artworkQueueIndex?.indices[id], let first = indices.first else { continue }
             let offline = offlineSong?(id)
-            if offline == nil, let owner = queue[first].onlineOwnerID,
-               !hasResolvedOnlineIdentity || owner != resolvedOnlineOwnerID { continue }
             var replacement = incoming
             if let offline {
                 let file: URL?
@@ -1053,12 +1059,22 @@ final class NowPlayingModel {
                     replacement = offline
                 }
             }
-            // Occurrences can share their artwork state. Check the playing occurrence first.
-            if hasCurrent, current.id == id {
-                currentChanged = current.publishArtwork(from: replacement) || currentChanged
+            if let indices = artworkQueueIndex?.indices[id], let first = indices.first {
+                if offline != nil || queue[first].onlineOwnerID == nil
+                    || (hasResolvedOnlineIdentity && queue[first].onlineOwnerID == resolvedOnlineOwnerID) {
+                    // Occurrences can share their artwork state. Check the playing occurrence first.
+                    if hasCurrent, current.id == id {
+                        currentChanged = current.publishArtwork(from: replacement) || currentChanged
+                    }
+                    for index in indices where index != currentIndex {
+                        changed = queue[index].publishArtwork(from: replacement) || changed
+                    }
+                }
             }
-            for index in indices where index != currentIndex {
-                changed = queue[index].publishArtwork(from: replacement) || changed
+            for index in trackPlaybackEvents.indices where trackPlaybackEvents[index].song.id == id {
+                if offline == nil, let owner = trackPlaybackEvents[index].song.onlineOwnerID,
+                   !hasResolvedOnlineIdentity || owner != resolvedOnlineOwnerID { continue }
+                changed = trackPlaybackEvents[index].song.publishArtwork(from: replacement) || changed
             }
         }
         if changed || currentChanged { cachedQueueContent = nil }

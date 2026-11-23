@@ -17,7 +17,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
     var history: [PlayerHistoryEntry] = []
     var trackTransitionKey: String = ""
     var subtitle: String = "接下来播放的歌曲"
-    let songHeader: NowPlayingQueueSongHeader
+    var songHeader: NowPlayingQueueSongHeader
     var onImportLyrics: (() -> Void)? = nil
     let headerHeight: CGFloat
     let horizontalInset: CGFloat
@@ -58,10 +58,30 @@ struct NowPlayingQueueList: UIViewRepresentable {
                 history.boundarySupplementaryItems = [header]
                 return history
             }
-            return NSCollectionLayoutSection.list(
+            if identifier == .header {
+                let headerHeight = max(coordinator?.latest?.headerHeight ?? NowPlayingQueuePage.songHeaderHeight, 1)
+                let rowSize = NSCollectionLayoutSize(widthDimension: .fractionalWidth(1),
+                                                     heightDimension: .absolute(headerHeight))
+                let group = NSCollectionLayoutGroup.vertical(layoutSize: rowSize,
+                    subitems: [NSCollectionLayoutItem(layoutSize: rowSize)])
+                return NSCollectionLayoutSection(group: group)
+            }
+            let listSection = NSCollectionLayoutSection.list(
                 using: identifier == .queue ? queueConfiguration : configuration,
                 layoutEnvironment: environment
             )
+            if identifier == .queue {
+                let queueHeader = NSCollectionLayoutBoundarySupplementaryItem(
+                    layoutSize: .init(widthDimension: .fractionalWidth(1),
+                                      heightDimension: .estimated(100)),
+                    elementKind: UICollectionView.elementKindSectionHeader,
+                    alignment: .top
+                )
+                queueHeader.pinToVisibleBounds = true
+                queueHeader.zIndex = 2
+                listSection.boundarySupplementaryItems = [queueHeader]
+            }
+            return listSection
         }
 
         let collectionView = EdgeFadedCollectionView(frame: .zero, collectionViewLayout: layout)
@@ -138,6 +158,12 @@ struct NowPlayingQueueList: UIViewRepresentable {
             return supplementaryView(forElementKind: UICollectionView.elementKindSectionHeader,
                               at: IndexPath(item: 0, section: index))
                 as? UICollectionViewListCell
+        }
+
+        private func section(for cell: UICollectionViewCell) -> Coordinator.Section? {
+            guard let source = dataSource as? UICollectionViewDiffableDataSource<Coordinator.Section, Coordinator.Item>,
+                  let indexPath = indexPath(for: cell) else { return nil }
+            return source.sectionIdentifier(for: indexPath.section)
         }
 
         private let maskedCells = NSHashTable<UICollectionViewCell>.weakObjects()
@@ -355,7 +381,20 @@ struct NowPlayingQueueList: UIViewRepresentable {
 
         override func layoutSubviews() {
             super.layoutSubviews()
-            collectionView.frame = bounds.insetBy(dx: -overflow, dy: 0)
+            let targetFrame = bounds.insetBy(dx: -overflow, dy: 0)
+            guard collectionView.frame != targetFrame else { return }
+            let hadZeroHeight = collectionView.bounds.height == 0 && targetFrame.height > 0
+            let queueOffset = (collectionView as? EdgeFadedCollectionView).map {
+                $0.contentOffset.y - $0.queueRestOffset
+            } ?? 0
+            collectionView.frame = targetFrame
+            if hadZeroHeight, let faded = collectionView as? EdgeFadedCollectionView, faded.historyHeight > 0 {
+                faded.layoutIfNeeded()
+                let targetY = faded.queueRestOffset + max(0, queueOffset)
+                if abs(faded.contentOffset.y - targetY) > 0.5 {
+                    faded.setContentOffset(CGPoint(x: faded.contentOffset.x, y: targetY), animated: false)
+                }
+            }
         }
 
         override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
@@ -471,7 +510,8 @@ struct NowPlayingQueueList: UIViewRepresentable {
             guard let dataSource else { return false }
             let previousList = latest
             latest = list
-            if !list.visualsActive || previousList?.player !== list.player {
+            if !list.visualsActive || previousList?.player !== list.player
+                || (isReturningAfterHistoryClear && (!list.history.isEmpty || collectionView?.isScrollAnimating != true)) {
                 isReturningAfterHistoryClear = false
             }
             let previousHistory = displayedHistory
@@ -479,6 +519,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
             collectionView?.songHeaderHeight = list.headerHeight
             let trackChanged = hasApplied && !list.trackTransitionKey.isEmpty
                 && previousList?.trackTransitionKey != list.trackTransitionKey
+            let sameSong = previousList?.songHeader.song.id == list.songHeader.song.id
             let returnsToQueue = pendingReturnToQueueFromHistory
             pendingReturnToQueueFromHistory = false
             let entriesChanged = !hasApplied || previousList?.version != list.version
@@ -489,11 +530,19 @@ struct NowPlayingQueueList: UIViewRepresentable {
             let previousContentOffset = collectionView?.contentOffset.y ?? 0
             let previousQueueOffset = previousContentOffset - (collectionView?.queueRestOffset ?? 0)
             let staysInHistory = hasApplied && !previousHistory.isEmpty
-                && previousQueueOffset < 0 && !history.isEmpty && !returnsToQueue
+                && previousQueueOffset < -HistoryStops.restTolerance && !history.isEmpty && !returnsToQueue
+            let browsingDeepInQueue = previousQueueOffset >= list.headerHeight - HistoryStops.restTolerance
+                || collectionView?.isTracking == true || collectionView?.isDecelerating == true
+                || collectionView?.hasActiveDrag == true
+            let targetQueueOffset = (trackChanged && !browsingDeepInQueue && !sameSong) ? 0 : max(0, previousQueueOffset)
             let insetChanged = previousList?.horizontalInset != list.horizontalInset
+            let headerHeightChanged = hasApplied && previousList?.headerHeight != list.headerHeight
             let headerChanged = previousList?.songHeader != list.songHeader
-                || previousList?.headerHeight != list.headerHeight
+                || headerHeightChanged
                 || (previousList?.onImportLyrics == nil) != (list.onImportLyrics == nil)
+            if headerHeightChanged {
+                collectionView?.collectionViewLayout.invalidateLayout()
+            }
             var refreshed = false
             if (previousList?.subtitle != list.subtitle || insetChanged || previousList?.player !== list.player),
                let header = collectionView?.queueHeader {
@@ -517,11 +566,15 @@ struct NowPlayingQueueList: UIViewRepresentable {
                 if (returnsToQueue || trackChanged || historyOrderChanged), let collectionView {
                     if returnsToQueue {
                         animateReturnToQueue(in: collectionView, reason: "playFromHistory")
+                    } else if staysInHistory, let target = snapshotTargetOffset {
+                        collectionView.layoutIfNeeded()
+                        if abs(collectionView.contentOffset.y - target) > 0.5 {
+                            collectionView.setContentOffset(CGPoint(x: collectionView.contentOffset.x, y: target), animated: false)
+                        }
                     } else if !staysInHistory && !isReturningAfterHistoryClear {
                         if historyOrderChanged { collectionView.layoutIfNeeded() }
-                        let offset = trackChanged ? 0 : max(0, previousQueueOffset)
                         let reason = trackChanged ? "trackChanged" : "historyOrderChanged"
-                        setQueueOffset(offset, in: collectionView, reason: reason)
+                        setQueueOffset(targetQueueOffset, in: collectionView, reason: reason)
                     }
                     scrollViewDidScroll(collectionView)
                 }
@@ -578,6 +631,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
                 snapshot.reconfigureItems(requestedItemIdentifiers.filter(changedItems.contains))
                 list.services?.diagnostics?.event("QueueSnapshot")
                 snapshotTargetOffset = nil
+                let historySectionToggled = previousHistory.isEmpty != history.isEmpty
                 if staysInHistory, let collectionView {
                     // Keep older rows in place. At the newest end, follow the inserted row.
                     snapshotTargetOffset = min(previousContentOffset, collectionView.queueRestOffset - 0.5)
@@ -588,11 +642,14 @@ struct NowPlayingQueueList: UIViewRepresentable {
                         snapshotTargetOffset = collectionView.queueRestOffset + historyStop
                             + max(0, previousQueueOffset - previousHistoryStop)
                     }
+                } else if !staysInHistory, historyOrderChanged, !historySectionToggled, let collectionView {
+                    snapshotTargetOffset = collectionView.queueRestOffset + targetQueueOffset
                 }
                 snapshotApplicationCount += 1
                 let application = snapshotApplicationCount
-                dataSource.apply(snapshot, animatingDifferences: hasApplied && !returnsToQueue && !isReturningAfterHistoryClear
-                    && (!historyOrderChanged || staysInHistory)) { [weak self] in
+                let animatesDifferences = hasApplied && !returnsToQueue && !isReturningAfterHistoryClear
+                    && (!historyOrderChanged || staysInHistory || (!historySectionToggled && entriesChanged))
+                dataSource.apply(snapshot, animatingDifferences: animatesDifferences) { [weak self] in
                     guard let self, self.snapshotApplicationCount == application else { return }
                     self.snapshotTargetOffset = nil
                 }
@@ -844,7 +901,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
             case .track(let id):
                 guard let entry = entriesByID[id] else { return }
                 cell.contentConfiguration = UIHostingConfiguration {
-                    NowPlayingQueueRow(song: entry.song) { [weak self] in
+                    NowPlayingQueueRow(song: { entry.song }) { [weak self] in
                         guard let self, let index = self.entriesByID[id]?.queueIndex else { return }
                         self.latest?.onPlay(index)
                     }
@@ -867,10 +924,13 @@ struct NowPlayingQueueList: UIViewRepresentable {
             case .history(let id):
                 guard let entry = historyByID[id] else { return }
                 cell.contentConfiguration = UIHostingConfiguration {
-                    NowPlayingQueueRow(song: entry.song, showsMenu: false) { [weak self] in
+                    NowPlayingQueueRow(song: { entry.song }) { [weak self] in
                         self?.playFromHistory(id)
                     }
+                    .environment(latest.player)
+                    .environment(latest.actions)
                     .environment(latest.services)
+                    .listRowSeparator(.hidden)
                 }
                 .margins(.horizontal, inset)
                 .margins(.vertical, 4)
@@ -956,7 +1016,11 @@ struct NowPlayingQueueList: UIViewRepresentable {
             guard let latest else { return }
             let historyHeight = collectionView?.historyHeight ?? 0
             let offset = scrollView.contentOffset.y - (historyHeight - scrollView.adjustedContentInset.top)
-            let headerOffset = min(max(offset, 0), latest.headerHeight)
+            if isReturningAfterHistoryClear, !scrollView.isScrollAnimating,
+               offset >= -HistoryStops.restTolerance {
+                finishHistoryClear()
+            }
+            let headerOffset = clampedHeaderOffset(for: offset, headerHeight: latest.headerHeight)
             if scrollView.isDragging, let start = dragStartOffset, !didPlayHistoryFeedback,
                let stops = historyStops(in: scrollView),
                stops.crossedThreshold(from: start, at: offset) {
@@ -973,6 +1037,12 @@ struct NowPlayingQueueList: UIViewRepresentable {
             latest.onScroll(min(offset, latest.headerHeight))
         }
 
+        private func clampedHeaderOffset(for offset: CGFloat, headerHeight: CGFloat) -> CGFloat {
+            guard offset > 0 else { return 0 }
+            guard offset < headerHeight - HistoryStops.restTolerance else { return headerHeight }
+            return offset
+        }
+
         private var scrollFeedback: UIImpactFeedbackGenerator?
         var scrollFeedbackHandler: (() -> Void)?
         private var pendingCollapseFeedbackOffset: CGFloat?
@@ -985,6 +1055,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
         // Positions are relative to Continue Playing.
         private struct HistoryStops {
             static let triggerDistance: CGFloat = 160
+            static let restTolerance: CGFloat = 0.5
             let rest: CGFloat
             let revealThreshold: CGFloat
             private var returnThreshold: CGFloat { min(0, rest + Self.triggerDistance) }
@@ -995,17 +1066,19 @@ struct NowPlayingQueueList: UIViewRepresentable {
             }
 
             func crossedThreshold(from start: CGFloat, at offset: CGFloat) -> Bool {
-                if start >= 0 { return start == 0 && offset <= revealThreshold }
+                if start >= -Self.restTolerance {
+                    return start <= Self.restTolerance && offset <= revealThreshold
+                }
                 return offset >= returnThreshold
             }
 
             func releaseTarget(from start: CGFloat, at offset: CGFloat, projected: CGFloat,
                                velocity: CGFloat) -> CGFloat? {
                 let movingDeeper = velocity < 0 && projected < offset
-                if start >= 0 {
+                if start >= -Self.restTolerance {
                     guard min(offset, projected) < 0 else { return nil }
                     // Returning from within the queue lands here. A new drag from rest can reveal History.
-                    if start > 0 { return 0 }
+                    if start > Self.restTolerance { return 0 }
                     if projected < rest, movingDeeper || offset <= rest { return nil }
                     let reveal = offset <= revealThreshold || (movingDeeper && projected <= revealThreshold)
                     return reveal ? rest : 0
@@ -1087,12 +1160,15 @@ struct NowPlayingQueueList: UIViewRepresentable {
                 let historyHeight = collectionView?.historyHeight ?? 0
                 let queueRest = historyHeight - scrollView.adjustedContentInset.top
                 let start = dragStartOffset ?? 0
-                let fastHistoryExit = start < 0
+                let fastHistoryExit = start < -HistoryStops.restTolerance
                     && target == queueRest && offset < queueRest
                     && velocity.y >= Self.fastHistoryExitVelocity
-                let fastHistoryEntry = start >= 0 && target < queueRest
+                let fastHistoryEntry = start >= -HistoryStops.restTolerance && target < queueRest
                     && velocity.y <= -Self.fastHistoryExitVelocity
-                let preservesVelocity = historyHeight > 0 && (fastHistoryExit || fastHistoryEntry)
+                let fastQueueReturn = start > HistoryStops.restTolerance
+                    && target == queueRest && offset > queueRest + (latest?.headerHeight ?? 0)
+                    && velocity.y <= -Self.fastHistoryExitVelocity
+                let preservesVelocity = (historyHeight > 0 && (fastHistoryExit || fastHistoryEntry)) || fastQueueReturn
                 releaseSnap = (target, preservesVelocity)
                 // Leave the ordinary snap to UIKit's short animated scroll at drag end.
                 targetContentOffset.pointee.y = preservesVelocity ? target : offset
@@ -1139,7 +1215,9 @@ struct NowPlayingQueueList: UIViewRepresentable {
             dragStartOffset = offset
             releaseSnap = nil
             didPlayHistoryFeedback = false
-            pendingCollapseFeedbackOffset = offset >= 0 ? min(offset, latest.headerHeight) : nil
+            pendingCollapseFeedbackOffset = offset >= -HistoryStops.restTolerance
+                ? clampedHeaderOffset(for: offset, headerHeight: latest.headerHeight)
+                : nil
             scrollFeedback?.prepare()
             latest.services?.diagnostics?.queueScroll(
                 "scrollViewWillBeginDragging offset=\(scrollView.contentOffset.y) queueOffset=\(offset)"

@@ -183,10 +183,10 @@ struct NowPlayingArtworkPage: View {
                     .position(x: layout.x(329.875), y: layout.pageY(501) - extraInformationHeight / 2 - controlsOverflow)
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
-            .task(id: ArtworkPrefetchKey(urls: visualsActive ? player.adjacentArtworkURLs : [], size: displayedArtworkSize, scale: displayScale)) {
+            .task(id: ArtworkPrefetchKey(urls: visualsActive ? player.adjacentArtworkURLs : [], size: artworkSize, scale: displayScale)) {
                 guard visualsActive else { return }
                 guard let provider = services?.artwork else { return }
-                let pixels = Int((displayedArtworkSize * displayScale / 64).rounded(.up) * 64)
+                let pixels = Int(artworkSize * displayScale)
                 guard pixels > 0 else { return }
                 let requests = player.adjacentArtworkURLs.map {
                     PlayerArtworkRequest(url: $0, pixelWidth: pixels, pixelHeight: pixels)

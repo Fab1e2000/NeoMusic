@@ -301,6 +301,7 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
             QueueLinkedArtwork(
                 song: song,
                 page: page,
+                pageChange: pageChange,
                 offset: queueHeaderOffset,
                 artworkPageFrame: artworkPageFrame,
                 isVisible: !showsArtworkInQueue,
@@ -710,6 +711,7 @@ private struct QueueLinkedArtwork<ArtworkTransition: ViewModifier>: View {
     @Environment(PlayerState.self) private var player
     let song: PlayerTrack
     let page: NowPlayingPage
+    let pageChange: NowPlayingPageChange?
     let offset: QueueHeaderOffset
     let artworkPageFrame: CGRect
     let isVisible: Bool
@@ -749,7 +751,7 @@ private struct QueueLinkedArtwork<ArtworkTransition: ViewModifier>: View {
                     .modifier(QueueArtworkScrollPosition(page: page, offset: offset, frame: frame))
             }
         }
-        .modifier(QueueArtworkScrollMask(page: page, offset: offset))
+        .modifier(QueueArtworkScrollMask(page: page, pageChange: pageChange, offset: offset))
         .animation(nil) { $0.opacity(isVisible ? 1 : 0) }
         .accessibilityHidden(!isVisible)
         .allowsHitTesting(false)
@@ -776,6 +778,7 @@ private struct QueueArtworkScrollMask: ViewModifier {
     @Environment(\.nowPlayingLayout) private var layout
     @Environment(\.nowPlayingControlsOverflow) private var controlsOverflow
     let page: NowPlayingPage
+    let pageChange: NowPlayingPageChange?
     let offset: QueueHeaderOffset
 
     func body(content: Content) -> some View {
@@ -783,20 +786,22 @@ private struct QueueArtworkScrollMask: ViewModifier {
         content.mask(alignment: .top) {
             GeometryReader { geometry in
                 let isQueue = page == .queue
+                let clipsQueue = isQueue || (pageChange?.source == .queue && offset.points != 0)
                 let overflow = max(geometry.size.width, geometry.size.height)
-                let top = isQueue ? 0 : -overflow
+                let top = isQueue ? 0 : (clipsQueue ? min(0, NowPlayingSongHeader.topInset) : -overflow)
                 let bottomInset = NowPlayingQueuePage.bottomContentInset(layout: layout, controlsOverflow: controlsOverflow)
-                let bottom = isQueue ? max(0, min(geometry.size.height - bottomInset, layout.pageY(557)))
+                let bottom = clipsQueue ? max(0, min(geometry.size.height - bottomInset, layout.pageY(557)))
                     : geometry.size.height + overflow
                 let topFade = isQueue ? min(24, max(0, -offset.points), bottom) : 0
                 let bottomFade = isQueue ? min(NowPlayingQueueList.bottomFadeHeight, bottom - topFade) : 0
                 VStack(spacing: 0) {
                     NowPlayingQueueTopFade(height: topFade)
-                    Rectangle().frame(height: bottom - top - topFade - bottomFade)
+                    Rectangle().frame(height: max(0, bottom - top - topFade - bottomFade))
                     NowPlayingQueueTopFade(height: bottomFade).rotationEffect(.degrees(180))
                 }
                 .padding(.horizontal, -overflow)
                 .offset(y: top)
+                .transaction { $0.animation = nil }
             }
         }
     }

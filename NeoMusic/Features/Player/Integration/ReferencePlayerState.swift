@@ -76,7 +76,12 @@ import FullScreenPlayer
     }
 
     var playbackHistory: [PlayerHistoryEntry] {
-        model.playbackHistory.map { PlayerHistoryEntry(id: $0.id, song: Self.convert($0.song)) }
+        model.playbackHistory.map { event in
+            let song = event.song
+            return PlayerHistoryEntry(id: event.id, artworkIdentity: song.artworkIdentity, song: Self.convert(song)) {
+                Self.convert(song)
+            }
+        }
     }
 
     init(model: NowPlayingModel) { self.model = model }
