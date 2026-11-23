@@ -32,6 +32,9 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
     private let isActive: Bool
     private var visualsActive: Bool { isActive && scenePhase == .active }
     private var animatesPageChanges: Bool { visualsActive && !accessibilityReduceMotion }
+    private var entersArtworkWithDetails: Bool {
+        page == .artwork && pageChange?.source == .queue && pageChange?.stationaryArtworkPage == .artwork
+    }
     private var showsResidentQueueHeader: Bool { page == .queue && pageChange == nil }
     // Direct lyrics/queue changes keep one header resident instead of swapping its text and actions.
     private var showsSharedSongHeader: Bool {
@@ -319,7 +322,7 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
                 pageChange: pageChange,
                 offset: queueHeaderOffset,
                 artworkPageFrame: artworkPageFrame,
-                isVisible: page != .queue || (pageChange != nil && pageChange?.stationaryArtworkPage == nil),
+                isVisible: !entersArtworkWithDetails && (page != .queue || (pageChange != nil && pageChange?.stationaryArtworkPage == nil)),
                 reducesMotion: accessibilityReduceMotion,
                 artworkTransition: artworkTransition
             )
@@ -347,11 +350,23 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
             usesArtworkTransition: false,
             showsArtwork: false
         )
+        .overlay(alignment: .topLeading) {
+            if artworkPageFrame.width > 0 {
+                NowPlayingPortraitArtwork(song: song, isArtworkPage: true, decodeSize: artworkPageFrame.size)
+                    .frame(width: artworkPageFrame.width, height: artworkPageFrame.height)
+                    .scaleEffect(player.isPlaying ? 1 : NowPlayingArtworkPage.pausedArtworkScale)
+                    .position(x: artworkPageFrame.midX, y: artworkPageFrame.midY)
+                    .opacity(entersArtworkWithDetails || (page == .queue && queueHeaderOffset.isArtworkOffscreen) ? 1 : 0)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
+        .geometryGroup()
         .offset(y: yOffset)
         .animation(titleSpatialAnimation, value: isVisible)
         .opacity(isVisible ? 1 : 0)
         .animation(animatesPageChanges
-                   ? (isVisible ? .easeInOut(duration: 0.125).delay(0.15)
+                   ? (isVisible ? (entersArtworkWithDetails ? .easeOut(duration: 0.16) : .easeInOut(duration: 0.125).delay(0.15))
                                 : .easeInOut(duration: 0.12).delay(0.04)) : nil,
                    value: isVisible)
         .allowsHitTesting(isVisible)
@@ -387,9 +402,9 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
             header: NowPlayingQueueSongHeader(
                 song: song,
                 artworkNamespace: pageArtworkNamespace,
-                isVisible: showsResidentQueueHeader,
                 artworkDecodeSize: artworkPageFrame.width > 0 ? artworkPageFrame.size : nil
             ),
+            showsSongHeader: showsResidentQueueHeader,
             onImportLyrics: importLyricsAction(for: song),
             onScroll: { offset in
                 if queueHeaderOffset.points != -offset { queueHeaderOffset.points = -offset }

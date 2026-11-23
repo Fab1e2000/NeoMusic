@@ -7,6 +7,7 @@ struct NowPlayingQueuePage: View {
     @Environment(\.nowPlayingControlsOverflow) private var controlsOverflow
 
     let header: NowPlayingQueueSongHeader
+    var showsSongHeader = true
     let onImportLyrics: (() -> Void)?
     let onScroll: (CGFloat) -> Void
     var onViewportHeightChange: (CGFloat) -> Void = { _ in }
@@ -22,6 +23,7 @@ struct NowPlayingQueuePage: View {
             trackTransitionKey: player.currentTrackTransitionKey,
             subtitle: player.automaticContinuationDescription,
             songHeader: header,
+            showsSongHeader: showsSongHeader,
             onImportLyrics: onImportLyrics,
             headerHeight: Self.songHeaderHeight,
             horizontalInset: 32,
@@ -41,7 +43,6 @@ struct NowPlayingQueuePage: View {
 struct NowPlayingQueueSongHeader: Equatable {
     let song: PlayerTrack
     let artworkNamespace: Namespace.ID
-    var isVisible = true
     var artworkDecodeSize: CGSize? = nil
 }
 

@@ -60,6 +60,25 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
         XCTAssertEqual(accessory.value(forKey: "tintColor") as? UIColor, UIColor.white.withAlphaComponent(0.45))
     }
 
+    func testHandoffHidesHeaderWithoutReplacingMaskedContent() async throws {
+        let (window, host) = try mount(QueueListTestInputs())
+        defer { window.isHidden = true }
+        try await settle(host)
+        let coordinator = try coordinator(in: host.view)
+        var list = try XCTUnwrap(coordinator.latest)
+        let source = try XCTUnwrap(coordinator.dataSource)
+        let marked = try markConfigurations(in: host.view, source: source)
+        let header = try XCTUnwrap(marked[.songHeader])
+        let content = header.contentView
+        for visible in [false, true] {
+            list.showsSongHeader = visible
+            XCTAssertTrue(coordinator.update(with: list))
+            XCTAssertTrue(content === header.contentView)
+            XCTAssertEqual(content.isHidden, !visible)
+            XCTAssertTrue(reconfiguredCells(marked).isEmpty)
+        }
+    }
+
     func testUnchangedInputsSkipApplyAndHeaderChangesLeaveRowsAlone() async throws {
         let inputs = QueueListTestInputs()
         let (window, host) = try mount(inputs)
