@@ -5,6 +5,14 @@ import SwiftUI
 
 @MainActor
 final class PlayerVisibilityTests: XCTestCase {
+    func testArtworkPushFadeSpansScreenTopToRestingCoverAndLetsCoverClearTheScreen() {
+        let fade = NowPlayingArtworkScreenFade(safeAreaTop: 62)
+        let artworkFrame = CGRect(x: 0, y: 11, width: 338, height: 338)
+        XCTAssertEqual(fade.topExtension, 84, accuracy: 0.5)
+        XCTAssertEqual(fade.height(to: artworkFrame.minY), 95, accuracy: 0.5)
+        XCTAssertEqual(artworkFrame.maxY + fade.pushOffset(for: artworkFrame), -fade.topExtension, accuracy: 0.5)
+    }
+
     func testPopupArtworkTargetTracksQueueCoverVisibility() async throws {
         let songs = (0..<30).map { index in
             LibrarySongItem(id: "queue-cover-\(index)", title: "Song \(index)", artist: "Artist",

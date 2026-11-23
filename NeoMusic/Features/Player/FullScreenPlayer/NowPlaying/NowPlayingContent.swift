@@ -36,9 +36,6 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
     private var holdsArtworkAboveQueue: Bool {
         page == .queue && pageChange == nil && queueHeaderOffset.isArtworkOffscreen
     }
-    private var artworkPushOffset: CGFloat {
-        min(NowPlayingPageTransition.motion.artworkDetailsTravel, -artworkPageFrame.maxY)
-    }
     private var artworkPushAnimation: Animation? {
         pushesArtworkWithDetails && animatesPageChanges ? .spring(response: 0.30, dampingFraction: 1) : nil
     }
@@ -87,7 +84,8 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
                 )
                 if let song = player.currentTrack {
                     portraitContent(for: song, layout: layout,
-                                    lyricsBottomExtension: geometry.safeAreaInsets.bottom + 3)
+                                    lyricsBottomExtension: geometry.safeAreaInsets.bottom + 3,
+                                    artworkScreenFade: NowPlayingArtworkScreenFade(safeAreaTop: geometry.safeAreaInsets.top))
                 } else {
                     ContentUnavailableView("当前没有播放歌曲", systemImage: "music.note").foregroundStyle(.white)
                 }
@@ -157,11 +155,12 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
     }
 
     private func portraitContent(for song: PlayerTrack, layout: ReferenceNowPlayingLayout,
-                                 lyricsBottomExtension: CGFloat) -> some View {
+                                 lyricsBottomExtension: CGFloat, artworkScreenFade: NowPlayingArtworkScreenFade) -> some View {
         VStack(spacing: 0) {
             dismissalHandle(layout: layout)
+                .zIndex(1)
 
-            pageContent(for: song, lyricsBottomExtension: lyricsBottomExtension)
+            pageContent(for: song, lyricsBottomExtension: lyricsBottomExtension, artworkScreenFade: artworkScreenFade)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .overlay(alignment: .bottom) {
                     portraitPlayerControlsLayer(for: song)
@@ -277,9 +276,9 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
             Capsule()
                 .fill(.white.opacity(NowPlayingVisualHierarchy.grabberOpacity))
                 .blendMode(.plusLighter)
-                .frame(width: layout.width(60), height: 3.8)
-                .padding(.top, layout.contentY(69))
-                .frame(width: 76, height: 22, alignment: .top)
+                .frame(width: layout.width(60), height: NowPlayingDismissalHandleLayout.capsuleHeight)
+                .padding(.top, NowPlayingDismissalHandleLayout.capsuleTop(in: layout))
+                .frame(width: 76, height: NowPlayingDismissalHandleLayout.height, alignment: .top)
                 .contentShape(.rect)
         }
         .buttonStyle(.plain)
@@ -288,9 +287,12 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
         .accessibilityIdentifier("player.dismiss")
     }
 
-    private func pageContent(for song: PlayerTrack, lyricsBottomExtension: CGFloat) -> some View {
-        ZStack(alignment: .top) {
-            transientArtworkPageContent(for: song)
+    private func pageContent(
+        for song: PlayerTrack, lyricsBottomExtension: CGFloat, artworkScreenFade: NowPlayingArtworkScreenFade
+    ) -> some View {
+        let artworkPushOffset = artworkScreenFade.pushOffset(for: artworkPageFrame)
+        return ZStack(alignment: .top) {
+            transientArtworkPageContent(for: song, artworkPushOffset: artworkPushOffset)
                 .frame(
                     maxWidth: .infinity,
                     maxHeight: .infinity
@@ -338,6 +340,7 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
                 pushOffset: page == .queue && (pushesArtworkWithDetails || holdsArtworkAboveQueue)
                     && !accessibilityReduceMotion ? artworkPushOffset : 0,
                 pushAnimation: artworkPushAnimation,
+                artworkScreenFade: pushesArtworkWithDetails ? artworkScreenFade : nil,
                 fade: animatesPageChanges && pageChange?.stationaryArtworkPage == .lyrics
                     ? NowPlayingPageChange.stationaryFade : nil,
                 reducesMotion: accessibilityReduceMotion,
@@ -351,7 +354,7 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
 
     @ViewBuilder
     private func transientArtworkPageContent(
-        for song: PlayerTrack
+        for song: PlayerTrack, artworkPushOffset: CGFloat
     ) -> some View {
         let isVisible = page == .artwork
         let hiddenOffset = pushesArtworkWithDetails || holdsArtworkAboveQueue
@@ -760,6 +763,7 @@ private struct QueueLinkedArtwork<ArtworkTransition: ViewModifier>: View {
     let holdsArtworkAboveQueue: Bool
     let pushOffset: CGFloat
     let pushAnimation: Animation?
+    let artworkScreenFade: NowPlayingArtworkScreenFade?
     let fade: Animation?
     let reducesMotion: Bool
 
@@ -810,7 +814,9 @@ private struct QueueLinkedArtwork<ArtworkTransition: ViewModifier>: View {
         }
         .modifier(QueueArtworkScrollMask(
             page: page, pageChange: pageChange, offset: offset,
-            artworkTopFade: geometryPage == .artwork ? min(24, max(0, artworkPageFrame.minY)) : 0
+            artworkTopFade: geometryPage == .artwork ? min(24, max(0, artworkPageFrame.minY)) : 0,
+            artworkScreenFade: artworkScreenFade,
+            artworkTop: artworkPageFrame.minY
         ))
         .animation(fade) {
             $0.opacity(isVisible ? 1 : 0)
@@ -852,6 +858,8 @@ private struct QueueArtworkScrollMask: ViewModifier {
     let pageChange: NowPlayingPageChange?
     let offset: QueueHeaderOffset
     var artworkTopFade: CGFloat = 0
+    var artworkScreenFade: NowPlayingArtworkScreenFade?
+    var artworkTop: CGFloat = 0
 
     func body(content: Content) -> some View {
         // Keep the mask attached across page changes so SwiftUI animates a single artwork view.
@@ -860,16 +868,21 @@ private struct QueueArtworkScrollMask: ViewModifier {
                 let isQueue = page == .queue
                 let clipsQueue = pageChange?.stationaryArtworkPage == nil && (isQueue || (pageChange?.source == .queue && offset.points != 0))
                 let overflow = max(geometry.size.width, geometry.size.height)
-                let top = clipsQueue ? -NowPlayingSongHeader.lift : (artworkTopFade > 0 ? 0 : -overflow)
+                let top = artworkScreenFade.map { -$0.topExtension }
+                    ?? (clipsQueue ? -NowPlayingSongHeader.lift : (artworkTopFade > 0 ? 0 : -overflow))
                 let bottomInset = NowPlayingQueuePage.bottomContentInset(layout: layout, controlsOverflow: controlsOverflow)
                 let bottom = clipsQueue ? max(0, min(geometry.size.height - bottomInset, layout.pageY(557)))
                     : geometry.size.height + overflow
-                let topFade = clipsQueue
-                    ? (isQueue ? min(24, max(0, -offset.points), bottom) : 0)
-                    : artworkTopFade
+                let topFade = artworkScreenFade?.height(to: artworkTop)
+                    ?? (clipsQueue ? (isQueue ? min(24, max(0, -offset.points), bottom) : 0) : artworkTopFade)
                 let bottomFade = isQueue ? min(NowPlayingQueueList.bottomFadeHeight, bottom - topFade) : 0
                 VStack(spacing: 0) {
-                    NowPlayingQueueTopFade(height: topFade)
+                    if artworkScreenFade != nil {
+                        LinearGradient(stops: NowPlayingArtworkScreenFade.stops, startPoint: .top, endPoint: .bottom)
+                            .frame(height: topFade)
+                    } else {
+                        NowPlayingQueueTopFade(height: topFade)
+                    }
                     Rectangle().frame(height: max(0, bottom - top - topFade - bottomFade))
                     NowPlayingQueueTopFade(height: bottomFade).rotationEffect(.degrees(180))
                 }
