@@ -10,9 +10,7 @@ struct NowPlayingQueuePage: View {
     let onImportLyrics: (() -> Void)?
     let onScroll: (CGFloat) -> Void
 
-    // Keep the artwork inside both the collection viewport and the transition mask.
-    static let songHeaderTopInset: CGFloat = 1
-    static let songHeaderHeight = songHeaderTopInset + NowPlayingSongHeader.referenceHeight
+    static let songHeaderHeight = NowPlayingSongHeader.topInset + NowPlayingSongHeader.referenceHeight
         + NowPlayingSongHeader.bottomSpacing
 
     var body: some View {
@@ -41,7 +39,7 @@ struct NowPlayingQueuePage: View {
 struct NowPlayingQueueSongHeader: Equatable {
     let song: PlayerTrack
     let artworkNamespace: Namespace.ID
-    var showsArtwork = true
+    var isVisible = true
     var artworkDecodeSize: CGSize? = nil
 }
 

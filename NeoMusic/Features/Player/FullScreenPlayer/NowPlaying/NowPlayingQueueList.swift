@@ -1032,12 +1032,16 @@ struct NowPlayingQueueList: UIViewRepresentable {
                         artworkNamespace: latest.songHeader.artworkNamespace,
                         usesReferenceLayout: true,
                         usesArtworkTransition: false,
-                        showsArtwork: latest.songHeader.showsArtwork,
+                        showsArtwork: latest.songHeader.isVisible,
                         artworkDecodeSize: latest.songHeader.artworkDecodeSize,
                         onImportLyrics: importLyrics
                     )
+                    .opacity(latest.songHeader.isVisible ? 1 : 0)
+                    .allowsHitTesting(latest.songHeader.isVisible)
+                    .accessibilityHidden(!latest.songHeader.isVisible)
+                    .animation(nil, value: latest.songHeader.isVisible)
                     .frame(height: NowPlayingSongHeader.referenceHeight)
-                    .padding(.top, NowPlayingQueuePage.songHeaderTopInset)
+                    .padding(.top, NowPlayingSongHeader.topInset)
                     .frame(height: latest.headerHeight, alignment: .top)
                     .environment(latest.player)
                     .environment(latest.actions)

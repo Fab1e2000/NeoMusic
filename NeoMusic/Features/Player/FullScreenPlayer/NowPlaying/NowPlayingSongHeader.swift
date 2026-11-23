@@ -42,7 +42,8 @@ extension View {
 
 struct NowPlayingSongHeader: View {
     static let referenceHeight: CGFloat = 72
-    static let topInset: CGFloat = -2.75
+    // Keep the shared header inside scroll viewports so its artwork is not clipped.
+    static let topInset: CGFloat = 1
     static let bottomSpacing: CGFloat = 4.75
     static let height = referenceHeight
 
