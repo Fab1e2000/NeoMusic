@@ -32,6 +32,7 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
     private let isActive: Bool
     private var visualsActive: Bool { isActive && scenePhase == .active }
     private var animatesPageChanges: Bool { visualsActive && !accessibilityReduceMotion }
+    private var showsArtworkInQueue: Bool { page == .queue && pageChange == nil }
     init(artworkTransition: ArtworkTransition, initialPage: NowPlayingPage = .artwork, onDismiss: (() -> Void)? = nil,
          geometry: NowPlayingGeometry = NowPlayingGeometry(), isActive: Bool = true) {
         self.artworkTransition = artworkTransition
@@ -302,6 +303,7 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
                 page: page,
                 offset: queueHeaderOffset,
                 artworkPageFrame: artworkPageFrame,
+                isVisible: !showsArtworkInQueue,
                 reducesMotion: accessibilityReduceMotion,
                 artworkTransition: artworkTransition
             )
@@ -369,7 +371,8 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
             header: NowPlayingQueueSongHeader(
                 song: song,
                 artworkNamespace: pageArtworkNamespace,
-                showsArtwork: false
+                showsArtwork: showsArtworkInQueue,
+                artworkDecodeSize: artworkPageFrame.width > 0 ? artworkPageFrame.size : nil
             ),
             onImportLyrics: importLyricsAction(for: song),
             onScroll: { offset in
@@ -709,6 +712,7 @@ private struct QueueLinkedArtwork<ArtworkTransition: ViewModifier>: View {
     let page: NowPlayingPage
     let offset: QueueHeaderOffset
     let artworkPageFrame: CGRect
+    let isVisible: Bool
     let reducesMotion: Bool
 
     let artworkTransition: ArtworkTransition
@@ -747,6 +751,8 @@ private struct QueueLinkedArtwork<ArtworkTransition: ViewModifier>: View {
             }
         }
         .modifier(QueueArtworkScrollMask(page: page, offset: offset))
+        .animation(nil) { $0.opacity(isVisible ? 1 : 0) }
+        .accessibilityHidden(!isVisible)
         .allowsHitTesting(false)
         .padding(.horizontal, -CGFloat(32))
     }

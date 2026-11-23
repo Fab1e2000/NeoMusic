@@ -382,12 +382,16 @@ struct NowPlayingQueueList: UIViewRepresentable {
         private(set) var latest: NowPlayingQueueList?
         private var entriesByID: [PlayerQueueEntry.ID: PlayerQueueEntry] = [:]
         private var historyByID: [PlayerHistoryEntry.ID: PlayerHistoryEntry] = [:]
+        private var displayedHistory: [PlayerHistoryEntry] = []
+        private var isReturningAfterHistoryClear = false
         private(set) var dataSource: UICollectionViewDiffableDataSource<Section, Item>?
         private weak var collectionView: EdgeFadedCollectionView?
         private var hasApplied = false
         private var requestedItemIdentifiers: [Item] = []
         private var currentItemIdentifiers: [Item] = []
         private var nativeOrderMatches = true
+        private var snapshotTargetOffset: CGFloat?
+        private var pendingReturnToQueueFromHistory = false
         private var contentRevision: UInt64 = 0
         private(set) var snapshotApplicationCount = 0
         private var prefetchedArtwork: [IndexPath: Task<Void, Never>] = [:]
@@ -467,15 +471,25 @@ struct NowPlayingQueueList: UIViewRepresentable {
             guard let dataSource else { return false }
             let previousList = latest
             latest = list
+            if !list.visualsActive || previousList?.player !== list.player {
+                isReturningAfterHistoryClear = false
+            }
+            let previousHistory = displayedHistory
+            let history = isReturningAfterHistoryClear ? previousHistory : list.history
             collectionView?.songHeaderHeight = list.headerHeight
             let trackChanged = hasApplied && !list.trackTransitionKey.isEmpty
                 && previousList?.trackTransitionKey != list.trackTransitionKey
+            let returnsToQueue = pendingReturnToQueueFromHistory
+            pendingReturnToQueueFromHistory = false
             let entriesChanged = !hasApplied || previousList?.version != list.version
-            let historyChanged = previousList?.history != list.history
+            let historyChanged = previousHistory != history
             let historyOrderChanged = hasApplied
-                ? historyChanged && previousList?.history.map(\.id) != list.history.map(\.id)
-                : !list.history.isEmpty
-            let previousQueueOffset = collectionView.map { $0.contentOffset.y - $0.queueRestOffset } ?? 0
+                ? historyChanged && previousHistory.map(\.id) != history.map(\.id)
+                : !history.isEmpty
+            let previousContentOffset = collectionView?.contentOffset.y ?? 0
+            let previousQueueOffset = previousContentOffset - (collectionView?.queueRestOffset ?? 0)
+            let staysInHistory = hasApplied && !previousHistory.isEmpty
+                && previousQueueOffset < 0 && !history.isEmpty && !returnsToQueue
             let insetChanged = previousList?.horizontalInset != list.horizontalInset
             let headerChanged = previousList?.songHeader != list.songHeader
                 || previousList?.headerHeight != list.headerHeight
@@ -500,14 +514,14 @@ struct NowPlayingQueueList: UIViewRepresentable {
                 configureHistoryHeader(header)
             }
             defer {
-                if (trackChanged || historyOrderChanged), let collectionView {
-                    if historyOrderChanged { collectionView.layoutIfNeeded() }
-                    let offset = trackChanged ? 0 : max(0, previousQueueOffset)
-                    let target = collectionView.queueRestOffset + offset
-                    if abs(collectionView.contentOffset.y - target) > 0.5 {
+                if (returnsToQueue || trackChanged || historyOrderChanged), let collectionView {
+                    if returnsToQueue {
+                        animateReturnToQueue(in: collectionView, reason: "playFromHistory")
+                    } else if !staysInHistory && !isReturningAfterHistoryClear {
+                        if historyOrderChanged { collectionView.layoutIfNeeded() }
+                        let offset = trackChanged ? 0 : max(0, previousQueueOffset)
                         let reason = trackChanged ? "trackChanged" : "historyOrderChanged"
-                        list.services?.diagnostics?.queueScroll("setContentOffset reason=\(reason) targetY=\(target) currentY=\(collectionView.contentOffset.y)")
-                        collectionView.setContentOffset(CGPoint(x: 0, y: target), animated: false)
+                        setQueueOffset(offset, in: collectionView, reason: reason)
                     }
                     scrollViewDidScroll(collectionView)
                 }
@@ -531,14 +545,15 @@ struct NowPlayingQueueList: UIViewRepresentable {
             }
             if historyChanged || !hasApplied {
                 let previousHistory = historyByID
-                historyByID = Dictionary(uniqueKeysWithValues: list.history.map { ($0.id, $0) })
-                changedItems.formUnion(list.history.compactMap { entry in
+                displayedHistory = history
+                historyByID = Dictionary(uniqueKeysWithValues: history.map { ($0.id, $0) })
+                changedItems.formUnion(history.compactMap { entry in
                     guard let previous = previousHistory[entry.id], previous != entry else { return nil }
                     return .history(entry.id)
                 })
             }
             if entriesChanged || historyOrderChanged {
-                requestedItemIdentifiers = list.history.map { .history($0.id) } + [.songHeader]
+                requestedItemIdentifiers = history.map { .history($0.id) } + [.songHeader]
                     + (list.entries.isEmpty ? [.empty] : list.entries.map { .track($0.id) })
                 nativeOrderMatches = currentItemIdentifiers == requestedItemIdentifiers
             }
@@ -547,22 +562,40 @@ struct NowPlayingQueueList: UIViewRepresentable {
 
             if !hasApplied || !nativeOrderMatches {
                 cancelPrefetches()
+                let previousHistoryStop = collectionView.flatMap { historyStops(in: $0)?.rest }
                 var snapshot = NSDiffableDataSourceSnapshot<Section, Item>()
-                if !list.history.isEmpty {
+                if !history.isEmpty {
                     snapshot.appendSections([.history])
-                    snapshot.appendItems(list.history.map { .history($0.id) }, toSection: .history)
+                    snapshot.appendItems(history.map { .history($0.id) }, toSection: .history)
                 }
-                collectionView?.historyHeight = list.history.isEmpty ? 0
+                collectionView?.historyHeight = history.isEmpty ? 0
                     : NowPlayingQueueList.historyHeaderHeight
-                        + CGFloat(list.history.count) * NowPlayingQueueList.historyRowHeight
+                        + CGFloat(history.count) * NowPlayingQueueList.historyRowHeight
                         + NowPlayingQueueList.historyBottomInset
                 snapshot.appendSections([.header, .queue])
                 snapshot.appendItems([.songHeader], toSection: .header)
                 snapshot.appendItems(list.entries.isEmpty ? [.empty] : list.entries.map { .track($0.id) }, toSection: .queue)
                 snapshot.reconfigureItems(requestedItemIdentifiers.filter(changedItems.contains))
                 list.services?.diagnostics?.event("QueueSnapshot")
+                snapshotTargetOffset = nil
+                if staysInHistory, let collectionView {
+                    // Keep older rows in place. At the newest end, follow the inserted row.
+                    snapshotTargetOffset = min(previousContentOffset, collectionView.queueRestOffset - 0.5)
+                    if let previousHistoryStop, let historyStop = historyStops(in: collectionView)?.rest,
+                       previousQueueOffset >= previousHistoryStop - 0.5,
+                       history.count > previousHistory.count,
+                       !collectionView.isTracking, !collectionView.isDecelerating {
+                        snapshotTargetOffset = collectionView.queueRestOffset + historyStop
+                            + max(0, previousQueueOffset - previousHistoryStop)
+                    }
+                }
                 snapshotApplicationCount += 1
-                dataSource.apply(snapshot, animatingDifferences: hasApplied && !historyOrderChanged)
+                let application = snapshotApplicationCount
+                dataSource.apply(snapshot, animatingDifferences: hasApplied && !returnsToQueue && !isReturningAfterHistoryClear
+                    && (!historyOrderChanged || staysInHistory)) { [weak self] in
+                    guard let self, self.snapshotApplicationCount == application else { return }
+                    self.snapshotTargetOffset = nil
+                }
                 currentItemIdentifiers = requestedItemIdentifiers
                 nativeOrderMatches = true
                 hasApplied = true
@@ -721,14 +754,33 @@ struct NowPlayingQueueList: UIViewRepresentable {
 
             let alert = UIAlertController(title: "清除播放历史？", message: nil, preferredStyle: .alert)
             alert.addAction(UIAlertAction(title: "取消", style: .cancel))
-            alert.addAction(UIAlertAction(title: "清除", style: .destructive) { [weak collectionView] _ in
-                if let collectionView {
-                    let rest = CGPoint(x: collectionView.contentOffset.x, y: collectionView.queueRestOffset)
-                    collectionView.setContentOffset(rest, animated: false)
+            alert.addAction(UIAlertAction(title: "清除", style: .destructive) { [weak self] _ in
+                if let self {
+                    self.clearHistory(for: player)
+                } else {
+                    player.clearPlaybackHistory()
                 }
-                player.clearPlaybackHistory()
             })
             presenter.present(alert, animated: true)
+        }
+
+        func clearHistory(for player: PlayerState) {
+            guard let collectionView, latest?.player === player, !displayedHistory.isEmpty else {
+                player.clearPlaybackHistory()
+                return
+            }
+            // Removing the section would move Continue Playing before UIKit can scroll to it.
+            isReturningAfterHistoryClear = true
+            player.clearPlaybackHistory()
+            animateReturnToQueue(in: collectionView, reason: "clearHistory")
+            if !collectionView.isScrollAnimating { finishHistoryClear() }
+        }
+
+        private func finishHistoryClear() {
+            guard isReturningAfterHistoryClear, var list = latest else { return }
+            isReturningAfterHistoryClear = false
+            list.history = list.player.playbackHistory
+            update(with: list)
         }
 
         func configure(_ cell: UICollectionViewListCell, item: Item) {
@@ -760,6 +812,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
                         usesReferenceLayout: true,
                         usesArtworkTransition: false,
                         showsArtwork: latest.songHeader.showsArtwork,
+                        artworkDecodeSize: latest.songHeader.artworkDecodeSize,
                         onImportLyrics: importLyrics
                     )
                     .frame(height: NowPlayingSongHeader.referenceHeight)
@@ -815,7 +868,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
                 guard let entry = historyByID[id] else { return }
                 cell.contentConfiguration = UIHostingConfiguration {
                     NowPlayingQueueRow(song: entry.song, showsMenu: false) { [weak self] in
-                        self?.latest?.player.playFromHistory(id)
+                        self?.playFromHistory(id)
                     }
                     .environment(latest.services)
                 }
@@ -824,6 +877,41 @@ struct NowPlayingQueueList: UIViewRepresentable {
                 .minSize(height: 0)
             }
             (cell as? EdgeFadedListCell)?.contentRevision = contentRevision
+        }
+
+        func playFromHistory(_ id: PlayerHistoryEntry.ID) {
+            guard let latest, !isReturningAfterHistoryClear, historyByID[id] != nil else { return }
+            let previousTrack = latest.player.currentTrackTransitionKey
+            pendingReturnToQueueFromHistory = true
+            latest.player.playFromHistory(id)
+            // A stale history row can produce no playback update.
+            if pendingReturnToQueueFromHistory, latest.player.currentTrackTransitionKey == previousTrack {
+                pendingReturnToQueueFromHistory = false
+                if let collectionView {
+                    animateReturnToQueue(in: collectionView, reason: "playFromHistory")
+                }
+            }
+        }
+
+        private func animateReturnToQueue(in collectionView: EdgeFadedCollectionView, reason: String) {
+            collectionView.layoutIfNeeded()
+            setQueueOffset(0, in: collectionView, reason: reason, animated: true)
+        }
+
+        private func setQueueOffset(_ offset: CGFloat, in collectionView: EdgeFadedCollectionView,
+                                    reason: String, animated: Bool = false) {
+            let target = collectionView.queueRestOffset + offset
+            guard abs(collectionView.contentOffset.y - target) > 0.5 else { return }
+            latest?.services?.diagnostics?.queueScroll("setContentOffset reason=\(reason) targetY=\(target) currentY=\(collectionView.contentOffset.y) animated=\(animated)")
+            collectionView.setContentOffset(CGPoint(x: collectionView.contentOffset.x, y: target), animated: animated)
+        }
+
+        func collectionView(
+            _ collectionView: UICollectionView,
+            targetContentOffsetForProposedContentOffset proposedContentOffset: CGPoint
+        ) -> CGPoint {
+            guard let snapshotTargetOffset else { return proposedContentOffset }
+            return CGPoint(x: proposedContentOffset.x, y: snapshotTargetOffset)
         }
 
         private func didReorder(
@@ -1039,7 +1127,12 @@ struct NowPlayingQueueList: UIViewRepresentable {
             }
         }
 
+        func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
+            finishHistoryClear()
+        }
+
         func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+            finishHistoryClear()
             guard let latest else { return }
             let historyHeight = collectionView?.historyHeight ?? 0
             let offset = scrollView.contentOffset.y - (historyHeight - scrollView.adjustedContentInset.top)

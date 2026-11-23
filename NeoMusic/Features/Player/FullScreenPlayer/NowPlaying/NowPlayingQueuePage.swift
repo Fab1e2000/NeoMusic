@@ -42,6 +42,7 @@ struct NowPlayingQueueSongHeader: Equatable {
     let song: PlayerTrack
     let artworkNamespace: Namespace.ID
     var showsArtwork = true
+    var artworkDecodeSize: CGSize? = nil
 }
 
 struct NowPlayingQueueTopFade: View {

@@ -51,6 +51,7 @@ struct NowPlayingSongHeader: View {
     let usesReferenceLayout: Bool
     let usesArtworkTransition: Bool
     let showsArtwork: Bool
+    let artworkDecodeSize: CGSize?
     var onImportLyrics: (() -> Void)? = nil
 
     init(
@@ -59,6 +60,7 @@ struct NowPlayingSongHeader: View {
         usesReferenceLayout: Bool,
         usesArtworkTransition: Bool = true,
         showsArtwork: Bool = true,
+        artworkDecodeSize: CGSize? = nil,
         onImportLyrics: (() -> Void)? = nil
     ) {
         self.onImportLyrics = onImportLyrics
@@ -67,6 +69,7 @@ struct NowPlayingSongHeader: View {
         self.usesReferenceLayout = usesReferenceLayout
         self.usesArtworkTransition = usesArtworkTransition
         self.showsArtwork = showsArtwork
+        self.artworkDecodeSize = artworkDecodeSize
     }
 
     var body: some View {
@@ -103,7 +106,7 @@ struct NowPlayingSongHeader: View {
     @ViewBuilder
     private var artwork: some View {
         if showsArtwork {
-            NowPlayingPortraitArtwork(song: song, isArtworkPage: false)
+            NowPlayingPortraitArtwork(song: song, isArtworkPage: false, decodeSize: artworkDecodeSize)
             .nowPlayingArtworkTransition(
                 id: song.id,
                 in: artworkNamespace,

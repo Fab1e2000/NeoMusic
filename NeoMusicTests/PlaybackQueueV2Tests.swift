@@ -481,6 +481,83 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
         XCTAssertEqual(list.contentOffset.y, -list.adjustedContentInset.top, accuracy: 1)
     }
 
+    func testHistoryTrackChangesKeepBrowsingAndHistorySelectionReturnsToQueue() async throws {
+        let inputs = QueueListTestInputs()
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = try PlayerTestFixtures.silentAudio(at: directory.appendingPathComponent("history.wav"), seconds: 10)
+        let engine = LocalPlaybackEngine(activateSession: { true })
+        let model = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false, makeAudioEngine: { engine })
+        defer { model.shutdownPlayback() }
+        model.configurePlayback(resolveURL: { _ in url }, persistenceURL: directory.appendingPathComponent("queue.json"))
+        let songs = PlayerTestFixtures.owner(tracks: inputs.entries.map(\.song)).queue
+        model.play(songs, from: "Album", shuffled: false)
+        for _ in 0..<100 where !engine.isPlaybackConfirmed {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        model.select(1)
+        inputs.player = PlayerState(model: model)
+        let selectableHistoryEntry = try XCTUnwrap(inputs.player.playbackHistory.first)
+        inputs.history = (0..<24).map { _ in PlayerHistoryEntry(id: UUID(), song: inputs.song) }
+        let (window, host) = try mount(inputs)
+        defer { window.isHidden = true }
+        try await settle(host)
+        let list = try XCTUnwrap(collection(in: host.view) as? NowPlayingQueueList.EdgeFadedCollectionView)
+        let coordinator = try coordinator(in: host.view)
+        let source = try XCTUnwrap(coordinator.dataSource)
+        var update = try XCTUnwrap(coordinator.latest)
+
+        let olderOffset: CGFloat = 80
+        list.contentOffset.y = olderOffset
+        update.trackTransitionKey = "next-while-browsing"
+        update.history.append(PlayerHistoryEntry(id: UUID(), song: inputs.song))
+        coordinator.update(with: update)
+        try await settle(host)
+        XCTAssertEqual(list.contentOffset.y, olderOffset, accuracy: 1)
+
+        let readableHeight = list.bounds.height - list.adjustedContentInset.top - NowPlayingQueueList.bottomFadeHeight
+        let latestOffset = list.queueRestOffset - max(160, readableHeight)
+        list.contentOffset.y = latestOffset
+        update.trackTransitionKey = "next-at-history-rest"
+        update.history.append(selectableHistoryEntry)
+        coordinator.update(with: update)
+        XCTAssertEqual(source.snapshot().itemIdentifiers(inSection: .history).last, .history(selectableHistoryEntry.id))
+        try await settle(host)
+        XCTAssertEqual(list.contentOffset.y, latestOffset + NowPlayingQueueList.historyRowHeight, accuracy: 1)
+        XCTAssertLessThan(list.contentOffset.y, list.queueRestOffset)
+
+        coordinator.playFromHistory(selectableHistoryEntry.id)
+        XCTAssertEqual(inputs.player.currentTrack?.id, selectableHistoryEntry.song.id)
+        // A coalesced presentation can carry a different key from the one observed at the tap.
+        update.trackTransitionKey = "coalesced-after-history-selection"
+        update.history.append(PlayerHistoryEntry(id: UUID(), song: inputs.song))
+        coordinator.update(with: update)
+        XCTAssertTrue(list.isScrollAnimating)
+        XCTAssertLessThan(list.contentOffset.y, list.queueRestOffset)
+        for _ in 0..<40 where list.isScrollAnimating {
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        XCTAssertEqual(list.contentOffset.y, list.queueRestOffset, accuracy: 1)
+
+        list.contentOffset.y = list.queueRestOffset - 160
+        XCTAssertFalse(inputs.player.playbackHistory.isEmpty)
+        coordinator.clearHistory(for: inputs.player)
+        XCTAssertTrue(inputs.player.playbackHistory.isEmpty)
+        inputs.history = []
+        update.history = []
+        coordinator.update(with: update)
+        XCTAssertTrue(list.isScrollAnimating)
+        XCTAssertLessThan(list.contentOffset.y, list.queueRestOffset)
+        XCTAssertTrue(source.snapshot().sectionIdentifiers.contains(.history))
+        for _ in 0..<40 where list.isScrollAnimating {
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        try await settle(host)
+        XCTAssertEqual(source.snapshot().sectionIdentifiers, [.header, .queue])
+        XCTAssertEqual(list.contentOffset.y, list.queueRestOffset, accuracy: 1)
+        await model.flushQueuePersistence()
+    }
+
     func testHistoryRevealThresholdControlsLiveFeedbackAndRelease() async throws {
         let inputs = QueueListTestInputs()
         let (window, host) = try mount(inputs)
