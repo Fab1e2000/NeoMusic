@@ -724,7 +724,7 @@ struct LyricsControlSurfaceHitShield: ViewModifier {
 }
 
 @MainActor @Observable
-private final class QueueHeaderOffset {
+final class QueueHeaderOffset {
     var points: CGFloat = 0
     var viewportHeight: CGFloat = 0
 
@@ -752,7 +752,7 @@ private struct PlaybackLinkedBackdrop: View {
     }
 }
 
-private struct QueueLinkedArtwork<ArtworkTransition: ViewModifier>: View {
+struct QueueLinkedArtwork<ArtworkTransition: ViewModifier>: View {
     @Environment(PlayerState.self) private var player
     let song: PlayerTrack
     let page: NowPlayingPage
@@ -795,18 +795,19 @@ private struct QueueLinkedArtwork<ArtworkTransition: ViewModifier>: View {
                     isArtworkPage: geometryPage == .artwork,
                     decodeSize: artworkPageFrame.width > 0 ? artworkPageFrame.size : nil
                 )
-                    .frame(width: frame.width, height: frame.height)
+                    .transaction(disableStationaryGeometryAnimation) {
+                        $0.frame(width: frame.width, height: frame.height)
+                    }
                     .scaleEffect(playbackScale)
                     .animation(reducesMotion ? nil : .interpolatingSpring(
                         mass: 1, stiffness: expanded ? 180 : 153, damping: expanded ? 16.4 : 22.8
                     ), value: expanded)
                     .modifier(artworkTransition)
                     .environment(\.playerArtworkTransitionTargetVisible, hasPopupArtworkTarget(in: geometry.size))
-                    .modifier(QueueArtworkScrollPosition(page: geometryPage, offset: offset, frame: frame))
+                    .transaction(disableStationaryGeometryAnimation) {
+                        $0.modifier(QueueArtworkScrollPosition(page: geometryPage, offset: offset, frame: frame))
+                    }
             }
-        }
-        .transaction {
-            if pageChange?.stationaryArtworkPage != nil { $0.animation = nil; $0.disablesAnimations = true }
         }
         .geometryGroup()
         .animation(pushAnimation) {
@@ -824,6 +825,12 @@ private struct QueueLinkedArtwork<ArtworkTransition: ViewModifier>: View {
         .accessibilityHidden(!isVisible)
         .allowsHitTesting(false)
         .padding(.horizontal, -CGFloat(32))
+    }
+
+    private func disableStationaryGeometryAnimation(_ transaction: inout Transaction) {
+        guard pageChange?.stationaryArtworkPage != nil else { return }
+        transaction.animation = nil
+        transaction.disablesAnimations = true
     }
 
     private func hasPopupArtworkTarget(in viewport: CGSize) -> Bool {

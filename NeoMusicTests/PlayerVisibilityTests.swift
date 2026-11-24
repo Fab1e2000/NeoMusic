@@ -5,6 +5,73 @@ import SwiftUI
 
 @MainActor
 final class PlayerVisibilityTests: XCTestCase {
+    func testPausingDuringOffscreenArtworkPushRendersIntermediateCoverSizes() async throws {
+        let song = PlayerTrack(id: "push", title: "Push", artists: "Artist", albumTitle: "Album",
+                               coverURL: URL(fileURLWithPath: "/cover.png"), duration: 180)
+        let owner = PlayerTestFixtures.owner(tracks: [song])
+        owner.isPlaying = true
+        let cover = UIGraphicsImageRenderer(size: CGSize(width: 8, height: 8)).image { context in
+            UIColor.magenta.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
+        }
+        let services = PlayerServices(
+            actions: PlayerTestFixtures.actions(), lyrics: .init(load: { _ in PlayerLyrics() }),
+            artwork: .init(cached: { _ in cover }, load: { _ in cover })
+        )
+        let change = NowPlayingPageChange(source: .queue, destination: .artwork, stationaryArtworkPage: .artwork,
+                                          startsFromRest: true)
+        let root = QueueLinkedArtwork(
+            song: song, page: .artwork, pageChange: change, offset: QueueHeaderOffset(),
+            artworkPageFrame: CGRect(x: 60, y: 60, width: 200, height: 200), isVisible: true,
+            holdsArtworkAboveQueue: false, pushOffset: 0, pushAnimation: nil, artworkScreenFade: nil,
+            fade: nil, reducesMotion: false, artworkTransition: EmptyModifier()
+        )
+        .environment(PlayerState(model: owner))
+        .environment(services)
+        .background(.black)
+        .ignoresSafeArea()
+        let window = UIWindow(windowScene: try await applicationWindowScene())
+        window.frame = CGRect(x: 0, y: 0, width: 320, height: 420)
+        window.rootViewController = UIHostingController(rootView: root)
+        window.isHidden = false
+        defer { window.isHidden = true }
+        try await Task.sleep(for: .milliseconds(100))
+        let playing = try renderedCoverWidth(in: window)
+        XCTAssertEqual(playing, 200, accuracy: 2)
+
+        owner.isPlaying = false
+        var widths: [Int] = []
+        for _ in 0..<24 {
+            try await Task.sleep(for: .milliseconds(16))
+            widths.append(try renderedCoverWidth(in: window))
+        }
+        let paused = 200 * NowPlayingArtworkPage.pausedArtworkScale
+        XCTAssertEqual(CGFloat(try XCTUnwrap(widths.last)), paused, accuracy: 3)
+        XCTAssertTrue(widths.contains { CGFloat($0) > paused + 5 && $0 < playing - 5 }, "Rendered widths: \(widths)")
+    }
+
+    private func renderedCoverWidth(in window: UIWindow) throws -> Int {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let screen = UIGraphicsImageRenderer(bounds: window.bounds, format: format).image { _ in
+            window.drawHierarchy(in: window.bounds, afterScreenUpdates: false)
+        }
+        let image = try XCTUnwrap(screen.cgImage)
+        let row = try XCTUnwrap(image.cropping(to: CGRect(x: 0, y: 160, width: image.width, height: 1)))
+        var bytes = [UInt8](repeating: 0, count: row.width * 4)
+        let width = try bytes.withUnsafeMutableBytes { buffer in
+            let context = try XCTUnwrap(CGContext(data: buffer.baseAddress, width: row.width, height: 1,
+                bitsPerComponent: 8, bytesPerRow: row.width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue))
+            context.draw(row, in: CGRect(x: 0, y: 0, width: row.width, height: 1))
+            return (0..<row.width).count { pixel in
+                let index = pixel * 4
+                return buffer[index] > 200 && buffer[index + 1] < 40 && buffer[index + 2] > 200
+            }
+        }
+        return width
+    }
+
     func testArtworkPushFadeSpansScreenTopToRestingCoverAndLetsCoverClearTheScreen() {
         let fade = NowPlayingArtworkScreenFade(safeAreaTop: 62)
         let artworkFrame = CGRect(x: 0, y: 11, width: 338, height: 338)
