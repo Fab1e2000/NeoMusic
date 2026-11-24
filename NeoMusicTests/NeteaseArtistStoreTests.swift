@@ -110,6 +110,95 @@ import UIKit
         await store.invalidate()
     }
 
+    func testLibraryPortraitDemandDeduplicatesAndPublishesAfterArtworkArrives() async throws {
+        let directory = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try await contentStore(directory: directory, userID: 42)
+        let remote = try XCTUnwrap(URL(string: "https://artwork.test/portrait.png"))
+        let requested = expectation(description: "Portrait image requested")
+        ArtistContentProtocol.state.withLock {
+            $0.portraitURL = remote
+            $0.onArtworkRequest = { requested.fulfill() }
+        }
+        let first = Task { await store.prepareLibraryPortrait(7) }
+        let second = Task { await store.prepareLibraryPortrait(7) }
+        await fulfillment(of: [requested], timeout: 3)
+        XCTAssertNil(store.libraryPortraitFile(7))
+        XCTAssertTrue(store.details.isEmpty)
+        let changes = Mutex(0)
+        withObservationTracking { _ = store.libraryPortraitFile(7) } onChange: { changes.withLock { $0 += 1 } }
+        ArtistContentProtocol.finishArtwork(try portraitPNG())
+        await first.value
+        await second.value
+        XCTAssertEqual(changes.withLock { $0 }, 1)
+        let file = try XCTUnwrap(store.libraryPortraitFile(7))
+        XCTAssertEqual(file, store.cachedArtworkURL(remote))
+        XCTAssertEqual(ArtistContentProtocol.state.withLock { $0.paths }, ["/eapi/artist/head/info/get", "/portrait.png"])
+
+        let credential = try NeteaseCredential(musicU: "test")
+        await store.activate(.init(profile: .init(userID: 43, nickname: "Other", avatarURL: nil),
+                                   credential: credential), refresh: false)
+        XCTAssertNil(store.libraryPortraitFile(7))
+        await store.activate(.init(profile: .init(userID: 42, nickname: "Test", avatarURL: nil),
+                                   credential: credential), refresh: false)
+        await store.prepareLibraryPortrait(7)
+        XCTAssertEqual(store.libraryPortraitFile(7), file)
+        XCTAssertEqual(ArtistContentProtocol.state.withLock { $0.paths.count }, 2)
+        await store.invalidate()
+    }
+
+    func testLibraryPortraitAfterPrefetchWindowUsesSubscribedURL() async throws {
+        let directory = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let remote = try XCTUnwrap(URL(string: "https://artwork.test/subscribed.png"))
+        var artists = (1...6).map { NeteaseArtistReference(id: Int64($0), name: "Artist \($0)", artworkURL: nil) }
+        artists.append(.init(id: 7, name: "Subscribed", artworkURL: remote))
+        let cache = NeteasePageCache(directory: directory.appendingPathComponent("Pages"))
+        try await cache.save(ArtistSubscriptionsFixture(artists: artists, albums: [], refreshedAt: [:]),
+                             scope: "42", key: "subscriptions")
+        let store = try await contentStore(directory: directory, userID: 42)
+        let png = try portraitPNG()
+        ArtistContentProtocol.state.withLock { $0.artworkData = png }
+        XCTAssertEqual(ArtistContentProtocol.state.withLock { $0.paths }, [])
+        await store.prepareLibraryPortrait(7)
+        XCTAssertNotNil(store.libraryPortraitFile(7))
+        XCTAssertEqual(ArtistContentProtocol.state.withLock { $0.paths }, ["/subscribed.png"])
+        XCTAssertTrue(store.details.isEmpty)
+        await store.invalidate()
+    }
+
+    func testInvalidationCancelsOutstandingLibraryPortrait() async throws {
+        let directory = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try await contentStore(directory: directory, userID: 42)
+        let remote = try XCTUnwrap(URL(string: "https://artwork.test/pending.png"))
+        let requested = expectation(description: "Old session portrait requested")
+        ArtistContentProtocol.state.withLock {
+            $0.portraitURL = remote
+            $0.onArtworkRequest = { requested.fulfill() }
+        }
+        let pending = Task { await store.prepareLibraryPortrait(7) }
+        await fulfillment(of: [requested], timeout: 3)
+        await store.invalidate()
+        await pending.value
+        ArtistContentProtocol.finishArtwork(try portraitPNG())
+        XCTAssertNil(store.libraryPortraitFile(7))
+        let session = NeteaseSavedSession(profile: .init(userID: 42, nickname: "Test", avatarURL: nil),
+                                          credential: try .init(musicU: "test"))
+        await store.activate(session, refresh: false)
+        let staleFile = await store.cachedArtworkFile(remote)
+        XCTAssertNil(staleFile)
+        await store.invalidate()
+    }
+
+    private func portraitPNG() throws -> Data {
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 8, height: 8)).image { context in
+            UIColor.blue.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
+        }
+        return try XCTUnwrap(image.pngData())
+    }
+
     func testFullArtistLoadPublishesEachResourceAtMostOnce() async throws {
         let store = try await contentStore()
         var publications = 0
@@ -439,8 +528,10 @@ private final class ArtistContentProtocol: URLProtocol, @unchecked Sendable {
         var offline = false
         var emptySongs = false
         var artworkURL: URL?
+        var portraitURL: URL?
         var artworkData: Data?
         var pendingArtwork: [ArtistContentProtocol] = []
+        var onArtworkRequest: (@Sendable () -> Void)?
     }
     static let state = Mutex(State())
     override class func canInit(with request: URLRequest) -> Bool { true }
@@ -450,18 +541,23 @@ private final class ArtistContentProtocol: URLProtocol, @unchecked Sendable {
         let offline = Self.state.withLock { $0.paths.append(path); return $0.offline }
         if offline { client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet)); return }
         if request.url?.pathExtension == "png" {
-            let data = Self.state.withLock { state -> Data? in
-                if let data = state.artworkData { return data }
-                state.pendingArtwork.append(self)
-                return nil as Data?
+            let (data, callback) = Self.state.withLock { state in
+                if state.artworkData == nil { state.pendingArtwork.append(self) }
+                return (state.artworkData, state.onArtworkRequest)
             }
+            callback?()
             if let data { deliverArtwork(data) }
             return
         }
         let body: String
         let emptySongs = Self.state.withLock { $0.emptySongs }
         let artwork = Self.state.withLock { $0.artworkURL }.map { ",\"picUrl\":\"\($0.absoluteString)\"" } ?? ""
-        if path.contains("/v1/artist/"), let id = Int(path.split(separator: "/").last ?? "") {
+        if path == "/eapi/artist/head/info/get" {
+            let avatar = Self.state.withLock { $0.portraitURL }.map { "\"\($0.absoluteString)\"" } ?? "null"
+            body = """
+            {"code":200,"data":{"artist":{"id":7,"avatar":\(avatar)}}}
+            """
+        } else if path.contains("/v1/artist/"), let id = Int(path.split(separator: "/").last ?? "") {
             let songs = emptySongs ? "[]" : """
             [{"id":\(id * 10),"name":"Song \(id * 10)","ar":[{"id":\(id),"name":"Artist \(id)"}],"al":{"id":1,"name":"Album"\(artwork)},"dt":1000}]
             """

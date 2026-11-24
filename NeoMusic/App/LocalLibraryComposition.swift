@@ -18,7 +18,10 @@ enum LocalLibrary {
     static let runtime = LocalLibraryRuntime(
         songLibrary: songLibrary, playlistLibrary: playlistLibrary, player: player,
         favoriteAlbums: favoriteAlbums, pinnedAlbums: pinnedAlbums, deletedAlbums: deletedAlbums,
-        onLocalSongsApplied: { downloads.setLocalSongs($0) })
+        onLocalSongsApplied: {
+            artistPreferences.registerLocalCredits(in: $0)
+            downloads.setLocalSongs($0)
+        })
     static let catalog = LibraryCatalog()
     static let songLibrary = SongLibrary(songs: [])
     static var songs: [LibrarySongItem] { runtime.localSongs }
@@ -57,6 +60,7 @@ enum LocalLibrary {
     private static let pinnedOrder = PinnedOrderStore()
     static let favoriteAlbums = LibrarySelectionSet(ids: [], key: "favoriteAlbums")
     static let favoriteArtists = LibrarySelectionSet(ids: [], key: "favoriteArtists")
+    private static let artistPreferences = LibraryArtistPreferences()
     static let deletedAlbums = LibrarySelectionSet(ids: [], key: "deletedAlbums")
     static let downloads = LibraryDownloads()
     static let toasts = LibraryToastCenter()
@@ -178,15 +182,19 @@ enum LocalLibrary {
     }
 
     static var pinned: [LibraryShelfItem] {
-        let items = playlistLibrary.playlists.filter(\.isPinned).map(\.shelfItem) + albums.map(withPinState).filter(\.isPinned)
+        var items = playlistLibrary.playlists.filter(\.isPinned).map(\.shelfItem) + albums.map(withPinState).filter(\.isPinned)
+        if !artistPreferences.pins(for: libraryArtistOwner).isEmpty {
+            items += libraryArtists.filter(\.isPinned).sorted(byName: \.name).map(\.shelfItem)
+        }
         return pinnedOrder.ordered(items) { $0.route.flatMap(PinnedOrderID.init(route:)) }
     }
 
     @discardableResult
     static func reorderPinned(_ routes: [LibraryRoute]) -> Bool {
-        let visible = pinned.compactMap { $0.route.flatMap(PinnedOrderID.init(route:)) }
+        let items = pinned
+        let visible = items.compactMap { $0.route.flatMap(PinnedOrderID.init(route:)) }
         let requested = routes.compactMap(PinnedOrderID.init(route:))
-        guard visible.count == pinned.count, requested.count == routes.count else { return false }
+        guard visible.count == items.count, requested.count == routes.count else { return false }
         return pinnedOrder.reorder(visible: visible, to: requested)
     }
 
@@ -219,6 +227,108 @@ enum LocalLibrary {
     }
     static var playlists: [LibraryPlaylistItem] { playlistLibrary.playlists }
     static var artists: [LibraryArtistItem] { catalog.artists }
+
+    private static var libraryArtistOwner: String? { catalog.activeArtistOwner?() }
+
+    static var libraryArtists: [LibraryArtistEntry] {
+        let owner = libraryArtistOwner
+        let collected = catalog.albums.filter { $0.sourceOwnerID == owner && owner != nil }
+        let localAlbums = songLibrary.albumIndex.items.filter { !deletedAlbums.ids.contains($0.id) }.map(withPinState)
+        let additions = playlistLibrary.recentlyAddedSongs()
+        let playlistTracks = playlistLibrary.playlists.filter {
+            !$0.isSystem && ($0.sourceOwnerID == nil || $0.sourceOwnerID == owner)
+        }.flatMap { playlist in
+            playlistLibrary.songs(in: playlist.id).filter(\.isOnline).map { track in
+                var song = songLibrary.song(id: track.id) ?? track
+                if let date = additions[track.id]?.addedAt {
+                    song.addedOrder = max(song.addedOrder, Int(date.timeIntervalSince1970))
+                }
+                return song
+            }
+        }
+        return LibraryArtistCatalog.make(
+            local: songs,
+            online: playlistTracks + songLibrary.onlineSongs.filter(\.isFavorite),
+            subscribed: owner != nil && catalog.artistOwnerID == owner ? catalog.artists : [],
+            albums: collected + localAlbums + catalog.downloadedAlbums,
+            owner: owner,
+            preferences: artistPreferences,
+            downloadedID: { catalog.downloadedOnlineSongID?($0) }
+        )
+    }
+
+    private static func libraryArtist(_ id: LibraryArtistIdentity) -> LibraryArtistEntry? {
+        guard id.belongs(to: libraryArtistOwner) else { return nil }
+        return libraryArtists.first { $0.id == id }
+    }
+
+    private static func toggleLibraryArtistFavorite(_ id: LibraryArtistIdentity) {
+        guard let artist = libraryArtist(id) else { return }
+        if case .catalog(_, .some) = id, let route = artist.id.onlineRoute {
+            catalog.actions.toggleFavorite(route)
+        } else {
+            artistPreferences.toggleFavorite(id, owner: libraryArtistOwner)
+            LibraryHaptics.success()
+            toasts.show(artist.isFavorite ? .unfavorited : .favorited)
+        }
+    }
+
+    private static func playLibraryArtist(_ id: LibraryArtistIdentity, shuffled: Bool) async {
+        guard let artist = libraryArtist(id) else { return }
+        let session = catalog.activeArtistSession?()
+        let ownedAlbums = artist.albums.filter { $0.sourceOwnerID != nil && $0.isFavorite }
+        var loaded: [LibrarySongItem] = []
+        var failure: String?
+        if let load = catalog.loadAlbumSongs, session != nil {
+            for album in ownedAlbums {
+                do {
+                    try Task.checkCancellation()
+                    let tracks = try await load(album.id)
+                    guard session == catalog.activeArtistSession?(), id.belongs(to: libraryArtistOwner) else { return }
+                    loaded += tracks.filter { track in
+                        track.artistReferences.contains { $0.id == id.itemID }
+                            || (track.artistReferences.isEmpty && album.artistReferences.contains { $0.id == id.itemID })
+                    }
+                } catch is CancellationError {
+                    return
+                } catch {
+                    failure = error.localizedDescription
+                }
+            }
+        } else if !ownedAlbums.isEmpty {
+            failure = "账户资料正在恢复，请稍后重试。"
+        }
+        guard !Task.isCancelled, let current = libraryArtist(id),
+              ownedAlbums.isEmpty || session == catalog.activeArtistSession?() else { return }
+        let currentAlbums = Set(current.albums.filter(\.isFavorite).map(\.id))
+        var seen = Set<String>()
+        let playable = (current.songs + loaded.filter { currentAlbums.contains($0.albumID) }).filter { track in
+            let stableID = track.onlineSongID ?? catalog.downloadedOnlineSongID?(track.id)
+            return track.unavailabilityReason == nil && seen.insert(stableID.map { "catalog-song:\($0)" } ?? track.id).inserted
+        }
+        guard !playable.isEmpty else {
+            toasts.show(.error(failure ?? "该艺人在资料库中没有可播放的歌曲"))
+            return
+        }
+        player.requestPlay(playable, from: current.name, shuffled: shuffled)
+        if failure != nil { toasts.show(.error("部分专辑未能读取，正在播放已可用的歌曲")) }
+    }
+
+    private static func libraryArtistAlbum(_ id: LibraryArtistIdentity, albumID: String) -> CollectionDetail? {
+        guard let artist = libraryArtist(id), let item = artist.albums.first(where: { $0.id == albumID }) else { return nil }
+        let likedIDs = Set(songLibrary.onlineSongs.filter {
+            $0.onlineOwnerID == libraryArtistOwner && $0.isFavorite
+        }.compactMap(\.onlineSongID))
+        let tracks = songs.filter { $0.albumID == albumID }.map { track in
+            var song = track
+            if let id = catalog.downloadedOnlineSongID?(track.id) { song.isFavorite = likedIDs.contains(id) }
+            return song
+        }.sorted(by: LibrarySongItem.albumOrder)
+        guard !tracks.isEmpty else { return nil }
+        return .init(kind: .album, title: item.title, subtitle: item.subtitle, caption: item.year.map { "\($0)年" },
+                     artwork: item.artwork, tint: Color(.systemBackground), albumBackdrop: item.albumBackdrop,
+                     songs: tracks, route: .libraryArtistAlbum(id, albumID))
+    }
     static func albumDetail(_ id: String) -> CollectionDetail? {
         let orderedSongs = albumSongs(id)
         guard let album = albumItem(id) else { return nil }
@@ -323,6 +433,7 @@ enum LocalLibrary {
         case .album(let id): albumDetail(id).map { ($0.title, $0.songs) }
         case .playlist(let id): playlistDetail(id).map { ($0.title, $0.songs) }
         case .artist(let id): (id, songs.filter { $0.albumArtist == id })
+        case .libraryArtistAlbum(let artist, let album): libraryArtistAlbum(artist, albumID: album).map { ($0.title, $0.songs) }
         default: nil
         }
     }
@@ -402,6 +513,7 @@ enum LocalLibrary {
                 case .playlist(let id): playlistLibrary.toggleFavorite(id)
                 case .album(let id): favoriteAlbums.toggle(id)
                 case .artist(let id): favoriteArtists.toggle(id)
+                case .libraryArtist(let id): toggleLibraryArtistFavorite(id)
                 default: break
                 }
             },
@@ -409,6 +521,9 @@ enum LocalLibrary {
                 switch route {
                 case .playlist(let id): playlistLibrary.togglePin(id)
                 case .album(let id): pinnedAlbums.toggle(id)
+                case .libraryArtist(let id):
+                    guard let artist = libraryArtist(id) else { return }
+                    artistPreferences.togglePin(id, name: artist.name, owner: libraryArtistOwner)
                 default: break
                 }
             },
@@ -552,17 +667,27 @@ enum LocalLibrary {
         case .downloadedCategory(.songs): SongsListView(songs: songs.filter { downloads.state(of: $0.id) == .downloaded }, playAll: playSongs)
         case .downloadedCategory(.albums): AlbumsGridView(albums: downloadedAlbumItems.map(withPinState), playAll: playAlbums)
         case .downloadedCategory(.artists):
-            let downloadedArtistIDs = Set(songs.filter { downloads.state(of: $0.id) == .downloaded }
-                .flatMap(\.artistReferences).map(\.id))
-            ArtistsListView(artists: catalog.artists.filter { downloadedArtistIDs.contains($0.id) })
+            ArtistsListView(artists: libraryArtists, filter: .downloaded)
         case .downloadedCategory(.playlists): PlaylistsListView(library: downloadedPlaylists)
         case .downloadedCategory(.downloaded): EmptyView()
         case .category(.songs): SongsListView(songs: songs, playAll: playSongs)
         case .category(.albums): AlbumsGridView(albums: albums.map(withPinState), playAll: playAlbums)
-        case .category(.artists): ArtistsListView(artists: artists)
+        case .category(.artists): ArtistsListView(artists: libraryArtists)
         case .category(.playlists): PlaylistsListView(library: playlistLibrary)
         case .playlistFolder(let id): PlaylistsListView(library: playlistLibrary, folderID: id)
         case .album(let id): albumDetail(id).map { CollectionDetailView(detail: $0) }
+        case .libraryArtist(let id):
+            if let artist = libraryArtist(id) {
+                LibraryArtistDetailView(artist: artist, play: { await playLibraryArtist(id, shuffled: $0) })
+            } else {
+                ContentUnavailableView("艺人已不可用", systemImage: "music.microphone")
+            }
+        case .libraryArtistAlbum(let artist, let id):
+            if let detail = libraryArtistAlbum(artist, albumID: id) {
+                CollectionDetailView(detail: detail)
+            } else {
+                ContentUnavailableView("专辑已不可用", systemImage: "square.stack")
+            }
         case .playlist(let id):
             if id == "favorites" { LocalFavoritesDetail() }
             else { PlaylistDetailView(playlistID: id, library: playlistLibrary, songs: [], availableSongs: { allSongs }, recentlyPlayedSongs: recentPlaybackFixture) }
@@ -694,6 +819,9 @@ extension PinnedOrderID {
         switch route {
         case .playlist(let id): self.init(kind: .playlist, id: id)
         case .album(let id): self.init(kind: .album, id: id)
+        case .libraryArtist(let artist):
+            let owner: String? = if case .catalog(_, let owner) = artist { owner } else { nil }
+            self.init(kind: .artist, id: artist.itemID, ownerID: owner)
         default: return nil
         }
     }

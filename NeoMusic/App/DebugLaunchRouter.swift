@@ -7,6 +7,7 @@ enum DebugLaunchRouter {
         let arguments = ProcessInfo.processInfo.arguments
         let directPreviews = [
             "-frontendReviewPreview",
+            "-libraryArtistsPreview",
             "-searchPreview",
             "-downloadsPreview",
             "-homeFeedPreview"
@@ -22,6 +23,9 @@ enum DebugLaunchRouter {
         let arguments = ProcessInfo.processInfo.arguments
         if arguments.contains("-frontendReviewPreview") {
             FrontendReviewPreview().environment(account)
+        } else if let index = arguments.firstIndex(of: "-libraryArtistsPreview") {
+            let scene = arguments.dropFirst(index + 1).first.flatMap(LibraryArtistsPreview.Scene.init(rawValue:))
+            LibraryArtistsPreview(scene: scene ?? .artistsList)
         } else if arguments.contains("-searchPreview") {
             SearchPreviewRoot().environment(account)
         } else if arguments.contains("-downloadsPreview") {

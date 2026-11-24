@@ -210,6 +210,9 @@ struct CollectionMenuActions {
 
     func pinnedSections(for item: LibraryShelfItem, route: LibraryRoute, tapAction: PinnedTapAction,
                         setTapAction: @escaping (PinnedTapAction) -> Void) -> LibraryMenuSections {
+        if case .libraryArtist = route {
+            return [[LibraryMenuItem(title: "取消置顶", systemImage: "pin.slash") { togglePin(route) }]]
+        }
         let options = PinnedTapAction.allCases.map { option in
             LibraryMenuItem(title: option.title(for: route), systemImage: "",
                             isSelected: option == tapAction) { setTapAction(option) }
@@ -624,6 +627,8 @@ struct SongMenuContents: View {
 struct MenuPreviewCard: View {
     let artwork: Artwork
     let lines: [String]
+    var artistAvatar: ArtistAvatarArtwork?
+    var artistIdentity: LibraryArtistIdentity?
 
     private static let minWidth: CGFloat = 250
     private static let maxWidth: CGFloat = 340
@@ -645,8 +650,11 @@ struct MenuPreviewCard: View {
 
     var body: some View {
         HStack(spacing: 16) {
-            ArtworkView(artwork: artwork, cornerRadius: 16)
-                .frame(width: 92, height: 92)
+            Group {
+                if let artistAvatar { ArtistAvatar(source: artistAvatar, identity: artistIdentity) }
+                else { ArtworkView(artwork: artwork, cornerRadius: 16) }
+            }
+            .frame(width: 92, height: 92)
             HStack(spacing: 8) {
                 VStack(alignment: .leading, spacing: 2) {
                     ForEach(Array(lines.enumerated()), id: \.offset) { index, line in

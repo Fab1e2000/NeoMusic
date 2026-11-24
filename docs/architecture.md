@@ -165,6 +165,9 @@ flowchart TD
 
 - `LocalLibrary` 与 `LocalLibraryRuntime` 管理本地曲目索引、专辑聚合、最近添加（`LibraryRecentAdditions`）、播放集合历史（`PlaybackCollectionHistory`）与歌单/文件夹（`PlaylistLibrary`、`PlaylistPersistence`）。
 - `LocalMusicScanner` 扫描应用 Documents 下的音乐目录；`LocalAudioMetadataReader` 读取音频元数据与封面；`LocalArtworkImages` 负责封面派生与缓存；`DownloadedAudioTags` 通过 `AudioTagBridge`（TagLib）为下载音频写入标签。
+- 资料库艺人由本机曲目、当前账号的喜爱歌曲与已载入的歌单曲目、收藏专辑及艺人订阅投影。`LibraryArtistPreferences` 保存本地艺人的 UUID、离线喜爱和按账号区分的艺人置顶，在线喜爱沿用账号的艺人订阅。`PinnedOrderStore` 保存艺人、专辑与播放列表的混合顺序。
+- `LibraryRoute.libraryArtist` 打开资料库艺人详情，`LibraryRoute.artist` 打开在线艺人主页。已下载专辑可以从资料库艺人详情进入基于本机曲目的专辑页。本地专辑沿用目录分组和文件中的年份标签。
+- 资料库艺人头像由列表、详情和置顶卡片按需读取。`NeteaseArtistStore` 按账号缓存头像元数据，复用订阅、艺人详情和图片缓存，并限制同时进行的资料库头像请求数。头像文件就绪后通过 Observation 更新对应视图。
 
 ### 播放与音频管线（`Core/Playback`、`Features/Player`）
 

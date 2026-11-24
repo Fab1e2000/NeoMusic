@@ -57,7 +57,8 @@ final class AppRuntime {
         ArtworkLoadAction(
             handler: requestArtwork,
             resolve: resolveArtworkFile,
-            queueHandler: requestQueueArtwork
+            queueHandler: requestQueueArtwork,
+            artistPortraits: artists.libraryPortraits
         )
     }
 

@@ -194,14 +194,22 @@ private struct LibraryAuditDestination: View {
             SongsListView(songs: fixture.songs, playAll: { songs, _ in fixture.recordPlay(songs.first) })
                 .accessibilityIdentifier("library-audit.songs")
         case .category(.artists), .downloadedCategory(.artists):
-            ArtistsListView(artists: fixture.artists)
+            ArtistsListView(artists: fixture.artists.map {
+                .init(id: .catalog(id: $0.id, ownerID: nil), name: $0.name, portrait: $0.artwork)
+            })
         case .category(.downloaded), .downloadedCategory(.downloaded):
             DownloadedLibraryView(albums: fixture.albums)
         case .artist(let id):
             ArtistDetailView(detail: fixture.artistDetail(id), playSong: { fixture.recordPlay($0) })
+        case .libraryArtist(let id):
+            let artist = fixture.artistDetail(id.itemID)
+            LibraryArtistDetailView(artist: .init(id: id, name: artist.name, portrait: artist.artwork,
+                                                  songs: artist.songs, albums: artist.albums)) { _ in
+                fixture.recordPlay(artist.songs.first)
+            }
         case .artistSection(let id, let section):
             ArtistSectionView(detail: fixture.artistDetail(id), section: section, playSong: { fixture.recordPlay($0) })
-        case .searchCategory:
+        case .searchCategory, .libraryArtistAlbum:
             EmptyView()
         }
     }

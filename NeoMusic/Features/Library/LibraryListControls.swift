@@ -110,6 +110,7 @@ struct LibraryFilterMenu: View {
     @Binding var filter: LibraryFilter
     let allTitle: String
     let allImage: String
+    var supportsDownloads = false
     @Environment(\.accessibilityReduceMotion) private var reducesMotion
 
     var body: some View {
@@ -118,7 +119,7 @@ struct LibraryFilterMenu: View {
             Section {
                 option(.favorites) { Label("喜爱", systemImage: "star") }
                 option(.downloaded) { Label("下载", systemImage: "arrow.down.circle") }
-                    .disabled(true)
+                    .disabled(!supportsDownloads)
             }
         } label: {
             Label("筛选", systemImage: "line.3.horizontal.decrease")

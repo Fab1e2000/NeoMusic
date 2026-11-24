@@ -17,6 +17,7 @@ struct LocalTrack: Codable, Sendable, Equatable, Identifiable {
     var fingerprint: LocalFileFingerprint? = nil
     var artworkKey: String? = nil
     var artworkBackdrop: AlbumArtworkBackdrop? = nil
+    var year: Int? = nil
 }
 
 struct LocalFileFingerprint: Codable, Sendable, Equatable {
@@ -164,7 +165,7 @@ actor LocalMusicScanner {
                     cover = (coverFiles, signature)
                     directoryCovers[directoryID] = cover
                 }
-                let fingerprint = LocalFileFingerprint(version: 1, size: values.fileSize ?? 0, modified: values.contentModificationDate, covers: cover.signature)
+                let fingerprint = LocalFileFingerprint(version: 2, size: values.fileSize ?? 0, modified: values.contentModificationDate, covers: cover.signature)
                 if let old = previous[relative], old.fingerprint == fingerprint {
                     result.tracks.append(old)
                     result.reusedCount += 1
@@ -186,7 +187,8 @@ actor LocalMusicScanner {
                     albumArtist: metadata.albumArtist.isEmpty ? (metadata.artist.isEmpty ? "未知艺人" : metadata.artist) : metadata.albumArtist,
                     trackNumber: metadata.trackNumber, duration: metadata.duration, artworkData: metadata.artworkData,
                     addedDate: previous[relative]?.addedDate ?? values.creationDate ?? .distantPast,
-                    albumDirectory: directoryID, discNumber: metadata.discNumber > 0 ? metadata.discNumber : Self.folderDisc(directory.lastPathComponent), fingerprint: fingerprint))
+                    albumDirectory: directoryID, discNumber: metadata.discNumber > 0 ? metadata.discNumber : Self.folderDisc(directory.lastPathComponent),
+                    fingerprint: fingerprint, year: metadata.year))
             } catch is CancellationError { throw CancellationError() }
             catch { result.failures.append(relative); result.issues.append("\(relative)：\(error.localizedDescription)") }
         }

@@ -99,6 +99,21 @@ final class NeteaseDownloadTests: XCTestCase, @unchecked Sendable {
         XCTAssertTrue(result.isEmpty)
         XCTAssertEqual(DownloadFixtureProtocol.state.withLock { $0.paths.count }, 3)
     }
+    @MainActor func testSongPlanningKeepsArtistIdentityAndAlbumYearForOfflineLibrary() async throws {
+        let client = client([
+            #"{"code":200,"songs":[{"id":12,"name":"Song","ar":[{"id":7,"name":"Artist"}],"al":{"id":3,"name":"Album"},"dt":60000}]}"#,
+            #"""
+            {"code":200,"album":{"id":3,"name":"Album","size":1,"publishTime":1688169600000},
+             "songs":[{"id":12,"name":"Song","ar":[{"id":7,"name":"Artist"}],"al":{"id":3,"name":"Album"},"dt":60000}]}
+            """#
+        ])
+        let songs = try await client.downloadSongs(ids: [12], credential: saved().credential)
+        let item = try XCTUnwrap(songs.first)
+        XCTAssertEqual(DownloadFixtureProtocol.state.withLock { $0.paths },
+                       ["/eapi/v3/song/detail", "/eapi/v1/album/3"])
+        XCTAssertEqual(item.song.artists?.map(\.id), [7])
+        XCTAssertEqual(item.year, 2023)
+    }
     @MainActor func testStagedBackgroundDownloadWaitsForAccountAndCommitsMetadata() async throws {
         let root = try directory(), job = try stage(root)
         try persist(Saved(jobs: [job]), root: root)

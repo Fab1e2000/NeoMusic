@@ -25,14 +25,19 @@ extension NeteaseMusicClient {
     }
 
     @concurrent func downloadSongs(ids: [Int64], credential: NeteaseCredential) async throws -> [NeteaseDownloadSong] {
-        struct Artist: Decodable { let name: String }
+        struct Artist: Decodable { let id: Int64?; let name: String }
         struct Item: Decodable {
             let id: Int64; let name: String; let ar: [Artist]
             struct Album: Decodable { let id: Int64; let name: String; let picUrl: String? }
             let al: Album; let dt: Double; let no: Int?; let cd: String?
             var model: NeteaseDownloadSong {
-                .init(song: .init(id: id, title: name, artist: ar.map(\.name).joined(separator: " / "),
-                    album: al.name, artworkURL: NeteaseMusicClient.url(al.picUrl), duration: dt / 1000, albumID: al.id),
+                let credits = ar.compactMap { value -> NeteaseArtistReference? in
+                    guard let id = value.id, id > 0 else { return nil }
+                    return .init(id: id, name: value.name)
+                }
+                return .init(song: .init(id: id, title: name, artist: ar.map(\.name).joined(separator: " / "),
+                    album: al.name, artworkURL: NeteaseMusicClient.url(al.picUrl), duration: dt / 1000,
+                    artists: credits.isEmpty ? nil : credits, albumID: al.id),
                     albumArtist: ar.map(\.name).joined(separator: " / "), trackNumber: max(0, no ?? 0),
                     discNumber: max(1, Int(cd ?? "1") ?? 1))
             }
@@ -68,6 +73,7 @@ extension NeteaseMusicClient {
         for id in songs.keys {
             guard var value = songs[id], let albumID = value.song.albumID, let album = albums[albumID] else { continue }
             if !album.album.artist.isEmpty { value.albumArtist = album.album.artist }
+            value.year = album.album.publishTime.map { Calendar.current.component(.year, from: $0) }
             if value.trackNumber == 0, let position = album.songs.firstIndex(where: { $0.id == id }) { value.trackNumber = position + 1 }
             songs[id] = value
         }

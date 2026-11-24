@@ -64,11 +64,22 @@ import Observation
                                     sourceOwnerID: owner.map(String.init), albumBackdrop: detail.albumBackdrop)
         }
         LocalLibrary.catalog.actions = collectionActions
+        LocalLibrary.catalog.activeArtistOwner = { [weak self] in
+            guard let self, !account.isLoggingOut else { return nil }
+            return owner.map(String.init)
+        }
+        LocalLibrary.catalog.activeArtistSession = { [weak self] in
+            guard let self, let store, store.isReady, store.userID == owner, !account.isLoggingOut else { return nil }
+            return store.sessionRevision
+        }
         LocalLibrary.catalog.loadAlbumSongs = { [weak self] key in
-            guard let self, let captured = self.owner else { throw NeteaseAccountError.authenticationRequired }
+            guard let self, let captured = self.owner, let store, store.userID == captured, !account.isLoggingOut
+            else { throw NeteaseAccountError.authenticationRequired }
+            let revision = store.sessionRevision
             let route = LibraryRoute.album(key)
             let available = await self.loadSongs(route)
-            guard captured == self.owner else { throw CancellationError() }
+            guard !Task.isCancelled, !account.isLoggingOut, captured == self.owner,
+                  revision == store.sessionRevision else { throw CancellationError() }
             guard available, let id = Self.number(route), let detail = self.albumDetail(id) else { throw NeteaseAccountError.invalidResponse }
             return detail.songs
         }
@@ -85,6 +96,24 @@ import Observation
             return nil
         }
         observe()
+    }
+
+    var libraryPortraits: LibraryArtistPortraitAccess {
+        .init(snapshot: { [weak self] identity in
+            guard let (store, id) = self?.portraitContext(identity) else { return nil }
+            return .init(session: store.sessionRevision, knownURL: store.knownPortraitURL(id),
+                         file: store.libraryPortraitFile(id))
+        }, resolve: { [weak self] identity, revision in
+            guard let (store, id) = self?.portraitContext(identity), revision == store.sessionRevision else { return }
+            await store.prepareLibraryPortrait(id)
+        })
+    }
+
+    private func portraitContext(_ identity: LibraryArtistIdentity) -> (NeteaseArtistStore, Int64)? {
+        guard let store, store.isReady, store.userID == owner, !account.isLoggingOut,
+              identity.belongs(to: owner.map(String.init)), identity.onlineRoute != nil,
+              let id = CatalogRouteIdentity.parseArtistID(identity.itemID) else { return nil }
+        return (store, id)
     }
     private func observe() {
         withObservationTracking {
@@ -123,6 +152,7 @@ import Observation
             }
             guard let store, store.isReady, store.userID == owner else {
                 if !LocalLibrary.catalog.artists.isEmpty { LocalLibrary.catalog.artists = [] }
+                LocalLibrary.catalog.artistOwnerID = nil
                 if !LocalLibrary.catalog.albums.isEmpty { LocalLibrary.catalog.albums = [] }
                 LocalLibrary.songLibrary.replaceExternalSongs([], source: "artists"); return
             }
@@ -160,6 +190,7 @@ import Observation
             return artistItem(value)
         }
         if LocalLibrary.catalog.artists != items { LocalLibrary.catalog.artists = items }
+        LocalLibrary.catalog.artistOwnerID = owner.map(String.init)
     }
     private func publishSubscribedAlbums(changedIDs: Set<Int64>? = nil) {
         let values = store?.subscribedAlbums ?? []
@@ -318,7 +349,10 @@ import Observation
         if case .file(let url) = cover, backdropSources[value.id] == url { retained = backdrops[value.id] }
         else { retained = nil }
         let albumRouteID = CatalogRouteIdentity.albumID(value.id)
-        return .init(id: albumRouteID, title: value.title, subtitle: value.artist, artwork: cover, route: .album(albumRouteID), isFavorite: subscribedAlbumIDs.contains(value.id), addedOrder: store?.albumAddedDate(value.id).map { Int($0.timeIntervalSince1970) } ?? 0, year: value.publishTime.map { Calendar.current.component(.year, from: $0) }, sourceOwnerID: owner.map(String.init), albumArtist: value.artist, albumBackdrop: prepared ?? retained)
+        return .init(id: albumRouteID, title: value.title, subtitle: value.artist, artwork: cover, route: .album(albumRouteID), isFavorite: subscribedAlbumIDs.contains(value.id), addedOrder: store?.albumAddedDate(value.id).map { Int($0.timeIntervalSince1970) } ?? 0, year: value.publishTime.map { Calendar.current.component(.year, from: $0) }, sourceOwnerID: owner.map(String.init), albumArtist: value.artist, albumBackdrop: prepared ?? retained,
+                     artistReferences: (value.artists ?? []).map {
+                         .init(id: CatalogRouteIdentity.artistID($0.id), name: $0.name, artwork: artwork($0.artworkURL))
+                     })
     }
     private func releaseItem(_ value: NeteaseArtistAlbum) -> LibraryShelfItem {
         var item = albumItem(value); item.subtitle = item.year.map { "\($0)年" }; return item

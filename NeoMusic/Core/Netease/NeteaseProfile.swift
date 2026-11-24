@@ -68,6 +68,7 @@ enum NeteaseAccountError: Error, LocalizedError, Equatable, Sendable {
         case .invalidResponse: "网易云音乐返回的数据无法读取，请重试。"
         case .network: "连接网易云音乐失败，请检查网络后重试。"
         case .http: "网易云音乐连接失败，请稍后重试。"
+        case .server(-460): "网易云音乐拒绝了此次请求（-460）。"
         case .server: "网易云音乐请求失败，请稍后重试。"
         case .keychain(errSecMissingEntitlement): "当前应用缺少访问登录凭据的权限，请检查应用签名后重试。"
         case .keychain: "登录凭据暂时无法读取或保存，请稍后重新验证。"

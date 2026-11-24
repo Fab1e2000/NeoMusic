@@ -15,6 +15,8 @@ struct LibraryShelfItem: Identifiable, Equatable {
     var sourceOwnerID: String?
     var albumArtist: String?
     var albumBackdrop: AlbumArtworkBackdrop? = nil
+    var artistReferences: [LibraryArtistReference] = []
+    var artistAvatar: ArtistAvatarArtwork? = nil
 }
 
 enum LibraryRoute: Hashable {
@@ -22,6 +24,8 @@ enum LibraryRoute: Hashable {
     case downloadedCategory(LibraryCategory)
     case album(String)
     case artist(String)
+    case libraryArtist(LibraryArtistIdentity)
+    case libraryArtistAlbum(LibraryArtistIdentity, String)
     case artistSection(String, ArtistSection)
     case playlist(String)
     case playlistFolder(String)

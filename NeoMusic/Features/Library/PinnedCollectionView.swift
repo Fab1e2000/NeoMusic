@@ -68,6 +68,8 @@ struct PinnedCollectionView: UIViewRepresentable {
         switch item.route {
         case .album(let id): "album:" + id
         case .playlist(let id): "playlist:" + id
+        case .libraryArtist(.local(let id)): "artist:local:" + id.uuidString
+        case .libraryArtist(.catalog(let id, let owner)): "artist:\(owner ?? "offline"):\(id)"
         default: "other:" + item.id
         }
     }
@@ -177,7 +179,7 @@ struct PinnedCollectionView: UIViewRepresentable {
             guard let latest, !latest.isEditing, latest.items.count > 1,
                   let item = itemsByID[id] else { return false }
             switch item.route {
-            case .album, .playlist: return true
+            case .album, .playlist, .libraryArtist: return true
             default: return false
             }
         }
@@ -200,7 +202,11 @@ struct PinnedCollectionView: UIViewRepresentable {
             guard !rect.isEmpty else { return nil }
             let parameters = UIDragPreviewParameters()
             parameters.backgroundColor = .clear
-            parameters.visiblePath = UIBezierPath(roundedRect: rect, cornerRadius: artwork.layer.cornerRadius)
+            if let id = dataSource?.itemIdentifier(for: indexPath), itemsByID[id]?.artistAvatar != nil {
+                parameters.visiblePath = UIBezierPath(ovalIn: rect)
+            } else {
+                parameters.visiblePath = UIBezierPath(roundedRect: rect, cornerRadius: artwork.layer.cornerRadius)
+            }
             return parameters
         }
 
@@ -323,7 +329,8 @@ struct PinnedCollectionView: UIViewRepresentable {
             }
             let configuration = UIContextMenuConfiguration(identifier: id as NSString) {
                 let size = MenuPreviewCard.size(for: item.previewLines, compatibleWith: traits)
-                let content = MenuPreviewCard(artwork: item.artwork, lines: item.previewLines)
+                let content = MenuPreviewCard(artwork: item.artwork, lines: item.previewLines,
+                                             artistAvatar: item.artistAvatar, artistIdentity: item.pinnedArtistIdentity)
                     .libraryHostedAppearance(environment)
                     .frame(width: size.width, height: size.height)
                 let preview = UIHostingController(rootView: content)
@@ -455,18 +462,23 @@ final class PinnedCollectionCell: UICollectionViewCell {
 private struct PinnedArtworkSurface: UIViewRepresentable {
     let artwork: Artwork
     let contentID: String
+    var artistAvatar: ArtistAvatarArtwork?
+    var artistIdentity: LibraryArtistIdentity?
 
     func makeUIView(context: Context) -> LibraryArtworkSurfaceView {
         let view = LibraryArtworkSurfaceView()
-        view.layer.cornerRadius = 8
         view.clipsToBounds = true
         view.isUserInteractionEnabled = false
         return view
     }
 
     func updateUIView(_ view: LibraryArtworkSurfaceView, context: Context) {
+        view.layer.cornerRadius = artistAvatar == nil ? 8 : 0
         let configuration = UIHostingConfiguration {
-            ArtworkView(artwork: artwork, contentID: contentID, cornerRadius: 8)
+            Group {
+                if let artistAvatar { ArtistAvatar(source: artistAvatar, identity: artistIdentity) }
+                else { ArtworkView(artwork: artwork, contentID: contentID, cornerRadius: 8) }
+            }
                 .libraryHostedAppearance(context.environment)
                 .environment(\.nativeArtworkSurfaceEnabled, false)
         }.margins(.all, 0)
@@ -494,7 +506,8 @@ private struct PinnedCellContent: View {
 
     var body: some View {
         VStack(spacing: 6) {
-            PinnedArtworkSurface(artwork: item.artwork, contentID: item.id)
+            PinnedArtworkSurface(artwork: item.artwork, contentID: item.id,
+                                 artistAvatar: item.artistAvatar, artistIdentity: item.pinnedArtistIdentity)
                 .aspectRatio(1, contentMode: .fit)
             Text(item.title)
                 .font(.caption.weight(.medium))
@@ -518,5 +531,12 @@ private struct PinnedCellContent: View {
                 .offset(x: -16, y: -16)
             }
         }
+    }
+}
+
+private extension LibraryShelfItem {
+    var pinnedArtistIdentity: LibraryArtistIdentity? {
+        if case .libraryArtist(let id) = route { return id }
+        return nil
     }
 }

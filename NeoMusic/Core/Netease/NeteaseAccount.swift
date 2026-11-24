@@ -45,6 +45,7 @@ final class NeteaseAccount {
     @ObservationIgnored private let loadAvatar: @MainActor (URL) async throws -> Data
     @ObservationIgnored private let clearAvatarCache: @MainActor () -> Void
     @ObservationIgnored private let saveAvatarSnapshot: @MainActor (Data, NeteaseProfile) async -> Void
+    @ObservationIgnored private var accountTransport: NeteaseAccountClient?
     @ObservationIgnored private var startupAvatar: NeteaseAvatarSnapshot?
     @ObservationIgnored private var session: NeteaseSavedSession?
     private(set) var hasRestored = false
@@ -97,6 +98,7 @@ final class NeteaseAccount {
     convenience init(client: NeteaseAccountClient, credentialStore: NeteaseCredentialStore,
                      avatarClient: NeteaseAvatarClient,
                      avatarSnapshotStore: NeteaseAvatarSnapshotStore = NeteaseAvatarSnapshotStore()) {
+        let musicClient = NeteaseMusicClient(transport: client)
         self.init(readSession: { try await credentialStore.read() },
                   saveSession: { try await credentialStore.save($0) },
                   deleteSession: { try await credentialStore.delete() },
@@ -108,12 +110,13 @@ final class NeteaseAccount {
                       avatarClient.clearCache()
                   },
                   startupAvatar: avatarSnapshotStore.load(),
-                  music: NeteaseMusicStore(),
-                  home: NeteaseHomeStore(),
-                  artists: NeteaseArtistStore(),
-                  downloads: NeteaseDownloadStore(),
-                  search: NeteaseSearchStore(),
+                  music: NeteaseMusicStore(client: musicClient),
+                  home: NeteaseHomeStore(client: musicClient),
+                  artists: NeteaseArtistStore(client: musicClient),
+                  downloads: NeteaseDownloadStore(client: musicClient),
+                  search: NeteaseSearchStore(client: NeteaseSearchClient(transport: client)),
                   saveAvatarSnapshot: { await avatarSnapshotStore.save($0, for: $1) })
+        accountTransport = client
         music?.onAuthenticationRequired = { [weak self] in
             guard let self else { return }
             let revision = self.generation
@@ -243,6 +246,7 @@ final class NeteaseAccount {
                     await music?.invalidate()
                     await oldRefresh?.value
                     guard validationID == id, generation == revision, !Task.isCancelled else { return }
+                    endCookieSession()
                     session = nil
                     validationState = .requiresLogin
                     self.setError(error)
@@ -357,6 +361,7 @@ final class NeteaseAccount {
                 let saved = NeteaseSavedSession(profile: candidate, credential: credential)
                 try await persist(saved, replacing: session) { self.loginID == id && self.logoutID == nil }
                 if session?.profile.userID != candidate.userID { clearAvatarCache() }
+                if session?.credential.musicU != credential.musicU { endCookieSession() }
                 session = saved
                 profile = candidate
                 hasRestored = true
@@ -467,6 +472,7 @@ final class NeteaseAccount {
             do {
                 try await deleteSession()
                 clearAvatarCache()
+                endCookieSession()
                 session = nil
                 profile = nil
                 avatarData = nil
@@ -485,6 +491,10 @@ final class NeteaseAccount {
         }
         logoutTask = task
         try await task.value
+    }
+
+    private func endCookieSession() {
+        if let credential = session?.credential { accountTransport?.clearSessionCookies(for: credential) }
     }
 
     private func setError(_ failure: Error, message: String? = nil) {

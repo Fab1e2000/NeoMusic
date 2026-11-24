@@ -1,11 +1,16 @@
 import SwiftUI
 
 struct PinnedOrderID: Hashable, Codable {
-    enum Kind: String, Codable { case playlist, album }
+    enum Kind: String, Codable { case playlist, album, artist }
     let kind: Kind
     let id: String
+    let ownerID: String?
 
-    init(kind: Kind, id: String) { self.kind = kind; self.id = id }
+    init(kind: Kind, id: String, ownerID: String? = nil) {
+        self.kind = kind
+        self.id = id
+        self.ownerID = ownerID
+    }
 
 }
 
@@ -100,6 +105,7 @@ final class LocalAlbumIndex {
             items.append(LibraryShelfItem(id: id, title: first.album, subtitle: credits.joined(separator: " / "),
                                           artwork: first.artwork, route: .album(id),
                                           addedOrder: members.map(\.addedOrder).max() ?? 0,
+                                          year: members.compactMap(\.year).first,
                                           albumBackdrop: first.artworkBackdrop))
             songIDs[id] = members.map(\.id)
             for artist in credits { artistAlbums[artist, default: []].append(id) }
@@ -116,6 +122,7 @@ final class LocalAlbumIndex {
             a.id == b.id && a.albumID == b.albumID && a.album == b.album && a.albumArtist == b.albumArtist
                 && a.trackNumber == b.trackNumber && a.discNumber == b.discNumber
                 && a.artwork == b.artwork && a.artworkBackdrop == b.artworkBackdrop && a.addedOrder == b.addedOrder
+                && a.year == b.year
         }
     }
 }

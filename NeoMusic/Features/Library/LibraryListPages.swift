@@ -36,13 +36,14 @@ struct LibrarySongItem: Identifiable, Equatable {
     var unavailabilityReason: String? = nil
     var onlineAlbumID: Int64? = nil
     var artistReferences: [LibraryArtistReference] = []
+    var year: Int?
 
     init(id: String, title: String, artist: String, album: String, albumArtist: String,
          trackNumber: Int, artwork: Artwork, albumDirectory: String? = nil, discNumber: Int = 1,
          artworkData: Data? = nil, artworkURL: URL? = nil, artworkBackdrop: AlbumArtworkBackdrop? = nil,
          duration: Int = 0, isPinned: Bool = false, addedOrder: Int = 0, isFavorite: Bool = false,
          favoriteAddedAt: Date? = nil, unavailabilityReason: String? = nil,
-         onlineAlbumID: Int64? = nil, artistReferences: [LibraryArtistReference] = []) {
+         onlineAlbumID: Int64? = nil, artistReferences: [LibraryArtistReference] = [], year: Int? = nil) {
         self.id = id; self.title = title; self.artist = artist; self.album = album
         self.albumArtist = albumArtist; self.trackNumber = trackNumber
         self.albumDirectory = albumDirectory; self.discNumber = discNumber
@@ -52,6 +53,7 @@ struct LibrarySongItem: Identifiable, Equatable {
         self.isFavorite = isFavorite; self.favoriteAddedAt = favoriteAddedAt
         self.unavailabilityReason = unavailabilityReason; self.onlineAlbumID = onlineAlbumID
         self.artistReferences = artistReferences
+        self.year = year
     }
 
     @discardableResult
@@ -146,6 +148,7 @@ extension LibrarySongItem {
 struct LibraryArtistReference: Equatable {
     let id: String
     let name: String
+    var artwork: Artwork?
 }
 
 struct LibraryArtistItem: Identifiable, Equatable {
@@ -552,44 +555,91 @@ struct LibraryListEmptyState: View {
 
 
 struct ArtistsListView: View {
-    let artists: [LibraryArtistItem]
-    @State private var filter = LibraryFilter.all
-    @Environment(\.dynamicTypeSize) private var textSize
-    @Environment(\.openLibraryRoute) private var openLibraryRoute
+    let artists: [LibraryArtistEntry]
+    @State var filter = LibraryFilter.all
+    @State private var query = ""
 
     var body: some View {
-        let artists = filter == .favorites ? artists.filter(\.isFavorite) : artists
-        GenericCollectionList(
-            items: artists,
-            menu: { _ in UIMenu() },
-            open: { artist, source in
-                openLibraryRoute(.artist(artist.id), sourceProvider: source)
-            },
-            moveItem: nil,
-            shelfItem: { artist in
-                LibraryShelfItem(id: artist.id, title: artist.name, artwork: artist.artwork ?? .missing, route: .artist(artist.id))
-            },
-            route: { artist in .artist(artist.id) }
-        )
+        let results = LibraryArtistEntry.visible(artists, filter: filter, query: query)
+        List(results) { artist in
+            LibraryRouteLink(value: .libraryArtist(artist.id)) {
+                HStack(spacing: 12) {
+                    ArtistAvatar(source: artist.libraryAvatar, identity: artist.id)
+                        .frame(width: DesignTokens.Artwork.rowCoverSize)
+                        .modifier(ArtistFavoriteGutter(isFavorite: artist.isFavorite))
+                    Text(artist.name).lineLimit(1)
+                }
+                .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] + DesignTokens.Spacing.rowDividerInset }
+            }
+            .listRowInsets(.init(top: 4, leading: DesignTokens.Spacing.pageMargin, bottom: 4,
+                                 trailing: DesignTokens.Spacing.pageMargin))
+            .listRowSeparator(artist.id == results.first?.id ? .hidden : .automatic, edges: .top)
+            .listRowSeparator(artist.id == results.last?.id ? .hidden : .automatic, edges: .bottom)
+        }
+        .listStyle(.plain)
+        .overlay {
+            if results.isEmpty {
+                let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !term.isEmpty {
+                    ContentUnavailableView.search(text: term)
+                } else {
+                    switch filter {
+                    case .all: ContentUnavailableView("暂无艺人", systemImage: "music.microphone")
+                    case .favorites: ContentUnavailableView("暂无喜爱的艺人", systemImage: "star")
+                    case .downloaded: ContentUnavailableView("暂无已下载的艺人", systemImage: "arrow.down.circle")
+                    }
+                }
+            }
+        }
         .libraryNavigationTitle("艺人")
         .libraryTitleDisplayMode(.large)
+        .librarySearchable(text: $query, prompt: "搜索艺人")
         .libraryRootAccountButton()
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                LibraryFilterMenu(filter: $filter, allTitle: "所有艺人", allImage: "music.microphone")
+                LibraryFilterMenu(filter: $filter, allTitle: "所有艺人", allImage: "music.microphone", supportsDownloads: true)
+                    .menuOrder(.fixed)
             }
         }
     }
 }
 
+enum ArtistAvatarArtwork: Equatable {
+    case portrait(Artwork)
+    case album(Artwork, AlbumArtworkBackdrop?)
+    case missing
+}
+
 struct ArtistAvatar: View {
-    let artwork: Artwork?
+    let source: ArtistAvatarArtwork
+    let identity: LibraryArtistIdentity?
+    @Environment(\.artworkLoadAction) private var artworkLoader
+
+    private struct Demand: Equatable {
+        let identity: LibraryArtistIdentity
+        let snapshot: LibraryArtistPortraitAccess.Snapshot
+    }
+
+    init(source: ArtistAvatarArtwork, identity: LibraryArtistIdentity? = nil) {
+        self.source = source
+        self.identity = identity
+    }
+    init(artwork: Artwork?) {
+        source = artwork.flatMap { $0 == .missing ? nil : .portrait($0) } ?? .missing
+        identity = nil
+    }
 
     var body: some View {
+        let access = artworkLoader.artistPortraits
+        let demand = identity.flatMap { id in access?.snapshot(id).map { Demand(identity: id, snapshot: $0) } }
+        let current = demand?.snapshot.file.map { ArtistAvatarArtwork.portrait(.file($0)) } ?? source
         Group {
-            if let artwork {
-                ArtworkView(artwork: artwork, cornerRadius: 0)
-            } else {
+            switch current {
+            case .portrait(let artwork):
+                ArtworkView(artwork: artwork, cornerRadius: 0, showsBorder: false)
+            case .album(let artwork, let backdrop):
+                ArtistAlbumAvatar(artwork: artwork, backdrop: backdrop)
+            case .missing:
                 GeometryReader { proxy in
                     Color(.secondarySystemFill)
                         .overlay {
@@ -600,7 +650,64 @@ struct ArtistAvatar: View {
                 }
             }
         }
+        .aspectRatio(1, contentMode: .fit)
         .clipShape(.circle)
         .accessibilityHidden(true)
+        .task(id: demand) {
+            guard let demand, demand.snapshot.file == nil else { return }
+            await access?.resolve(demand.identity, demand.snapshot.session)
+        }
+    }
+}
+
+private struct ArtistAlbumAvatar: View {
+    let artwork: Artwork
+    let backdrop: AlbumArtworkBackdrop?
+    @Environment(\.artworkLoadAction) private var loader
+    @State private var prepared: (Artwork, AlbumArtworkBackdrop)?
+
+    var body: some View {
+        let color = backdrop ?? (prepared?.0 == artwork ? prepared?.1 : nil)
+            ?? LocalArtworkImages.cachedBackdrop(for: artwork)
+        GeometryReader { proxy in
+            let side = proxy.size.width * 0.62
+            Circle()
+                .fill(color?.color ?? Color(.secondarySystemFill))
+                .overlay {
+                    ArtworkView(artwork: artwork, cornerRadius: side * 0.06, showsBorder: false)
+                        .frame(width: side)
+                }
+        }
+        .task(id: artwork) {
+            guard color == nil else { return }
+            let file: URL?
+            switch artwork {
+            case .file(let url): file = url
+            case .deferred(let id, _):
+                if let cached = LocalArtworkImages.resolvedURL(for: id) { file = cached }
+                else { file = await loader.resolve?(id) }
+            default: file = nil
+            }
+            guard let file, let sampled = await LocalArtworkImages.loadBackdrop(for: file),
+                  !Task.isCancelled else { return }
+            prepared = (artwork, sampled)
+        }
+    }
+}
+
+struct ArtistFavoriteGutter: ViewModifier {
+    let isFavorite: Bool
+
+    func body(content: Content) -> some View {
+        content.overlay(alignment: .leading) {
+            if isFavorite {
+                Image(systemName: "star.fill")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.yellow)
+                    .offset(x: -14)
+                    .accessibilityLabel("已喜爱")
+                    .allowsHitTesting(false)
+            }
+        }
     }
 }

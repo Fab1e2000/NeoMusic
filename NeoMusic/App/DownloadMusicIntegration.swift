@@ -340,15 +340,14 @@ final class DownloadMusicIntegration {
             favoriteAddedAt: account.music?.likedAt[value.id],
             unavailabilityReason: !hasFile && account.music?.userID == nil ? "请登录网易云账号后重试" : nil,
             onlineAlbumID: value.albumID,
-            artistReferences: (value.artists ?? []).map { .init(id: "catalog:artist:\($0.id)", name: $0.name) })
+            artistReferences: (value.artists ?? []).map { .init(id: "catalog:artist:\($0.id)", name: $0.name) },
+            year: record.metadata.year ?? local?.year)
     }
 
     private func makeDownloadedAlbums(albumGroups: [(albumID: Int64, firstRecord: NeteaseDownloadRecord)],
                                       localSongs: [String: LibrarySongItem]) -> [LibraryShelfItem] {
-        let catalogByID = Dictionary(uniqueKeysWithValues: LocalLibrary.catalog.albums.map { ($0.id, $0) })
         return albumGroups.map { albumID, first in
             let routeID = "catalog:album:\(albumID)"
-            if let existing = catalogByID[routeID] { return existing }
             let local = localSongs[first.relativePath] ?? LocalLibrary.songLibrary.song(id: first.relativePath)
             let subtitle = first.metadata.albumArtist.isEmpty ? first.song.artist : first.metadata.albumArtist
             return LibraryShelfItem(
@@ -358,6 +357,7 @@ final class DownloadMusicIntegration {
                 artwork: local?.artwork ?? .missing,
                 route: .album(routeID),
                 addedOrder: local?.addedOrder ?? 0,
+                year: first.metadata.year ?? local?.year,
                 albumBackdrop: local?.artworkBackdrop
             )
         }

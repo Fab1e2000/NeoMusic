@@ -22,10 +22,22 @@ struct ArtworkLoadAction {
     var handler: (@MainActor (String) -> Void)?
     var resolve: (@MainActor (String) async -> URL?)? = nil
     var queueHandler: (@MainActor (String, Bool) -> Task<Void, Never>?)? = nil
+    var artistPortraits: LibraryArtistPortraitAccess? = nil
     @MainActor func callAsFunction(_ id: String?) {
         guard let id else { return }
         handler?(id)
     }
+}
+
+struct LibraryArtistPortraitAccess {
+    struct Snapshot: Equatable {
+        let session: UUID
+        let knownURL: URL?
+        let file: URL?
+    }
+
+    let snapshot: @MainActor (LibraryArtistIdentity) -> Snapshot?
+    let resolve: @MainActor (LibraryArtistIdentity, UUID) async -> Void
 }
 
 extension EnvironmentValues {

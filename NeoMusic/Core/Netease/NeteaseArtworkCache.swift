@@ -13,6 +13,10 @@ enum NeteaseArtworkURL {
         return NeteaseMusicClient.url(chosen)
     }
 
+    static func isDefaultArtistAvatar(_ url: URL) -> Bool {
+        url.lastPathComponent == nonSquareAvatar || url.lastPathComponent == URL(string: squareAvatar)?.lastPathComponent
+    }
+
     static func downloadURL(for canonical: URL) -> URL {
         guard storesSizedVariant(canonical),
               var components = URLComponents(url: canonical, resolvingAgainstBaseURL: false) else { return canonical }

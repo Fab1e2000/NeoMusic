@@ -9,6 +9,7 @@ struct LocalAudioMetadata: Sendable {
     var albumArtist = ""
     var trackNumber = 0
     var discNumber = 0
+    var year: Int?
     var duration: Double = 0
     var artworkData: Data?
 }
@@ -62,6 +63,10 @@ enum LocalAudioMetadataReader {
                     output.discNumber = Int(bytes[bytes.startIndex + 2]) * 256 + Int(bytes[bytes.startIndex + 3])
                 }
             }
+            if output.year == nil && (entry.commonKey == .commonKeyCreationDate
+                || matches(["date", "year", "tdrc", "tyer", "©day"])) {
+                output.year = releaseYear(text)
+            }
             if output.artworkData == nil && (entry.commonKey == .commonKeyArtwork || matches(["apic", "covr", "metadatablockpicture"])) {
                 if let data = try? await entry.load(.dataValue), validArtwork(data) { output.artworkData = data }
             }
@@ -70,6 +75,7 @@ enum LocalAudioMetadataReader {
         let comments = flacComments(url)
         if let values = comments["ARTIST"], !values.isEmpty { artists = []; values.forEach { appendCredits($0, to: &artists) } }
         if let values = comments["ALBUMARTIST"], !values.isEmpty { albumArtists = []; values.forEach { appendCredits($0, to: &albumArtists) } }
+        output.year = (comments["DATE"] ?? comments["YEAR"] ?? []).compactMap(releaseYear).first ?? output.year
         output.artist = artists.joined(separator: " / ")
         output.albumArtist = albumArtists.joined(separator: " / ")
         return output
@@ -77,6 +83,12 @@ enum LocalAudioMetadataReader {
 
     static func number(_ value: String) -> Int {
         max(0, Int(value.split(separator: "/").first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") ?? 0)
+    }
+
+    static func releaseYear(_ value: String) -> Int? {
+        let prefix = value.trimmingCharacters(in: .whitespacesAndNewlines).prefix(4)
+        guard prefix.count == 4, let year = Int(prefix), (1000...9999).contains(year) else { return nil }
+        return year
     }
 
     static func appendCredits(_ value: String, to credits: inout [String]) {
@@ -141,7 +153,7 @@ enum LocalAudioMetadataReader {
             cursor += length
             guard let entry, let separator = entry.firstIndex(of: "=") else { continue }
             let name = entry[..<separator].uppercased().replacingOccurrences(of: "_", with: "").replacingOccurrences(of: " ", with: "")
-            if name == "ARTIST" || name == "ALBUMARTIST" {
+            if ["ARTIST", "ALBUMARTIST", "DATE", "YEAR"].contains(name) {
                 let value = String(entry[entry.index(after: separator)...]).trimmingCharacters(in: .whitespacesAndNewlines)
                 if !value.isEmpty { result[name, default: []].append(value) }
             }

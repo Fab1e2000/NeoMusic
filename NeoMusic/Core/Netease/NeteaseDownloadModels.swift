@@ -12,6 +12,7 @@ struct NeteaseDownloadSong: Codable, Sendable, Equatable {
     var albumArtist: String
     var trackNumber: Int
     var discNumber: Int
+    var year: Int? = nil
 }
 
 struct NeteaseDownloadRecord: Codable, Sendable, Equatable {

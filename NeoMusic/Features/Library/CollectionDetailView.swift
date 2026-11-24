@@ -45,6 +45,11 @@ struct CollectionDetail {
     var isPinned = false
     let songs: [LibrarySongItem]
     var route: LibraryRoute?
+
+    var isOfflineArtistAlbum: Bool {
+        if case .libraryArtistAlbum = route { return true }
+        return false
+    }
 }
 
 struct CollectionDetailView: View {
@@ -186,7 +191,7 @@ private struct CollectionDetailContent: View {
         .libraryTitleDisplayMode(.inline)
         .modifier(FavoritesTitleHidden(isHidden: isFavorites))
         .librarySearchable(text: $query, prompt: "搜索", enabled: detail.kind != .album)
-        .toolbar { if !awaitingDetail { detailToolbar } }
+        .toolbar { if !awaitingDetail && !detail.isOfflineArtistAlbum { detailToolbar } }
         .libraryRootAccountButton()
     }
 
@@ -419,7 +424,9 @@ private struct CollectionActions: View {
             .disabled(!canPlay)
             switch detail.kind {
             case .album:
-                if case .album(let id) = detail.route, id.hasPrefix("catalog:"), !detail.isFavorite {
+                if detail.isOfflineArtistAlbum {
+                    EmptyView()
+                } else if case .album(let id) = detail.route, id.hasPrefix("catalog:"), !detail.isFavorite {
                     albumCollectionButton
                 } else {
                     if let route = detail.route { CollectionDownloadButton(route: route, songs: detail.songs) }

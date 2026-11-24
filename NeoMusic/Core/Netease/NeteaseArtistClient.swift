@@ -14,6 +14,7 @@ struct NeteaseArtistAlbum: Codable, Sendable, Identifiable {
     let publishTime: Date?
     let type: String
     let trackCount: Int
+    var artists: [NeteaseArtistReference]? = nil
 }
 struct NeteaseArtistDetail: Codable, Sendable {
     let artist: NeteaseArtistReference
@@ -36,6 +37,18 @@ extension NeteaseMusicClient {
         struct Response: Decodable { let artist: ArtistDTO; let hotSongs: [Song] }
         let response: Response = try await read("/api/v1/artist/\(id)", [:], credential)
         return .init(artist: response.artist.model, biography: response.artist.briefDesc ?? "", songs: response.hotSongs.map(\.model))
+    }
+    @concurrent func artistPortraitURL(id: Int64, credential: NeteaseCredential?) async throws -> URL? {
+        struct Response: Decodable {
+            struct Content: Decodable {
+                struct Artist: Decodable { let id: Int64; let avatar: String? }
+                let artist: Artist
+            }
+            let data: Content
+        }
+        let response: Response = try await read("/api/artist/head/info/get", ["id": id], credential)
+        guard response.data.artist.id == id else { throw NeteaseAccountError.invalidResponse }
+        return NeteaseArtworkURL.artist(img1v1Url: response.data.artist.avatar, picUrl: nil)
     }
     @concurrent func artistBiography(id: Int64, credential: NeteaseCredential?) async throws -> String {
         struct Section: Decodable { let ti: String; let txt: String }
@@ -91,7 +104,10 @@ extension NeteaseMusicClient {
         }
     }
     @concurrent func setArtistSubscribed(id: Int64, subscribed: Bool, credential: NeteaseCredential) async throws {
-        _ = try await transport.requestWeb(path: subscribed ? "/api/artist/sub" : "/api/artist/unsub", fields: ["artistId": id, "artistIds": "[\(id)]"], credential: credential)
+        // NeteaseCloudMusicApiEnhanced's artist_sub module (the backend Folia pins) sends this
+        // through weapi. The eapi route answers -460 even for an anonymous request.
+        _ = try await transport.requestWeb(path: subscribed ? "/api/artist/sub" : "/api/artist/unsub",
+            fields: ["artistId": id, "artistIds": "[\(id)]"], credential: credential)
     }
     @concurrent func setAlbumSubscribed(id: Int64, subscribed: Bool, credential: NeteaseCredential) async throws {
         _ = try await transport.requestWeb(path: subscribed ? "/api/album/sub" : "/api/album/unsub", fields: ["id": id], credential: credential)
@@ -103,7 +119,11 @@ extension NeteaseMusicClient {
     private struct AlbumDTO: Decodable {
         let id: Int64; let name: String; let picUrl: String?; let publishTime: Double?; let type: String?; let size: Int?; let artist: ArtistDTO?; let artists: [ArtistDTO]?
         var model: NeteaseArtistAlbum {
-            .init(id: id, title: name, artist: artists?.map(\.name).joined(separator: " / ") ?? artist?.name ?? "", artworkURL: NeteaseMusicClient.url(picUrl), publishTime: publishTime.flatMap { $0 > 0 ? Date(timeIntervalSince1970: $0 / 1000) : nil }, type: type ?? "", trackCount: size ?? 0)
+            let credits = artists.flatMap { $0.isEmpty ? nil : $0 } ?? artist.map { [$0] } ?? []
+            return .init(id: id, title: name, artist: credits.map(\.name).joined(separator: " / "),
+                         artworkURL: NeteaseMusicClient.url(picUrl),
+                         publishTime: publishTime.flatMap { $0 > 0 ? Date(timeIntervalSince1970: $0 / 1000) : nil },
+                         type: type ?? "", trackCount: size ?? 0, artists: credits.map(\.model))
         }
     }
 }

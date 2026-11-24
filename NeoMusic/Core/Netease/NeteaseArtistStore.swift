@@ -35,6 +35,14 @@ final class NeteaseArtistStore {
     private(set) var isReady = false
     @ObservationIgnored private let artworkCache: NeteaseArtworkCache
     @ObservationIgnored private let pageCache: NeteasePageCache
+    @ObservationIgnored private let portraitCache: NeteasePageCache
+    private var portraitMetadata: [Int64: PortraitMetadata] = [:]
+    private var portraitFiles: [Int64: URL] = [:]
+    @ObservationIgnored private var portraitWaiters: [Int64: [UUID: CheckedContinuation<Void, Never>]] = [:]
+    @ObservationIgnored private var portraitQueue: [Int64] = []
+    @ObservationIgnored private var portraitTasks: [Int64: Task<Void, Never>] = [:]
+    @ObservationIgnored private var portraitRetryAfter: [Int64: Date] = [:]
+    @ObservationIgnored private var portraitMetadataRetryAfter: Date?
     @ObservationIgnored private var artworkTasks: [URL: Task<Void, Never>] = [:]
     @ObservationIgnored private var restoringPages: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var restoredPages: Set<String> = []
@@ -74,6 +82,7 @@ final class NeteaseArtistStore {
         let directory = directory ?? URL.cachesDirectory.appendingPathComponent("NeteaseArtists")
         self.directory = directory
         pageCache = NeteasePageCache(directory: directory.appendingPathComponent("Pages"))
+        portraitCache = NeteasePageCache(directory: directory.appendingPathComponent("Portraits"))
         artworkCache = artworkSession.map { NeteaseArtworkCache(directory: directory.appendingPathComponent("Artwork"), session: $0) } ?? .shared
     }
     private var scope: String { userID.map(String.init) ?? "public" }
@@ -91,6 +100,9 @@ final class NeteaseArtistStore {
                 subscribedArtists = subscriptions.artists; subscribedAlbums = subscriptions.albums
                 albumAdditions = subscriptions.albumAdditions ?? AlbumLibraryAdditions(baselineRecorded: true)
                 refreshedAt.merge(subscriptions.refreshedAt) { _, new in new }
+                if subscriptions.albums.contains(where: { $0.artists == nil }) {
+                    refreshedAt.removeValue(forKey: "subscriptions:albums")
+                }
             }
             isReady = true
             publish(.reset)
@@ -105,7 +117,7 @@ final class NeteaseArtistStore {
             guard let payload = NeteaseArtworkCache.eviction(in: notification) else { return }
             MainActor.assumeIsolated {
                 guard let self, self.isReady, self.revision == token, self.scope == payload.scope else { return }
-                if !payload.urls.isEmpty { self.onArtworkChange?(payload.urls) }
+                if !payload.urls.isEmpty { self.notifyArtworkChange(payload.urls) }
             }
         }
     }
@@ -113,7 +125,13 @@ final class NeteaseArtistStore {
         if let artworkObserver { NotificationCenter.default.removeObserver(artworkObserver) }
         artworkObserver = nil
         revision = UUID(); credential = nil; userID = nil; isReady = false
-        let pending = Array(tasks.values) + Array(artworkTasks.values) + Array(saveTasks.values) + Array(restoringPages.values)
+        let pending = Array(tasks.values) + Array(artworkTasks.values) + Array(saveTasks.values)
+            + Array(restoringPages.values) + Array(portraitTasks.values)
+        let consumers = portraitWaiters
+        portraitWaiters.removeAll(); portraitQueue.removeAll(); portraitTasks.removeAll()
+        portraitMetadata.removeAll(); portraitFiles.removeAll(); portraitRetryAfter.removeAll()
+        portraitMetadataRetryAfter = nil
+        for waiters in consumers.values { for waiter in waiters.values { waiter.resume() } }
         tasks.removeAll(); artworkTasks.removeAll(); saveTasks.removeAll(); restoringPages.removeAll(); restoredPages.removeAll()
         resolvedSongs = [:]; songSources = [:]; songOwners = [:]; biographies = [:]; refreshedAt = [:]
         details = [:]; releases = [:]; similar = [:]; albums = [:]; subscribedArtists = []; subscribedAlbums = []; albumAdditions = AlbumLibraryAdditions(); errors = [:]
@@ -406,7 +424,7 @@ final class NeteaseArtistStore {
     func requestArtwork(_ urls: [URL]) {
         guard isReady, !Task.isCancelled else { return }
         let cached = Set(urls.filter { cachedArtworkURL($0) != nil })
-        if !cached.isEmpty { onArtworkChange?(cached) }
+        if !cached.isEmpty { notifyArtworkChange(cached) }
         cacheArtwork(urls, token: revision)
     }
     private func cacheArtwork(_ urls: [URL], token: UUID) {
@@ -419,7 +437,7 @@ final class NeteaseArtistStore {
                     _ = try await artworkCache.imageURL(for: remote, scope: owner)
                     try check(token)
                     PerformanceDiagnostics.event("ArtworkReady")
-                    onArtworkChange?([remote])
+                    notifyArtworkChange([remote])
                 } catch {
                     guard token == revision, !Task.isCancelled, cachedArtworkURL(remote) == nil else { return }
                     onArtworkFailure?(remote)
@@ -427,6 +445,149 @@ final class NeteaseArtistStore {
             }
         }
     }
+    private struct PortraitMetadata: Codable, Sendable {
+        let url: URL?
+        let checkedAt: Date
+    }
+
+    func knownPortraitURL(_ id: Int64) -> URL? {
+        let subscribed = subscribedArtists.first { $0.id == id }?.artworkURL
+        let detail = details[id]?.artist.artworkURL
+        let albumCredit = subscribedAlbums.lazy.compactMap { album in
+            album.artists?.first { $0.id == id }?.artworkURL
+        }.first
+        return [subscribed, detail, albumCredit].compactMap { $0 }.first(where: Self.isArtistPortrait)
+    }
+
+    private static func isArtistPortrait(_ url: URL) -> Bool {
+        url.scheme == "https" && !NeteaseArtworkURL.isDefaultArtistAvatar(url)
+    }
+
+    func libraryPortraitFile(_ id: Int64) -> URL? {
+        let metadata = portraitMetadata[id]
+        if let known = knownPortraitURL(id), metadata?.url != known { return nil }
+        return portraitFiles[id]
+    }
+
+    func prepareLibraryPortrait(_ id: Int64) async {
+        guard id > 0, isReady, !Task.isCancelled, libraryPortraitFile(id) == nil else { return }
+        if let remote = knownPortraitURL(id), let file = cachedArtworkURL(remote) {
+            portraitMetadata[id] = .init(url: remote, checkedAt: Date())
+            portraitFiles[id] = file
+            return
+        }
+        let token = revision, consumer = UUID()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                guard token == revision, !Task.isCancelled else { continuation.resume(); return }
+                if portraitWaiters[id] == nil && portraitTasks[id] == nil { portraitQueue.append(id) }
+                portraitWaiters[id, default: [:]][consumer] = continuation
+                startPortraitRequests()
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.cancelPortraitConsumer(id, consumer: consumer, token: token) }
+        }
+    }
+
+    private func cancelPortraitConsumer(_ id: Int64, consumer: UUID, token: UUID) {
+        guard token == revision, let continuation = portraitWaiters[id]?.removeValue(forKey: consumer) else { return }
+        continuation.resume()
+        guard portraitWaiters[id]?.isEmpty == true else { return }
+        portraitWaiters[id] = nil
+        if portraitTasks[id] == nil { portraitQueue.removeAll { $0 == id } }
+    }
+
+    private func startPortraitRequests() {
+        while portraitTasks.count < 2 && !portraitQueue.isEmpty {
+            let id = portraitQueue.removeFirst(), token = revision
+            portraitTasks[id] = Task { [self] in
+                while true {
+                    let previousURL = knownPortraitURL(id)
+                    await resolveLibraryPortrait(id, token: token)
+                    guard token == revision else { return }
+                    guard portraitWaiters[id] != nil, let updatedURL = knownPortraitURL(id),
+                          updatedURL != previousURL else { break }
+                    portraitRetryAfter[id] = nil
+                }
+                portraitTasks[id] = nil
+                if let waiters = portraitWaiters.removeValue(forKey: id) {
+                    for waiter in waiters.values { waiter.resume() }
+                }
+                startPortraitRequests()
+            }
+        }
+    }
+
+    private func resolveLibraryPortrait(_ id: Int64, token: UUID) async {
+        let owner = scope, key = String(id)
+        do {
+            try check(token)
+            let known = knownPortraitURL(id)
+            if let retry = portraitRetryAfter[id], retry > Date(), known == nil || known == portraitMetadata[id]?.url { return }
+            let metadata: PortraitMetadata
+            if let url = known {
+                metadata = .init(url: url, checkedAt: Date())
+            } else {
+                var saved = portraitMetadata[id]
+                if saved == nil {
+                    saved = try? await portraitCache.load(PortraitMetadata.self, scope: owner, key: key)
+                    try check(token)
+                }
+                if saved == nil {
+                    let page = try? await pageCache.load(ArtistPage.self, scope: owner, key: "artist:\(id)")
+                    try check(token)
+                    if let artist = page?.detail?.artist, artist.id == id,
+                       let url = artist.artworkURL, Self.isArtistPortrait(url) {
+                        saved = .init(url: url, checkedAt: Date())
+                    }
+                }
+                let cached: URL?
+                if let remote = saved?.url {
+                    cached = await cachedArtworkFile(remote)
+                    try check(token)
+                } else { cached = nil }
+                if let saved, cached != nil || Date().timeIntervalSince(saved.checkedAt) < 86_400 {
+                    metadata = saved
+                } else {
+                    if let retry = portraitMetadataRetryAfter, retry > Date() { return }
+                    let url: URL?
+                    do {
+                        url = try await client.artistPortraitURL(id: id, credential: credential)
+                    } catch let error as NeteaseAccountError
+                            where error == .server(-460) || error == .server(429) || error == .http(429) {
+                        try check(token)
+                        portraitMetadataRetryAfter = Date().addingTimeInterval(300)
+                        throw error
+                    }
+                    try check(token)
+                    metadata = .init(url: url.flatMap { Self.isArtistPortrait($0) ? $0 : nil }, checkedAt: Date())
+                }
+            }
+            if portraitMetadata[id]?.url != metadata.url { portraitFiles[id] = nil }
+            portraitMetadata[id] = metadata
+            try? await portraitCache.save(metadata, scope: owner, key: key)
+            try check(token)
+            if let remote = metadata.url {
+                if let existing = artworkTasks[remote] { await existing.value; try check(token) }
+                _ = try await artworkCache.imageURL(for: remote, scope: owner, demand: .foreground)
+                try check(token)
+                notifyArtworkChange([remote])
+            }
+        } catch {
+            guard token == revision, !Task.isCancelled else { return }
+            portraitRetryAfter[id] = Date().addingTimeInterval(60)
+        }
+    }
+
+    private func notifyArtworkChange(_ urls: Set<URL>) {
+        for (id, metadata) in portraitMetadata {
+            guard let remote = metadata.url, urls.contains(remote) else { continue }
+            let file = cachedArtworkURL(remote)
+            if portraitFiles[id] != file { portraitFiles[id] = file }
+        }
+        onArtworkChange?(urls)
+    }
+
     fileprivate struct ArtistPage: Codable, Sendable {
         let detail: NeteaseArtistDetail?
         let biography: String?
@@ -482,6 +643,7 @@ final class NeteaseArtistStore {
         lhs.count == rhs.count && zip(lhs, rhs).allSatisfy {
             $0.id == $1.id && $0.title == $1.title && $0.artist == $1.artist && $0.artworkURL == $1.artworkURL
                 && $0.publishTime == $1.publishTime && $0.type == $1.type && $0.trackCount == $1.trackCount
+                && $0.artists == $1.artists
         }
     }
 }

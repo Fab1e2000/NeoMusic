@@ -255,7 +255,8 @@ extension LibraryRoute {
         case .category(let value): category = value
         case .downloadedCategory(.downloaded): return nil
         case .downloadedCategory(let value): category = value
-        case .album, .artist, .artistSection, .playlist, .playlistFolder, .searchCategory: return nil
+        case .album, .artist, .libraryArtist, .libraryArtistAlbum, .artistSection, .playlist, .playlistFolder, .searchCategory:
+            return nil
         }
         switch category {
         case .playlists: return ("播放列表", .large)

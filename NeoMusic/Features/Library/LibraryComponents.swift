@@ -84,7 +84,7 @@ struct LibraryNavigationPreview: Equatable {
         self.subtitle = subtitle
         self.artwork = artwork
         switch route {
-        case .album, .playlist:
+        case .album, .libraryArtistAlbum, .playlist:
             self.albumBackdrop = albumBackdrop ?? LocalArtworkImages.cachedBackdrop(for: artwork)
         default: self.albumBackdrop = nil
         }

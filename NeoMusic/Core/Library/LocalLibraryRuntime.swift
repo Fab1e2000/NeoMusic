@@ -282,7 +282,7 @@ final class LocalLibraryRuntime {
                 albumArtist: track.albumArtist, trackNumber: track.trackNumber, artwork: url.map(Artwork.file) ?? .missing,
                 albumDirectory: track.albumDirectory, discNumber: track.discNumber ?? 1, artworkURL: url,
                 artworkBackdrop: track.artworkBackdrop, duration: Int(track.duration), isPinned: pins.contains(track.id),
-                addedOrder: Int(track.addedDate.timeIntervalSince1970), isFavorite: favorites.contains(track.id))
+                addedOrder: Int(track.addedDate.timeIntervalSince1970), isFavorite: favorites.contains(track.id), year: track.year)
         })
         onLocalSongsApplied(localSongs)
         onLibraryPublished?()
