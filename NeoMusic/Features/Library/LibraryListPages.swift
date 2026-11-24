@@ -164,33 +164,20 @@ enum SongSort: Hashable, Sendable {
 
     static let options = [
         LibrarySortOption(sort: SongSort.name, title: "名称"),
-        LibrarySortOption(sort: SongSort.addedDate, title: "添加日期"),
-        LibrarySortOption(sort: SongSort.artist, title: "艺人", subtitle: "A-Z"),
+        LibrarySortOption(sort: SongSort.addedDate, title: "添加日期", subtitle: "最新的排最前"),
+        LibrarySortOption(sort: SongSort.artist, title: "艺人"),
     ]
-
-    func sections(of songs: [LibrarySongItem]) -> [TitleSection<LibrarySongItem>] {
-        switch self {
-        case .name:
-            TitleSection.group(songs, by: \.title)
-        case .artist:
-            TitleSection.group(songs) { song in
-                [song.albumArtist, song.album, String(format: "%04d", song.discNumber), String(format: "%04d", song.trackNumber)].joined(separator: "\u{1}")
-            }
-        case .addedDate:
-            [TitleSection(letter: "", items: songs.sorted { $0.addedOrder > $1.addedOrder })]
-        }
-    }
 }
 
 struct SongsListView: View {
     let songs: [LibrarySongItem]
     let playAll: ([LibrarySongItem], Bool) -> Void
-    @State private var sort = SongSort.artist
+    @State private var sort = SongSort.addedDate
     @State private var filter = LibraryFilter.all
     @State private var query = ""
     @State private var projection = AsyncListProjection<ProjectionInput, Projection>()
     @Environment(\.songMenuActions) private var actions
-    @Environment(\.openLibraryRoute) private var openLibraryRoute
+    @Environment(\.colorScheme) private var colorScheme
 
     struct ProjectionInput: Equatable {
         let songs: [LibrarySongItem]
@@ -199,11 +186,19 @@ struct SongsListView: View {
         let sort: SongSort
 
         func calculate() -> Projection {
-            let matching = query.isEmpty ? songs : songs.filter {
-                $0.title.localizedStandardContains(query) || $0.artist.localizedStandardContains(query) || $0.album.localizedStandardContains(query)
+            finish(SongsListView.computeGroupedIndices(entries: entries, query: query, filter: filter, sort: sort))
+        }
+
+        fileprivate var entries: [SongSortEntry] {
+            songs.enumerated().map { index, song in
+                SongSortEntry(index: index, title: song.title, artist: song.artist, album: song.album,
+                              albumArtist: song.albumArtist, discNumber: song.discNumber,
+                              trackNumber: song.trackNumber, addedOrder: song.addedOrder, isFavorite: song.isFavorite)
             }
-            let shown = filter == .favorites ? matching.filter(\.isFavorite) : matching
-            let sections = sort.sections(of: shown)
+        }
+
+        fileprivate func finish(_ groups: [GroupedIndices]) -> Projection {
+            let sections = groups.map { TitleSection(letter: $0.letter, items: $0.indices.map { songs[$0] }) }
             return Projection(sections: sections, ordered: sections.flatMap(\.items))
         }
     }
@@ -212,7 +207,7 @@ struct SongsListView: View {
         let ordered: [LibrarySongItem]
     }
 
-    private struct SongSortEntry: Sendable {
+    fileprivate struct SongSortEntry: Sendable {
         let index: Int
         let title: String
         let artist: String
@@ -224,7 +219,7 @@ struct SongsListView: View {
         let isFavorite: Bool
     }
 
-    private struct GroupedIndices: Sendable {
+    fileprivate struct GroupedIndices: Sendable {
         let letter: String
         let indices: [Int]
     }
@@ -245,7 +240,7 @@ struct SongsListView: View {
         case .artist:
             return TitleSection.group(shown) { entry in
                 [entry.albumArtist, entry.album, String(format: "%04d", entry.discNumber), String(format: "%04d", entry.trackNumber)].joined(separator: "\u{1}")
-            }.map { GroupedIndices(letter: $0.letter, indices: $0.items.map(\.index)) }
+            }.reversed().map { GroupedIndices(letter: $0.letter, indices: $0.items.map(\.index)) }
         case .addedDate:
             return [GroupedIndices(letter: "", indices: shown.sorted { $0.addedOrder > $1.addedOrder }.map(\.index))]
         }
@@ -260,34 +255,34 @@ struct SongsListView: View {
         let result = projection.currentValue(for: input, fastPath: Self.fastPath,
                                              placeholder: { _ in Projection(sections: [], ordered: []) })
         let ordered = result.ordered
-        
-        GenericCollectionList(
-            items: ordered,
-            menu: { song in
-                let sections = actions.rowMenuSections(for: song) { openLibraryRoute($0, preview: actions.albumPreview(song, $0)) }
-                return sections.nativeMenu(firstSectionIsRow: (sections.first?.count ?? 0) > 1)
-            },
-            open: { song, _ in
-                actions.play(ordered, ordered.firstIndex { $0.id == song.id } ?? 0, "歌曲")
-            },
-            moveItem: nil,
-            shelfItem: { song in
-                LibraryShelfItem(id: song.id, title: song.title, subtitle: song.artist, artwork: song.artwork,
-                                 route: nil, songID: song.id)
-            },
-            route: { song in .album(song.albumID) },
-            deselectsImmediately: true
+        let groups = result.sections.first?.letter.isEmpty == false
+            ? result.sections.map { NativeTrackSection(title: $0.letter, songIDs: $0.items.map(\.id)) } : nil
+
+        NativePlaylistTrackList(songs: ordered, title: "歌曲",
+            header: ordered.isEmpty ? nil : AnyView(
+                PlayShuffleButtons(play: { playAll(ordered, false) }, shuffle: { playAll(ordered, true) })
+                    .padding(.horizontal, DesignTokens.Spacing.pageMargin)
+                    .padding(.top, 20)
+                    .padding(.bottom, 24)
+            ),
+            banner: nil, footer: nil, showsAddMusicRow: false,
+            pageColor: UIColor(Color(.systemBackground)), scheme: colorScheme,
+            indexedSections: groups, usesLibrarySongAppearance: true,
+            rowCornerRadius: DesignTokens.Radius.songRowCover, lastSongSeparatorLeading: 80,
+            onPlaySong: { _, index in actions.play(ordered, index, "歌曲") }
         )
+        .ignoresSafeArea(.container, edges: .vertical)
+        .overlay {
+            if ordered.isEmpty, input.songs.count <= 120 || projection.resolvedValue(for: input) != nil {
+                LibraryListEmptyState(noun: "歌曲", symbol: "music.note", query: $query, filter: $filter)
+            }
+        }
         .libraryNavigationTitle("歌曲")
         .libraryTitleDisplayMode(.large)
-        .librarySearchable(text: $query, prompt: "搜索歌曲")
+        .librarySearchable(text: $query, prompt: "搜索歌曲", usesStackedPlacement: true)
         .libraryRootAccountButton()
         .task(id: input) {
-            let entries = input.songs.enumerated().map { index, song in
-                SongSortEntry(index: index, title: song.title, artist: song.artist, album: song.album,
-                              albumArtist: song.albumArtist, discNumber: song.discNumber,
-                              trackNumber: song.trackNumber, addedOrder: song.addedOrder, isFavorite: song.isFavorite)
-            }
+            let entries = input.entries
             let currentQuery = input.query
             let currentFilter = input.filter
             let currentSort = input.sort
@@ -297,16 +292,13 @@ struct SongsListView: View {
                 background: {
                     Self.computeGroupedIndices(entries: entries, query: currentQuery, filter: currentFilter, sort: currentSort)
                 },
-                finish: { groups in
-                    let sections = groups.map { TitleSection(letter: $0.letter, items: $0.indices.map { input.songs[$0] }) }
-                    return Projection(sections: sections, ordered: sections.flatMap(\.items))
-                }
+                finish: input.finish
             )
         }
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 LibraryFilterMenu(filter: $filter, allTitle: "所有歌曲", allImage: "music.note")
-                LibrarySortMenu(sort: $sort, options: SongSort.options)
+                LibrarySortMenu(sort: $sort, options: SongSort.options).menuOrder(.fixed)
             }
         }
     }
@@ -348,15 +340,6 @@ enum AlbumSort: Hashable, Sendable {
         LibrarySortOption(sort: AlbumSort.artist, title: "艺人", subtitle: "A-Z"),
         LibrarySortOption(sort: AlbumSort.year, title: "年份"),
     ]
-
-    func apply(to albums: [LibraryShelfItem]) -> [LibraryShelfItem] {
-        switch self {
-        case .name: albums.sorted(byName: \.title)
-        case .addedDate: albums.sorted { $0.addedOrder > $1.addedOrder }
-        case .artist: albums.sorted(byName: { [$0.subtitle ?? "", $0.title].joined(separator: "\u{1}") })
-        case .year: albums.sorted { ($0.year ?? 0, $1.title) > ($1.year ?? 0, $0.title) }
-        }
-    }
 }
 
 struct AlbumsGridView: View {
@@ -367,10 +350,8 @@ struct AlbumsGridView: View {
     @State private var sort = AlbumSort.artist
     @State private var layout = LibraryLayout.grid
     @State private var projection = AsyncListProjection<ProjectionInput, [LibraryShelfItem]>()
-    @Environment(\.dynamicTypeSize) private var textSize
-    private var columns: [GridItem] {
-        Array(repeating: GridItem(.flexible(), spacing: 12), count: textSize.isAccessibilitySize ? 1 : 2)
-    }
+    @Environment(\.collectionMenuActions) private var collectionActions
+    @Environment(\.openLibraryRoute) private var openLibraryRoute
 
     private struct ProjectionInput: Equatable {
         let albums: [LibraryShelfItem]
@@ -378,11 +359,17 @@ struct AlbumsGridView: View {
         let filter: LibraryFilter
         let sort: AlbumSort
 
-        func calculate() -> [LibraryShelfItem] {
-            let matching = query.isEmpty ? albums : albums.filter {
-                $0.title.localizedStandardContains(query) || ($0.subtitle?.localizedStandardContains(query) ?? false)
+        var entries: [AlbumSortEntry] {
+            albums.enumerated().map { index, album in
+                AlbumSortEntry(index: index, title: album.title, subtitle: album.subtitle ?? "",
+                               addedOrder: album.addedOrder, year: album.year ?? 0, isFavorite: album.isFavorite)
             }
-            return sort.apply(to: filter == .favorites ? matching.filter(\.isFavorite) : matching)
+        }
+
+        func finish(_ indices: [Int]) -> [LibraryShelfItem] { indices.map { albums[$0] } }
+
+        func calculate() -> [LibraryShelfItem] {
+            finish(AlbumsGridView.computeAlbumIndices(entries: entries, query: query, filter: filter, sort: sort))
         }
     }
 
@@ -424,31 +411,7 @@ struct AlbumsGridView: View {
     var body: some View {
         let input = ProjectionInput(albums: albums, query: query, filter: filter, sort: sort)
         let shown = projection.currentValue(for: input, fastPath: Self.fastPath, placeholder: { _ in [] })
-        ScrollView {
-            VStack(spacing: 24) {
-                if !shown.isEmpty {
-                    PlayShuffleButtons(play: { playAll(shown.map(\.id), false) }, shuffle: { playAll(shown.map(\.id), true) })
-                }
-                switch layout {
-                case .grid:
-                    LazyVGrid(columns: columns, alignment: .leading, spacing: 21) {
-                        ForEach(shown) { item in CollectionCardLink(item: item) { AlbumCard(item: item) } }
-                    }
-                case .list:
-                    LazyVStack(spacing: 0) {
-                        ForEach(Array(shown.enumerated()), id: \.element.id) { index, item in
-                            CollectionCardLink(item: item) {
-                                CollectionListRow(item: item, showsSeparator: index < shown.count - 1)
-                            }
-                        }
-                    }
-                    .padding(.horizontal, -20)
-                }
-            }
-            .padding(.horizontal, 20)
-            .padding(.top, 10)
-            .padding(.bottom, 24)
-        }
+        content(shown)
         .overlay {
             if shown.isEmpty, projection.isResolved(for: input, fastPath: Self.fastPath) {
                 LibraryListEmptyState(noun: "专辑", symbol: "square.stack", query: $query, filter: $filter)
@@ -459,10 +422,7 @@ struct AlbumsGridView: View {
         .libraryRootAccountButton()
         .librarySearchable(text: $query, prompt: "搜索专辑")
         .task(id: input) {
-            let entries = input.albums.enumerated().map { index, album in
-                AlbumSortEntry(index: index, title: album.title, subtitle: album.subtitle ?? "",
-                               addedOrder: album.addedOrder, year: album.year ?? 0, isFavorite: album.isFavorite)
-            }
+            let entries = input.entries
             let currentQuery = input.query
             let currentFilter = input.filter
             let currentSort = input.sort
@@ -472,7 +432,7 @@ struct AlbumsGridView: View {
                 background: {
                     Self.computeAlbumIndices(entries: entries, query: currentQuery, filter: currentFilter, sort: currentSort)
                 },
-                finish: { indices in indices.map { input.albums[$0] } }
+                finish: input.finish
             )
         }
         .toolbar {
@@ -482,38 +442,34 @@ struct AlbumsGridView: View {
             }
         }
     }
-}
 
-struct CollectionListRow: View {
-    let item: LibraryShelfItem
-    let showsSeparator: Bool
-    @Environment(\.dynamicTypeSize) private var textSize
+    private func playButtons(_ shown: [LibraryShelfItem]) -> some View {
+        PlayShuffleButtons(play: { playAll(shown.map(\.id), false) }, shuffle: { playAll(shown.map(\.id), true) })
+    }
 
-    var body: some View {
-        HStack(spacing: 12) {
-            ArtworkView(artwork: item.artwork, cornerRadius: 6)
-                .frame(width: 64)
-                .overlay(alignment: .leading) { FavoriteMark(isFavorite: item.isFavorite, color: .yellow) }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(item.title).font(.callout)
-                if let subtitle = item.subtitle {
-                    Text(subtitle).font(.subheadline).foregroundStyle(.secondary)
+    @ViewBuilder private func content(_ shown: [LibraryShelfItem]) -> some View {
+        switch layout {
+        case .grid:
+            ScrollView {
+                VStack(spacing: 24) {
+                    if !shown.isEmpty { playButtons(shown) }
+                    LibraryCollectionGrid(rowSpacing: 21, columnAlignment: nil) {
+                        ForEach(shown) { item in CollectionCardLink(item: item) { AlbumCard(item: item) } }
+                    }
                 }
+                .padding(.horizontal, 20)
+                .padding(.top, 10)
+                .padding(.bottom, 24)
             }
-            .lineLimit(textSize.isAccessibilitySize ? nil : 1)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            Image(systemName: "chevron.right")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(.tertiary)
-        }
-        .padding(.horizontal, 20)
-        .frame(minHeight: 80)
-        .overlay(alignment: .bottom) {
-            if showsSeparator {
-                Rectangle().fill(.separator).frame(height: 1 / 3)
-                    .padding(.leading, 96)
-                    .padding(.trailing, 20)
-            }
+        case .list:
+            GenericCollectionList(items: shown,
+                menu: { item in collectionActions.sections(for: item, route: item.route ?? .album(item.id)).nativeMenu(firstSectionIsRow: true) },
+                open: { item, source in openLibraryRoute(item, sourceProvider: source) },
+                moveItem: nil, shelfItem: { $0 }, route: { $0.route ?? .album($0.id) },
+                header: shown.isEmpty ? nil : AnyView(playButtons(shown)
+                    .padding(.horizontal, 20).padding(.top, 10).padding(.bottom, 24)),
+                wrapsAccessibilityText: true, bottomPadding: 24)
+                .ignoresSafeArea(.container, edges: .vertical)
         }
     }
 }

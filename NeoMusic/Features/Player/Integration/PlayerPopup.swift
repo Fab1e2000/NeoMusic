@@ -1,7 +1,6 @@
 import FullScreenPlayer
 // Source: NeoDizzy Features/Player/PlayerPopup.swift; see Resources/PlayerSourceNotices.txt.
 import LNPopupUI
-import Nuke
 import SwiftUI
 import UIKit
 
@@ -61,7 +60,7 @@ struct PlayerPopup: ViewModifier {
             .popupCloseButtonStyle(.none)
             .popupBarMarqueeScrollEnabled(isBarActive)
             .onChange(of: shouldShowBar, initial: true) { _, visible in
-                PerformanceDiagnostics.restoration("popup.visibility visible=\(visible) suppressed=\(isSuppressed) track=\(player.currentTrack != nil) titleEmpty=\(player.currentTrack?.title.isEmpty ?? true)")
+                AppLogger.ui.notice("popup.visibility visible=\(visible) suppressed=\(isSuppressed) track=\(player.currentTrack != nil) titleEmpty=\(player.currentTrack?.title.isEmpty ?? true)")
                 let restoresPausedBar = visible && !hasPresentedBar && !player.isPlaying && !isPresented
                 if restoresPausedBar {
                     var transaction = Transaction(animation: nil)
@@ -86,12 +85,12 @@ struct PlayerPopup: ViewModifier {
                     if track?.artworkLoadID == nil { artwork = nil }
                     return
                 }
-                if let cached = Self.cachedArtwork(for: url) {
+                let request = PlayerArtworkRequest(url: url, pixelWidth: 160, pixelHeight: 160)
+                if let cached = ArtworkImagePipeline.cached(request, usesTargetBounds: true) {
                     artwork = cached
                     return
                 }
-                let request = ArtworkImagePipeline.thumbnailRequest(for: url, pixels: 160)
-                guard let image = try? await ImagePipeline.shared.image(for: request),
+                guard let image = try? await ArtworkImagePipeline.load(request, usesTargetBounds: true),
                       !Task.isCancelled else { return }
                 artwork = image
             }
@@ -118,8 +117,9 @@ struct PlayerPopup: ViewModifier {
     }
 
     static func cachedArtwork(for url: URL) -> UIImage? {
-        ImagePipeline.shared.cache[ArtworkImagePipeline.thumbnailRequest(for: url, pixels: 160)]?.image
-            ?? LocalArtworkImages.cached(url, pixels: 160)
+        let request = PlayerArtworkRequest(url: url, pixelWidth: 160, pixelHeight: 160)
+        return ArtworkImagePipeline.cached(request, usesTargetBounds: true)
+            ?? ArtworkImagePipeline.displayFallback(request, usesTargetBounds: true)
     }
 
 }
@@ -139,7 +139,7 @@ private struct PlayerPopupContent: View {
                 PlayerNowPlayingHostView(onDismiss: onDismiss, isActive: isActive)
                     .modifier(OptionalPlayerToastModifier(toasts: isActive ? toasts : nil))
                     .onChange(of: isActive, initial: true) { _, active in
-                        PerformanceDiagnostics.restoration("popup.content active=\(active) titleEmpty=\(track.title.isEmpty) cover=\(track.coverURL != nil)")
+                        AppLogger.ui.notice("popup.content active=\(active) titleEmpty=\(track.title.isEmpty) cover=\(track.coverURL != nil)")
                     }
                     .popupItem {
                         PopupItem(id: track.id, image: barImage,
@@ -187,9 +187,9 @@ private struct PlayerPopupArtworkPrefetcher: View {
             }
             .task(id: prefetchURLs) {
                 let requests = prefetchURLs.flatMap { url in
-                    [160, 240].map { ArtworkImagePipeline.thumbnailRequest(for: url, pixels: $0) }
+                    [160, 240].map { PlayerArtworkRequest(url: url, pixelWidth: $0, pixelHeight: $0) }
                 }
-                await ArtworkImagePipeline.prefetch(requests)
+                await ArtworkImagePipeline.prefetch(requests, usesTargetBounds: true)
             }
     }
 }

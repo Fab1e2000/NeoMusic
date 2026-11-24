@@ -158,22 +158,7 @@ struct NeteaseHomeFeed: Codable, Sendable, Equatable {
         var title: String { uiElement?.mainTitle?.title ?? song?.title ?? "" }
         var artworkURL: URL? { NeteaseMusicClient.url(uiElement?.image?.imageUrl) ?? song?.artworkURL }
         enum CodingKeys: String, CodingKey { case resourceType, resourceId, uiElement, resourceExtInfo, song }
-        private struct FeedSong: Decodable {
-            let model: NeteaseMusicSong
-            enum CodingKeys: String, CodingKey { case id, name, artists, ar, album, al, duration, dt }
-            init(from decoder: any Decoder) throws {
-                let c = try decoder.container(keyedBy: CodingKeys.self)
-                let artists = try c.decodeIfPresent([NeteaseMusicClient.Song.Artist].self, forKey: .artists)
-                    ?? c.decode([NeteaseMusicClient.Song.Artist].self, forKey: .ar)
-                let album = try c.decodeIfPresent(NeteaseMusicClient.Song.Album.self, forKey: .album)
-                    ?? c.decode(NeteaseMusicClient.Song.Album.self, forKey: .al)
-                let duration = try c.decodeIfPresent(Double.self, forKey: .duration) ?? c.decode(Double.self, forKey: .dt)
-                model = try .init(id: c.decode(Int64.self, forKey: .id), title: c.decode(String.self, forKey: .name),
-                    artist: artists.map(\.name).joined(separator: " / "), album: album.name,
-                    artworkURL: NeteaseMusicClient.url(album.picUrl), duration: duration / 1000,
-                    artists: artists.compactMap { a in a.id.map { .init(id: $0, name: a.name, artworkURL: nil) } }, albumID: album.id)
-            }
-        }
+        private typealias FeedSong = NeteaseSongPayload.Home
         private struct Extra: Decodable {
             let songData: FeedSong?
             let song: FeedSong?

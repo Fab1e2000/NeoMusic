@@ -84,7 +84,9 @@ struct LibraryHomeView: View {
         }
         .listStyle(.plain)
         .animation(reduceMotion ? nil : .default, value: isContentReady && isPinnedReady)
+        #if DEBUG
         .navigationDiagnostics("library")
+        #endif
         .libraryHomeNavigation()
         .toolbar {
             if isEditingPinned {

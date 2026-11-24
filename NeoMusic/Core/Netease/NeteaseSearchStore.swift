@@ -25,14 +25,13 @@ final class NeteaseSearchStore {
     private(set) var sessionID = UUID()
     var sessionOwnerID: String? { owner == "guest" ? nil : owner }
     @ObservationIgnored var onArtworkChange: ((Set<URL>) -> Void)?
-    @ObservationIgnored private let artworkCache: NeteaseArtworkCache
-    @ObservationIgnored private var artworkTasks: [URL: Task<Void, Never>] = [:]
-    @ObservationIgnored private var artworkEvictionObserver: NSObjectProtocol?
+    @ObservationIgnored private let artworkLoader: ScopedArtworkLoader
     @ObservationIgnored private let client: NeteaseSearchClient
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private var owner = "guest"
     @ObservationIgnored private var credential: NeteaseCredential?
-    @ObservationIgnored private var generation = UUID()
+    @ObservationIgnored let sessionScope = NeteaseSessionScope()
+    private var generation: UUID { sessionScope.revision }
     @ObservationIgnored private var sessionTask: Task<Void, Never>?
     @ObservationIgnored private var searchID = UUID()
     @ObservationIgnored private var suggestionID = UUID()
@@ -45,32 +44,30 @@ final class NeteaseSearchStore {
     @ObservationIgnored private var cache: [Request: NeteaseSearchPage] = [:]
     init(client: NeteaseSearchClient = .init(), defaults: UserDefaults = .standard,
          artworkCache: NeteaseArtworkCache = .shared) {
-        self.client = client; self.defaults = defaults; self.artworkCache = artworkCache
-        history = defaults.stringArray(forKey: "search.history.guest.online") ?? []
-        artworkEvictionObserver = NotificationCenter.default.addObserver(forName: NeteaseArtworkCache.didEvictArtwork,
-            object: artworkCache, queue: .main) { [weak self] notification in
-                guard let event = NeteaseArtworkCache.eviction(in: notification) else { return }
-                MainActor.assumeIsolated {
-                    guard let self, self.sessionTask == nil,
-                          event.scope == (self.owner == "guest" ? "public" : self.owner) else { return }
-                    self.onArtworkChange?(event.urls)
-                }
-            }
+        self.client = client; self.defaults = defaults
+        artworkLoader = ScopedArtworkLoader(cache: artworkCache, session: sessionScope)
+        history = defaults.stringArray(forKey: AppDefaultsKey.onlineSearchHistory(owner: "guest")) ?? []
+        artworkLoader.scope = { [weak self] in
+            guard let self, sessionTask == nil else { return nil }
+            return owner == "guest" ? "public" : owner
+        }
+        artworkLoader.isReady = { [weak self] in self?.sessionTask == nil }
+        artworkLoader.onChange = { [weak self] in self?.onArtworkChange?($0) }
     }
-    isolated deinit {
-        if let artworkEvictionObserver { NotificationCenter.default.removeObserver(artworkEvictionObserver) }
+    func activate(_ session: NeteaseSavedSession?) async {
+        await setSession(owner: session?.profile.userID, credential: session?.credential)
     }
     func setSession(owner: Int64?, credential: NeteaseCredential?) async {
         guard !Task.isCancelled else { return }
         let nextOwner = owner.map(String.init) ?? "guest"
         guard sessionTask != nil || self.owner != nextOwner || self.credential != credential else { return }
-        let generation = UUID(); self.generation = generation
+        let generation = sessionScope.advance()
         let previousSession = sessionTask
         previousSession?.cancel()
-        let previous = [searchTask, suggestionTask, categoriesTask, categoryTask].compactMap { $0 } + Array(artworkTasks.values)
-        previous.forEach { $0.cancel() }
+        var pending = SessionTaskBag()
+        artworkLoader.takePending(into: &pending)
+        let drain = sessionScope.cancelAndDrain(pending)
         searchTask = nil; suggestionTask = nil; categoriesTask = nil; categoryTask = nil
-        artworkTasks = [:]
         let work = Task { [self] in
             defer {
                 if self.generation == generation {
@@ -80,7 +77,7 @@ final class NeteaseSearchStore {
                 }
             }
             await previousSession?.value
-            for task in previous { await task.value }
+            await drain.value
             guard self.generation == generation, !Task.isCancelled else { return }
             self.owner = nextOwner; self.credential = credential
             request = nil; page = nil; cache = [:]; isLoading = false; isLoadingMore = false
@@ -109,31 +106,9 @@ final class NeteaseSearchStore {
         suggestions = .init(keywords: [], resources: []); suggestionError = nil
         for task in previous { await task.value }
     }
-    func cachedArtwork(_ remote: URL) -> URL? {
-        guard sessionTask == nil else { return nil }
-        return artworkCache.cachedURL(for: remote, scope: owner == "guest" ? "public" : owner)
-    }
-    func cachedArtworkFile(_ remote: URL) async -> URL? {
-        guard sessionTask == nil, !Task.isCancelled else { return nil }
-        let generation = generation
-        let file = await artworkCache.cachedFileURL(for: remote, scope: owner == "guest" ? "public" : owner)
-        guard generation == self.generation, !Task.isCancelled else { return nil }
-        return file
-    }
-    func requestArtwork(_ remote: URL) {
-        guard sessionTask == nil else { return }
-        guard artworkTasks[remote] == nil else { return }
-        if cachedArtwork(remote) != nil { onArtworkChange?([remote]); return }
-        let generation = generation, scope = owner == "guest" ? "public" : owner
-        artworkTasks[remote] = Task {
-            defer { if self.generation == generation { artworkTasks[remote] = nil } }
-            do {
-                _ = try await artworkCache.imageURL(for: remote, scope: scope)
-                guard !Task.isCancelled, self.generation == generation else { return }
-                onArtworkChange?([remote])
-            } catch { }
-        }
-    }
+    func cachedArtwork(_ remote: URL) -> URL? { artworkLoader.cachedURL(remote) }
+    func cachedArtworkFile(_ remote: URL) async -> URL? { await artworkLoader.cachedFile(remote) }
+    func requestArtwork(_ remote: URL) { artworkLoader.request([remote]) }
     func recent() -> [String] {
         guard sessionTask == nil else { return [] }
         return defaults.stringArray(forKey: historyKey) ?? []
@@ -152,7 +127,7 @@ final class NeteaseSearchStore {
         defaults.set(updated, forKey: historyKey)
         history = updated
     }
-    private var historyKey: String { "search.history.\(owner).online" }
+    private var historyKey: String { AppDefaultsKey.onlineSearchHistory(owner: owner) }
 
     func loadCategories(force: Bool = false) async {
         guard await waitForSession() else { return }
@@ -160,14 +135,18 @@ final class NeteaseSearchStore {
         guard force || categories.isEmpty else { return }
         let generation = generation, credential = credential
         isLoadingCategories = true; categoriesError = nil
-        let work = Task {
+        let work = sessionScope.task { [self] in
             defer { if self.generation == generation { isLoadingCategories = false } }
             do {
                 let values = try await client.categories(credential: credential)
                 guard !Task.isCancelled, self.generation == generation else { return }
                 categories = values
             } catch is CancellationError { }
-            catch { if !Task.isCancelled, self.generation == generation { categoriesError = error.localizedDescription } }
+            catch {
+                guard !Task.isCancelled, self.generation == generation else { return }
+                sessionScope.report(error, revision: generation, signedIn: credential != nil)
+                categoriesError = error.localizedDescription
+            }
         }
         categoriesTask = work
         await work.value
@@ -187,14 +166,18 @@ final class NeteaseSearchStore {
         if !force, let cached = categoryCache[name] { categoryPage = cached; isLoadingCategory = false; return }
         let generation = generation, credential = credential
         isLoadingCategory = true
-        let work = Task {
+        let work = sessionScope.task { [self] in
             defer { if self.generation == generation, categoryID == id { isLoadingCategory = false } }
             do {
                 let result = try await client.playlists(category: name, credential: credential)
                 guard !Task.isCancelled, self.generation == generation, categoryID == id else { return }
                 categoryPage = result; categoryCache[name] = result
             } catch is CancellationError { }
-            catch { if !Task.isCancelled, self.generation == generation, categoryID == id { categoryError = error.localizedDescription } }
+            catch {
+                guard !Task.isCancelled, self.generation == generation, categoryID == id else { return }
+                sessionScope.report(error, revision: generation, signedIn: credential != nil)
+                categoryError = error.localizedDescription
+            }
         }
         categoryTask = work
         await work.value
@@ -207,7 +190,7 @@ final class NeteaseSearchStore {
         let id = UUID(); categoryID = id
         let generation = generation, credential = credential
         isLoadingMoreCategory = true; categoryMoreError = nil
-        let work = Task {
+        let work = sessionScope.task { [self] in
             defer { if self.generation == generation, categoryID == id { isLoadingMoreCategory = false } }
             do {
                 let incoming = try await client.playlists(category: category, offset: old.nextOffset, credential: credential)
@@ -215,7 +198,11 @@ final class NeteaseSearchStore {
                 let result = Self.merging(old, incoming)
                 categoryPage = result; categoryCache[category] = result
             } catch is CancellationError { }
-            catch { if !Task.isCancelled, self.generation == generation, categoryID == id { categoryMoreError = error.localizedDescription } }
+            catch {
+                guard !Task.isCancelled, self.generation == generation, categoryID == id else { return }
+                sessionScope.report(error, revision: generation, signedIn: credential != nil)
+                categoryMoreError = error.localizedDescription
+            }
         }
         categoryTask = work
         await work.value
@@ -233,14 +220,19 @@ final class NeteaseSearchStore {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return }
         let generation = generation, credential = credential
-        let work = Task {
+        let work = sessionScope.task { [self] in
             do {
                 try await Task.sleep(for: .milliseconds(300))
-                let result = try await client.suggestions(query, credential: credential)
+                let result = try await client.suggestions(query, credential: credential,
+                    onAuthenticationRequired: sessionScope.authenticationHandler(signedIn: credential != nil))
                 guard !Task.isCancelled, self.generation == generation, suggestionID == id else { return }
                 suggestions = result
             } catch is CancellationError { }
-            catch { if !Task.isCancelled, self.generation == generation, suggestionID == id { suggestionError = error.localizedDescription } }
+            catch {
+                guard !Task.isCancelled, self.generation == generation, suggestionID == id else { return }
+                sessionScope.report(error, revision: generation, signedIn: credential != nil)
+                suggestionError = error.localizedDescription
+            }
         }
         suggestionTask = work
         await work.value
@@ -265,14 +257,19 @@ final class NeteaseSearchStore {
         if changed { page = nil }
         isLoading = true
         let generation = generation, credential = credential
-        let work = Task {
+        let work = sessionScope.task { [self] in
             defer { if self.generation == generation, searchID == id { isLoading = false } }
             do {
-                let result = try await client.search(next.query, kind: next.kind, credential: credential)
+                let result = try await client.search(next.query, kind: next.kind, credential: credential,
+                    onAuthenticationRequired: sessionScope.authenticationHandler(signedIn: credential != nil))
                 guard !Task.isCancelled, self.generation == generation, searchID == id else { return }
                 page = result; cache[next] = result
             } catch is CancellationError { }
-            catch { if !Task.isCancelled, self.generation == generation, searchID == id { self.error = error.localizedDescription } }
+            catch {
+                guard !Task.isCancelled, self.generation == generation, searchID == id else { return }
+                sessionScope.report(error, revision: generation, signedIn: credential != nil)
+                self.error = error.localizedDescription
+            }
         }
         searchTask = work
         await work.value
@@ -285,15 +282,20 @@ final class NeteaseSearchStore {
         let id = UUID(); searchID = id
         let generation = generation, credential = credential
         isLoadingMore = true; moreError = nil
-        let work = Task {
+        let work = sessionScope.task { [self] in
             defer { if self.generation == generation, searchID == id { isLoadingMore = false } }
             do {
-                let incoming = try await client.search(request.query, kind: request.kind, offset: old.nextOffset, credential: credential)
+                let incoming = try await client.search(request.query, kind: request.kind, offset: old.nextOffset, credential: credential,
+                    onAuthenticationRequired: sessionScope.authenticationHandler(signedIn: credential != nil))
                 guard !Task.isCancelled, self.generation == generation, searchID == id else { return }
                 let combined = Self.merging(old, incoming)
                 page = combined; cache[request] = combined
             } catch is CancellationError { }
-            catch { if !Task.isCancelled, self.generation == generation, searchID == id { moreError = error.localizedDescription } }
+            catch {
+                guard !Task.isCancelled, self.generation == generation, searchID == id else { return }
+                sessionScope.report(error, revision: generation, signedIn: credential != nil)
+                moreError = error.localizedDescription
+            }
         }
         searchTask = work
         await work.value

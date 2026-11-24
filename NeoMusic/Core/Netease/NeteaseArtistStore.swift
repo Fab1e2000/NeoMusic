@@ -23,17 +23,19 @@ final class NeteaseArtistStore {
     var sessionRevision: UUID { revision }
     @ObservationIgnored private let client: NeteaseMusicClient
     @ObservationIgnored private var credential: NeteaseCredential?
-    @ObservationIgnored private var revision = UUID()
+    @ObservationIgnored let sessionScope = NeteaseSessionScope()
+    private var revision: UUID { sessionScope.revision }
     @ObservationIgnored private var tasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private let directory: URL
     @ObservationIgnored private var resolvedSongs: [Int64: NeteaseMusicSong] = [:]
     @ObservationIgnored private var songSources: [String: [Int64: NeteaseMusicSong]] = [:]
     @ObservationIgnored private var songOwners: [Int64: Set<String>] = [:]
-    @ObservationIgnored nonisolated(unsafe) private var artworkObserver: NSObjectProtocol?
     @ObservationIgnored private var biographies: [Int64: String] = [:]
     @ObservationIgnored private var refreshedAt: [String: Date] = [:]
     private(set) var isReady = false
-    @ObservationIgnored private let artworkCache: NeteaseArtworkCache
+    @ObservationIgnored private let artworkLoader: ScopedArtworkLoader
+    @ObservationIgnored private let cacheWriter: KeyedPageCacheWriter
+    private var artworkCache: NeteaseArtworkCache { artworkLoader.cache }
     @ObservationIgnored private let pageCache: NeteasePageCache
     @ObservationIgnored private let portraitCache: NeteasePageCache
     private var portraitMetadata: [Int64: PortraitMetadata] = [:]
@@ -43,10 +45,8 @@ final class NeteaseArtistStore {
     @ObservationIgnored private var portraitTasks: [Int64: Task<Void, Never>] = [:]
     @ObservationIgnored private var portraitRetryAfter: [Int64: Date] = [:]
     @ObservationIgnored private var portraitMetadataRetryAfter: Date?
-    @ObservationIgnored private var artworkTasks: [URL: Task<Void, Never>] = [:]
     @ObservationIgnored private var restoringPages: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var restoredPages: Set<String> = []
-    @ObservationIgnored private var saveTasks: [String: Task<Void, Never>] = [:]
     func cachedSong(_ id: Int64) -> NeteaseMusicSong? { resolvedSongs[id] }
     var cachedSongs: [NeteaseMusicSong] { resolvedSongs.values.sorted { $0.id < $1.id } }
     func restoreCachedSongs(ids: Set<Int64>) async -> [NeteaseMusicSong] {
@@ -79,21 +79,25 @@ final class NeteaseArtistStore {
     init(client: NeteaseMusicClient = NeteaseMusicClient(), directory: URL? = nil,
          artworkSession: URLSession? = nil) {
         self.client = client
-        let directory = directory ?? URL.cachesDirectory.appendingPathComponent("NeteaseArtists")
+        let directory = directory ?? AppStoragePaths.neteaseArtistsCache
         self.directory = directory
         pageCache = NeteasePageCache(directory: directory.appendingPathComponent("Pages"))
         portraitCache = NeteasePageCache(directory: directory.appendingPathComponent("Portraits"))
-        artworkCache = artworkSession.map { NeteaseArtworkCache(directory: directory.appendingPathComponent("Artwork"), session: $0) } ?? .shared
+        let artwork = artworkSession.map { NeteaseArtworkCache(directory: directory.appendingPathComponent("Artwork"), session: $0) } ?? .shared
+        artworkLoader = ScopedArtworkLoader(cache: artwork, session: sessionScope)
+        cacheWriter = KeyedPageCacheWriter(cache: pageCache, session: sessionScope)
+        artworkLoader.scope = { [weak self] in self?.scope }
+        artworkLoader.isReady = { [weak self] in self?.isReady == true }
+        artworkLoader.onChange = { [weak self] in self?.notifyArtworkChange($0) }
+        artworkLoader.onFailure = { [weak self] in self?.onArtworkFailure?($0) }
     }
     private var scope: String { userID.map(String.init) ?? "public" }
     func activate(_ session: NeteaseSavedSession?, refresh: Bool = true) async {
         guard !Task.isCancelled else { return }
         if !isReady || userID != session?.profile.userID || credential != session?.credential {
-            await invalidate()
-            guard !Task.isCancelled else { return }
-            let token = revision
+            let token = await resetSession()
+            guard sessionScope.isCurrent(token) else { return }
             userID = session?.profile.userID; credential = session?.credential
-            observeArtworkEvictions(token: token)
             let subscriptions = try? await pageCache.load(Subscriptions.self, scope: scope, key: "subscriptions")
             guard token == revision, !Task.isCancelled else { return }
             if let subscriptions {
@@ -110,34 +114,25 @@ final class NeteaseArtistStore {
         }
         if refresh { await self.refresh() }
     }
-    deinit { if let artworkObserver { NotificationCenter.default.removeObserver(artworkObserver) } }
-    private func observeArtworkEvictions(token: UUID) {
-        if let artworkObserver { NotificationCenter.default.removeObserver(artworkObserver) }
-        artworkObserver = NotificationCenter.default.addObserver(forName: NeteaseArtworkCache.didEvictArtwork, object: artworkCache, queue: .main) { [weak self] notification in
-            guard let payload = NeteaseArtworkCache.eviction(in: notification) else { return }
-            MainActor.assumeIsolated {
-                guard let self, self.isReady, self.revision == token, self.scope == payload.scope else { return }
-                if !payload.urls.isEmpty { self.notifyArtworkChange(payload.urls) }
-            }
-        }
-    }
-    func invalidate() async {
-        if let artworkObserver { NotificationCenter.default.removeObserver(artworkObserver) }
-        artworkObserver = nil
-        revision = UUID(); credential = nil; userID = nil; isReady = false
-        let pending = Array(tasks.values) + Array(artworkTasks.values) + Array(saveTasks.values)
-            + Array(restoringPages.values) + Array(portraitTasks.values)
+    func invalidate() async { _ = await resetSession() }
+
+    private func resetSession() async -> UUID {
+        let token = sessionScope.advance()
+        credential = nil; userID = nil; isReady = false
+        var pending = SessionTaskBag()
+        artworkLoader.takePending(into: &pending)
+        cacheWriter.takePending(into: &pending)
         let consumers = portraitWaiters
         portraitWaiters.removeAll(); portraitQueue.removeAll(); portraitTasks.removeAll()
         portraitMetadata.removeAll(); portraitFiles.removeAll(); portraitRetryAfter.removeAll()
         portraitMetadataRetryAfter = nil
         for waiters in consumers.values { for waiter in waiters.values { waiter.resume() } }
-        tasks.removeAll(); artworkTasks.removeAll(); saveTasks.removeAll(); restoringPages.removeAll(); restoredPages.removeAll()
+        tasks.removeAll(); restoringPages.removeAll(); restoredPages.removeAll()
         resolvedSongs = [:]; songSources = [:]; songOwners = [:]; biographies = [:]; refreshedAt = [:]
         details = [:]; releases = [:]; similar = [:]; albums = [:]; subscribedArtists = []; subscribedAlbums = []; albumAdditions = AlbumLibraryAdditions(); errors = [:]
         publish(.reset)
-        pending.forEach { $0.cancel() }
-        for task in pending { await task.value }
+        await sessionScope.cancelAndDrain(pending).value
+        return token
     }
     private func publish(_ change: Change) { onContentChange?(change); onChange?() }
     private func fresh(_ key: String) -> Bool {
@@ -146,7 +141,7 @@ final class NeteaseArtistStore {
     private func run(_ key: String, token: UUID, operation: @escaping @MainActor () async throws -> Change?) async {
         guard token == revision, isReady, !Task.isCancelled else { return }
         if let task = tasks[key] { await task.value; return }
-        let task = Task { [self] in
+        let task = sessionScope.task { [self] in
             do {
                 let change = try await operation()
                 try check(token)
@@ -159,6 +154,7 @@ final class NeteaseArtistStore {
             } catch is CancellationError { }
             catch {
                 guard token == revision else { return }
+                sessionScope.report(error, revision: token, signedIn: credential != nil)
                 let message = error.localizedDescription
                 if errors[key] != message { errors[key] = message; publish(.error(key)) }
             }
@@ -223,7 +219,7 @@ final class NeteaseArtistStore {
             if token == revision, !Task.isCancelled, !restoredPages.contains(key) { await restoreArtistPage(id: id) }
             return
         }
-        let task = Task { [self] in
+        let task = sessionScope.task { [self] in
             defer { if token == revision { restoringPages[key] = nil } }
             let cached = try? await pageCache.load(ArtistPage.self, scope: owner, key: key)
             guard token == revision, !Task.isCancelled else { return }
@@ -250,7 +246,7 @@ final class NeteaseArtistStore {
             if token == revision, !Task.isCancelled, !restoredPages.contains(key) { await restoreAlbumPage(id: id) }
             return
         }
-        let task = Task { [self] in
+        let task = sessionScope.task { [self] in
             defer { if token == revision { restoringPages[key] = nil } }
             let cached = try? await pageCache.load(AlbumPage.self, scope: owner, key: key)
             guard token == revision, !Task.isCancelled else { return }
@@ -382,7 +378,10 @@ final class NeteaseArtistStore {
                 if artist { try await client.setArtistSubscribed(id: id, subscribed: subscribed, credential: credential) }
                 else { try await client.setAlbumSubscribed(id: id, subscribed: subscribed, credential: credential) }
             } catch let error as URLError where error.code == .notConnectedToInternet { throw error }
-            catch { failure = error }
+            catch {
+                sessionScope.report(error, revision: token, signedIn: true)
+                failure = error
+            }
             try check(token)
             let change: Change
             let confirmed: Bool
@@ -412,38 +411,12 @@ final class NeteaseArtistStore {
         try check(token)
         if let error = errors[key] { throw NSError(domain: "NeteaseArtist", code: 1, userInfo: [NSLocalizedDescriptionKey: error]) }
     }
-    func cachedArtworkURL(_ remote: URL) -> URL? { artworkCache.cachedURL(for: remote, scope: scope) }
-    func cachedArtworkFile(_ remote: URL) async -> URL? {
-        guard isReady, !Task.isCancelled else { return nil }
-        if let cached = cachedArtworkURL(remote) { return cached }
-        let token = revision, owner = scope
-        let file = await artworkCache.cachedFileURL(for: remote, scope: owner)
-        guard isReady, revision == token, scope == owner, !Task.isCancelled else { return nil }
-        return file
-    }
-    func requestArtwork(_ urls: [URL]) {
-        guard isReady, !Task.isCancelled else { return }
-        let cached = Set(urls.filter { cachedArtworkURL($0) != nil })
-        if !cached.isEmpty { notifyArtworkChange(cached) }
-        cacheArtwork(urls, token: revision)
-    }
+    func cachedArtworkURL(_ remote: URL) -> URL? { artworkLoader.cachedURL(remote) }
+    func cachedArtworkFile(_ remote: URL) async -> URL? { await artworkLoader.cachedFile(remote) }
+    func requestArtwork(_ urls: [URL]) { artworkLoader.request(urls) }
     private func cacheArtwork(_ urls: [URL], token: UUID) {
-        guard token == revision, !Task.isCancelled else { return }
-        let owner = scope
-        for remote in Set(urls) where remote.scheme == "https" && cachedArtworkURL(remote) == nil && artworkTasks[remote] == nil {
-            artworkTasks[remote] = Task { [self] in
-                defer { if token == revision { artworkTasks[remote] = nil } }
-                do {
-                    _ = try await artworkCache.imageURL(for: remote, scope: owner)
-                    try check(token)
-                    PerformanceDiagnostics.event("ArtworkReady")
-                    notifyArtworkChange([remote])
-                } catch {
-                    guard token == revision, !Task.isCancelled, cachedArtworkURL(remote) == nil else { return }
-                    onArtworkFailure?(remote)
-                }
-            }
-        }
+        guard sessionScope.isCurrent(token) else { return }
+        artworkLoader.request(urls, notifyCached: false)
     }
     private struct PortraitMetadata: Codable, Sendable {
         let url: URL?
@@ -500,7 +473,7 @@ final class NeteaseArtistStore {
     private func startPortraitRequests() {
         while portraitTasks.count < 2 && !portraitQueue.isEmpty {
             let id = portraitQueue.removeFirst(), token = revision
-            portraitTasks[id] = Task { [self] in
+            portraitTasks[id] = sessionScope.task { [self] in
                 while true {
                     let previousURL = knownPortraitURL(id)
                     await resolveLibraryPortrait(id, token: token)
@@ -568,13 +541,14 @@ final class NeteaseArtistStore {
             try? await portraitCache.save(metadata, scope: owner, key: key)
             try check(token)
             if let remote = metadata.url {
-                if let existing = artworkTasks[remote] { await existing.value; try check(token) }
+                if let existing = artworkLoader.task(for: remote) { await existing.value; try check(token) }
                 _ = try await artworkCache.imageURL(for: remote, scope: owner, demand: .foreground)
                 try check(token)
                 notifyArtworkChange([remote])
             }
         } catch {
             guard token == revision, !Task.isCancelled else { return }
+            sessionScope.report(error, revision: token, signedIn: credential != nil)
             portraitRetryAfter[id] = Date().addingTimeInterval(60)
         }
     }
@@ -616,14 +590,8 @@ final class NeteaseArtistStore {
         }
     }
     private func save<Value: Encodable & Sendable>(_ value: Value, key: String) {
-        let owner = scope, token = revision, previous = saveTasks[key]
-        previous?.cancel()
-        saveTasks[key] = Task { [pageCache] in
-            await previous?.value
-            guard !Task.isCancelled, token == revision else { return }
-            do { try await pageCache.save(value, scope: owner, key: key) }
-            catch is CancellationError { }
-            catch { if token == revision { errors["cache"] = error.localizedDescription } }
+        cacheWriter.save(value, scope: scope, key: key) { [weak self] error in
+            self?.errors["cache"] = error.localizedDescription
         }
     }
     private static func changedArtistIDs(_ old: [NeteaseArtistReference], _ new: [NeteaseArtistReference]) -> Set<Int64> {

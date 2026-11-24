@@ -39,8 +39,9 @@ import Observation
     var sessionRevision: UUID { generation }
     @ObservationIgnored private var credential: NeteaseCredential?
     @ObservationIgnored private let client: NeteaseMusicClient
-    @ObservationIgnored private let directory: URL
-    @ObservationIgnored private var generation = UUID()
+    @ObservationIgnored private let dailyHistoryDirectory: URL
+    @ObservationIgnored let sessionScope = NeteaseSessionScope()
+    private var generation: UUID { sessionScope.revision }
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
     @ObservationIgnored private var refreshID: UUID?
     @ObservationIgnored private var refreshIsForced = false
@@ -54,7 +55,6 @@ import Observation
     @ObservationIgnored private var actionSongs: [NeteaseMusicSong] = []
     @ObservationIgnored private var referencedSongs: [Int64: NeteaseMusicSong] = [:]
     @ObservationIgnored private var roamingTask: Task<RoamingCache, Error>?
-    @ObservationIgnored private var continuationRequests: [UUID: Task<[NeteaseMusicSong], Error>] = [:]
     @ObservationIgnored private var roamingCache: RoamingCache?
     private struct RoamingCache: Codable, Sendable {
         let id: UUID
@@ -63,16 +63,13 @@ import Observation
         var consumed = false
     }
     @ObservationIgnored private var detailTasks: [Int64: Task<NeteasePlaylistDetail, Error>] = [:]
-    @ObservationIgnored private var artworkTasks: [URL: Task<Void, Never>] = [:]
     @ObservationIgnored private var queueArtworkTasks: [UUID: Task<Void, Never>] = [:]
-    @ObservationIgnored private var artworkEvictionObserver: NSObjectProtocol?
-    @ObservationIgnored private let artworkCache: NeteaseArtworkCache
+    @ObservationIgnored private let artworkLoader: ScopedArtworkLoader
+    @ObservationIgnored private let cacheWriter: KeyedPageCacheWriter
+    private var artworkCache: NeteaseArtworkCache { artworkLoader.cache }
     @ObservationIgnored private let pageCache: NeteasePageCache
     @ObservationIgnored private var cache = Cache()
     private var restored = false
-    @ObservationIgnored private let cacheIO = NeteaseCacheIO()
-    @ObservationIgnored private var saveTasks: [String: Task<Void, Never>] = [:]
-    @ObservationIgnored private var saveIDs: [String: UUID] = [:]
     @ObservationIgnored private var refreshedDetails: [Int64: Date] = [:]
     @ObservationIgnored private var lastRefresh: Date?
     @ObservationIgnored private(set) var songCatalogRevision: UInt64 = 0
@@ -84,21 +81,20 @@ import Observation
         var snapshots: [String: NeteaseDailySnapshot] = [:]
         var details: [Int64: NeteasePlaylistDetail] = [:]
     }
-    init(client: NeteaseMusicClient = NeteaseMusicClient(), directory: URL = URL.applicationSupportDirectory.appendingPathComponent("NeteaseHome"),
+    init(client: NeteaseMusicClient = NeteaseMusicClient(), directory: URL? = nil, cacheDirectory: URL? = nil,
          artworkSession: URLSession? = nil, artworkCache: NeteaseArtworkCache? = nil) {
-        self.client = client; self.directory = directory
-        pageCache = NeteasePageCache(directory: directory)
-        self.artworkCache = artworkCache ?? artworkSession.map { NeteaseArtworkCache(directory: directory.appendingPathComponent("Artwork"), session: $0) } ?? .shared
-        artworkEvictionObserver = NotificationCenter.default.addObserver(forName: NeteaseArtworkCache.didEvictArtwork, object: self.artworkCache, queue: .main) { [weak self] note in
-            guard let event = NeteaseArtworkCache.eviction(in: note) else { return }
-            MainActor.assumeIsolated {
-                guard let self, self.restored, event.scope == self.scope else { return }
-                if !event.urls.isEmpty { self.onArtworkChange?(event.urls) }
-            }
-        }
-    }
-    isolated deinit {
-        if let artworkEvictionObserver { NotificationCenter.default.removeObserver(artworkEvictionObserver) }
+        self.client = client
+        let archiveLocation = directory ?? AppStoragePaths.legacyNeteaseHome
+        dailyHistoryDirectory = directory.map(AppStoragePaths.dailyHistory(in:)) ?? AppStoragePaths.neteaseDailyHistory
+        let cacheLocation = cacheDirectory ?? directory ?? AppStoragePaths.neteaseHomeCache
+        pageCache = NeteasePageCache(directory: cacheLocation,
+                                     legacyDirectoryToDiscard: archiveLocation)
+        let artwork = artworkCache ?? artworkSession.map { NeteaseArtworkCache(directory: cacheLocation.appendingPathComponent("Artwork"), session: $0) } ?? .shared
+        artworkLoader = ScopedArtworkLoader(cache: artwork, session: sessionScope)
+        cacheWriter = KeyedPageCacheWriter(cache: pageCache, session: sessionScope)
+        artworkLoader.scope = { [weak self] in self?.scope }
+        artworkLoader.isReady = { [weak self] in self?.restored == true }
+        artworkLoader.onChange = { [weak self] in self?.onArtworkChange?($0) }
     }
     nonisolated static func day(_ date: Date = Date()) -> String {
         let formatter = DateFormatter()
@@ -111,39 +107,21 @@ import Observation
     func activate(_ session: NeteaseSavedSession?, refresh: Bool = true) async {
         guard !Task.isCancelled else { return }
         if !restored || userID != session?.profile.userID || credential != session?.credential {
-            generation = UUID()
-            let oldRefresh = refreshTask; refreshTask = nil; refreshID = nil; oldRefresh?.cancel()
-            let oldSources = Array(sourceTasks.values); sourceTasks = [:]; sourceTaskIDs = [:]
-            oldSources.forEach { $0.cancel() }; refreshingSources = []
-            let oldActions = Array(quickActionTasks.values); quickActionTasks = [:]
-            oldActions.forEach { $0.cancel() }
-            let oldRoaming = roamingTask; roamingTask = nil; oldRoaming?.cancel(); roamingCache = nil
-            let oldContinuations = Array(continuationRequests.values)
-            continuationRequests.removeAll()
-            oldContinuations.forEach { $0.cancel() }
+            let revision = sessionScope.advance()
+            var pending = SessionTaskBag()
+            artworkLoader.takePending(into: &pending)
+            cacheWriter.takePending(into: &pending)
+            refreshTask = nil; refreshID = nil; sourceTasks = [:]; sourceTaskIDs = [:]; refreshingSources = []
+            quickActionTasks = [:]; roamingTask = nil; roamingCache = nil
             quickActionStates = [:]; likedPlaylistID = nil; likedSongIDs = []; likedSeedID = nil; likedSongs = [:]; actionSongs = []; referencedSongs = [:]
-            let oldDetails = Array(detailTasks.values); detailTasks = [:]
-            oldDetails.forEach { $0.cancel() }
-            let oldArtwork = Array(artworkTasks.values) + Array(queueArtworkTasks.values)
-            artworkTasks = [:]; queueArtworkTasks = [:]
-            oldArtwork.forEach { $0.cancel() }
-            let oldSaves = Array(saveTasks.values); saveTasks = [:]; saveIDs = [:]
-            oldSaves.forEach { $0.cancel() }
+            detailTasks = [:]; queueArtworkTasks = [:]
             userID = nil; credential = nil; restored = false
             cache = Cache(); recommendations = []; daily = nil; songCatalog = []; feed = nil; feedError = nil
             charts = nil; followedReleases = nil; chartsError = nil; followedReleasesError = nil
             newSongs = nil; newSongsError = nil
             refreshedDetails = [:]; lastRefresh = nil
             recommendationsError = nil; dailyError = nil; onChange?()
-            let revision = generation
-            await oldRefresh?.value
-            for task in oldSources { await task.value }
-            for task in oldActions { _ = await task.result }
-            _ = await oldRoaming?.result
-            for task in oldContinuations { _ = await task.result }
-            for task in oldDetails { _ = await task.result }
-            for task in oldArtwork { await task.value }
-            for task in oldSaves { await task.value }
+            await sessionScope.cancelAndDrain(pending).value
             guard revision == generation, !Task.isCancelled else { return }
             userID = session?.profile.userID; credential = session?.credential
             let owner = scope, date = Self.day(), signedIn = userID != nil
@@ -200,7 +178,7 @@ import Observation
         if !force, let lastRefresh, Date().timeIntervalSince(lastRefresh) < 300, userID == nil || daily?.date == Self.day() { return }
         let credential = credential, id = UUID()
         refreshID = id; refreshIsForced = force
-        let task = Task { [self] in
+        let task = sessionScope.task { [self] in
             async let daily: Void = refreshDaily(credential: credential, revision: revision)
             async let feed: Void = refreshSource(.feed, credential: credential, revision: revision, force: force)
             async let charts: Void = refreshSource(.charts, credential: credential, revision: revision, force: force)
@@ -243,7 +221,7 @@ import Observation
         let id = UUID()
         sourceTaskIDs[source] = id
         refreshingSources.insert(source)
-        let task = Task { [self] in
+        let task = sessionScope.task { [self] in
             defer {
                 if generation == revision, sourceTaskIDs[source] == id {
                     sourceTasks[source] = nil; sourceTaskIDs[source] = nil
@@ -307,6 +285,7 @@ import Observation
             let value = Self.block(code: "NEOMUSIC_NEW_SONGS", title: "新歌速递", resources: songs.filter { $0.id > 0 && !$0.unavailable }.map { .init(song: $0) })
             newSongs = value; newSongsError = nil; save(value, key: "home-new-songs"); rebuildSongCatalog(); onChange?(); requestDisplayedArtwork()
         } catch is CancellationError {} catch {
+            sessionScope.report(error, revision: revision, signedIn: credential != nil)
             if generation == revision, !Task.isCancelled { newSongsError = error.localizedDescription; onChange?() }
         }
     }
@@ -366,7 +345,9 @@ import Observation
             guard revision == generation else { return }
             onChange?()
             requestDisplayedArtwork()
-        } catch {}
+        } catch {
+            sessionScope.report(error, revision: revision, signedIn: credential != nil)
+        }
     }
 
     private func refreshRoaming(force: Bool) async {
@@ -386,7 +367,7 @@ import Observation
         guard let credential else { throw NeteaseHomeActionError.loginRequired }
         let revision = generation
         quickActionStates[.privateRoaming] = .loading; onChange?()
-        let task = Task<RoamingCache, Error> { [self] in
+        let task: Task<RoamingCache, Error> = sessionScope.throwingTask { [self] in
             defer { if generation == revision { roamingTask = nil } }
             do {
                 let songs = try await client.personalFM(credential: credential, mode: "EXPLORE", limit: 30)
@@ -403,6 +384,7 @@ import Observation
                 requestDisplayedArtwork()
                 return value
             } catch {
+                sessionScope.report(error, revision: revision, signedIn: true)
                 if generation == revision {
                     quickActionStates[.privateRoaming] = Task.isCancelled || error is CancellationError ? nil : .failed(error.localizedDescription)
                     onChange?()
@@ -442,11 +424,15 @@ import Observation
 
     private func continuationBatch(_ fetch: @escaping @Sendable () async throws -> [NeteaseMusicSong]) async throws -> [NeteaseMusicSong] {
         try Task.checkCancellation()
-        let revision = generation, id = UUID()
-        let task = Task { try await fetch() }
-        continuationRequests[id] = task
-        defer { continuationRequests[id] = nil }
-        let songs = try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+        let revision = generation
+        let task = sessionScope.throwingTask { try await fetch() }
+        let songs: [NeteaseMusicSong]
+        do {
+            songs = try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+        } catch {
+            sessionScope.report(error, revision: revision, signedIn: credential != nil)
+            throw error
+        }
         try Task.checkCancellation()
         guard generation == revision else { throw CancellationError() }
         var seen = Set<Int64>()
@@ -476,7 +462,7 @@ import Observation
         if let task = quickActionTasks[action] { return try await task.value }
         let revision = generation, credential = credential
         quickActionStates[action] = .loading; onChange?()
-        let task = Task<NeteaseHomeQuickActionResult, Error> { [self] in
+        let task: Task<NeteaseHomeQuickActionResult, Error> = sessionScope.throwingTask { [self] in
             defer { if generation == revision { quickActionTasks[action] = nil } }
             do {
                 if action != .hotSongs, credential == nil { throw NeteaseHomeActionError.loginRequired }
@@ -535,6 +521,7 @@ import Observation
                 quickActionStates[action] = nil; onChange?()
                 return playable
             } catch {
+                sessionScope.report(error, revision: revision, signedIn: credential != nil)
                 if generation == revision {
                     quickActionStates[action] = Task.isCancelled || error is CancellationError ? nil : .failed(error.localizedDescription)
                     onChange?()
@@ -557,17 +544,20 @@ import Observation
             guard generation == revision else { return }
             charts = value; chartsError = nil; save(value, key: "home-charts"); onChange?(); requestDisplayedArtwork()
         } catch is CancellationError {} catch {
+            sessionScope.report(error, revision: revision, signedIn: credential != nil)
             if generation == revision, !Task.isCancelled { chartsError = error.localizedDescription; onChange?() }
         }
     }
     private func refreshFollowed(credential: NeteaseCredential?, revision: UUID) async {
         guard let credential else { return }
         do {
-            let value = try await client.followedArtistReleases(credential: credential, cached: followedReleases)
+            let value = try await client.followedArtistReleases(credential: credential, cached: followedReleases,
+                onAuthenticationRequired: sessionScope.authenticationHandler(signedIn: true))
             try Task.checkCancellation()
             guard generation == revision else { return }
             followedReleases = value; followedReleasesError = nil; save(value, key: "home-followed"); onChange?(); requestDisplayedArtwork()
         } catch is CancellationError {} catch {
+            sessionScope.report(error, revision: revision, signedIn: true)
             if generation == revision, !Task.isCancelled {
                 followedReleasesError = error.localizedDescription; onChange?()
             }
@@ -599,6 +589,7 @@ import Observation
             save(value, key: "feed")
             publishFeed(value)
         } catch is CancellationError {} catch {
+            sessionScope.report(error, revision: revision, signedIn: credential != nil)
             if generation == revision, !Task.isCancelled { feedError = error.localizedDescription; onChange?() }
         }
     }
@@ -623,7 +614,10 @@ import Observation
             recommendations = items; cache.recommendations = items; recommendationsError = nil; save(items, key: "recommendations")
             PerformanceDiagnostics.event("NetworkContentReady"); onChange?()
             requestDisplayedArtwork()
-        } catch is CancellationError {} catch { if generation == revision, !Task.isCancelled { recommendationsError = error.localizedDescription; onChange?() } }
+        } catch is CancellationError {} catch {
+            sessionScope.report(error, revision: revision, signedIn: credential != nil)
+            if generation == revision, !Task.isCancelled { recommendationsError = error.localizedDescription; onChange?() }
+        }
     }
     private func refreshDaily(credential: NeteaseCredential?, revision: UUID) async {
         guard let credential else { return }
@@ -635,7 +629,7 @@ import Observation
             guard generation == revision else { return }
             let previous = cache.snapshots[date]
             let snapshot = NeteaseDailySnapshot(date: date, songs: songs, id: previous?.songs.map(\.id) == songs.map(\.id) ? previous!.id : UUID().uuidString)
-            try await cacheIO.save(snapshot, to: dailyArchiveURL(snapshot.id))
+            try await AtomicJSONStore.writeInBackground(snapshot, to: dailyArchiveURL(snapshot.id))
             try Task.checkCancellation()
             guard generation == revision else { return }
             cache.snapshots[snapshot.id] = snapshot
@@ -646,7 +640,10 @@ import Observation
             PerformanceDiagnostics.event("NetworkContentReady"); onChange?()
             requestDisplayedArtwork()
             requestArtwork(songs.prefix(NeteaseArtworkPrefetch.detailSongs).compactMap(\.artworkURL))
-        } catch is CancellationError {} catch { if generation == revision, !Task.isCancelled { dailyError = error.localizedDescription; onChange?() } }
+        } catch is CancellationError {} catch {
+            sessionScope.report(error, revision: revision, signedIn: true)
+            if generation == revision, !Task.isCancelled { dailyError = error.localizedDescription; onChange?() }
+        }
     }
     var cachedSongs: [NeteaseMusicSong] { userID == nil ? [] : songCatalog }
     func restoreCachedSongs(ids: Set<Int64>) async -> [NeteaseMusicSong] {
@@ -655,13 +652,13 @@ import Observation
         let loaded = cachedSongs.filter { ids.contains($0.id) }
         let missing = ids.subtracting(loaded.map(\.id))
         guard !missing.isEmpty else { return loaded }
-        let recovered = (try? await Self.readCachedSongs(ids: missing, scope: owner, directory: directory,
-                                                       pageCache: pageCache, cacheIO: cacheIO)) ?? []
+        let recovered = (try? await Self.readCachedSongs(ids: missing, scope: owner, dailyHistoryDirectory: dailyHistoryDirectory,
+                                                       pageCache: pageCache)) ?? []
         guard revision == generation, !Task.isCancelled else { return [] }
         return loaded + recovered
     }
-    @concurrent private static func readCachedSongs(ids: Set<Int64>, scope: String, directory: URL,
-                                                   pageCache: NeteasePageCache, cacheIO: NeteaseCacheIO) async throws -> [NeteaseMusicSong] {
+    @concurrent private static func readCachedSongs(ids: Set<Int64>, scope: String, dailyHistoryDirectory: URL,
+                                                   pageCache: NeteasePageCache) async throws -> [NeteaseMusicSong] {
         var missing = ids
         var found: [NeteaseMusicSong] = []
         func collect(_ songs: [NeteaseMusicSong]) {
@@ -679,11 +676,11 @@ import Observation
             collect(snapshot.songs)
             if missing.isEmpty { return found }
         }
-        let history = directory.appendingPathComponent("DailyHistory", isDirectory: true).appendingPathComponent(scope, isDirectory: true)
+        let history = dailyHistoryDirectory.appendingPathComponent(scope, isDirectory: true)
         let files = (try? FileManager.default.contentsOfDirectory(at: history, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? []
         for file in files where file.pathExtension == "json" {
             try Task.checkCancellation()
-            if let snapshot = await cacheIO.load(NeteaseDailySnapshot.self, from: file) { collect(snapshot.songs) }
+            if let snapshot = try? AtomicJSONStore.read(NeteaseDailySnapshot.self, from: file) { collect(snapshot.songs) }
             if missing.isEmpty { return found }
         }
         return found
@@ -698,7 +695,7 @@ import Observation
     func dailySnapshot(date: String) -> NeteaseDailySnapshot? { cache.snapshots[date] }
     func cachedDetail(id: Int64) -> NeteasePlaylistDetail? { cache.details[id] }
     private func dailyArchiveURL(_ id: String) -> URL {
-        directory.appendingPathComponent("DailyHistory", isDirectory: true)
+        dailyHistoryDirectory
             .appendingPathComponent(scope, isDirectory: true).appendingPathComponent(id).appendingPathExtension("json")
     }
     func loadDailySnapshot(id: String) async throws -> NeteaseDailySnapshot? {
@@ -706,7 +703,7 @@ import Observation
         if let cached = cache.snapshots[id] { return cached }
         let revision = generation, owner = scope, archiveURL = dailyArchiveURL(id)
         var snapshot = try? await pageCache.load(NeteaseDailySnapshot.self, scope: owner, key: "daily:" + id)
-        if snapshot == nil { snapshot = await cacheIO.load(NeteaseDailySnapshot.self, from: archiveURL) }
+        if snapshot == nil { snapshot = try? await AtomicJSONStore.readInBackground(NeteaseDailySnapshot.self, from: archiveURL) }
         try Task.checkCancellation()
         guard revision == generation else { throw CancellationError() }
         if let cached = cache.snapshots[id] { return cached }
@@ -738,6 +735,7 @@ import Observation
         let revision = generation
         _ = try await restoreCachedDetail(id: id, publish: false)
         _ = try await joinDetail(id)
+        guard sessionScope.isCurrent(revision) else { throw CancellationError() }
         let detail: NeteasePlaylistDetail
         if let cached = cache.details[id], cached.orderedTrackIDs.isEmpty || cached.nextOffset > 0 { detail = cached }
         else {
@@ -748,16 +746,21 @@ import Observation
         }
         try Task.checkCancellation()
         guard generation == revision, let remote = detail.displayArtworkURL(ownerID: userID) else { return nil }
-        let file = try await artworkCache.imageURL(for: remote, scope: scope)
-        try Task.checkCancellation()
-        guard generation == revision else { throw CancellationError() }
+        let owner = scope
+        let task = sessionScope.throwingTask { [artworkCache] in
+            try await artworkCache.imageURL(for: remote, scope: owner)
+        }
+        let file = try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+        guard sessionScope.isCurrent(revision) else { throw CancellationError() }
         return file
     }
 
     func detail(id: Int64, force: Bool = false) async throws -> NeteasePlaylistDetail {
         try Task.checkCancellation()
+        let revision = generation
         _ = try await restoreCachedDetail(id: id)
         let joined = try await joinDetail(id)
+        guard sessionScope.isCurrent(revision) else { throw CancellationError() }
         if let cached = cache.details[id], joined != nil || (!force && refreshedDetails[id].map { Date().timeIntervalSince($0) < 300 } == true) {
             if cached.hasInitialPage { return cached }
             let credential = credential
@@ -774,9 +777,12 @@ import Observation
 
     func loadMoreDetail(id: Int64) async throws -> NeteasePlaylistDetail {
         try Task.checkCancellation()
+        let revision = generation
         _ = try await restoreCachedDetail(id: id)
         let previousOffset = cache.details[id]?.nextOffset ?? 0
-        if let value = try await joinDetail(id), value.isComplete || value.nextOffset > previousOffset { return value }
+        let joined = try await joinDetail(id)
+        guard sessionScope.isCurrent(revision) else { throw CancellationError() }
+        if let joined, joined.isComplete || joined.nextOffset > previousOffset { return joined }
         guard let cached = cache.details[id] else { return try await detail(id: id) }
         guard !cached.isComplete else { return cached }
         let credential = credential
@@ -787,10 +793,12 @@ import Observation
 
     func completeDetail(id: Int64) async throws -> NeteasePlaylistDetail {
         try Task.checkCancellation()
-        _ = try await restoreCachedDetail(id: id)
-        if let cached = cache.details[id], cached.isComplete { return cached }
         let revision = generation
+        _ = try await restoreCachedDetail(id: id)
+        guard sessionScope.isCurrent(revision) else { throw CancellationError() }
+        if let cached = cache.details[id], cached.isComplete { return cached }
         _ = try await joinDetail(id)
+        guard sessionScope.isCurrent(revision) else { throw CancellationError() }
         let detail: NeteasePlaylistDetail
         if let cached = cache.details[id] { detail = cached }
         else { detail = try await self.detail(id: id) }
@@ -800,6 +808,7 @@ import Observation
         let credential = credential
         if detailTasks[id] != nil {
             _ = try await joinDetail(id)
+            guard sessionScope.isCurrent(revision) else { throw CancellationError() }
             return try await completeDetail(id: id)
         }
         return try await fetchDetail(id: id) { [client] in
@@ -829,11 +838,12 @@ import Observation
     private func fetchDetail(id: Int64, refresh: Bool = false, preloadArtwork: Bool = true, publish: Bool = true,
                              operation: @escaping @MainActor () async throws -> NeteasePlaylistDetail) async throws -> NeteasePlaylistDetail {
         let revision = generation
-        let task = Task { [self] in
+        let task = sessionScope.throwingTask { [self] in
             defer { if generation == revision { detailTasks[id] = nil } }
             let value: NeteasePlaylistDetail
             do { value = try await operation() }
             catch {
+                sessionScope.report(error, revision: revision, signedIn: credential != nil)
                 try Task.checkCancellation()
                 guard generation == revision else { throw CancellationError() }
                 throw error
@@ -851,43 +861,15 @@ import Observation
         detailTasks[id] = task
         return try await existing(task)
     }
-    func cachedArtworkURL(remote: URL) -> URL? {
-        artworkCache.cachedURL(for: remote, scope: scope)
-    }
-    func cachedArtworkFile(_ remote: URL) async -> URL? {
-        guard restored, !Task.isCancelled else { return nil }
-        if let cached = cachedArtworkURL(remote: remote) { return cached }
-        let revision = generation, owner = scope
-        let file = await artworkCache.cachedFileURL(for: remote, scope: owner)
-        guard restored, generation == revision, scope == owner, !Task.isCancelled else { return nil }
-        return file
-    }
+    func cachedArtworkURL(remote: URL) -> URL? { artworkLoader.cachedURL(remote) }
+    func cachedArtworkFile(_ remote: URL) async -> URL? { await artworkLoader.cachedFile(remote) }
     private func requestDisplayedArtwork() {
         let urls = displayFeedBlocks.flatMap { $0.resources.compactMap(\.artworkURL) }
             + NeteaseHomeQuickAction.allCases.compactMap { quickActionArtwork($0) }
         requestArtwork(urls)
     }
 
-    func requestArtwork(_ urls: [URL]) {
-        guard restored, !Task.isCancelled else { return }
-        let revision = generation
-        let owner = scope
-        var seen = Set<URL>()
-        var cached = Set<URL>()
-        for remote in urls where seen.insert(remote).inserted && remote.scheme == "https" {
-            if cachedArtworkURL(remote: remote) != nil { cached.insert(remote); continue }
-            guard artworkTasks[remote] == nil else { continue }
-            artworkTasks[remote] = Task { [self] in
-                defer {
-                    if generation == revision {
-                        artworkTasks[remote] = nil
-                    }
-                }
-                await loadArtwork(remote, owner: owner, revision: revision, demand: .standard)
-            }
-        }
-        if !cached.isEmpty { onArtworkChange?(cached) }
-    }
+    func requestArtwork(_ urls: [URL]) { artworkLoader.request(urls) }
 
     var canRequestQueueArtwork: Bool { restored && userID != nil }
 
@@ -902,41 +884,22 @@ import Observation
             return nil
         }
         let revision = generation, owner = scope, id = UUID()
-        let task = Task { [self] in
+        let task = sessionScope.task { [self] in
             defer { queueArtworkTasks[id] = nil }
             if let pending {
                 // The next track already had foreground priority. Keep that request through promotion.
                 await withTaskCancellationHandler { await pending.value } onCancel: { pending.cancel() }
                 guard !Task.isCancelled, generation == revision, cachedArtworkURL(remote: remote) == nil else { return }
             }
-            await loadArtwork(remote, owner: owner, revision: revision, demand: foreground ? .foreground : .prefetch)
+            await artworkLoader.load(remote, owner: owner, revision: revision, demand: foreground ? .foreground : .prefetch)
         }
         queueArtworkTasks[id] = task
         return task
     }
 
-    private func loadArtwork(_ remote: URL, owner: String, revision: UUID, demand: NeteaseArtworkCache.Demand) async {
-        do {
-            _ = try await artworkCache.imageURL(for: remote, scope: owner, demand: demand)
-            try Task.checkCancellation()
-            guard generation == revision, scope == owner else { return }
-            PerformanceDiagnostics.event("ArtworkReady")
-            onArtworkChange?([remote])
-        } catch { }
-    }
-    func flush() async {
-        for task in Array(saveTasks.values) { await task.value }
-    }
+    func flush() async { await cacheWriter.flush() }
 
     private func save<Value: Encodable & Sendable>(_ value: Value, key: String) {
-        let owner = scope, revision = generation, previous = saveTasks[key], id = UUID()
-        previous?.cancel()
-        saveIDs[key] = id
-        saveTasks[key] = Task { [weak self, pageCache] in
-            await previous?.value
-            guard !Task.isCancelled, self?.generation == revision else { return }
-            try? await pageCache.save(value, scope: owner, key: key)
-            if self?.saveIDs[key] == id { self?.saveTasks[key] = nil; self?.saveIDs[key] = nil }
-        }
+        cacheWriter.save(value, scope: scope, key: key)
     }
 }

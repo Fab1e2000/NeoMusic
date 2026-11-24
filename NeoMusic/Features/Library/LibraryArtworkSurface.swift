@@ -9,6 +9,8 @@ struct LibraryArtworkSurface<Content: View>: UIViewRepresentable {
     let content: Content
     let cornerRadius: CGFloat
     var isZoomAlignmentTarget = false
+    var isUserInteractionEnabled = true
+    var hostedBackgroundColor: UIColor? = .clear
 
     func makeUIView(context: Context) -> LibraryArtworkSurfaceView { LibraryArtworkSurfaceView() }
 
@@ -16,6 +18,7 @@ struct LibraryArtworkSurface<Content: View>: UIViewRepresentable {
         view.layer.cornerRadius = cornerRadius
         view.clipsToBounds = true
         view.isZoomAlignmentTarget = isZoomAlignmentTarget
+        view.isUserInteractionEnabled = isUserInteractionEnabled
         let configuration = UIHostingConfiguration {
             content.libraryHostedAppearance(context.environment)
                 .environment(\.nativeArtworkSurfaceEnabled, false)
@@ -24,7 +27,7 @@ struct LibraryArtworkSurface<Content: View>: UIViewRepresentable {
             hosted.configuration = configuration
         } else {
             let hosted = configuration.makeContentView()
-            hosted.backgroundColor = .clear
+            if let hostedBackgroundColor { hosted.backgroundColor = hostedBackgroundColor }
             hosted.translatesAutoresizingMaskIntoConstraints = false
             view.addSubview(hosted)
             NSLayoutConstraint.activate([

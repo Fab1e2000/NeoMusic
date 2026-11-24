@@ -193,10 +193,11 @@ private struct AccountSettingsPage: View {
 }
 
 private struct TabOrderPage: View {
+    @Environment(PlaylistLibrary.self) private var playlistLibrary
     @AppStorage(AppTabOrder.storageKey) private var storedOrder = AppTabOrder.defaultRaw
     @AppStorage(AppTabOrder.hiddenKey) private var storedHidden: String?
     private var playlistIDs: [String] {
-        LocalLibrary.playlistLibrary.playlists.compactMap { item in
+        playlistLibrary.playlists.compactMap { item in
             guard !item.isSystem, !item.isDownloadedSnapshot, !item.id.isEmpty, !item.id.contains(",") else { return nil }
             return item.id
         }
@@ -292,7 +293,7 @@ private struct TabOrderPage: View {
     }
 
     private func title(for tab: AppTab) -> String {
-        if case .playlist(let id) = tab { return LocalLibrary.playlistLibrary.playlist(id)?.title ?? "播放列表" }
+        if case .playlist(let id) = tab { return playlistLibrary.playlist(id)?.title ?? "播放列表" }
         return tab.title
     }
 
@@ -366,6 +367,7 @@ struct AccountErrorMessage: View {
     }
 }
 
+#if DEBUG
 #Preview("账户验证错误") {
     List {
         Section {
@@ -382,3 +384,4 @@ struct AccountErrorMessage: View {
     }
     .listStyle(.insetGrouped)
 }
+#endif

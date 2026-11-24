@@ -1,5 +1,5 @@
-import FullScreenPlayer
 #if DEBUG
+import FullScreenPlayer
 import SwiftUI
 
 struct SearchPreviewRoot: View {

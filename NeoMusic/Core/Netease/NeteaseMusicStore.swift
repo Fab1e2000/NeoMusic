@@ -18,19 +18,18 @@ final class NeteaseMusicStore {
     private(set) var morePlaylistIDs: Set<Int64> = []
     var wifiQuality: NeteaseMusicQuality = .lossless {
         didSet {
-            defaults.set(wifiQuality.rawValue, forKey: "netease.quality.wifi")
+            defaults.set(wifiQuality.rawValue, forKey: AppDefaultsKey.neteaseWiFiQuality)
             if !isCellular, wifiQuality != oldValue { onQualityChange?() }
         }
     }
     var cellularQuality: NeteaseMusicQuality = .high {
         didSet {
-            defaults.set(cellularQuality.rawValue, forKey: "netease.quality.cellular")
+            defaults.set(cellularQuality.rawValue, forKey: AppDefaultsKey.neteaseCellularQuality)
             if isCellular, cellularQuality != oldValue { onQualityChange?() }
         }
     }
     private(set) var isCellular = false
     private var playbackQuality: NeteaseMusicQuality { isCellular ? cellularQuality : wifiQuality }
-    @ObservationIgnored var onAuthenticationRequired: (() -> Void)?
     @ObservationIgnored var onChange: (() -> Void)?
     @ObservationIgnored var onArtworkChange: ((Set<URL>) -> Void)?
     var sessionRevision: UUID { generation }
@@ -40,9 +39,12 @@ final class NeteaseMusicStore {
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let directory: URL
     @ObservationIgnored private let pages: NeteasePageCache
-    @ObservationIgnored private let artworkCache: NeteaseArtworkCache
+    @ObservationIgnored private let artworkLoader: ScopedArtworkLoader
+    @ObservationIgnored private let cacheWriter: KeyedPageCacheWriter
+    private var artworkCache: NeteaseArtworkCache { artworkLoader.cache }
     @ObservationIgnored private var credential: NeteaseCredential?
-    @ObservationIgnored private var generation = UUID()
+    @ObservationIgnored let sessionScope = NeteaseSessionScope()
+    private var generation: UUID { sessionScope.revision }
     @ObservationIgnored private var restored = false
     @ObservationIgnored private var details: [Int64: NeteasePlaylistDetail] = [:]
     @ObservationIgnored private var restoredPlaylists: Set<Int64> = []
@@ -50,23 +52,20 @@ final class NeteaseMusicStore {
     @ObservationIgnored private var failedLoads: [Int64: LoadMode] = [:]
     @ObservationIgnored private var refreshedAt: Date?
     @ObservationIgnored private var detailTasks: [Int64: Task<Bool, Never>] = [:]
-    @ObservationIgnored private var tasks: [UUID: Task<Void, Never>] = [:]
     @ObservationIgnored private var lyricCache: [Int64: NeteaseMusicLyrics] = [:]
-    @ObservationIgnored private var artworkTasks: [URL: Task<Void, Never>] = [:]
-    @ObservationIgnored private var saveTasks: [String: Task<Void, Never>] = [:]
-    @ObservationIgnored private var saveIDs: [String: UUID] = [:]
     @ObservationIgnored private let monitor = NWPathMonitor()
-    @ObservationIgnored private var artworkObserver: (any NSObjectProtocol)?
 
     init(client: NeteaseMusicClient = NeteaseMusicClient(), directory: URL? = nil, defaults: UserDefaults = .standard,
          artworkSession: URLSession? = nil, artworkCache: NeteaseArtworkCache? = nil) {
         self.client = client; self.defaults = defaults
-        let directory = directory ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("NeteaseMusic")
+        let directory = directory ?? AppStoragePaths.neteaseMusicCache
         self.directory = directory
         pages = NeteasePageCache(directory: directory)
-        self.artworkCache = artworkCache ?? artworkSession.map { NeteaseArtworkCache(directory: directory.appendingPathComponent("Artwork"), session: $0) } ?? .shared
-        wifiQuality = NeteaseMusicQuality(rawValue: defaults.string(forKey: "netease.quality.wifi") ?? "") ?? .lossless
-        cellularQuality = NeteaseMusicQuality(rawValue: defaults.string(forKey: "netease.quality.cellular") ?? "") ?? .high
+        let artwork = artworkCache ?? artworkSession.map { NeteaseArtworkCache(directory: directory.appendingPathComponent("Artwork"), session: $0) } ?? .shared
+        artworkLoader = ScopedArtworkLoader(cache: artwork, session: sessionScope)
+        cacheWriter = KeyedPageCacheWriter(cache: pages, session: sessionScope)
+        wifiQuality = NeteaseMusicQuality(rawValue: defaults.string(forKey: AppDefaultsKey.neteaseWiFiQuality) ?? "") ?? .lossless
+        cellularQuality = NeteaseMusicQuality(rawValue: defaults.string(forKey: AppDefaultsKey.neteaseCellularQuality) ?? "") ?? .high
         monitor.pathUpdateHandler = { [weak self] path in
             let cellular = path.usesInterfaceType(.cellular)
             Task { @MainActor [weak self] in
@@ -74,29 +73,21 @@ final class NeteaseMusicStore {
             }
         }
         monitor.start(queue: DispatchQueue(label: "NeoMusic.NetworkQuality"))
-        artworkObserver = NotificationCenter.default.addObserver(forName: NeteaseArtworkCache.didEvictArtwork,
-            object: self.artworkCache, queue: .main) { [weak self] notification in
-                guard let event = NeteaseArtworkCache.eviction(in: notification) else { return }
-                MainActor.assumeIsolated {
-                    guard let self, self.restored, let userID = self.userID,
-                          event.scope == String(userID), !event.urls.isEmpty else { return }
-                    self.onArtworkChange?(event.urls)
-                }
-            }
+        artworkLoader.scope = { [weak self] in self?.userID.map(String.init) }
+        artworkLoader.isReady = { [weak self] in self?.restored == true }
+        artworkLoader.onChange = { [weak self] in self?.onArtworkChange?($0) }
     }
 
-    isolated deinit {
-        monitor.cancel()
-        if let artworkObserver { NotificationCenter.default.removeObserver(artworkObserver) }
-    }
+    isolated deinit { monitor.cancel() }
 
-    func activate(_ session: NeteaseSavedSession, refresh: Bool = true) async {
+    func activate(_ session: NeteaseSavedSession?, refresh: Bool = true) async {
         guard !Task.isCancelled else { return }
+        guard let session else { await invalidate(); return }
         if !restored || userID != session.profile.userID || credential != session.credential {
-            await invalidate()
-            guard !Task.isCancelled else { return }
+            let revision = await resetSession()
+            guard sessionScope.isCurrent(revision) else { return }
             userID = session.profile.userID; credential = session.credential
-            let revision = generation, scope = String(session.profile.userID)
+            let scope = String(session.profile.userID)
             let summary = try? await pages.load(Summary.self, scope: scope, key: "library")
             guard revision == generation, !Task.isCancelled else { return }
             restored = true
@@ -125,33 +116,35 @@ final class NeteaseMusicStore {
         if playbackQuality != previous { onQualityChange?() }
     }
 
-    func invalidate() async {
+    func invalidate() async { _ = await resetSession() }
+
+    private func resetSession() async -> UUID {
         let hadSession = restored || userID != nil
-        generation = UUID(); credential = nil; userID = nil; restored = false
+        let revision = sessionScope.advance()
+        credential = nil; userID = nil; restored = false
+        var pending = SessionTaskBag()
+        detailTasks.removeAll()
+        artworkLoader.takePending(into: &pending)
+        cacheWriter.takePending(into: &pending)
         if hadSession { onSessionInvalidated?() }
-        let pending = Array(tasks.values) + Array(artworkTasks.values) + Array(saveTasks.values)
-        let pendingDetails = Array(detailTasks.values)
-        pending.forEach { $0.cancel() }; pendingDetails.forEach { $0.cancel() }
-        for task in pending { await task.value }
-        for task in pendingDetails { _ = await task.value }
-        tasks.removeAll(); detailTasks.removeAll(); artworkTasks.removeAll(); saveTasks.removeAll(); saveIDs.removeAll()
+        await sessionScope.cancelAndDrain(pending).value
+        guard generation == revision else { return revision }
         playlists = []; songs = [:]; playlistTracks = [:]; likedIDs = []; likedAt = [:]; lyricCache = [:]
         details = [:]; restoredPlaylists = []; detailDates = [:]; failedLoads = [:]; refreshedAt = nil; morePlaylistIDs = []
         isLoading = false; loadingPlaylists = []; playlistErrors = [:]; error = nil; onChange?()
+        return revision
     }
 
     private func run<T: Sendable>(_ operation: @escaping @MainActor (NeteaseCredential) async throws -> T) async throws -> T {
         try Task.checkCancellation()
         guard let credential else { throw NeteaseAccountError.authenticationRequired }
-        let revision = generation, id = UUID()
-        let resultTask = Task { try await operation(credential) }
-        tasks[id] = Task { await withTaskCancellationHandler { _ = await resultTask.result } onCancel: { resultTask.cancel() } }
-        defer { tasks.removeValue(forKey: id) }
+        let revision = generation
+        let resultTask = sessionScope.throwingTask { try await operation(credential) }
         return try await withTaskCancellationHandler {
             let value: T
             do { value = try await resultTask.value } catch {
                 guard generation == revision else { throw CancellationError() }
-                if error as? NeteaseAccountError == .authenticationRequired { onAuthenticationRequired?() }
+                sessionScope.report(error, revision: revision, signedIn: true)
                 throw error
             }
             try Task.checkCancellation()
@@ -322,7 +315,7 @@ final class NeteaseMusicStore {
         guard !Task.isCancelled else { return false }
         if let existing = detailTasks[id] { return await existing.value }
         let revision = generation
-        let task = Task { [self] in
+        let task = sessionScope.task { [self] in
             defer { if generation == revision { detailTasks.removeValue(forKey: id) } }
             return await performLoadPlaylist(id: id, mode: mode)
         }
@@ -533,33 +526,10 @@ final class NeteaseMusicStore {
         if needsSave { save(lyrics, key: key) }
         return lyrics
     }
-    func requestArtwork(_ urls: [URL]) {
-        guard restored, userID != nil, !Task.isCancelled else { return }
-        let revision = generation
-        let cached = Set(urls.filter { cachedArtworkURL($0) != nil })
-        if !cached.isEmpty { onArtworkChange?(cached) }
-        var seen = Set<URL>()
-        for remote in urls where seen.insert(remote).inserted && remote.scheme == "https" && cachedArtworkURL(remote) == nil && artworkTasks[remote] == nil {
-            artworkTasks[remote] = Task { [weak self] in
-                guard let self else { return }
-                defer { if self.generation == revision { self.artworkTasks[remote] = nil } }
-                _ = try? await self.artwork(remote)
-            }
-        }
-    }
+    func requestArtwork(_ urls: [URL]) { artworkLoader.request(urls) }
     func cachedArtworkURL(for remote: URL) -> URL? { cachedArtworkURL(remote) }
-    func cachedArtworkURL(_ remote: URL) -> URL? {
-        guard let userID else { return nil }
-        return artworkCache.cachedURL(for: remote, scope: String(userID))
-    }
-    func cachedArtworkFile(_ remote: URL) async -> URL? {
-        guard restored, let userID, !Task.isCancelled else { return nil }
-        if let cached = cachedArtworkURL(remote) { return cached }
-        let revision = generation, scope = String(userID)
-        let file = await artworkCache.cachedFileURL(for: remote, scope: scope)
-        guard restored, generation == revision, self.userID == userID, !Task.isCancelled else { return nil }
-        return file
-    }
+    func cachedArtworkURL(_ remote: URL) -> URL? { artworkLoader.cachedURL(remote) }
+    func cachedArtworkFile(_ remote: URL) async -> URL? { await artworkLoader.cachedFile(remote) }
     func artwork(_ remote: URL) async throws -> URL {
         if let cached = cachedArtworkURL(remote) { return cached }
         guard remote.scheme == "https", let userID else { throw NeteaseAccountError.authenticationRequired }
@@ -588,48 +558,11 @@ final class NeteaseMusicStore {
     }
     private func save<Value: Encodable & Sendable>(_ value: Value, key: String) {
         guard let userID else { return }
-        let scope = String(userID), revision = generation, previous = saveTasks[key], id = UUID()
-        previous?.cancel()
-        saveIDs[key] = id
-        saveTasks[key] = Task { [weak self, pages] in
-            defer {
-                if self?.generation == revision, self?.saveIDs[key] == id {
-                    self?.saveTasks[key] = nil; self?.saveIDs[key] = nil
-                }
-            }
-            await previous?.value
-            guard !Task.isCancelled else { return }
-            do { try await pages.save(value, scope: scope, key: key) }
-            catch is CancellationError {} catch {
-                if self?.generation == revision { self?.error = "缓存保存失败：\(error.localizedDescription)"; self?.onChange?() }
-            }
+        cacheWriter.save(value, scope: String(userID), key: key) { [weak self] error in
+            self?.error = "缓存保存失败：\(error.localizedDescription)"
+            self?.onChange?()
         }
     }
 
-    func waitForCacheWrites() async {
-        for task in saveTasks.values { await task.value }
-    }
-}
-
-actor NeteaseCacheIO {
-    func load<Value: Decodable & Sendable>(_ type: Value.Type, from url: URL) -> Value? {
-        guard !Task.isCancelled, let data = try? Data(contentsOf: url) else { return nil }
-        return try? JSONDecoder().decode(type, from: data)
-    }
-    func remove(_ url: URL) throws {
-        try Task.checkCancellation()
-        try FileManager.default.removeItem(at: url)
-    }
-    func save<Value: Encodable & Sendable>(_ snapshot: Value, to url: URL) throws {
-        try Task.checkCancellation()
-        let data = try JSONEncoder().encode(snapshot)
-        try Task.checkCancellation()
-        try writeArtwork(data, to: url)
-    }
-    func writeArtwork(_ data: Data, to url: URL) throws {
-        try Task.checkCancellation()
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Task.checkCancellation()
-        try data.write(to: url, options: .atomic)
-    }
+    func waitForCacheWrites() async { await cacheWriter.flush() }
 }

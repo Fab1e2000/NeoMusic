@@ -2,6 +2,7 @@ import SwiftUI
 
 @MainActor
 final class AppRuntime {
+    let container: AppContainer
     let account: NeteaseAccount
     let onlineLibrary: OnlineLibraryIntegration
     var integration: OnlineLibraryIntegration { onlineLibrary }
@@ -11,15 +12,16 @@ final class AppRuntime {
     let downloads: DownloadMusicIntegration
     private(set) var startupTask: Task<Void, Never>?
 
-    init(account: NeteaseAccount? = nil) {
+    init(account: NeteaseAccount? = nil, container: AppContainer = .shared) {
         let account = account ?? NeteaseAccount(client: NeteaseAccountClient(), credentialStore: NeteaseCredentialStore(),
                                                avatarClient: NeteaseAvatarClient())
         self.account = account
-        onlineLibrary = OnlineLibraryIntegration(account: account)
-        home = HomeMusicIntegration(account: account)
-        artists = ArtistMusicIntegration(account: account)
-        search = SearchMusicIntegration(account: account)
-        let downloads = DownloadMusicIntegration(account: account)
+        self.container = container
+        onlineLibrary = OnlineLibraryIntegration(account: account, container: container)
+        home = HomeMusicIntegration(account: account, container: container)
+        artists = ArtistMusicIntegration(account: account, container: container)
+        search = SearchMusicIntegration(account: account, container: container)
+        let downloads = DownloadMusicIntegration(account: account, container: container)
         self.downloads = downloads
     }
 
@@ -46,7 +48,7 @@ final class AppRuntime {
                 guard !Task.isCancelled else { return }
                 completeRestoredPlayback()
             }
-            async let scan: Void = LocalLibrary.runtime.refresh()
+            async let scan: Void = container.runtime.refresh()
             async let validation: Void = restoreRemainingOnlineContent()
             async let artwork: Void = prepareInitialOnlineArtwork()
             _ = await (scan, validation, artwork)
@@ -104,11 +106,11 @@ final class AppRuntime {
     func sceneDidChange(from previous: ScenePhase, to phase: ScenePhase) {
         guard startupTask != nil else { return }
         if phase == .background {
-            LocalLibrary.player.saveQueueForBackground()
-            LocalLibrary.playlistLibrary.saveForBackground()
+            container.player.saveQueueForBackground()
+            container.playlistLibrary.saveForBackground()
         }
         if previous == .background, phase != .background {
-            Task { await LocalLibrary.runtime.refresh() }
+            Task { await container.runtime.refresh() }
             Task { await account.revalidate() }
         }
     }
@@ -123,19 +125,19 @@ final class AppRuntime {
         case .signedOut: owner = nil
         case .signedIn(let value): owner = value
         }
-        LocalLibrary.runtime.completeInitialPlaybackRestoration(ownerID: owner, songs: LocalLibrary.allSongs)
+        container.runtime.completeInitialPlaybackRestoration(ownerID: owner, songs: container.allSongs)
     }
 
     private func restoreInitialLibrary() async {
-        await LocalLibrary.runtime.restoreCachedState()
+        await container.runtime.restoreCachedState()
         guard !Task.isCancelled else { return }
         await LocalArtworkImages.prepare(initialLibraryArtwork)
         guard !Task.isCancelled else { return }
-        LocalLibrary.runtime.completeInitialPresentation(songs: LocalLibrary.allSongs)
+        container.runtime.completeInitialPresentation(songs: container.allSongs)
     }
 
     private var initialLibraryArtwork: [Artwork] {
-        (Array(LocalLibrary.pinned.prefix(6)) + Array(LocalLibrary.recentlyAdded.prefix(4))).map(\.artwork)
+        (Array(container.pinned.prefix(6)) + Array(container.recentlyAdded.prefix(4))).map(\.artwork)
     }
 
     private func restoreInitialOnlineContent() async {

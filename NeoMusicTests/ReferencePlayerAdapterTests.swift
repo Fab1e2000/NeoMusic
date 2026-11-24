@@ -745,27 +745,34 @@ private struct ArtistHitRegionContent: View {
 }
 
 @MainActor final class ReferenceTrackPagingTests: XCTestCase {
-    func testPrefetchWarmsExactArtworkRequests() async throws {
-        let image = UIGraphicsImageRenderer(size: CGSize(width: 48, height: 48)).image { context in
+    func testPlayerPrefetchWarmsLocalVariantsWithoutPopulatingNuke() async throws {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let size = CGSize(width: 480, height: 240)
+        let image = UIGraphicsImageRenderer(size: size, format: format).image { context in
             UIColor.red.setFill()
-            context.fill(CGRect(x: 0, y: 0, width: 48, height: 48))
+            context.fill(CGRect(origin: .zero, size: size))
         }
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".png")
         try XCTUnwrap(image.pngData()).write(to: url)
         defer { try? FileManager.default.removeItem(at: url) }
-        let thumbnails = [160, 240].map { size in
+        let thumbnails = [160, 240].map { PlayerArtworkRequest(url: url, pixelWidth: $0, pixelHeight: $0) }
+        let fit = PlayerArtworkRequest(url: url, pixelWidth: 160, pixelHeight: 160, fits: true)
+        let full = PlayerArtworkRequest(url: url, pixelWidth: 384, pixelHeight: 384)
+        await ArtworkImagePipeline.prefetch(thumbnails, usesTargetBounds: true)
+        let first = try XCTUnwrap(ArtworkImagePipeline.cached(thumbnails[0], usesTargetBounds: true))
+        XCTAssertEqual(first.size, CGSize(width: 320, height: 160))
+        XCTAssertTrue(PlayerPopup.cachedArtwork(for: url) === first)
+        let provider = NeoMusicPlayerServices.artwork()
+        await provider.prefetch([full, fit])
+        XCTAssertEqual(provider.cached(fit)?.size, CGSize(width: 160, height: 80))
+        XCTAssertNotNil(provider.cached(full))
+        for value in thumbnails + [full, fit] {
             var request = ImageRequest(url: url)
-            request.thumbnail = .init(size: CGSize(width: size, height: size), unit: .pixels, contentMode: .aspectFill)
-            return request
+            request.thumbnail = .init(size: CGSize(width: value.pixelWidth, height: value.pixelHeight),
+                                      unit: .pixels, contentMode: value.fits ? .aspectFit : .aspectFill)
+            XCTAssertNil(ImagePipeline.shared.cache.cachedImage(for: request))
         }
-        let full = try XCTUnwrap(ArtworkImagePipeline.request(for: url, size: CGSize(width: 128, height: 128), displayScale: 3))
-        let requests = thumbnails + [full]
-        await ArtworkImagePipeline.prefetch(requests)
-        for request in requests {
-            XCTAssertNotNil(ImagePipeline.shared.cache.cachedImage(for: request))
-        }
-        XCTAssertNil(LocalArtworkImages.cached(url, pixels: 160))
-        XCTAssertNotNil(PlayerPopup.cachedArtwork(for: url), "The mini player must synchronously consume its prefetch cache")
     }
 }
 

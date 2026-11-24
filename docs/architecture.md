@@ -54,7 +54,7 @@ NeoMusic/
 │   ├── Lyrics/                       # 歌词模型与解析读取
 │   ├── Playback/                     # 播放引擎、音频图、频谱分析、队列与媒体会话
 │   ├── Netease/                      # 网易云网络、凭据、账号、缓存、搜索与下载存储
-│   └── PerformanceDiagnostics.swift  # os.signpost 性能打点
+│   └── PerformanceDiagnostics.swift  # AppLogger 与 os.signpost 性能打点
 ├── Features/
 │   ├── Home/                         # 主页视图与内容模型
 │   ├── Library/                      # 资料库、歌单/专辑/艺人详情、编辑器与共用组件
@@ -64,6 +64,8 @@ NeoMusic/
 │       ├── FullScreenPlayer/         # 独立编译为 FullScreenPlayer.framework 的全屏播放器
 │       ├── Integration/              # 宿主适配层（连接播放器模型、歌词、封面与 LNPopup）
 │       ├── NowPlayingModel.swift     # 宿主播放状态与队列模型
+│       ├── NowPlayingHistory.swift   # 播放历史与账号过滤
+│       ├── NowPlayingContinuation.swift # 推荐续播与队列衔接
 │       └── PlaybackQueuePersistence.swift
 └── Resources/                        # App 图标、资产与来源声明
 ```
@@ -153,7 +155,7 @@ flowchart TD
 
 ### 封面路由（`AppRuntime.requestArtwork(for:)`）
 
-按 `DeferredArtworkKey` 的 `domain`（`.music`、`.home` / `.homePlaylist`、`.artists`、`.search`）分发到对应 Integration 请求或查询缓存文件。
+按 `DeferredArtworkKey` 的 `domain`（`.music`、`.home` / `.homePlaylist`、`.artists`、`.search`）分发到对应 Integration 请求或查询缓存文件。\`DeferredArtworkRoute\` 校验会话和缓存返回结果，Online 与 Home 共用 16 ms 封面发布合批器。五个 Integration 共用引用曲目查找、喜爱反馈或曲目投影中的相应组件。
 
 首页来源的播放队列封面由当前与下一曲、可见队列项及 UIKit 预取回调触发。`NeteaseHomeStore` 按会话管理请求，`NeteaseArtworkCache` 将前台需求提交为高优先级，并在写入新下载前验证图像可解码。
 
@@ -163,15 +165,20 @@ flowchart TD
 
 ### 本地资料库与扫描（`Core/Library`、`Core/LocalMusic`）
 
-- `LocalLibrary` 与 `LocalLibraryRuntime` 管理本地曲目索引、专辑聚合、最近添加（`LibraryRecentAdditions`）、播放集合历史（`PlaybackCollectionHistory`）与歌单/文件夹（`PlaylistLibrary`、`PlaylistPersistence`）。
+- `LocalLibrary` 与 `LocalLibraryRuntime` 管理本地曲目索引、专辑聚合、最近添加（`LibraryRecentAdditions`）、播放集合历史与歌单及文件夹（`PlaylistLibrary`）。
 - `LocalMusicScanner` 扫描应用 Documents 下的音乐目录；`LocalAudioMetadataReader` 读取音频元数据与封面；`LocalArtworkImages` 负责封面派生与缓存；`DownloadedAudioTags` 通过 `AudioTagBridge`（TagLib）为下载音频写入标签。
 - 资料库艺人由本机曲目、当前账号的喜爱歌曲与已载入的歌单曲目、收藏专辑及艺人订阅投影。`LibraryArtistPreferences` 保存本地艺人的 UUID、离线喜爱和按账号区分的艺人置顶，在线喜爱沿用账号的艺人订阅。`PinnedOrderStore` 保存艺人、专辑与播放列表的混合顺序。
 - `LibraryRoute.libraryArtist` 打开资料库艺人详情，`LibraryRoute.artist` 打开在线艺人主页。已下载专辑可以从资料库艺人详情进入基于本机曲目的专辑页。本地专辑沿用目录分组和文件中的年份标签。
 - 资料库艺人头像由列表、详情和置顶卡片按需读取。`NeteaseArtistStore` 按账号缓存头像元数据，复用订阅、艺人详情和图片缓存，并限制同时进行的资料库头像请求数。头像文件就绪后通过 Observation 更新对应视图。
+- `AppStoragePaths` 声明音乐目录、应用状态与缓存路径。`AtomicJSONStore` 统一原子 JSON 读写，`AppDefaultsKey` 集中管理偏好键。封面取色共用 `Caches/ArtworkBackdrops.json`。
+- `ImageSourceThumbnail` 负责封面、头像与选图的 ImageIO 缩略图解码。普通缩略图加载与详情页的背景取色分别触发。
+- 全部歌曲、专辑、歌单与喜爱歌曲共用 `NativePlaylistTrackList`。按名称或艺人排序的全部歌曲使用 UIKit diffable data source 提供 Section 和原生索引。专辑与歌单的列表使用 `GenericCollectionList`，其网格与资料库艺人专辑共用 `LibraryCollectionGrid`。
+- 歌单移到文件夹时，由 `LibraryToastCenter` 显示可打开目标文件夹的提示。
 
 ### 播放与音频管线（`Core/Playback`、`Features/Player`）
 
-- `NowPlayingModel` 持有队列与播放状态，`PlaybackQueuePersistence` 负责队列持久化。
+- `NowPlayingModel` 持有队列与播放状态，`PlaybackQueuePersistence` 负责队列持久化。播放队列与歌单各自通过 `BackgroundTaskPersistenceQueue` 串行写入，进入后台时使用 UIKit 后台任务完成待保存工作。
+- 迷你播放器与全屏播放器的本地封面共用 `LocalArtworkImages`。宿主与全屏播放器编译同一份 `ArtworkColorSpace`，各自计算所需的调色板。
 - `LocalPlaybackEngine` 协调音频播放，`PlaybackAudioActor` 与 `SharedAudioGraph` 管理音频图：
   - 本地文件由 `LocalFilePlaybackNode` 解码输出。
   - 在线音频流由 `StreamingPlaybackDeck`（基于 `AudioStreaming`）解码输出。
@@ -183,6 +190,8 @@ flowchart TD
 
 - **账户与凭据**：`NeteaseAccount` 协调登录、恢复、重验与退出；`NeteaseCredentialStore` 读写 Keychain；`NeteaseAvatarClient` 与 `NeteaseAvatarSnapshot` 管理头像缓存与本地缩略快照。
 - **在线数据与缓存**：`NeteaseMusicClient` / `NeteaseMusicStore`、`NeteaseHomeStore`、`NeteaseArtistClient` / `NeteaseArtistStore`、`NeteaseSearchClient` / `NeteaseSearchStore` 负责对应领域请求与状态；`NeteasePageCache` 使用 SQLite 按账号与键持久化页面缓存；`NeteaseArtworkCache` 通过 Nuke 管理在线封面缓存。
+- 五个在线 Store 共用 \`NeteaseSessionScope\` 管理会话版本和任务取消。Music、Home、Artist 共用 \`KeyedPageCacheWriter\`，Music、Home、Artist、Search 共用 \`ScopedArtworkLoader\`。
+- 首页页面缓存位于 `Caches/NeteaseHome/content.sqlite`。已保存的日推快照按账号保存在 `Application Support/NeteaseHome/DailyHistory`，供历史播放引用。
 - **下载**：`NeteaseDownloadStore`、`NeteaseDownloadClient`、`NeteaseDownloadTransport` 与 `NeteaseDownloadedAudio` 管理后台下载任务、NCM 解码与本地落地文件。
 
 ---

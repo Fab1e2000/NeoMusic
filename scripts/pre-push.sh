@@ -60,13 +60,5 @@ if [ -n "$working_tree" ]; then
     exit 1
 fi
 
-if [ -e build/ci/TestResults.xcresult ]; then
-    rm -rf build/ci/TestResults.previous.xcresult
-    mv build/ci/TestResults.xcresult build/ci/TestResults.previous.xcresult
-fi
-if [ -f build/ci/source-state.json ]; then
-    mv -f build/ci/source-state.json build/ci/source-state.previous.json
-fi
-
-echo "推送前运行本机完整检查，包含脚本回归、边界检查、XcodeGen 和 NeoMusicTests／FullScreenPlayerTests Release。"
+echo "推送前运行本机完整检查，包含脚本回归、边界与 Vendor 说明检查、AudioStreaming 测试、XcodeGen 和 NeoMusicTests／FullScreenPlayerTests Release。"
 bash scripts/ci.sh

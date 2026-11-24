@@ -1,6 +1,6 @@
+#if DEBUG
 import SwiftUI
 import FullScreenPlayer
-#if DEBUG
 private struct NowPlayingControlsFeedbackPreview: View {
     @State private var player: PlayerState
     private let song: PlayerTrack

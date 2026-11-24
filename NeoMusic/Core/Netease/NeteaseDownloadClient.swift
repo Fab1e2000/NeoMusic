@@ -24,24 +24,9 @@ extension NeteaseMusicClient {
         throw NeteaseDownloadError.unavailable
     }
 
-    @concurrent func downloadSongs(ids: [Int64], credential: NeteaseCredential) async throws -> [NeteaseDownloadSong] {
-        struct Artist: Decodable { let id: Int64?; let name: String }
-        struct Item: Decodable {
-            let id: Int64; let name: String; let ar: [Artist]
-            struct Album: Decodable { let id: Int64; let name: String; let picUrl: String? }
-            let al: Album; let dt: Double; let no: Int?; let cd: String?
-            var model: NeteaseDownloadSong {
-                let credits = ar.compactMap { value -> NeteaseArtistReference? in
-                    guard let id = value.id, id > 0 else { return nil }
-                    return .init(id: id, name: value.name)
-                }
-                return .init(song: .init(id: id, title: name, artist: ar.map(\.name).joined(separator: " / "),
-                    album: al.name, artworkURL: NeteaseMusicClient.url(al.picUrl), duration: dt / 1000,
-                    artists: credits.isEmpty ? nil : credits, albumID: al.id),
-                    albumArtist: ar.map(\.name).joined(separator: " / "), trackNumber: max(0, no ?? 0),
-                    discNumber: max(1, Int(cd ?? "1") ?? 1))
-            }
-        }
+    @concurrent func downloadSongs(ids: [Int64], credential: NeteaseCredential,
+        onAuthenticationRequired: (@MainActor @Sendable () -> Void)? = nil) async throws -> [NeteaseDownloadSong] {
+        typealias Item = NeteaseSongPayload.Download
         struct Response: Decodable { let songs: [Item] }
         var unique = Set<Int64>(), ordered: [Int64] = []
         for id in ids where unique.insert(id).inserted { ordered.append(id) }
@@ -60,7 +45,11 @@ extension NeteaseMusicClient {
                 group.addTask {
                     do { return (id, try await self.albumDetail(id: id, credential: credential)) }
                     catch is CancellationError { throw CancellationError() }
-                    catch { return (id, nil) }
+                    catch {
+                        try Task.checkCancellation()
+                        if error as? NeteaseAccountError == .authenticationRequired { await onAuthenticationRequired?() }
+                        return (id, nil)
+                    }
                 }
             }
             for _ in 0..<min(3, albumIDs.count) { add(albumIDs[next]); next += 1 }

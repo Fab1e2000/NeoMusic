@@ -1,3 +1,4 @@
+#if DEBUG
 import XCTest
 @testable import NeoMusic
 
@@ -17,3 +18,4 @@ final class NavigationDiagnosticTests: XCTestCase {
         XCTAssertEqual(records[1]["cancelled"], "true")
     }
 }
+#endif

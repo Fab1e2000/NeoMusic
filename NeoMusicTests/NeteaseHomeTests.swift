@@ -1074,6 +1074,30 @@ import Synchronization
         XCTAssertNil(store.dailySnapshot(date: date))
         XCTAssertNil(store.daily)
     }
+    func testMovingHomePageCachePreservesTheAccountDailyArchive() async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let support = root.appending(path: "Application Support/NeteaseHome", directoryHint: .isDirectory)
+        let caches = root.appending(path: "Caches/NeteaseHome", directoryHint: .isDirectory)
+        let snapshot = NeteaseDailySnapshot(date: "2026-11-01", songs: [], id: "historic")
+        let archive = support.appending(path: "DailyHistory/42/historic.json")
+        try AtomicJSONStore.write(snapshot, to: archive)
+        let previousCache = NeteasePageCache(directory: support)
+        try await previousCache.save(snapshot, scope: "42", key: "daily:historic")
+
+        let home = NeteaseHomeStore(directory: support, cacheDirectory: caches)
+        await home.activate(try savedSession(), refresh: false)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: support.appending(path: "content.sqlite").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: caches.appending(path: "content.sqlite").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: archive.path))
+        let restored = try await home.loadDailySnapshot(id: snapshot.id)
+        XCTAssertEqual(restored?.date, snapshot.date)
+        await home.flush()
+        await home.activate(try savedSession(99), refresh: false)
+        let otherAccount = try await home.loadDailySnapshot(id: snapshot.id)
+        XCTAssertNil(otherAccount)
+    }
+
     func testCachedDetailsRemainReadableButRefreshFailureThrows() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

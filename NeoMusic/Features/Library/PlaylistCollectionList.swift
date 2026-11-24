@@ -9,6 +9,9 @@ struct GenericCollectionList<Item: Identifiable & Equatable>: UIViewControllerRe
     let shelfItem: (Item) -> LibraryShelfItem
     let route: (Item) -> LibraryRoute
     var deselectsImmediately = false
+    var header: AnyView? = nil
+    var wrapsAccessibilityText = false
+    var bottomPadding: CGFloat = 0
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -22,6 +25,7 @@ struct GenericCollectionList<Item: Identifiable & Equatable>: UIViewControllerRe
         let controller = PlaylistListController(collectionViewLayout: UICollectionViewCompositionalLayout.list(using: configuration))
         let collectionView = controller.collectionView!
         collectionView.backgroundColor = .clear
+        collectionView.contentInset.bottom = bottomPadding
         collectionView.delegate = coordinator
         collectionView.prefetchDataSource = coordinator
         collectionView.dragDelegate = coordinator
@@ -38,9 +42,11 @@ struct GenericCollectionList<Item: Identifiable & Equatable>: UIViewControllerRe
 
     @MainActor
     final class Coordinator: NSObject, UICollectionViewDelegate, UICollectionViewDataSourcePrefetching, UICollectionViewDragDelegate, UICollectionViewDropDelegate {
+        private enum Row: Hashable { case header, item(String) }
+
         private var latest: GenericCollectionList<Item>?
         private var itemsByID: [String: Item] = [:]
-        private var dataSource: UICollectionViewDiffableDataSource<Int, String>?
+        private var dataSource: UICollectionViewDiffableDataSource<Int, Row>?
         private var hasApplied = false
         private var environment = EnvironmentValues()
         private weak var collectionView: UICollectionView?
@@ -54,8 +60,11 @@ struct GenericCollectionList<Item: Identifiable & Equatable>: UIViewControllerRe
 
         func attach(to collectionView: UICollectionView, initial: GenericCollectionList<Item>, environment: EnvironmentValues) {
             self.collectionView = collectionView
-            let registration = UICollectionView.CellRegistration<UICollectionViewListCell, String> { [weak self] cell, _, id in
-                self?.configure(cell, id: id)
+            let registration = UICollectionView.CellRegistration<UICollectionViewListCell, Row> { [weak self] cell, _, row in
+                switch row {
+                case .header: self?.configureHeader(cell)
+                case .item(let id): self?.configure(cell, id: id)
+                }
             }
             dataSource = UICollectionViewDiffableDataSource(collectionView: collectionView) { collectionView, indexPath, id in
                 collectionView.dequeueConfiguredReusableCell(using: registration, for: indexPath, item: id)
@@ -70,15 +79,22 @@ struct GenericCollectionList<Item: Identifiable & Equatable>: UIViewControllerRe
             latest = list
             itemsByID = Dictionary(list.items.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
 
-            var snapshot = NSDiffableDataSourceSnapshot<Int, String>()
+            var snapshot = NSDiffableDataSourceSnapshot<Int, Row>()
             snapshot.appendSections([0])
-            snapshot.appendItems(list.items.map(\.id))
+            if list.header != nil {
+                snapshot.appendItems([.header])
+                if let path = dataSource.indexPath(for: .header),
+                   let cell = collectionView?.cellForItem(at: path) as? UICollectionViewListCell {
+                    configureHeader(cell)
+                }
+            }
+            snapshot.appendItems(list.items.map { .item($0.id) })
             let appearanceChanged = configuredColorScheme != environment.colorScheme
                 || configuredDynamicTypeSize != environment.dynamicTypeSize || configuredLocale != environment.locale
             let changed = list.items.filter { item in
                 previous[item.id].map { $0 != item || appearanceChanged } ?? false
             }.map(\.id)
-            snapshot.reconfigureItems(changed)
+            snapshot.reconfigureItems(changed.map(Row.item))
             if hasApplied, changed.isEmpty, dataSource.snapshot().itemIdentifiers == snapshot.itemIdentifiers { return }
             let needsLayout = configuredDynamicTypeSize != environment.dynamicTypeSize
             configuredColorScheme = environment.colorScheme
@@ -91,14 +107,27 @@ struct GenericCollectionList<Item: Identifiable & Equatable>: UIViewControllerRe
         }
 
         private func item(at indexPath: IndexPath) -> Item? {
-            dataSource?.itemIdentifier(for: indexPath).flatMap { itemsByID[$0] }
+            guard case .item(let id) = dataSource?.itemIdentifier(for: indexPath) else { return nil }
+            return itemsByID[id]
+        }
+
+        private func configureHeader(_ cell: UICollectionViewListCell) {
+            let header = latest?.header
+            let environment = environment
+            cell.contentConfiguration = UIHostingConfiguration {
+                header.libraryHostedAppearance(environment)
+            }.margins(.all, 0)
+            cell.backgroundConfiguration = .clear()
+            cell.accessories = []
+            cell.accessibilityTraits = []
         }
 
         private func configure(_ cell: UICollectionViewListCell, id: String) {
             guard let item = itemsByID[id], let latest else { return }
             let environment = environment
             cell.contentConfiguration = UIHostingConfiguration {
-                PlaylistListRow(item: latest.shelfItem(item), usesCellArtwork: true)
+                PlaylistListRow(item: latest.shelfItem(item), usesCellArtwork: true,
+                                wrapsAccessibilityText: latest.wrapsAccessibilityText)
                     .libraryHostedAppearance(environment)
                     .environment(\.nativeArtworkSurfaceEnabled, false)
             }
@@ -115,10 +144,22 @@ struct GenericCollectionList<Item: Identifiable & Equatable>: UIViewControllerRe
         func separator(at indexPath: IndexPath, base: UIListSeparatorConfiguration) -> UIListSeparatorConfiguration {
             var separator = base
             separator.topSeparatorVisibility = .hidden
+            if case .header = dataSource?.itemIdentifier(for: indexPath) {
+                separator.bottomSeparatorVisibility = .hidden
+                return separator
+            }
             let isLast = indexPath.item == (dataSource?.snapshot().numberOfItems ?? 0) - 1
             separator.bottomSeparatorVisibility = isLast ? .hidden : .visible
             separator.bottomSeparatorInsets = NSDirectionalEdgeInsets(top: 0, leading: Self.separatorLeading, bottom: 0, trailing: 20)
             return separator
+        }
+
+        func collectionView(_ collectionView: UICollectionView, shouldSelectItemAt indexPath: IndexPath) -> Bool {
+            item(at: indexPath) != nil
+        }
+
+        func collectionView(_ collectionView: UICollectionView, shouldHighlightItemAt indexPath: IndexPath) -> Bool {
+            item(at: indexPath) != nil
         }
 
         func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
@@ -130,7 +171,7 @@ struct GenericCollectionList<Item: Identifiable & Equatable>: UIViewControllerRe
             }
             if let item = item(at: indexPath), let latest {
                 latest.open(item) { [weak self] in
-                    guard let self, let path = self.dataSource?.indexPath(for: item.id),
+                    guard let self, let path = self.dataSource?.indexPath(for: .item(item.id)),
                           let cell = self.collectionView?.cellForItem(at: path) else { return nil }
                     return cell.libraryArtworkSource()
                 }
@@ -168,7 +209,7 @@ struct GenericCollectionList<Item: Identifiable & Equatable>: UIViewControllerRe
             animator.preferredCommitStyle = .dismiss
             animator.addCompletion { [weak self] in
                 latest.open(item) { [weak self] in
-                    guard let self, let path = self.dataSource?.indexPath(for: id),
+                    guard let self, let path = self.dataSource?.indexPath(for: .item(id)),
                           let cell = self.collectionView?.cellForItem(at: path) else { return nil }
                     return cell.libraryArtworkSource()
                 }
@@ -282,33 +323,6 @@ extension PlaylistEntry {
         if case .folder(_, let playlists) = self { contents = playlists.prefix(4).map(\.id) }
         else { contents = [] }
         return ([item.title, item.subtitle ?? "", item.isFavorite ? "1" : "0"] + contents).joined(separator: "\u{1}")
-    }
-}
-
-struct PlaylistCellArtwork: UIViewRepresentable {
-    let artwork: Artwork
-    func makeUIView(context: Context) -> LibraryArtworkSurfaceView { LibraryArtworkSurfaceView() }
-    func updateUIView(_ view: LibraryArtworkSurfaceView, context: Context) {
-        let configuration = UIHostingConfiguration {
-            ArtworkView(artwork: artwork, cornerRadius: 6)
-                .libraryHostedAppearance(context.environment)
-                .environment(\.nativeArtworkSurfaceEnabled, false)
-        }.margins(.all, 0)
-        if let content = view.subviews.first as? (UIView & UIContentView) {
-            content.configuration = configuration
-        } else {
-            let content = configuration.makeContentView()
-            content.translatesAutoresizingMaskIntoConstraints = false
-            view.addSubview(content)
-            NSLayoutConstraint.activate([
-                content.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-                content.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-                content.topAnchor.constraint(equalTo: view.topAnchor),
-                content.bottomAnchor.constraint(equalTo: view.bottomAnchor)
-            ])
-        }
-        view.layer.cornerRadius = 6
-        view.clipsToBounds = true
     }
 }
 

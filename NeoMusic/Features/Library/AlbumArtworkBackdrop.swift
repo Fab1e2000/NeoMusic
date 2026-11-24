@@ -12,19 +12,14 @@ struct AlbumArtworkBackdrop: Codable, Equatable, Sendable {
     private static let imageContext = CIContext()
     var colorScheme: ColorScheme {
         let (r, g, b) = linearRGB
-        let l = 0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b
-        let m = 0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b
-        let s = 0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b
-        let okL = 0.2104542553 * cbrt(l) + 0.7936177850 * cbrt(m) - 0.0040720468 * cbrt(s)
+        let okL = ArtworkColorSpace.linearToOKLab(r: r, g: g, b: b, cubeRoot: cbrt).l
         return okL <= 0.65 ? .dark : .light
     }
 
     var linearRGB: (Double, Double, Double) {
-        (linear(red), linear(green), linear(blue))
-    }
-
-    private func linear(_ channel: Double) -> Double {
-        channel <= 0.04045 ? channel / 12.92 : pow((channel + 0.055) / 1.055, 2.4)
+        (ArtworkColorSpace.sRGBToLinear(red, power: pow),
+         ArtworkColorSpace.sRGBToLinear(green, power: pow),
+         ArtworkColorSpace.sRGBToLinear(blue, power: pow))
     }
 
     static func extract(from data: Data) -> AlbumArtworkBackdrop? {
@@ -82,6 +77,7 @@ struct AlbumArtworkBackdrop: Codable, Equatable, Sendable {
 }
 
 actor AlbumArtworkBackdropPreparer {
+    static let shared = AlbumArtworkBackdropPreparer(cacheURL: AppStoragePaths.artworkBackdrops)
     static let cacheVersion = 2
     private struct Snapshot: Codable {
         let version: Int
@@ -102,8 +98,8 @@ actor AlbumArtworkBackdropPreparer {
     private func loadPersistedColors() throws {
         try Task.checkCancellation()
         if !loaded {
-            if let cacheURL, let data = try? Data(contentsOf: cacheURL),
-               let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data), snapshot.version == Self.cacheVersion {
+            if let cacheURL, let snapshot = try? AtomicJSONStore.read(Snapshot.self, from: cacheURL),
+               snapshot.version == Self.cacheVersion {
                 persisted = snapshot.colors
             }
             loaded = true
@@ -146,8 +142,8 @@ actor AlbumArtworkBackdropPreparer {
         }
         try Task.checkCancellation()
         if let cacheURL, nextPersisted != persisted {
-            if let data = try? JSONEncoder().encode(Snapshot(version: Self.cacheVersion, colors: nextPersisted)),
-               (try? data.write(to: cacheURL, options: .atomic)) != nil {
+            if (try? AtomicJSONStore.write(Snapshot(version: Self.cacheVersion, colors: nextPersisted), to: cacheURL)) != nil {
+                AppStoragePaths.excludeFromBackup(cacheURL)
                 persisted = nextPersisted
             }
         }

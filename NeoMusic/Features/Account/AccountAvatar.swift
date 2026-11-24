@@ -1,5 +1,4 @@
 import SwiftUI
-import ImageIO
 
 struct AccountAvatar: View {
     let account: NeteaseAccount
@@ -98,13 +97,7 @@ struct AccountAvatar: View {
     }
 
     private nonisolated static func decodeThumbnail(_ data: Data, pixels: Int) -> (cgImage: CGImage, cost: Int)? {
-        guard let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
-              let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, [
-                kCGImageSourceCreateThumbnailFromImageAlways: true,
-                kCGImageSourceCreateThumbnailWithTransform: true,
-                kCGImageSourceShouldCacheImmediately: true,
-                kCGImageSourceThumbnailMaxPixelSize: max(1, pixels)
-              ] as CFDictionary) else { return nil }
+        guard let thumbnail = ImageSourceThumbnail.image(data, maxPixels: pixels) else { return nil }
         return (thumbnail, thumbnail.bytesPerRow * thumbnail.height)
     }
 

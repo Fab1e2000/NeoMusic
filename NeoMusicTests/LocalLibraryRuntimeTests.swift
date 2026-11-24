@@ -94,13 +94,16 @@ final class LocalLibraryRuntimeTests: XCTestCase {
             context.fill(CGRect(x: 0, y: 0, width: 32, height: 32))
         }.pngData())
         let old = AlbumArtworkBackdrop(red: 1, green: 1, blue: 1)
-        let colorURL = store.appendingPathComponent("artwork-backdrops.json")
+        let colorURL = documents.appendingPathComponent("Caches/ArtworkBackdrops.json")
         _ = try await AlbumArtworkBackdropPreparer(cacheURL: colorURL) { _ in old }.prepare(["cached": data])
         var snapshot = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: colorURL)) as? [String: Any])
         let colors = try XCTUnwrap(snapshot["colors"] as? [String: Any])
         let key = try XCTUnwrap(colors.keys.first)
         snapshot["version"] = 1
-        try JSONSerialization.data(withJSONObject: snapshot).write(to: colorURL)
+        let stalePalette = try JSONSerialization.data(withJSONObject: snapshot)
+        try stalePalette.write(to: colorURL)
+        let legacyURL = store.appendingPathComponent("artwork-backdrops.json")
+        try stalePalette.write(to: legacyURL)
         let artworkURL = artworkDirectory.appendingPathComponent(key + ".image")
         try data.write(to: artworkURL)
         let track = LocalTrack(id: "cached.wav", title: "Cached", artist: "Artist", album: "Album", albumArtist: "Artist",
@@ -117,6 +120,7 @@ final class LocalLibraryRuntimeTests: XCTestCase {
             songLibrary: songs, playlistLibrary: PlaylistLibrary(playlists: []), player: player,
             favoriteAlbums: LibrarySelectionSet(ids: []), pinnedAlbums: LibrarySelectionSet(ids: []),
             deletedAlbums: LibrarySelectionSet(ids: []), defaults: defaults,
+            backdropPreparer: AlbumArtworkBackdropPreparer(cacheURL: colorURL),
             onLocalSongsApplied: { publications.append($0) })
         await runtime.restoreCachedState()
         XCTAssertTrue(runtime.isInitialLibraryReady)
@@ -130,6 +134,7 @@ final class LocalLibraryRuntimeTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: artworkURL), data)
         let persisted = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: colorURL)) as? [String: Any])
         XCTAssertEqual(persisted["version"] as? Int, AlbumArtworkBackdropPreparer.cacheVersion)
+        XCTAssertEqual(try Data(contentsOf: legacyURL), stalePalette)
     }
 
     func testIndependentRuntimesPublishOnlyToTheirInjectedLibraries() async throws {

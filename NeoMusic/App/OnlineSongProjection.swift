@@ -1,30 +1,45 @@
 import Foundation
 
 enum OnlineSongProjector {
+    struct DownloadedFields {
+        let record: NeteaseDownloadRecord
+        let localSong: LibrarySongItem?
+        let unavailabilityReason: String?
+    }
+
     static func makeSong(_ value: NeteaseMusicSong,
                          id: String,
                          artwork: Artwork,
                          artworkURL: URL?,
                          isFavorite: Bool,
-                         favoriteAddedAt: Date?) -> LibrarySongItem {
-        LibrarySongItem(
+                         favoriteAddedAt: Date?,
+                         downloaded: DownloadedFields? = nil) -> LibrarySongItem {
+        let metadata = downloaded?.record.metadata
+        let local = downloaded?.localSong
+        return LibrarySongItem(
             id: id,
             title: value.title,
             artist: value.artist,
             album: value.album,
-            albumArtist: value.artist,
-            trackNumber: value.trackNumber ?? 0,
+            albumArtist: metadata?.albumArtist ?? value.artist,
+            trackNumber: metadata?.trackNumber ?? value.trackNumber ?? 0,
             artwork: artwork,
-            discNumber: value.discNumber ?? 1,
+            albumDirectory: downloaded.map { ($0.record.relativePath as NSString).deletingLastPathComponent },
+            discNumber: metadata?.discNumber ?? value.discNumber ?? 1,
+            artworkData: local?.artworkData,
             artworkURL: artworkURL,
+            artworkBackdrop: local?.artworkBackdrop,
             duration: Int(value.duration),
+            isPinned: local?.isPinned ?? false,
+            addedOrder: local?.addedOrder ?? 0,
             isFavorite: isFavorite,
             favoriteAddedAt: favoriteAddedAt,
-            unavailabilityReason: value.unavailable ? "暂无完整音源" : nil,
+            unavailabilityReason: downloaded == nil ? (value.unavailable ? "暂无完整音源" : nil) : downloaded?.unavailabilityReason,
             onlineAlbumID: value.albumID,
             artistReferences: (value.artists ?? []).map {
                 .init(id: CatalogRouteIdentity.artistID($0.id), name: $0.name)
-            }
+            },
+            year: metadata?.year ?? local?.year
         )
     }
 

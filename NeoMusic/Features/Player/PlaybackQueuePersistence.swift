@@ -1,5 +1,28 @@
 import Foundation
 
+struct PlaybackCollectionReference: Codable, Hashable, Sendable {
+    enum Kind: String, Codable, Sendable { case favorites, localAlbum, localPlaylist, onlinePlaylist, daily }
+    let kind: Kind
+    let id: String
+    let ownerID: String?
+    let title: String
+}
+
+struct PlaybackQueueContinuation: Codable, Equatable, Sendable {
+    let id: UUID
+    let ownerID: String
+
+    enum Kind: String, Codable { case recommendations }
+    // Older saved continuations belong to the original radio queue.
+    let kind: Kind?
+
+    init(ownerID: String, id: UUID = UUID(), kind: Kind? = nil) {
+        self.kind = kind
+        self.id = id
+        self.ownerID = ownerID
+    }
+}
+
 struct PlaybackSongSnapshot: Codable, Sendable {
     struct Artist: Codable, Sendable {
         let id: String
@@ -25,8 +48,7 @@ struct PlaybackSongSnapshot: Codable, Sendable {
     let artistReferences: [Artist]
 
     var onlineOwnerID: String? {
-        let parts = id.split(separator: ":")
-        return parts.count == 3 && parts[0] == "netease" ? String(parts[1]) : nil
+        OnlineSongIdentity.snapshotOwnerID(id)
     }
 
     @MainActor init(_ song: LibrarySongItem) {
@@ -80,12 +102,9 @@ actor PlaybackQueuePersistence {
     private var written: (key: SnapshotKey, id: UUID)?
 
     nonisolated static func load(from url: URL) throws -> NowPlayingModel.SavedQueue? {
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-        let decoder = JSONDecoder()
-        var state = try decoder.decode(NowPlayingModel.SavedQueue.self, from: Data(contentsOf: url))
+        guard var state = try AtomicJSONStore.read(NowPlayingModel.SavedQueue.self, from: url) else { return nil }
         if let id = state.snapshotID, let entries = state.entryIDs,
-           let data = try? Data(contentsOf: url.appendingPathExtension("progress")),
-           let progress = try? decoder.decode(Progress.self, from: data),
+           let progress = try? AtomicJSONStore.read(Progress.self, from: url.appendingPathExtension("progress")),
            progress.snapshotID == id, entries.indices.contains(progress.index),
            entries[progress.index] == progress.entryID,
            progress.elapsed.isFinite, progress.elapsed >= 0 {
@@ -102,16 +121,14 @@ actor PlaybackQueuePersistence {
                               hasBatch: state.hasRecommendationBatch)
         if let written, written.key == key, let entries = state.entryIDs, entries.indices.contains(state.index) {
             let progress = Progress(snapshotID: written.id, entryID: entries[state.index], index: state.index, elapsed: state.elapsed)
-            try JSONEncoder().encode(progress).write(to: url.appendingPathExtension("progress"), options: .atomic)
+            try AtomicJSONStore.write(progress, to: url.appendingPathExtension("progress"))
             return
         }
 
         let snapshotID = UUID()
         var snapshot = state
         snapshot.snapshotID = snapshotID
-        let data = try JSONEncoder().encode(snapshot)
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try data.write(to: url, options: .atomic)
+        try AtomicJSONStore.write(snapshot, to: url)
         written = (key, snapshotID)
     }
 }

@@ -190,7 +190,9 @@ struct PinnedCollectionView: UIViewRepresentable {
             let item = UIDragItem(itemProvider: NSItemProvider(object: id as NSString))
             item.localObject = id
             session.localContext = self
+            #if DEBUG
             NavigationDiagnostics.event("Pinned.dragBegin", page: "library")
+            #endif
             return [item]
         }
 
@@ -256,7 +258,9 @@ struct PinnedCollectionView: UIViewRepresentable {
             order.remove(at: from)
             order.insert(id, at: target)
             guard commitOrder(from: original, to: order) else { return }
+            #if DEBUG
             NavigationDiagnostics.event("Pinned.dropCommit", page: "library")
+            #endif
             if order != original {
                 var snapshot = NSDiffableDataSourceSnapshot<Int, String>()
                 snapshot.appendSections([0])
@@ -459,55 +463,22 @@ final class PinnedCollectionCell: UICollectionViewCell {
     }
 }
 
-private struct PinnedArtworkSurface: UIViewRepresentable {
-    let artwork: Artwork
-    let contentID: String
-    var artistAvatar: ArtistAvatarArtwork?
-    var artistIdentity: LibraryArtistIdentity?
-
-    func makeUIView(context: Context) -> LibraryArtworkSurfaceView {
-        let view = LibraryArtworkSurfaceView()
-        view.clipsToBounds = true
-        view.isUserInteractionEnabled = false
-        return view
-    }
-
-    func updateUIView(_ view: LibraryArtworkSurfaceView, context: Context) {
-        view.layer.cornerRadius = artistAvatar == nil ? 8 : 0
-        let configuration = UIHostingConfiguration {
-            Group {
-                if let artistAvatar { ArtistAvatar(source: artistAvatar, identity: artistIdentity) }
-                else { ArtworkView(artwork: artwork, contentID: contentID, cornerRadius: 8) }
-            }
-                .libraryHostedAppearance(context.environment)
-                .environment(\.nativeArtworkSurfaceEnabled, false)
-        }.margins(.all, 0)
-        if let content = view.subviews.first as? any UIContentView {
-            content.configuration = configuration
-        } else {
-            let content = configuration.makeContentView()
-            content.backgroundColor = .clear
-            content.translatesAutoresizingMaskIntoConstraints = false
-            view.addSubview(content)
-            NSLayoutConstraint.activate([
-                content.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-                content.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-                content.topAnchor.constraint(equalTo: view.topAnchor),
-                content.bottomAnchor.constraint(equalTo: view.bottomAnchor)
-            ])
-        }
-    }
-}
-
 private struct PinnedCellContent: View {
     let item: LibraryShelfItem
     let isEditing: Bool
     let remove: () -> Void
 
+    private var artwork: some View {
+        Group {
+            if let avatar = item.artistAvatar { ArtistAvatar(source: avatar, identity: item.pinnedArtistIdentity) }
+            else { ArtworkView(artwork: item.artwork, contentID: item.id) }
+        }
+    }
+
     var body: some View {
         VStack(spacing: 6) {
-            PinnedArtworkSurface(artwork: item.artwork, contentID: item.id,
-                                 artistAvatar: item.artistAvatar, artistIdentity: item.pinnedArtistIdentity)
+            LibraryArtworkSurface(content: artwork, cornerRadius: item.artistAvatar == nil ? DesignTokens.Radius.card : 0,
+                                  isUserInteractionEnabled: false)
                 .aspectRatio(1, contentMode: .fit)
             Text(item.title)
                 .font(.caption.weight(.medium))

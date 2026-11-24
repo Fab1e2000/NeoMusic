@@ -17,7 +17,9 @@ The local LNPopupController owns the synchronous presentation layout and floatin
 bar ordering for this immediate path.
 
 The local LNPopupController package uses upstream 4.6.3, LNSwiftUIUtils 1.1.5, and
-LNSystemMarqueeLabel 0.1.2; the checked-in Package.resolved records their revisions.
+LNSystemMarqueeLabel 0.1.2; the checked-in
+`../../NeoMusic.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved`
+records their revisions.
 
 Custom-title `PopupItem` values accept optional accessibility labels and hints.
 Type erasure preserves these values and each native update assigns them through

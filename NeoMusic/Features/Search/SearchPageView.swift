@@ -51,7 +51,7 @@ struct SearchPageView: View {
                     .accessibilityIdentifier("search.browse.history")
                 }
             }
-            .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 24)
+            .padding(.horizontal, DesignTokens.Spacing.pageMargin).padding(.top, 8).padding(.bottom, 24)
         }
         .overlay {
             if model.history.isEmpty {
@@ -134,7 +134,7 @@ struct SearchPageView: View {
                                 .background(model.kind == kind ? Color.accentColor : .clear, in: .capsule)
                         }.buttonStyle(.plain).accessibilityAddTraits(model.kind == kind ? [.isSelected] : [])
                     }
-                }.padding(.horizontal, 20).padding(.vertical, 8)
+                }.padding(.horizontal, DesignTokens.Spacing.pageMargin).padding(.vertical, 8)
             }.scrollIndicators(.hidden)
             Divider()
             ZStack {
@@ -409,18 +409,18 @@ struct SearchCategoryContent: View {
                     } label: {
                         VStack(alignment: .leading, spacing: 5) {
                             LibraryCardArtwork(content: AnyView(ResourceArtworkView(resource: item.$artwork, contentID: item.id, cornerRadius: 0)),
-                                sources: sources, sourceID: item.id, cornerRadius: 8).aspectRatio(1, contentMode: .fit)
+                                sources: sources, sourceID: item.id, cornerRadius: DesignTokens.Radius.card).aspectRatio(1, contentMode: .fit)
                             Text(item.title).font(.subheadline).lineLimit(titleLineLimit).foregroundStyle(.primary)
                             Text(item.subtitle).font(.caption).lineLimit(subtitleLineLimit).foregroundStyle(.secondary)
                         }.frame(maxWidth: .infinity, alignment: .leading)
                     }.buttonStyle(.plain)
                 }
-            }.padding(20)
+            }.padding(DesignTokens.Spacing.pageMargin)
             if let error = model.categoryError, !model.categoryItems.isEmpty {
-                SearchInlineError(message: error) { Task { await model.onCategoryRefresh?() } }.padding(20)
+                SearchInlineError(message: error) { Task { await model.onCategoryRefresh?() } }.padding(DesignTokens.Spacing.pageMargin)
             }
             if let error = model.categoryMoreError {
-                SearchInlineError(message: error) { model.onCategoryMore?() }.padding(20)
+                SearchInlineError(message: error) { model.onCategoryMore?() }.padding(DesignTokens.Spacing.pageMargin)
             } else if model.categoryHasMore {
                 ProgressView().padding().onAppear { model.onCategoryMore?() }
             }
@@ -461,6 +461,6 @@ private extension MusicSearchItem {
         var cover = artwork
         if case .file(let url) = cover, let image = LocalArtworkImages.cached(url, pixels: 0) { cover = .image(Image(uiImage: image)) }
         return .init(route: route, ownerID: ownerID, title: title, subtitle: subtitle, artwork: cover,
-                     albumBackdrop: LocalArtworkImages.cachedBackdrop(for: artwork))
+                     originalArtwork: artwork)
     }
 }

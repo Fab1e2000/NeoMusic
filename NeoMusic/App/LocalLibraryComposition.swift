@@ -14,24 +14,15 @@ struct CollectionDownloadHandling {
 typealias AppLibrary = LocalLibrary
 
 @MainActor
-enum LocalLibrary {
-    static let runtime = LocalLibraryRuntime(
-        songLibrary: songLibrary, playlistLibrary: playlistLibrary, player: player,
-        favoriteAlbums: favoriteAlbums, pinnedAlbums: pinnedAlbums, deletedAlbums: deletedAlbums,
-        onLocalSongsApplied: {
-            artistPreferences.registerLocalCredits(in: $0)
-            downloads.setLocalSongs($0)
-        })
-    static let catalog = LibraryCatalog()
-    static let songLibrary = SongLibrary(songs: [])
-    static var songs: [LibrarySongItem] { runtime.localSongs }
-    static var allSongs: [LibrarySongItem] { runtime.allSongs }
-    private static func song(id: String) -> LibrarySongItem? {
+extension AppContainer {
+    var songs: [LibrarySongItem] { runtime.localSongs }
+    var allSongs: [LibrarySongItem] { runtime.allSongs }
+    private func song(id: String) -> LibrarySongItem? {
         guard let song = songLibrary.song(id: id), song.isOnline || !deletedAlbums.ids.contains(song.albumID) else { return nil }
         return song
     }
-    static var favorites: [LibrarySongItem] {
-        favoriteRows(online: songLibrary.onlineSongs, favorites: songLibrary.favoriteSongs,
+    var favorites: [LibrarySongItem] {
+        Self.favoriteRows(online: songLibrary.onlineSongs, favorites: songLibrary.favoriteSongs,
                      downloadedSongID: { catalog.downloadedOnlineSongID?($0) })
             .filter { $0.isOnline || !deletedAlbums.ids.contains($0.albumID) }
     }
@@ -56,70 +47,36 @@ enum LocalLibrary {
         }
         return SongLibrary.orderedFavorites(items)
     }
-    static let pinnedAlbums = LibrarySelectionSet(ids: [], key: "pinnedAlbums")
-    private static let pinnedOrder = PinnedOrderStore()
-    static let favoriteAlbums = LibrarySelectionSet(ids: [], key: "favoriteAlbums")
-    static let favoriteArtists = LibrarySelectionSet(ids: [], key: "favoriteArtists")
-    private static let artistPreferences = LibraryArtistPreferences()
-    static let deletedAlbums = LibrarySelectionSet(ids: [], key: "deletedAlbums")
-    static let downloads = LibraryDownloads()
-    static let toasts = LibraryToastCenter()
-    static var collectionDownloads = CollectionDownloadHandling()
-    static var collectionDownloadAction: ((LibraryRoute) -> Bool)? {
-        get { collectionDownloads.download }
-        set { collectionDownloads.download = newValue }
-    }
-    static var collectionRemovalAction: ((LibraryRoute) -> Bool)? {
-        get { collectionDownloads.remove }
-        set { collectionDownloads.remove = newValue }
-    }
-    static var collectionDownloadedState: ((LibraryRoute) -> Bool?)? {
-        get { collectionDownloads.downloadedState }
-        set { collectionDownloads.downloadedState = newValue }
-    }
-    static var collectionCanDownload: ((LibraryRoute) -> Bool)? {
-        get { collectionDownloads.canDownload }
-        set { collectionDownloads.canDownload = newValue }
-    }
-    static var collectionCanRemoveDownload: ((LibraryRoute) -> Bool)? {
-        get { collectionDownloads.canRemoveDownload }
-        set { collectionDownloads.canRemoveDownload = newValue }
-    }
-    static var collectionStopDownload: ((LibraryRoute) -> Void)? {
-        get { collectionDownloads.stop }
-        set { collectionDownloads.stop = newValue }
-    }
-    static var prepareSongForLibraryAction: ((LibrarySongItem) -> LibrarySongItem?)?
-    private static func albumSongs(_ id: String) -> [LibrarySongItem] {
+    private func albumSongs(_ id: String) -> [LibrarySongItem] {
         guard !deletedAlbums.ids.contains(id) else { return [] }
         return songLibrary.albumIndex.songIDsByAlbum[id, default: []].compactMap { songLibrary.song(id: $0) }
     }
-    static func isAlbumDownloaded(_ id: String) -> Bool { !albumSongs(id).isEmpty }
-    static var albums: [LibraryShelfItem] {
+    func isAlbumDownloaded(_ id: String) -> Bool { !albumSongs(id).isEmpty }
+    var albums: [LibraryShelfItem] {
         catalog.albums + songLibrary.albumIndex.items.filter { !deletedAlbums.ids.contains($0.id) }.map(withPinState)
     }
-    private static func albumItem(_ id: String) -> LibraryShelfItem? {
+    private func albumItem(_ id: String) -> LibraryShelfItem? {
         guard !deletedAlbums.ids.contains(id), let item = songLibrary.albumIndex.itemsByID[id] else { return nil }
         return withPinState(item)
     }
-    static var downloadedAlbumItems: [LibraryShelfItem] {
+    var downloadedAlbumItems: [LibraryShelfItem] {
         let local = songLibrary.albumIndex.items.filter { !deletedAlbums.ids.contains($0.id) }.map(withPinState)
         let catalogByID = Dictionary(uniqueKeysWithValues: catalog.albums.map { ($0.id, $0) })
         let netease = catalog.downloadedAlbums.map { catalogByID[$0.id] ?? $0 }
         return netease + local
     }
 
-    private static func withPinState(_ album: LibraryShelfItem) -> LibraryShelfItem {
+    private func withPinState(_ album: LibraryShelfItem) -> LibraryShelfItem {
         var album = album
         album.isPinned = pinnedAlbums.ids.contains(album.id)
         album.isFavorite = favoriteAlbums.ids.contains(album.id)
         return album
     }
 
-    static var allRecentlyAdded: [LibraryShelfItem] { recentAdditions() }
-    static var recentlyAdded: [LibraryShelfItem] { recentAdditions(limit: 6) }
+    var allRecentlyAdded: [LibraryShelfItem] { recentAdditions() }
+    var recentlyAdded: [LibraryShelfItem] { recentAdditions(limit: 6) }
 
-    private static func recentAdditions(limit: Int? = nil) -> [LibraryShelfItem] {
+    private func recentAdditions(limit: Int? = nil) -> [LibraryShelfItem] {
         let playlists = playlistLibrary.playlists.filter { !$0.isSystem }.map { playlist in
             var shown = playlist
             shown.artwork = playlistLibrary.displayArtwork(of: playlist)
@@ -146,42 +103,42 @@ enum LocalLibrary {
         return LibraryRecentAdditions.ordered(collections: playlists + albumItems, songs: songItems, limit: limit)
     }
 
-    static var musicPickerSource: MusicPickerSource {
+    var musicPickerSource: MusicPickerSource {
         MusicPickerSource(
-            songs: { allSongs },
-            artists: { artists },
-            albums: { albums.map(withPinState) },
-            downloadedAlbums: { downloadedAlbumItems.map(withPinState) },
-            recentlyAdded: { allRecentlyAdded },
-            recentlyPlayed: { recentPlaybackFixture },
+            songs: { self.allSongs },
+            artists: { self.artists },
+            albums: { self.albums.map(self.withPinState) },
+            downloadedAlbums: { self.downloadedAlbumItems.map(self.withPinState) },
+            recentlyAdded: { self.allRecentlyAdded },
+            recentlyPlayed: { self.recentPlaybackFixture },
             playlistLibrary: playlistLibrary,
-            albumSongs: { albumSongs($0) },
+            albumSongs: { self.albumSongs($0) },
             loadAlbumSongs: { id in
-                if CatalogRouteIdentity.isCatalogID(id), let load = catalog.loadAlbumSongs {
+                if CatalogRouteIdentity.isCatalogID(id), let load = self.catalog.loadAlbumSongs {
                     return try await load(id)
                 }
-                return albumSongs(id)
+                return self.albumSongs(id)
             },
             loadArtistDetail: { id in
-                if CatalogRouteIdentity.isCatalogID(id), let load = catalog.loadArtistDetail {
+                if CatalogRouteIdentity.isCatalogID(id), let load = self.catalog.loadArtistDetail {
                     return try await load(id)
                 }
                 return nil
             },
-            songByID: { songForMenu($0) }
+            songByID: { self.songForMenu($0) }
         )
     }
 
-    static func playLibrarySong(_ id: String) {
+    func playLibrarySong(_ id: String) {
         guard let song = songForMenu(id) else { return }
         playSongs([song], shuffled: false)
     }
 
-    static func songForMenu(_ id: String) -> LibrarySongItem? {
+    func songForMenu(_ id: String) -> LibrarySongItem? {
         song(id: id) ?? playlistLibrary.containedSong(id)
     }
 
-    static var pinned: [LibraryShelfItem] {
+    var pinned: [LibraryShelfItem] {
         var items = playlistLibrary.playlists.filter(\.isPinned).map(\.shelfItem) + albums.map(withPinState).filter(\.isPinned)
         if !artistPreferences.pins(for: libraryArtistOwner).isEmpty {
             items += libraryArtists.filter(\.isPinned).sorted(byName: \.name).map(\.shelfItem)
@@ -190,7 +147,7 @@ enum LocalLibrary {
     }
 
     @discardableResult
-    static func reorderPinned(_ routes: [LibraryRoute]) -> Bool {
+    func reorderPinned(_ routes: [LibraryRoute]) -> Bool {
         let items = pinned
         let visible = items.compactMap { $0.route.flatMap(PinnedOrderID.init(route:)) }
         let requested = routes.compactMap(PinnedOrderID.init(route:))
@@ -198,20 +155,16 @@ enum LocalLibrary {
         return pinnedOrder.reorder(visible: visible, to: requested)
     }
 
-    static var recentPlaybackFixture: [LibrarySongItem] { [] }
+    var recentPlaybackFixture: [LibrarySongItem] { [] }
 
-    static let playlistLibrary = PlaylistLibrary(playlists: [
-        LibraryPlaylistItem(id: "favorites", title: "喜爱歌曲", artwork: .favorites, isFavorite: true, isPinned: true, isSystem: true)
-    ])
-    private static let downloadedPlaylistView = PlaylistLibrary(playlists: [])
-    static var downloadedPlaylists: PlaylistLibrary { downloadedPlaylistView }
+    var downloadedPlaylists: PlaylistLibrary { downloadedPlaylistView }
 
-    static func refreshDownloadPresentation() {
+    func refreshDownloadPresentation() {
         songLibrary.refreshDownloadPresentation()
         refreshDownloadedPlaylistsPresentation()
     }
 
-    static func refreshDownloadedPlaylistsPresentation() {
+    func refreshDownloadedPlaylistsPresentation() {
         playlistLibrary.reconcileOfflineAvailability()
         let candidates = playlistLibrary.downloadedSnapshotItems + playlistLibrary.playlists.filter { !$0.isReadOnly }
         var items: [LibraryPlaylistItem] = []
@@ -225,12 +178,12 @@ enum LocalLibrary {
         }
         downloadedPlaylistView.replaceDownloadedPlaylists(items: items, songs: contents)
     }
-    static var playlists: [LibraryPlaylistItem] { playlistLibrary.playlists }
-    static var artists: [LibraryArtistItem] { catalog.artists }
+    var playlists: [LibraryPlaylistItem] { playlistLibrary.playlists }
+    var artists: [LibraryArtistItem] { catalog.artists }
 
-    private static var libraryArtistOwner: String? { catalog.activeArtistOwner?() }
+    private var libraryArtistOwner: String? { catalog.activeArtistOwner?() }
 
-    static var libraryArtists: [LibraryArtistEntry] {
+    var libraryArtists: [LibraryArtistEntry] {
         let owner = libraryArtistOwner
         let collected = catalog.albums.filter { $0.sourceOwnerID == owner && owner != nil }
         let localAlbums = songLibrary.albumIndex.items.filter { !deletedAlbums.ids.contains($0.id) }.map(withPinState)
@@ -257,12 +210,12 @@ enum LocalLibrary {
         )
     }
 
-    private static func libraryArtist(_ id: LibraryArtistIdentity) -> LibraryArtistEntry? {
+    private func libraryArtist(_ id: LibraryArtistIdentity) -> LibraryArtistEntry? {
         guard id.belongs(to: libraryArtistOwner) else { return nil }
         return libraryArtists.first { $0.id == id }
     }
 
-    private static func toggleLibraryArtistFavorite(_ id: LibraryArtistIdentity) {
+    private func toggleLibraryArtistFavorite(_ id: LibraryArtistIdentity) {
         guard let artist = libraryArtist(id) else { return }
         if case .catalog(_, .some) = id, let route = artist.id.onlineRoute {
             catalog.actions.toggleFavorite(route)
@@ -273,7 +226,7 @@ enum LocalLibrary {
         }
     }
 
-    private static func playLibraryArtist(_ id: LibraryArtistIdentity, shuffled: Bool) async {
+    private func playLibraryArtist(_ id: LibraryArtistIdentity, shuffled: Bool) async {
         guard let artist = libraryArtist(id) else { return }
         let session = catalog.activeArtistSession?()
         let ownedAlbums = artist.albums.filter { $0.sourceOwnerID != nil && $0.isFavorite }
@@ -314,7 +267,7 @@ enum LocalLibrary {
         if failure != nil { toasts.show(.error("部分专辑未能读取，正在播放已可用的歌曲")) }
     }
 
-    private static func libraryArtistAlbum(_ id: LibraryArtistIdentity, albumID: String) -> CollectionDetail? {
+    private func libraryArtistAlbum(_ id: LibraryArtistIdentity, albumID: String) -> CollectionDetail? {
         guard let artist = libraryArtist(id), let item = artist.albums.first(where: { $0.id == albumID }) else { return nil }
         let likedIDs = Set(songLibrary.onlineSongs.filter {
             $0.onlineOwnerID == libraryArtistOwner && $0.isFavorite
@@ -329,31 +282,20 @@ enum LocalLibrary {
                      artwork: item.artwork, tint: Color(.systemBackground), albumBackdrop: item.albumBackdrop,
                      songs: tracks, route: .libraryArtistAlbum(id, albumID))
     }
-    static func albumDetail(_ id: String) -> CollectionDetail? {
+    func albumDetail(_ id: String) -> CollectionDetail? {
         let orderedSongs = albumSongs(id)
         guard let album = albumItem(id) else { return nil }
         return CollectionDetail(kind: .album, title: album.title, subtitle: album.subtitle, caption: nil,
             artwork: album.artwork, tint: Color(.systemBackground), albumBackdrop: album.albumBackdrop, isFavorite: favoriteAlbums.ids.contains(id),
             isPinned: pinnedAlbums.ids.contains(id), songs: orderedSongs, route: .album(id))
     }
-    static func playlistDetail(_ id: String) -> CollectionDetail? {
+    func playlistDetail(_ id: String) -> CollectionDetail? {
         guard let playlist = playlists.first(where: { $0.id == id }) else { return nil }
         return CollectionDetail(kind: .playlist, title: playlist.title, subtitle: nil, caption: nil,
             artwork: playlist.artwork, tint: Color(.systemBackground), isFavorite: playlist.isFavorite,
             isPinned: playlist.isPinned, songs: id == "favorites" ? favorites : playlistLibrary.songs(in: id), route: .playlist(id))
     }
-    static let player = NowPlayingModel(queue: [], currentIndex: 0, isPlaying: false, elapsed: 0)
-
-    static let referencePlayer = PlayerState(model: player)
-    static let referenceLibrary = PlayerLyricsController(reader: PlayerLyricsStoreAdapter(
-        storageDirectory: URL.applicationSupportDirectory.appending(path: "Lyrics", directoryHint: .isDirectory),
-        root: runtime.root,
-        resolveAudioURL: { id in
-            let url = runtime.root.appending(path: id)
-            return FileManager.default.fileExists(atPath: url.path) ? url : nil
-        }))
-
-    static func songAlbumPreview(_ song: LibrarySongItem, route: LibraryRoute) -> LibraryNavigationPreview? {
+    func songAlbumPreview(_ song: LibrarySongItem, route: LibraryRoute) -> LibraryNavigationPreview? {
         guard case .album(let id) = route else { return nil }
         let online = CatalogRouteIdentity.isCatalogID(id)
         if let owner = song.onlineOwnerID, owner != (playbackAccountID ?? "search-guest") { return nil }
@@ -375,60 +317,58 @@ enum LocalLibrary {
             title: album?.title ?? song.album, subtitle: album?.subtitle ?? (song.albumArtist.isEmpty ? song.artist : song.albumArtist),
             artwork: cover, albumBackdrop: color)
         preview.requiresMatchingAccount = online
-        if case .file(let file) = cover { preview.backdropFile = file }
-        else if let id = cover.loadID { preview.backdropFile = LocalArtworkImages.resolvedURL(for: id) }
         return preview
     }
 
-    private static func playerActions(navigate: @escaping (LibraryRoute, LibraryNavigationPreview?) -> Void,
+    private func playerActions(navigate: @escaping (LibraryRoute, LibraryNavigationPreview?) -> Void,
                                       openAudioQualitySettings: (() -> Void)?) -> PlayerActions {
         let openRoute: (LibraryRoute) -> Void = { navigate($0, nil) }
         return PlayerActions(
-            isFavorite: { id in song(id: id)?.isFavorite == true },
-            toggleFavorite: { songLibrary.toggleFavorite($0) },
+            isFavorite: { id in self.song(id: id)?.isFavorite == true },
+            toggleFavorite: { self.songLibrary.toggleFavorite($0) },
             addToPlaylist: { id in
-                guard let song = song(id: id) else { return }
-                if let prepareSongForLibraryAction {
+                guard let song = self.song(id: id) else { return }
+                if let prepareSongForLibraryAction = self.prepareSongForLibraryAction {
                     guard let prepared = prepareSongForLibraryAction(song) else { return }
-                    playlistLibrary.pendingAddition = .init(songs: [prepared])
-                } else { playlistLibrary.pendingAddition = .init(songs: [song]) }
+                    self.playlistLibrary.pendingAddition = .init(songs: [prepared])
+                } else { self.playlistLibrary.pendingAddition = .init(songs: [song]) }
             },
             openAlbum: { id in
-                guard let song = song(id: id) else { return }
-                songActions.openAlbum(song) { route in navigate(route, songAlbumPreview(song, route: route)) }
+                guard let song = self.song(id: id) else { return }
+                self.songActions.openAlbum(song) { route in navigate(route, self.songAlbumPreview(song, route: route)) }
             },
             openArtist: { id in
-                guard let song = song(id: id) else { return }
+                guard let song = self.song(id: id) else { return }
                 if let ref = song.artistReferences.first { openRoute(.artist(ref.id)) }
-                else if song.isNeteaseCatalogSong || catalog.downloadedOnlineSongID?(id) != nil { catalog.openSongArtist?(id, nil, openRoute) }
+                else if song.isNeteaseCatalogSong || self.catalog.downloadedOnlineSongID?(id) != nil { self.catalog.openSongArtist?(id, nil, openRoute) }
             }, artistNames: { id in
-                guard let song = song(id: id) else { return [] }
+                guard let song = self.song(id: id) else { return [] }
                 let refs = song.artistReferences.map(\.name)
                 if !refs.isEmpty { return refs }
-                if song.isNeteaseCatalogSong || catalog.downloadedOnlineSongID?(id) != nil {
+                if song.isNeteaseCatalogSong || self.catalog.downloadedOnlineSongID?(id) != nil {
                     return song.artist.isEmpty ? [] : [song.artist]
                 }
                 return []
             }, openNamedArtist: { id, name in
-                guard let song = song(id: id) else { return }
+                guard let song = self.song(id: id) else { return }
                 if let ref = song.artistReferences.first(where: { $0.name == name }) { openRoute(.artist(ref.id)) }
-                else if song.isNeteaseCatalogSong || catalog.downloadedOnlineSongID?(id) != nil { catalog.openSongArtist?(id, name, openRoute) }
-            }, feedback: { LibraryHaptics.success() }, notify: { toasts.show(LibraryToast($0)) }, completesFavoriteSynchronously: { id in
-                guard let song = song(id: id) else { return false }
-                return !song.isNeteaseCatalogSong && !downloads.canRemove(song)
+                else if song.isNeteaseCatalogSong || self.catalog.downloadedOnlineSongID?(id) != nil { self.catalog.openSongArtist?(id, name, openRoute) }
+            }, feedback: { LibraryHaptics.success() }, notify: { self.toasts.show(LibraryToast($0)) }, completesFavoriteSynchronously: { id in
+                guard let song = self.song(id: id) else { return false }
+                return !song.isNeteaseCatalogSong && !self.downloads.canRemove(song)
             }, audioQuality: { id in
-                guard player.hasCurrent, player.current.id == id else { return nil }
-                if !player.current.isOnline {
-                    return PlayerAudioQuality.localFile(runtime.root.appending(path: id))
+                guard self.player.hasCurrent, self.player.current.id == id else { return nil }
+                if !self.player.current.isOnline {
+                    return PlayerAudioQuality.localFile(self.runtime.root.appending(path: id))
                 }
-                guard let value = player.actualQuality,
+                guard let value = self.player.actualQuality,
                       let quality = NeteaseMusicQuality(rawValue: value) else { return nil }
                 return PlayerAudioQuality(title: quality.title,
                     isLossless: quality == .lossless || quality == .hiRes)
             }, openAudioQualitySettings: openAudioQualitySettings)
     }
 
-    private static func collection(_ route: LibraryRoute) -> (title: String, songs: [LibrarySongItem])? {
+    private func collection(_ route: LibraryRoute) -> (title: String, songs: [LibrarySongItem])? {
         switch route {
         case .album(let id): albumDetail(id).map { ($0.title, $0.songs) }
         case .playlist(let id): playlistDetail(id).map { ($0.title, $0.songs) }
@@ -438,9 +378,7 @@ enum LocalLibrary {
         }
     }
 
-    static var playbackAccountID: String?
-
-    static func playbackCollection(_ route: LibraryRoute) -> PlaybackCollectionReference? {
+    func playbackCollection(_ route: LibraryRoute) -> PlaybackCollectionReference? {
         switch route {
         case .album(let id):
             guard let detail = albumDetail(id) else { return nil }
@@ -454,7 +392,7 @@ enum LocalLibrary {
         }
     }
 
-    private static func withCollection(_ route: LibraryRoute,
+    private func withCollection(_ route: LibraryRoute,
                                        perform: @escaping @MainActor ((title: String, songs: [LibrarySongItem])) -> Void) {
         guard case .playlist(let id) = route, let item = playlistLibrary.playlist(id) else {
             if let value = collection(route) { perform(value) }
@@ -496,142 +434,143 @@ enum LocalLibrary {
         }
     }
 
-    static var menuActions: CollectionMenuActions {
+    var menuActions: CollectionMenuActions {
         CollectionMenuActions(
             play: { route, shuffled in
-                if catalog.handles(route) { catalog.actions.play(route, shuffled); return }
-                withCollection(route) { collection in
+                if self.catalog.handles(route) { self.catalog.actions.play(route, shuffled); return }
+                self.withCollection(route) { collection in
                     guard !collection.songs.isEmpty else { return }
-                    player.requestPlay(collection.songs, from: collection.title, shuffled: shuffled, collection: playbackCollection(route))
+                    self.player.requestPlay(collection.songs, from: collection.title, shuffled: shuffled, collection: self.playbackCollection(route))
                 }
             },
-            playNext: { route in if catalog.handles(route) { catalog.actions.playNext(route); return }; withCollection(route) { player.insertNext($0.songs) } },
-            playLater: { route in if catalog.handles(route) { catalog.actions.playLater(route); return }; withCollection(route) { player.appendLater($0.songs) } },
+            playNext: { route in if self.catalog.handles(route) { self.catalog.actions.playNext(route); return }; self.withCollection(route) { self.player.insertNext($0.songs) } },
+            playLater: { route in if self.catalog.handles(route) { self.catalog.actions.playLater(route); return }; self.withCollection(route) { self.player.appendLater($0.songs) } },
             toggleFavorite: { route in
-                if catalog.handles(route) { catalog.actions.toggleFavorite(route); return }
+                if self.catalog.handles(route) { self.catalog.actions.toggleFavorite(route); return }
                 switch route {
-                case .playlist(let id): playlistLibrary.toggleFavorite(id)
-                case .album(let id): favoriteAlbums.toggle(id)
-                case .artist(let id): favoriteArtists.toggle(id)
-                case .libraryArtist(let id): toggleLibraryArtistFavorite(id)
+                case .playlist(let id): self.playlistLibrary.toggleFavorite(id)
+                case .album(let id): self.favoriteAlbums.toggle(id)
+                case .artist(let id): self.favoriteArtists.toggle(id)
+                case .libraryArtist(let id): self.toggleLibraryArtistFavorite(id)
                 default: break
                 }
             },
             togglePin: { route in
                 switch route {
-                case .playlist(let id): playlistLibrary.togglePin(id)
-                case .album(let id): pinnedAlbums.toggle(id)
+                case .playlist(let id): self.playlistLibrary.togglePin(id)
+                case .album(let id): self.pinnedAlbums.toggle(id)
                 case .libraryArtist(let id):
-                    guard let artist = libraryArtist(id) else { return }
-                    artistPreferences.togglePin(id, name: artist.name, owner: libraryArtistOwner)
+                    guard let artist = self.libraryArtist(id) else { return }
+                    self.artistPreferences.togglePin(id, name: artist.name, owner: self.libraryArtistOwner)
                 default: break
                 }
             },
             addToPlaylist: { route in
-                if catalog.handles(route) { catalog.actions.addToPlaylist(route); return }
-                withCollection(route) { collection in
-                    playlistLibrary.pendingAddition = .init(songs: collection.songs)
+                if self.catalog.handles(route) { self.catalog.actions.addToPlaylist(route); return }
+                self.withCollection(route) { collection in
+                    self.playlistLibrary.pendingAddition = .init(songs: collection.songs)
                 }
             },
-            playbackSource: { player.isPlaying ? player.sourceTitle : nil },
-            requestMove: { playlistLibrary.pendingMove = playlistLibrary.playlist($0) },
+            playbackSource: { self.player.isPlaying ? self.player.sourceTitle : nil },
+            requestMove: { self.playlistLibrary.pendingMove = self.playlistLibrary.playlist($0) },
             canDelete: { route in
-                if catalog.handles(route) { return false }
+                if self.catalog.handles(route) { return false }
                 return switch route {
-                case .playlist(let id): playlistLibrary.canDelete(id) || playlistLibrary.canUnsubscribe(id)
+                case .playlist(let id): self.playlistLibrary.canDelete(id) || self.playlistLibrary.canUnsubscribe(id)
                 case .album: true
                 default: false
                 }
             },
             isDownloaded: { route in
-                if let value = collectionDownloadedState?(route) { return value }
-                if case .album(let id) = route { return isAlbumDownloaded(id) }
+                if let value = self.collectionDownloads.downloadedState?(route) { return value }
+                if case .album(let id) = route { return self.isAlbumDownloaded(id) }
                 return false
             },
             edit: { route in
                 guard case .playlist(let id) = route else { return }
-                playlistLibrary.pendingEdit = playlistLibrary.playlist(id)
+                self.playlistLibrary.pendingEdit = self.playlistLibrary.playlist(id)
             },
             requestDelete: { route in
                 guard case .playlist(let id) = route else { return }
-                playlistLibrary.pendingDeletion = playlistLibrary.playlists.first { $0.id == id }
+                self.playlistLibrary.pendingDeletion = self.playlistLibrary.playlists.first { $0.id == id }
             },
             delete: { route in
                 switch route {
-                case .playlist(let id): playlistLibrary.deletePlaylist(id)
+                case .playlist(let id): self.playlistLibrary.deletePlaylist(id)
                 case .album(let id):
-                    let removed = albumSongs(id)
-                    deletedAlbums.insert(id)
-                    playlistLibrary.removeSongsEverywhere(Set(removed.map(\.id)))
-                    pinnedAlbums.remove(id)
+                    let removed = self.albumSongs(id)
+                    self.deletedAlbums.insert(id)
+                    self.playlistLibrary.removeSongsEverywhere(Set(removed.map(\.id)))
+                    self.pinnedAlbums.remove(id)
                 default: break
                 }
             },
-            notify: { toasts.show($0) },
+            notify: { self.toasts.show($0) },
             removeDownload: { route in
-                if collectionRemovalAction?(route) == true { return }
-                if case .album(let id) = route { downloads.requestRemoval(albumSongs(id)) }
+                if self.collectionDownloads.remove?(route) == true { return }
+                if case .album(let id) = route { self.downloads.requestRemoval(self.albumSongs(id)) }
             },
             download: { route in
-                if collectionDownloadAction?(route) == true { return }
-                if case .album(let id) = route { downloads.download(albumSongs(id)) }
+                if self.collectionDownloads.download?(route) == true { return }
+                if case .album(let id) = route { self.downloads.download(self.albumSongs(id)) }
             },
-            canDownload: { collectionCanDownload?($0) ?? false },
-            canRemoveDownload: { collectionCanRemoveDownload?($0) ?? false },
-            stopDownload: { collectionStopDownload?($0) },
+            canDownload: { self.collectionDownloads.canDownload?($0) ?? false },
+            canRemoveDownload: { self.collectionDownloads.canRemoveDownload?($0) ?? false },
+            stopDownload: { self.collectionDownloads.stop?($0) },
             downloads: downloads
         )
     }
 
-    private static var songActions: SongMenuActions {
+    private var songActions: SongMenuActions {
         SongMenuActions(
             downloads: downloads,
-            play: { songs, index, source in player.requestPlay(songs, startingAt: index, from: source) },
-            playNext: { player.insertNext([$0]) },
-            toggleFavorite: { songLibrary.toggleFavorite($0.id) },
-            removeFromFavorites: { songLibrary.setFavorite($0.id, false, playsSuccessHaptic: false) },
-            togglePin: { songLibrary.togglePin($0.id) },
+            play: { songs, index, source in self.player.requestPlay(songs, startingAt: index, from: source) },
+            playNext: { self.player.insertNext([$0]) },
+            toggleFavorite: { self.songLibrary.toggleFavorite($0.id) },
+            removeFromFavorites: { self.songLibrary.setFavorite($0.id, false, playsSuccessHaptic: false) },
+            togglePin: { self.songLibrary.togglePin($0.id) },
             addToPlaylist: { song in
-                if let prepareSongForLibraryAction {
+                if let prepareSongForLibraryAction = self.prepareSongForLibraryAction {
                     guard let prepared = prepareSongForLibraryAction(song) else { return }
-                    playlistLibrary.pendingAddition = .init(songs: [prepared])
-                } else { playlistLibrary.pendingAddition = .init(songs: [song]) }
+                    self.playlistLibrary.pendingAddition = .init(songs: [prepared])
+                } else { self.playlistLibrary.pendingAddition = .init(songs: [song]) }
             },
-            playLater: { player.appendLater([$0]) },
+            playLater: { self.player.appendLater([$0]) },
             delete: { song in
-                songLibrary.delete(song.id)
-                playlistLibrary.removeSongsEverywhere([song.id])
+                self.songLibrary.delete(song.id)
+                self.playlistLibrary.removeSongsEverywhere([song.id])
             },
-            playbackSource: { player.isPlaying ? player.sourceTitle : nil },
+            playbackSource: { self.player.isPlaying ? self.player.sourceTitle : nil },
             albumPreview: songAlbumPreview,
             openAlbum: { song, open in
                 if song.onlineAlbumID != nil { open(.album(song.albumID)) }
-                else if song.isNeteaseCatalogSong || catalog.downloadedOnlineSongID?(song.id) != nil { catalog.openSongAlbum?(song.id, open) }
+                else if song.isNeteaseCatalogSong || self.catalog.downloadedOnlineSongID?(song.id) != nil { self.catalog.openSongAlbum?(song.id, open) }
                 else { open(.album(song.albumID)) }
             },
             openArtist: { song, open in
                 if let ref = song.artistReferences.first { open(.artist(ref.id)) }
-                else if song.isNeteaseCatalogSong || catalog.downloadedOnlineSongID?(song.id) != nil { catalog.openSongArtist?(song.id, nil, open) }
+                else if song.isNeteaseCatalogSong || self.catalog.downloadedOnlineSongID?(song.id) != nil { self.catalog.openSongArtist?(song.id, nil, open) }
             },
-            notify: { toasts.show($0) },
-            isAsynchronousFavorite: { $0.isNeteaseCatalogSong || downloads.canRemove($0) }
+            notify: { self.toasts.show($0) },
+            isAsynchronousFavorite: { $0.isNeteaseCatalogSong || self.downloads.canRemove($0) }
         )
     }
 
-    static func songActions(for route: LibraryRoute) -> SongMenuActions {
+    func songActions(for route: LibraryRoute) -> SongMenuActions {
         var actions = songActions
         actions.play = { songs, index, source in
-            player.requestPlay(songs, startingAt: index, from: source, collection: playbackCollection(route))
+            self.player.requestPlay(songs, startingAt: index, from: source, collection: self.playbackCollection(route))
         }
         return actions
     }
 
-    static var app: some View {
-        AppShell(library: {
-            LocalLibraryHome()
-        }, detailDestination: { AnyView(LocalDestination(route: $0)) }, nowPlaying: player, playlistLibrary: playlistLibrary, toasts: toasts,
+    var app: some View {
+        AppShell(library: { [self] in
+            LocalLibraryHome(container: self)
+        }, detailDestination: { AnyView(LocalDestination(container: self, route: $0)) }, nowPlaying: player, playlistLibrary: playlistLibrary, toasts: toasts,
            referencePlayer: referencePlayer, referenceLibrary: referenceLibrary, makePlayerActions: playerActions, isInitialContentReady: runtime.isInitialPlaybackReady || (player.hasCurrent && !player.current.isOnline) || player.hasOfflineCurrentSong, libraryPath: launchPath, isPlayerPresented: ["nowplaying", "paused", "queue"].contains(launchPage))
-        .playlistEditSheet(playlistLibrary, songs: { allSongs })
+        .playlistEditSheet(playlistLibrary, songs: { self.allSongs })
+        .downloadRemovalConfirmation()
         .environment(\.libraryDownloads, downloads)
         .environment(\.collectionMenuActions, menuActions)
         .environment(\.songMenuActions, songActions)
@@ -639,11 +578,11 @@ enum LocalLibrary {
         .environment(\.musicPickerSource, musicPickerSource)
     }
 
-    static func playSongs(_ songs: [LibrarySongItem], shuffled: Bool) {
+    func playSongs(_ songs: [LibrarySongItem], shuffled: Bool) {
         player.requestPlay(songs, from: "歌曲", shuffled: shuffled)
     }
 
-    static func playAlbums(_ ids: [String], shuffled: Bool) {
+    func playAlbums(_ ids: [String], shuffled: Bool) {
         if ids.contains(where: CatalogRouteIdentity.isCatalogID) {
             Task {
                 do {
@@ -661,7 +600,7 @@ enum LocalLibrary {
         player.requestPlay(tracks, from: "专辑", shuffled: shuffled)
     }
 
-    @ViewBuilder fileprivate static func destination(_ route: LibraryRoute) -> some View {
+    @ViewBuilder fileprivate func destination(_ route: LibraryRoute) -> some View {
         switch route {
         case .category(.downloaded): DownloadedLibraryView(albums: downloadedAlbumItems.map(withPinState))
         case .downloadedCategory(.songs): SongsListView(songs: songs.filter { downloads.state(of: $0.id) == .downloaded }, playAll: playSongs)
@@ -678,7 +617,7 @@ enum LocalLibrary {
         case .album(let id): albumDetail(id).map { CollectionDetailView(detail: $0) }
         case .libraryArtist(let id):
             if let artist = libraryArtist(id) {
-                LibraryArtistDetailView(artist: artist, play: { await playLibraryArtist(id, shuffled: $0) })
+                LibraryArtistDetailView(artist: artist, play: { await self.playLibraryArtist(id, shuffled: $0) })
             } else {
                 ContentUnavailableView("艺人已不可用", systemImage: "music.microphone")
             }
@@ -689,19 +628,19 @@ enum LocalLibrary {
                 ContentUnavailableView("专辑已不可用", systemImage: "square.stack")
             }
         case .playlist(let id):
-            if id == "favorites" { LocalFavoritesDetail() }
-            else { PlaylistDetailView(playlistID: id, library: playlistLibrary, songs: [], availableSongs: { allSongs }, recentlyPlayedSongs: recentPlaybackFixture) }
+            if id == "favorites" { LocalFavoritesDetail(container: self) }
+            else { PlaylistDetailView(playlistID: id, library: playlistLibrary, songs: [], availableSongs: { self.allSongs }, recentlyPlayedSongs: recentPlaybackFixture) }
         case .artist, .artistSection, .searchCategory: EmptyView()
         }
     }
 
-    private static var launchPage: String? {
+    private var launchPage: String? {
         let arguments = ProcessInfo.processInfo.arguments
         guard let index = arguments.firstIndex(of: "-mockPage"), index + 1 < arguments.count else { return nil }
         return arguments[index + 1]
     }
 
-    private static var launchPath: [LibraryRoute] {
+    private var launchPath: [LibraryRoute] {
         #if DEBUG
         let args = ProcessInfo.processInfo.arguments
         if let index = args.firstIndex(of: "-catalogArtist"), args.indices.contains(index + 1), Int64(args[index + 1]) != nil { return [.artist(CatalogRouteIdentity.artistID(args[index + 1]))] }
@@ -724,19 +663,20 @@ enum LocalLibrary {
 }
 
 struct LocalLibraryHome: View {
+    var container: AppContainer = .shared
     var body: some View {
-        let ready = LocalLibrary.runtime.isInitialLibraryReady
-        let pinnedReady = ready && LocalLibrary.runtime.isInitialPresentationReady
-        LibraryHomeView(pinned: pinnedReady ? LocalLibrary.pinned : [], recentlyAdded: ready ? LocalLibrary.recentlyAdded : [],
-                        playlistLibrary: LocalLibrary.playlistLibrary,
+        let ready = container.runtime.isInitialLibraryReady
+        let pinnedReady = ready && container.runtime.isInitialPresentationReady
+        LibraryHomeView(pinned: pinnedReady ? container.pinned : [], recentlyAdded: ready ? container.recentlyAdded : [],
+                        playlistLibrary: container.playlistLibrary,
                         isContentReady: ready,
                         isPinnedReady: pinnedReady,
-                        reorderPinned: LocalLibrary.reorderPinned,
-                        playSong: LocalLibrary.playLibrarySong,
-                        songForMenu: LocalLibrary.songForMenu)
+                        reorderPinned: container.reorderPinned,
+                        playSong: container.playLibrarySong,
+                        songForMenu: container.songForMenu)
             .safeAreaInset(edge: .bottom) {
-                if let status = LocalLibrary.runtime.status { LibraryStatusMessage(message: status) }
-                if let error = LocalLibrary.playlistLibrary.persistenceError {
+                if let status = container.runtime.status { LibraryStatusMessage(message: status) }
+                if let error = container.playlistLibrary.persistenceError {
                     LibraryStatusMessage(message: error, title: "保存状态", isError: true)
                 }
             }
@@ -744,20 +684,30 @@ struct LocalLibraryHome: View {
 }
 
 private struct LocalDestination: View {
+    var container: AppContainer = .shared
     let route: LibraryRoute
     @Environment(\.libraryZoomNamespace) private var zoomNamespace
 
     @ViewBuilder var body: some View {
         switch route {
         case .album, .playlist:
-            LocalLibrary.destination(route).environment(\.songMenuActions, LocalLibrary.songActions(for: route)).navigationDiagnostics(route.diagnosticPage).libraryZoomTransition(route, in: zoomNamespace)
+            container.destination(route)
+                .environment(\.songMenuActions, container.songActions(for: route))
+                #if DEBUG
+                .navigationDiagnostics(route.diagnosticPage)
+                #endif
+                .libraryZoomTransition(route, in: zoomNamespace)
         default:
-            LocalLibrary.destination(route).navigationDiagnostics(route.diagnosticPage)
+            container.destination(route)
+                #if DEBUG
+                .navigationDiagnostics(route.diagnosticPage)
+                #endif
         }
     }
 }
 
 struct LocalFavoritesDetail: View {
+    var container: AppContainer = .shared
     @Environment(NeteaseAccount.self) private var account
 
     private struct LoadRequest: Equatable {
@@ -772,8 +722,8 @@ struct LocalFavoritesDetail: View {
     }
 
     var body: some View {
-        if let detail = LocalLibrary.playlistDetail("favorites") {
-            let library = LocalLibrary.playlistLibrary
+        if let detail = container.playlistDetail("favorites") {
+            let library = container.playlistLibrary
             let request = loadRequest
             let awaitingOnlineDetail = request.map { request in
                 !library.hasReceivedPlaylistDetail(for: "favorites")
@@ -781,19 +731,19 @@ struct LocalFavoritesDetail: View {
                     && account.music?.error == nil
             } ?? false
             let awaitingDetail = detail.songs.isEmpty
-                && (!LocalLibrary.runtime.isInitialLibraryReady || awaitingOnlineDetail)
+                && (!container.runtime.isInitialLibraryReady || awaitingOnlineDetail)
             CollectionDetailView(
                 detail: detail,
                 awaitingDetail: awaitingDetail,
                 hasMoreSongs: library.onlineHasMore.contains("favorites"),
                 totalSongCount: library.onlineTrackCounts["favorites"],
                 onReachedEnd: {
-                    guard LocalLibrary.playlistLibrary.onlineHasMore.contains("favorites"),
-                          LocalLibrary.playlistLibrary.onlineErrors["favorites"] == nil else { return }
-                    Task { await LocalLibrary.playlistLibrary.loadMoreOnlinePlaylist?("favorites") }
+                    guard container.playlistLibrary.onlineHasMore.contains("favorites"),
+                          container.playlistLibrary.onlineErrors["favorites"] == nil else { return }
+                    Task { await container.playlistLibrary.loadMoreOnlinePlaylist?("favorites") }
                 },
                 onPrepareCompleteCollection: {
-                    _ = await LocalLibrary.playlistLibrary.prepareCompleteCollection("favorites")
+                    _ = await container.playlistLibrary.prepareCompleteCollection("favorites")
                 }
             )
                 .task(id: request) {
@@ -810,7 +760,7 @@ struct LocalFavoritesDetail: View {
         await music.loadFavoritesPreview(force: force)
         guard revision == music.sessionRevision, !Task.isCancelled else { return }
         let playlistError = music.playlists.first(where: \.isFavorites).flatMap { music.playlistErrors[$0.id] }
-        if let message = playlistError ?? music.error { LocalLibrary.toasts.show(.error(message)) }
+        if let message = playlistError ?? music.error { container.toasts.show(.error(message)) }
     }
 }
 

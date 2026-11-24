@@ -19,12 +19,15 @@ def check_source(relative: Path, text: str) -> list[str]:
     netease = relative.is_relative_to("NeoMusic/Core/Netease")
     account_ui = relative.is_relative_to("NeoMusic/Features/Account")
     app = relative.is_relative_to("NeoMusic/App")
+    feature = relative.is_relative_to("NeoMusic/Features")
     player = relative.is_relative_to("NeoMusic/Features/Player")
     component = relative.is_relative_to(COMPONENT_ROOT)
     if relative.suffix == ".metal" and not player:
         errors.append("player shaders belong in Features/Player")
     if "Modules" in relative.parts:
         errors.append("online source code belongs in Core/Netease")
+    if feature and re.search(r"\bLocalLibrary\s*\.", text):
+        errors.append("features must receive library dependencies from App assembly")
     if relative.suffix == ".swift":
         for module in re.findall(r"^\s*(?:@\w+\s+)?import\s+([A-Za-z_][A-Za-z_0-9]*)", text, re.MULTILINE):
             allowed = module in (NETEASE_IMPORTS if netease else COMMON_IMPORTS)
@@ -35,7 +38,6 @@ def check_source(relative: Path, text: str) -> list[str]:
                 Path("NeoMusic/Features/Library/AlbumArtworkBackdrop.swift"),
             } and module == "CoreImage"
             allowed |= account_ui and module == "WebKit"
-            allowed |= relative == Path("NeoMusic/Core/Netease/NeteaseAvatarSnapshot.swift") and module == "ImageIO"
             allowed |= relative == Path("NeoMusic/Core/Netease/NeteaseMusicStore.swift") and module == "Network"
             allowed |= relative == Path("NeoMusic/Core/Netease/NeteaseArtworkCache.swift") and module == "Nuke"
             allowed |= relative == Path("NeoMusic/Core/Netease/NeteasePageCache.swift") and module == "SQLite3"
@@ -53,7 +55,9 @@ def check_source(relative: Path, text: str) -> list[str]:
             errors.append("full-screen presentation must consume host interfaces, not app implementations")
         if re.search(r'Bundle\.main|UIImage\(named:|"netease:|"preview\.appearance', text):
             errors.append("full-screen resources and identities must not depend on the app bundle or account format")
-    if not (netease or account_ui or app) and re.search(r"\bNetease\w*\b", text):
+    # Literal paths from the shared storage registry should not count as type references.
+    type_text = re.sub(r'"[A-Za-z_][\w./-]*"', '""', text)
+    if not (netease or account_ui or app) and re.search(r"\bNetease\w*\b", type_text):
         errors.append("NetEase types belong in Core/Netease, Features/Account or App assembly")
     if not netease and re.search(r"\b(?:URLSession|NSURLSession|HTTPCookieStorage|SecItem\w+|CommonCrypto)\b", text):
         errors.append("account transport and credentials belong in Core/Netease")

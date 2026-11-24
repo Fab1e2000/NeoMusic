@@ -147,8 +147,8 @@ struct AppTabPlaylist: Equatable, Identifiable {
 }
 
 enum AppTabOrder {
-    static let storageKey = "appTabOrder.v1"
-    static let hiddenKey = "appTabHidden.v1"
+    static let storageKey = AppDefaultsKey.appTabOrder
+    static let hiddenKey = AppDefaultsKey.appTabHidden
     static let maxVisible = 4
     static let defaultHidden: Set<AppTab> = [.favorites, .playlists, .albums, .artists, .songs]
     static var defaultRaw: String { raw([.home, .library]) }
@@ -238,6 +238,7 @@ struct AppShell<Library: View>: View {
     @State var libraryPath: [LibraryRoute] = []
     @State var isPlayerPresented = false
     @State private var showsAudioQualitySettings = false
+    @State private var loginIncludesHome = false
     @State private var tabNavigations = AppTabNavigationRegistry()
     @State private var emptyHome = HomeContentModel()
     @Environment(\.homeMusicIntegration) private var home
@@ -276,14 +277,10 @@ struct AppShell<Library: View>: View {
             tabNavigations.prunePlaylists(keeping: Set(ids))
         }
         .ignoresSafeArea()
-        .sheet(isPresented: Binding(get: { home?.showsLogin == true }, set: { home?.showsLogin = $0 }),
-               onDismiss: { home?.loginDismissed() }) {
-            AccountPage(account: account, initialRoute: .login)
+        .onChange(of: home?.showsLogin == true, initial: true) { _, requested in
+            if requested { loginIncludesHome = true }
         }
-        .sheet(isPresented: Binding(get: { artists?.showsLogin == true }, set: { artists?.showsLogin = $0 })) {
-            AccountPage(account: account, initialRoute: .login)
-        }
-        .sheet(isPresented: Binding(get: { search?.showsLogin == true }, set: { search?.showsLogin = $0 })) {
+        .sheet(isPresented: loginPresentation, onDismiss: finishLoginPresentation) {
             AccountPage(account: account, initialRoute: .login)
         }
         .sheet(isPresented: $showsAudioQualitySettings) {
@@ -316,6 +313,7 @@ struct AppShell<Library: View>: View {
                               toasts: toasts))
         .environment(referencePlayer)
         .environment(referenceLibrary)
+        .environment(playlistLibrary)
         .environment(makePlayerActions({ route, preview in
             startPlayerNavigation(route, preview: preview)
         }, account.music == nil ? nil : { showsAudioQualitySettings = true }))
@@ -332,6 +330,24 @@ struct AppShell<Library: View>: View {
         } message: { Text(nowPlaying?.errorMessage ?? "") }
 
     }
+
+    private var loginPresentation: Binding<Bool> {
+        Binding(get: {
+            home?.showsLogin == true || artists?.showsLogin == true || search?.showsLogin == true
+        }, set: { presented in
+            guard !presented else { return }
+            if home?.showsLogin == true { loginIncludesHome = true }
+            home?.showsLogin = false
+            artists?.showsLogin = false
+            search?.showsLogin = false
+        })
+    }
+
+    private func finishLoginPresentation() {
+        if loginIncludesHome { home?.loginDismissed() }
+        loginIncludesHome = home?.showsLogin == true
+    }
+
     private var effectiveSearchContent: AnyView? {
         if let searchContent { return searchContent }
         guard let search else { return nil }

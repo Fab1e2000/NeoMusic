@@ -13,7 +13,7 @@ struct NeteaseAvatarClient: Sendable {
         configuration.httpShouldSetCookies = false
         configuration.urlCredentialStorage = nil
         configuration.urlCache = URLCache(memoryCapacity: 2 * 1024 * 1024, diskCapacity: 20 * 1024 * 1024,
-                                          directory: URL.cachesDirectory.appending(path: "NeteaseAvatar"))
+                                          directory: AppStoragePaths.neteaseAvatarCache)
         return configuration
     }
 

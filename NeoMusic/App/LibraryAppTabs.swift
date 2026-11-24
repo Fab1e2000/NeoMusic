@@ -79,15 +79,17 @@ struct LibraryAppTabs<Library: View>: UIViewControllerRepresentable {
                 ? overrides.userInterfaceStyle : controller.traitCollection.userInterfaceStyle
             Self.applySelectedItemAppearance(style, to: controller.tabBar)
         }
-        updateAppearance(of: controller)
+        updateAppearance(of: controller, coordinator: context.coordinator)
         return controller
     }
     func updateUIViewController(_ controller: UITabBarController, context: Context) {
         context.coordinator.selection = $selection
+        let homeBridge = homeNavigation ?? context.coordinator.homeNavigation
+        context.coordinator.libraryBridge = navigation
+        context.coordinator.homeBridge = homeBridge
         navigation.configure(environment: context.environment, destination: destination)
         searchNavigation?.configure(environment: context.environment, destination: searchDestination ?? destination)
-        (homeNavigation ?? context.coordinator.homeNavigation).configure(environment: context.environment,
-                                                                        destination: homeDestination ?? destination)
+        homeBridge.configure(environment: context.environment, destination: homeDestination ?? destination)
         ensurePlaylistTabs(context.coordinator, environment: context.environment)
         for bridge in context.coordinator.sectionBridges.values {
             bridge.configure(environment: context.environment, destination: destination)
@@ -101,11 +103,7 @@ struct LibraryAppTabs<Library: View>: UIViewControllerRepresentable {
             controller.selectedTab = tab
             context.coordinator.selection.wrappedValue = fallback
         }
-        updateAppearance(of: controller)
-        for bridge in context.coordinator.sectionBridges.values {
-            let style = bridge.colorScheme.map { UIUserInterfaceStyle($0) } ?? controller.traitCollection.userInterfaceStyle
-            bridge.navigationController?.navigationBar.overrideUserInterfaceStyle = style
-        }
+        updateAppearance(of: controller, coordinator: context.coordinator)
     }
     private func desiredOrder(_ coordinator: Coordinator) -> [AppTab] {
         guard storesOrder else { return tabOrder }
@@ -148,12 +146,8 @@ struct LibraryAppTabs<Library: View>: UIViewControllerRepresentable {
     private func applyOrder(to controller: UITabBarController, coordinator: Coordinator) {
         coordinator.apply(desiredOrder(coordinator), to: controller, animated: coordinator.appliedOrder.isEmpty == false)
     }
-    private func updateAppearance(of controller: UITabBarController) {
-        let libraryStyle = navigation.colorScheme.map { UIUserInterfaceStyle($0) } ?? controller.traitCollection.userInterfaceStyle
-        navigation.navigationController?.navigationBar.overrideUserInterfaceStyle = libraryStyle
-        if let homeNavigation {
-            homeNavigation.navigationController?.navigationBar.overrideUserInterfaceStyle = homeNavigation.colorScheme.map { UIUserInterfaceStyle($0) } ?? controller.traitCollection.userInterfaceStyle
-        }
+    private func updateAppearance(of controller: UITabBarController, coordinator: Coordinator) {
+        coordinator.updateNavigationAppearance(systemStyle: controller.traitCollection.userInterfaceStyle)
         Self.updatePageInheritance(in: controller)
         let style = colorScheme.map { UIUserInterfaceStyle($0) } ?? controller.traitCollection.userInterfaceStyle
         Self.applySelectedItemAppearance(style, to: controller.tabBar)
@@ -200,9 +194,8 @@ struct LibraryAppTabs<Library: View>: UIViewControllerRepresentable {
         var sectionBridges: [AppTab: LibraryDetailNavigation] = [:]
         var playlistIDs: [String] = []
         func updateNavigationAppearance(systemStyle: UIUserInterfaceStyle) {
-            libraryBridge?.navigationController?.navigationBar.overrideUserInterfaceStyle = libraryBridge?.colorScheme.map { UIUserInterfaceStyle($0) } ?? systemStyle
-            homeBridge?.navigationController?.navigationBar.overrideUserInterfaceStyle = homeBridge?.colorScheme.map { UIUserInterfaceStyle($0) } ?? systemStyle
-            for bridge in sectionBridges.values {
+            let bridges = [libraryBridge, homeBridge].compactMap { $0 } + Array(sectionBridges.values)
+            for bridge in bridges {
                 bridge.navigationController?.navigationBar.overrideUserInterfaceStyle = bridge.colorScheme.map { UIUserInterfaceStyle($0) } ?? systemStyle
             }
         }

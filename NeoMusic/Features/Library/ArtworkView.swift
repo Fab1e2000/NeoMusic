@@ -14,6 +14,14 @@ enum Artwork: Equatable {
     case missing
 
     var loadID: String? { if case .deferred(let id, _) = self { id } else { nil } }
+
+    @MainActor var resolvedFileURL: URL? {
+        switch self {
+        case .file(let url): url
+        case .deferred(let id, _): LocalArtworkImages.resolvedURL(for: id)
+        default: nil
+        }
+    }
 }
 
 enum ArtworkPlaceholder: Equatable { case missing, playlist }
@@ -26,6 +34,18 @@ struct ArtworkLoadAction {
     @MainActor func callAsFunction(_ id: String?) {
         guard let id else { return }
         handler?(id)
+    }
+
+    @MainActor func resolveDeferred(_ id: String?, reuseRegisteredURL: Bool = true,
+                                    publish: (URL?) -> Void) async {
+        guard !Task.isCancelled else { return }
+        let registered = reuseRegisteredURL ? id.flatMap(LocalArtworkImages.resolvedURL(for:)) : nil
+        publish(registered)
+        guard let id else { return }
+        callAsFunction(id)
+        guard registered == nil, let file = await resolve?(id), !Task.isCancelled else { return }
+        LocalArtworkImages.registerResolvedArtwork(id, url: file)
+        publish(file)
     }
 }
 
@@ -48,7 +68,7 @@ struct ArtworkView: View {
     let artwork: Artwork
     var contentID: String?
     var previewArtwork: Artwork? = nil
-    var cornerRadius: CGFloat = 8
+    var cornerRadius: CGFloat = DesignTokens.Radius.card
     var hidesLoadingPlaceholder = false
     var showsBorder = true
     var isZoomAlignmentTarget = false
@@ -88,11 +108,11 @@ struct ArtworkView: View {
                 .id(contentID)
         case .favorites:
             GeometryReader { proxy in
-                Artwork.favoritesBackground
+                DesignTokens.Colors.favoritesBackground
                     .overlay {
                         Image(systemName: "star.fill")
                             .font(.system(size: proxy.size.width * 0.50))
-                            .foregroundStyle(Artwork.favoritesRed)
+                            .foregroundStyle(DesignTokens.Colors.favoritesRed)
                     }
             }
         case .playlist:
@@ -245,20 +265,9 @@ private struct LoadedArtworkView: View {
             }
         }
         .task(id: artwork.loadID) {
-            guard let id = artwork.loadID else {
-                resolvedURL = nil
-                return
+            await loadArtwork.resolveDeferred(artwork.loadID) {
+                if resolvedURL != $0 { resolvedURL = $0 }
             }
-            if let alreadyResolved = LocalArtworkImages.resolvedURL(for: id) {
-                if resolvedURL != alreadyResolved { resolvedURL = alreadyResolved }
-                loadArtwork(id)
-                return
-            }
-            resolvedURL = nil
-            loadArtwork(id)
-            guard let file = await loadArtwork.resolve?(id), !Task.isCancelled else { return }
-            LocalArtworkImages.registerResolvedArtwork(id, url: file)
-            resolvedURL = file
         }
         .onChange(of: artwork) {
             if case .deferred(_, let kind) = artwork { placeholderKind = kind }
@@ -295,7 +304,7 @@ private struct LoadedArtworkView: View {
 struct ResourceArtworkView: View {
     let resource: ArtworkResourceState<Artwork>
     var contentID: String?
-    var cornerRadius: CGFloat = 8
+    var cornerRadius: CGFloat = DesignTokens.Radius.card
     var body: some View {
         ArtworkView(artwork: resource.value, contentID: contentID, cornerRadius: cornerRadius)
     }

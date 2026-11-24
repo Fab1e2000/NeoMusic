@@ -4,11 +4,14 @@ enum DesignTokens {
     enum Colors {
         static let favoritesRed = Color(red: 251 / 255, green: 35 / 255, blue: 60 / 255)
         static let favoritesBackground = Color(red: 233 / 255, green: 237 / 255, blue: 238 / 255)
+        static let homeFavoritesBackdrop = Color(white: 0.575)
+        static let homeFavoritesTile = Color(white: 0.92)
     }
 
     enum Spacing {
         static let pageMargin: CGFloat = 20
         static let rowDividerInset: CGFloat = 60
+        static let heroCardInset: CGFloat = 16
     }
 
     enum Radius {
@@ -16,6 +19,7 @@ enum DesignTokens {
         static let card: CGFloat = 8
         static let detailCover: CGFloat = 10
         static let heroCard: CGFloat = 16
+        static let homeFavoritesTile: CGFloat = 7
     }
 
     enum Artwork {

@@ -315,7 +315,12 @@ struct CollectionCardLink<Label: View>: View {
                                    },
                                    preview: { AnyView(MenuPreviewCard(artwork: item.artwork, lines: item.previewLines)) },
                                    previewSize: { MenuPreviewCard.size(for: item.previewLines, compatibleWith: $0) },
-                                   commit: { NavigationDiagnostics.event("Card.commit", page: route.diagnosticPage); openLibraryRoute(item, sourceProvider: $0) }, tap: tap,
+                                   commit: {
+                                       #if DEBUG
+                                       NavigationDiagnostics.event("Card.commit", page: route.diagnosticPage)
+                                       #endif
+                                       openLibraryRoute(item, sourceProvider: $0)
+                                   }, tap: tap,
                                    drag: drag, drop: drop)
                 .padding(-8)
                 .alert("", isPresented: $isConfirmingDeletion) {

@@ -1,20 +1,29 @@
 import os
 
+enum AppLogger {
+    fileprivate static let subsystem = "com.elsterlee.NeoMusic"
+
+    static let playback = Logger(subsystem: subsystem, category: "Playback")
+    static let playbackRestoration = Logger(subsystem: subsystem, category: "PlaybackRestoration")
+    static let queueScroll = Logger(subsystem: subsystem, category: "QueueScroll")
+    static let library = Logger(subsystem: subsystem, category: "Library")
+    static let account = Logger(subsystem: subsystem, category: "Account")
+    static let navigation = Logger(subsystem: subsystem, category: "Navigation")
+    static let ui = Logger(subsystem: subsystem, category: "UI")
+}
+
 enum PerformanceDiagnostics {
     typealias Interval = OSSignpostIntervalState
-    private static let signposter = OSSignposter(subsystem: "com.elsterlee.NeoMusic", category: "Performance")
-
-    private static let restorationLogger = Logger(subsystem: "com.elsterlee.NeoMusic", category: "PlaybackRestoration")
-    private static let queueScrollLogger = Logger(subsystem: "com.elsterlee.NeoMusic", category: "QueueScroll")
+    private static let signposter = OSSignposter(subsystem: AppLogger.subsystem, category: "Performance")
 
     static func restoration(_ stage: String) {
-        restorationLogger.notice("\(stage, privacy: .public)")
+        AppLogger.playbackRestoration.notice("\(stage, privacy: .public)")
     }
 
     static func queueScroll(_ message: () -> String) {
-        guard queueScrollLogger.isEnabled(type: .debug) else { return }
+        guard AppLogger.queueScroll.isEnabled(type: .debug) else { return }
         let text = message()
-        queueScrollLogger.debug("\(text, privacy: .public)")
+        AppLogger.queueScroll.debug("\(text, privacy: .public)")
     }
 
     static func begin(_ name: StaticString) -> OSSignpostIntervalState {

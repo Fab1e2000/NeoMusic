@@ -49,11 +49,9 @@ struct HomePlaylistArtwork: View {
             onVisibleArtworkChange(visible)
         }
         .task(id: artwork.loadID) {
-            resolvedURL = nil
-            loadArtwork(artwork.loadID)
-            guard let id = artwork.loadID, let file = await loadArtwork.resolve?(id), !Task.isCancelled else { return }
-            LocalArtworkImages.registerResolvedArtwork(id, url: file)
-            resolvedURL = file
+            await loadArtwork.resolveDeferred(artwork.loadID, reuseRegisteredURL: false) {
+                resolvedURL = $0
+            }
         }
         .task(id: url) {
             guard let url else { return }

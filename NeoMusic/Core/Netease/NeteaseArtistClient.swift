@@ -58,14 +58,9 @@ extension NeteaseMusicClient {
     }
     @concurrent func artistAlbums(id: Int64, credential: NeteaseCredential?) async throws -> [NeteaseArtistAlbum] {
         struct Response: Decodable { let hotAlbums: [AlbumDTO]; let more: Bool }
-        var result: [NeteaseArtistAlbum] = [], offset = 0, seen = Set<Int64>()
-        while true {
-            let response: Response = try await read("/api/artist/albums/\(id)", ["limit": 100, "offset": offset, "total": true], credential)
-            let previousCount = result.count
-            result += response.hotAlbums.filter { seen.insert($0.id).inserted }.map(\.model)
-            if !response.more { return result }
-            guard result.count > previousCount else { throw NeteaseAccountError.invalidResponse }
-            offset += response.hotAlbums.count
+        return try await NeteasePagination.collect(id: \.id) { offset in
+            let page: Response = try await read("/api/artist/albums/\(id)", ["limit": 100, "offset": offset, "total": true], credential)
+            return .init(items: page.hotAlbums.map(\.model), hasMore: page.more, advance: page.hotAlbums.count)
         }
     }
     @concurrent func similarArtists(id: Int64, credential: NeteaseCredential?) async throws -> [NeteaseArtistReference] {
@@ -81,26 +76,16 @@ extension NeteaseMusicClient {
     }
     @concurrent func subscribedArtists(credential: NeteaseCredential) async throws -> [NeteaseArtistReference] {
         struct Response: Decodable { let data: [ArtistDTO]; let hasMore: Bool }
-        var result: [NeteaseArtistReference] = [], offset = 0, seen = Set<Int64>()
-        while true {
+        return try await NeteasePagination.collect(id: \.id) { offset in
             let page: Response = try await read("/api/artist/sublist", ["limit": 100, "offset": offset, "total": true], credential)
-            let previousCount = result.count
-            result += page.data.filter { seen.insert($0.id).inserted }.map(\.model)
-            if !page.hasMore { return result }
-            guard result.count > previousCount else { throw NeteaseAccountError.invalidResponse }
-            offset += page.data.count
+            return .init(items: page.data.map(\.model), hasMore: page.hasMore, advance: page.data.count)
         }
     }
     @concurrent func subscribedAlbums(credential: NeteaseCredential) async throws -> [NeteaseArtistAlbum] {
         struct Response: Decodable { let data: [AlbumDTO]; let hasMore: Bool }
-        var result: [NeteaseArtistAlbum] = [], offset = 0, seen = Set<Int64>()
-        while true {
+        return try await NeteasePagination.collect(id: \.id) { offset in
             let page: Response = try await read("/api/album/sublist", ["limit": 100, "offset": offset, "total": true], credential)
-            let previousCount = result.count
-            result += page.data.filter { seen.insert($0.id).inserted }.map(\.model)
-            if !page.hasMore { return result }
-            guard result.count > previousCount else { throw NeteaseAccountError.invalidResponse }
-            offset += page.data.count
+            return .init(items: page.data.map(\.model), hasMore: page.hasMore, advance: page.data.count)
         }
     }
     @concurrent func setArtistSubscribed(id: Int64, subscribed: Bool, credential: NeteaseCredential) async throws {

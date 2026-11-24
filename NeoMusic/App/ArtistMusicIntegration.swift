@@ -3,6 +3,7 @@ import Observation
 
 @MainActor @Observable final class ArtistMusicIntegration {
     private let account: NeteaseAccount
+    private let container: AppContainer
     private let player: NowPlayingModel
     private let playlistLibrary: PlaylistLibrary
     var showsLogin = false
@@ -22,6 +23,7 @@ import Observation
     @ObservationIgnored private var albumRoutes: [Int64: Set<String>] = [:]
     @ObservationIgnored private var songValues: [Int64: NeteaseMusicSong] = [:]
     @ObservationIgnored private var independentSongIDs: Set<Int64> = []
+    private let projectionCache = OnlineSongProjectionCache()
     @ObservationIgnored private var projectedSongs: [Int64: LibrarySongItem] = [:]
     @ObservationIgnored private var subscribedArtistIDs: Set<Int64> = []
     @ObservationIgnored private var subscribedAlbumIDs: Set<Int64> = []
@@ -41,11 +43,17 @@ import Observation
         let state = DetailState(); detailStates[route] = state; return state
     }
     var sessionIdentity: String { "\(store?.isReady == true):\(owner.map(String.init) ?? "guest"):\(store?.userID.map(String.init) ?? "guest")" }
-    init(account: NeteaseAccount, player: NowPlayingModel = LocalLibrary.player,
-         playlistLibrary: PlaylistLibrary = LocalLibrary.playlistLibrary) {
+    convenience init(account: NeteaseAccount, player: NowPlayingModel = AppContainer.shared.player,
+                     playlistLibrary: PlaylistLibrary = AppContainer.shared.playlistLibrary) {
+        self.init(account: account, container: .shared, player: player, playlistLibrary: playlistLibrary)
+    }
+
+    init(account: NeteaseAccount, container: AppContainer, player: NowPlayingModel? = nil,
+         playlistLibrary: PlaylistLibrary? = nil) {
         self.account = account
-        self.player = player
-        self.playlistLibrary = playlistLibrary
+        self.container = container
+        self.player = player ?? container.player
+        self.playlistLibrary = playlistLibrary ?? container.playlistLibrary
     }
     private var store: NeteaseArtistStore? { account.artists }
     private var owner: Int64? { account.profile?.userID }
@@ -54,25 +62,25 @@ import Observation
         store?.onContentChange = { [weak self] in self?.publish($0) }
         store?.onArtworkFailure = { [weak self] in self?.publishArtistArtworkFailure($0) }
         store?.onArtworkChange = { [weak self] in self?.publishArtwork($0) }
-        LocalLibrary.catalog.openSongAlbum = { [weak self] song, open in self?.openSong(song, artist: nil, album: true, open: open) }
-        LocalLibrary.catalog.openSongArtist = { [weak self] song, artist, open in self?.openSong(song, artist: artist, album: false, open: open) }
-        LocalLibrary.catalog.cachedAlbumItem = { [weak self] key in
+        container.catalog.openSongAlbum = { [weak self] song, open in self?.openSong(song, artist: nil, album: true, open: open) }
+        container.catalog.openSongArtist = { [weak self] song, artist, open in self?.openSong(song, artist: artist, album: false, open: open) }
+        container.catalog.cachedAlbumItem = { [weak self] key in
             guard let self, let store, store.userID == owner, store.sessionRevision == sessionRevision,
                   case .album(let id) = CatalogRouteIdentity(key),
                   let detail = detailStates["album:\(id)"]?.album else { return nil }
             return LibraryShelfItem(id: key, title: detail.title, subtitle: detail.subtitle, artwork: detail.artwork,
                                     sourceOwnerID: owner.map(String.init), albumBackdrop: detail.albumBackdrop)
         }
-        LocalLibrary.catalog.actions = collectionActions
-        LocalLibrary.catalog.activeArtistOwner = { [weak self] in
+        container.catalog.actions = collectionActions
+        container.catalog.activeArtistOwner = { [weak self] in
             guard let self, !account.isLoggingOut else { return nil }
             return owner.map(String.init)
         }
-        LocalLibrary.catalog.activeArtistSession = { [weak self] in
+        container.catalog.activeArtistSession = { [weak self] in
             guard let self, let store, store.isReady, store.userID == owner, !account.isLoggingOut else { return nil }
             return store.sessionRevision
         }
-        LocalLibrary.catalog.loadAlbumSongs = { [weak self] key in
+        container.catalog.loadAlbumSongs = { [weak self] key in
             guard let self, let captured = self.owner, let store, store.userID == captured, !account.isLoggingOut
             else { throw NeteaseAccountError.authenticationRequired }
             let revision = store.sessionRevision
@@ -83,7 +91,7 @@ import Observation
             guard available, let id = Self.number(route), let detail = self.albumDetail(id) else { throw NeteaseAccountError.invalidResponse }
             return detail.songs
         }
-        LocalLibrary.catalog.loadArtistDetail = { [weak self] key in
+        container.catalog.loadArtistDetail = { [weak self] key in
             guard let self, let captured = self.owner else { throw NeteaseAccountError.authenticationRequired }
             let route = LibraryRoute.artist(key)
             await self.load(route)
@@ -146,15 +154,16 @@ import Observation
                 for task in backdropTasks.values { task.cancel() }
                 backdropTasks = [:]; backdropSources = [:]; backdrops = [:]
                 for state in detailStates.values { state.artist = nil; state.album = nil; state.error = nil }
+                projectionCache.removeAll()
                 artworkSongs = [:]; artworkRoutes = [:]; routeArtwork = [:]; routeSongs = [:]
                 songRoutes = [:]; artistRoutes = [:]; albumRoutes = [:]; routeArtists = [:]; routeAlbums = [:]; songValues = [:]; projectedSongs = [:]; independentSongIDs = []
                 subscribedArtistIDs = []; subscribedAlbumIDs = []
             }
             guard let store, store.isReady, store.userID == owner else {
-                if !LocalLibrary.catalog.artists.isEmpty { LocalLibrary.catalog.artists = [] }
-                LocalLibrary.catalog.artistOwnerID = nil
-                if !LocalLibrary.catalog.albums.isEmpty { LocalLibrary.catalog.albums = [] }
-                LocalLibrary.songLibrary.replaceExternalSongs([], source: "artists"); return
+                if !container.catalog.artists.isEmpty { container.catalog.artists = [] }
+                container.catalog.artistOwnerID = nil
+                if !container.catalog.albums.isEmpty { container.catalog.albums = [] }
+                container.songLibrary.replaceExternalSongs([], source: "artists"); return
             }
             switch change {
             case .reset:
@@ -184,23 +193,23 @@ import Observation
     private func publishSubscribedArtists(changedIDs: Set<Int64>? = nil) {
         let values = store?.subscribedArtists ?? []
         subscribedArtistIDs = Set(values.map(\.id))
-        let existing = Dictionary(LocalLibrary.catalog.artists.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let existing = Dictionary(container.catalog.artists.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let items = values.map { value in
             if changedIDs?.contains(value.id) == false, let item = existing["catalog:artist:\(value.id)"] { return item }
             return artistItem(value)
         }
-        if LocalLibrary.catalog.artists != items { LocalLibrary.catalog.artists = items }
-        LocalLibrary.catalog.artistOwnerID = owner.map(String.init)
+        if container.catalog.artists != items { container.catalog.artists = items }
+        container.catalog.artistOwnerID = owner.map(String.init)
     }
     private func publishSubscribedAlbums(changedIDs: Set<Int64>? = nil) {
         let values = store?.subscribedAlbums ?? []
         subscribedAlbumIDs = Set(values.map(\.id))
-        let existing = Dictionary(LocalLibrary.catalog.albums.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let existing = Dictionary(container.catalog.albums.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let items = values.map { value in
             if changedIDs?.contains(value.id) == false, let item = existing["catalog:album:\(value.id)"] { return item }
             return albumItem(value)
         }
-        if LocalLibrary.catalog.albums != items { LocalLibrary.catalog.albums = items }
+        if container.catalog.albums != items { container.catalog.albums = items }
     }
     private func publishSongs(preferAsync: Bool = false) {
         if preferAsync, projectedSongs.count > 120 {
@@ -218,28 +227,27 @@ import Observation
                       self.sessionRevision == revision, self.displayedOwner == currentOwner else { return }
                 self.songsPublishTask = nil
                 let items = sortedKeys.compactMap { self.projectedSongs[$0] }
-                LocalLibrary.songLibrary.replaceExternalSongs(items, source: "artists")
+                container.songLibrary.replaceExternalSongs(items, source: "artists")
             }
             return
         }
         songsPublishTask?.cancel()
         songsPublishTask = nil
         songsPublishGeneration &+= 1
-        LocalLibrary.songLibrary.replaceExternalSongs(projectedSongs.keys.sorted().compactMap { projectedSongs[$0] }, source: "artists")
+        container.songLibrary.replaceExternalSongs(projectedSongs.keys.sorted().compactMap { projectedSongs[$0] }, source: "artists")
     }
     @discardableResult private func discardUnreferencedSongs() -> Bool {
         let orphanCandidates = songValues.keys.filter {
             songRoutes[$0]?.isEmpty != false && !independentSongIDs.contains($0)
         }
         guard !orphanCandidates.isEmpty else { return false }
-        let playlistSongs = playlistLibrary.playlists.filter { !$0.isReadOnly && !$0.isSystem }
-            .flatMap { playlistLibrary.songs(in: $0.id) }
-        let referenced = Set((player.queue + playlistSongs)
+        let referenced = Set(ReferencedLibrarySongs.collect(player: player, playlists: playlistLibrary)
             .filter { $0.onlineOwnerID == owner.map(String.init) }.compactMap(\.onlineSongID))
         let unused = orphanCandidates.filter { !referenced.contains($0) }
         for id in unused {
             if let url = songValues[id]?.artworkURL { artworkSongs[url]?.removeAll { $0.id == id } }
             songValues[id] = nil; projectedSongs[id] = nil; songRoutes[id] = nil
+            projectionCache.removeValue(forKey: id)
         }
         return !unused.isEmpty
     }
@@ -323,21 +331,18 @@ import Observation
     }
     func requestArtwork(for id: String) {
         guard let store, store.userID == owner,
-              let key = DeferredArtworkKey(rawValue: id),
-              key.matches(domain: .artists, session: store.sessionRevision),
-              let url = key.remoteURL else { return }
+              let url = DeferredArtworkRoute.remote(id, session: store.sessionRevision, domain: .artists) else { return }
         store.requestArtwork([url])
     }
+
     func cachedArtworkFile(for id: String) async -> URL? {
-        guard let store, store.userID == owner, !Task.isCancelled else { return nil }
+        guard let store else { return nil }
         let revision = store.sessionRevision, owner = store.userID
-        guard let key = DeferredArtworkKey(rawValue: id),
-              key.matches(domain: .artists, session: revision),
-              let url = key.remoteURL else { return nil }
-        let file = await store.cachedArtworkFile(url)
-        guard revision == store.sessionRevision, store.userID == owner,
-              self.owner == owner, !Task.isCancelled else { return nil }
-        return file
+        return await DeferredArtworkRoute.cachedFile(id, session: revision, domain: .artists,
+            isCurrent: { revision == store.sessionRevision && store.userID == owner && self.owner == owner }) { key in
+                guard let url = key.remoteURL else { return nil }
+                return await store.cachedArtworkFile(url)
+            }
     }
     private func artistItem(_ value: NeteaseArtistReference) -> LibraryArtistItem {
         .init(id: CatalogRouteIdentity.artistID(value.id), name: value.name, artwork: artwork(value.artworkURL), isFavorite: subscribedArtistIDs.contains(value.id))
@@ -359,14 +364,15 @@ import Observation
     }
     private func songItem(_ value: NeteaseMusicSong) -> LibrarySongItem {
         let url = value.artworkURL.flatMap { store?.cachedArtworkURL($0) }
-        return OnlineSongProjector.makeSong(
-            value,
-            id: OnlineSongIdentity.format(ownerID: owner.map(String.init), guestPrefix: "catalog-guest", song: value.id),
-            artwork: artwork(value.artworkURL),
-            artworkURL: url,
-            isFavorite: account.music?.likedIDs.contains(value.id) == true,
-            favoriteAddedAt: account.music?.likedAt[value.id]
-        )
+        let owner = owner.map(String.init)
+        let isFavorite = account.music?.likedIDs.contains(value.id) == true
+        let favoriteAddedAt = account.music?.likedAt[value.id]
+        return projectionCache.project(value, owner: owner, revision: store?.sessionRevision,
+            isFavorite: isFavorite, favoriteAddedAt: favoriteAddedAt, cachedArtworkURL: url) {
+                OnlineSongProjector.makeSong(value,
+                    id: OnlineSongIdentity.format(ownerID: owner, guestPrefix: "catalog-guest", song: value.id),
+                    artwork: artwork(value.artworkURL), artworkURL: url, isFavorite: isFavorite, favoriteAddedAt: favoriteAddedAt)
+            }
     }
     func artistDetail(_ id: Int64) -> ArtistDetail? { state("artist:\(id)").artist }
     private func makeArtistDetail(_ id: Int64) -> ArtistDetail? {
@@ -391,7 +397,7 @@ import Observation
         return .init(kind: .album, title: value.album.title, subtitle: value.album.artist, caption: item.year.map { "\($0)年" }, artwork: cover, tint: Color(.systemBackground), albumBackdrop: item.albumBackdrop, isFavorite: item.isFavorite, songs: value.songs.map(songItem), route: .album(item.id))
     }
     func destination(_ route: LibraryRoute) -> AnyView? {
-        guard LocalLibrary.catalog.handles(route) else { return nil }
+        guard container.catalog.handles(route) else { return nil }
         return AnyView(ArtistCatalogDestination(route: route, integration: self))
     }
     func load(_ route: LibraryRoute) async {
@@ -461,18 +467,18 @@ import Observation
             }
         }
         for value in store.subscribedArtists where value.artworkURL.map(urls.contains) == true {
-            if let index = LocalLibrary.catalog.artists.firstIndex(where: { $0.id == "catalog:artist:\(value.id)" }) {
+            if let index = container.catalog.artists.firstIndex(where: { $0.id == "catalog:artist:\(value.id)" }) {
                 let item = artistItem(value)
-                LocalLibrary.catalog.artists[index].$artwork.update(item.artwork)
+                container.catalog.artists[index].$artwork.update(item.artwork)
             }
         }
         for value in store.subscribedAlbums where value.artworkURL.map(urls.contains) == true {
-            if let index = LocalLibrary.catalog.albums.firstIndex(where: { $0.id == "catalog:album:\(value.id)" }) {
+            if let index = container.catalog.albums.firstIndex(where: { $0.id == "catalog:album:\(value.id)" }) {
                 let item = albumItem(value)
-                LocalLibrary.catalog.albums[index].$artwork.update(item.artwork)
+                container.catalog.albums[index].$artwork.update(item.artwork)
             }
         }
-        LocalLibrary.songLibrary.updateOnlineArtwork(songs, source: "artists")
+        container.songLibrary.updateOnlineArtwork(songs, source: "artists")
         playlistLibrary.updateArtwork(songs: songs)
         for route in routes where route.hasPrefix("album:") {
             if let id = Int64(route.dropFirst("album:".count)) { prepareBackdrop(id) }
@@ -485,6 +491,7 @@ import Observation
         let revision = store.sessionRevision
         backdropTasks[id] = Task { [weak self] in
             _ = await LocalArtworkImages.load(url, pixels: 512)
+            let backdrop = await LocalArtworkImages.loadBackdrop(for: url)
             guard let self, !Task.isCancelled, self.store?.sessionRevision == revision,
                   self.store?.userID == self.owner else { return }
             self.backdropTasks[id] = nil
@@ -493,7 +500,7 @@ import Observation
                 return
             }
             self.backdropSources[id] = url
-            self.backdrops[id] = LocalArtworkImages.cachedBackdrop(for: .file(url))
+            self.backdrops[id] = backdrop
             let state = self.state("album:\(id)")
             if var detail = state.album {
                 detail.$artwork.update(.file(url))
@@ -554,7 +561,7 @@ import Observation
         guard owner != nil else { showsLogin = true; return }
         guard let id = Self.number(route), let store else { return }
         guard store.isReady, store.userID == owner else {
-            LocalLibrary.toasts.show(.error("账户资料正在恢复，请稍后重试。"))
+            container.toasts.show(.error("账户资料正在恢复，请稍后重试。"))
             return
         }
         let capturedOwner = owner
@@ -573,15 +580,15 @@ import Observation
                 : store.subscribedArtists.contains { $0.id == id }
             guard confirmed == subscribed else { throw NeteaseAccountError.invalidResponse }
             LibraryHaptics.success()
-            if !route.isCatalogAlbum { LocalLibrary.toasts.show(subscribed ? .favorited : .unfavorited) }
+            if !route.isCatalogAlbum { container.toasts.show(subscribed ? .favorited : .unfavorited) }
         } catch is CancellationError {
         } catch {
             guard !Task.isCancelled, capturedOwner == owner, revision == store.sessionRevision else { return }
-            LocalLibrary.toasts.show(.error(error.localizedDescription))
+            container.toasts.show(.error(error.localizedDescription))
         }
     }
     func songActions(_ route: LibraryRoute) -> SongMenuActions {
-        var actions = LocalLibrary.songActions(for: route)
+        var actions = container.songActions(for: route)
         actions.play = { [weak self] songs, index, _ in
             guard songs.indices.contains(index) else { return }
             self?.play(route, song: songs[index])
@@ -595,7 +602,7 @@ import Observation
         return actions
     }
     var collectionActions: CollectionMenuActions {
-        var actions = LocalLibrary.menuActions
+        var actions = container.menuActions
         actions.defersQueueNotice = true
         actions.play = { [weak self] route, shuffle in
             guard let self else { return }
@@ -618,14 +625,14 @@ import Observation
             guard let songs else { return }
             if let next {
                 if next { self.player.insertNext(songs) } else { self.player.appendLater(songs) }
-                LocalLibrary.toasts.show(next ? .playingNext : .addedToQueue)
+                container.toasts.show(next ? .playingNext : .addedToQueue)
             }
             else { self.playlistLibrary.pendingAddition = .init(songs: songs) }
         }
     }
     private func openSong(_ songID: String, artist: String?, album: Bool, open: @escaping (LibraryRoute) -> Void) {
-        guard let song = LocalLibrary.songLibrary.song(id: songID) else { return }
-        let downloadedID = LocalLibrary.catalog.downloadedOnlineSongID?(songID)
+        guard let song = container.songLibrary.song(id: songID) else { return }
+        let downloadedID = container.catalog.downloadedOnlineSongID?(songID)
         guard song.onlineOwnerID == owner.map(String.init) || downloadedID != nil else { return }
         if album, let id = song.onlineAlbumID { open(.album("catalog:album:\(id)")); return }
         if !album, let ref = song.artistReferences.first(where: { artist == nil || $0.name == artist }) { open(.artist(ref.id)); return }
@@ -637,7 +644,7 @@ import Observation
                 guard captured == owner else { return }
                 if album, let albumID = value.albumID { open(.album("catalog:album:\(albumID)")) }
                 else if let ref = value.artists?.first(where: { artist == nil || $0.name == artist || artist == song.artist }) { open(.artist("catalog:artist:\(ref.id)")) }
-            } catch is CancellationError { } catch { LocalLibrary.toasts.show(.error(error.localizedDescription)) }
+            } catch is CancellationError { } catch { container.toasts.show(.error(error.localizedDescription)) }
         }
     }
 }

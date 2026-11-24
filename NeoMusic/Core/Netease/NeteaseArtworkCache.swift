@@ -53,8 +53,7 @@ final class NeteaseArtworkCache {
     }
 
     static let shared = NeteaseArtworkCache(
-        directory: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("NeteaseArtwork", isDirectory: true),
+        directory: AppStoragePaths.neteaseArtworkCache,
         countLimit: 4_096)
     static let didEvictArtwork = Notification.Name("NeoMusic.NeteaseArtworkCache.didEvictArtwork")
 
@@ -333,7 +332,9 @@ private actor NeteaseArtworkFiles {
         }
         guard data.count <= byteLimit else { throw URLError(.dataLengthExceedsMaximum) }
         let url = directory.appendingPathComponent(key)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        if !FileManager.default.fileExists(atPath: directory.path) {
+            try AppStoragePaths.prepareCacheDirectory(directory)
+        }
         try Task.checkCancellation()
         try data.write(to: url, options: .atomic)
         do { try Task.checkCancellation() }
@@ -352,6 +353,7 @@ private actor NeteaseArtworkFiles {
         guard !loaded else { return }
         let manager = FileManager.default
         if manager.fileExists(atPath: directory.path) {
+            AppStoragePaths.excludeFromBackup(directory)
             let urls = try manager.contentsOfDirectory(at: directory,
                 includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey], options: [.skipsHiddenFiles])
             for url in urls where url.pathExtension == "image" {

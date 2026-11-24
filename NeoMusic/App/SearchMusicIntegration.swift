@@ -6,6 +6,7 @@ final class SearchMusicIntegration {
     let model = SearchPageModel()
     var showsLogin = false
     @ObservationIgnored private let account: NeteaseAccount
+    private let container: AppContainer
     @ObservationIgnored private let player: NowPlayingModel
     @ObservationIgnored private let playlistLibrary: PlaylistLibrary
     @ObservationIgnored private var connected = false
@@ -21,9 +22,17 @@ final class SearchMusicIntegration {
     @ObservationIgnored var prepareNavigation: ((LibraryNavigationPreview) -> Void)?
     @ObservationIgnored var onPublication: (() -> Void)?
 
-    init(account: NeteaseAccount, player: NowPlayingModel = LocalLibrary.player,
-         playlistLibrary: PlaylistLibrary = LocalLibrary.playlistLibrary) {
-        self.account = account; self.player = player; self.playlistLibrary = playlistLibrary
+    convenience init(account: NeteaseAccount, player: NowPlayingModel = AppContainer.shared.player,
+                     playlistLibrary: PlaylistLibrary = AppContainer.shared.playlistLibrary) {
+        self.init(account: account, container: .shared, player: player, playlistLibrary: playlistLibrary)
+    }
+
+    init(account: NeteaseAccount, container: AppContainer, player: NowPlayingModel? = nil,
+         playlistLibrary: PlaylistLibrary? = nil) {
+        self.account = account
+        self.container = container
+        self.player = player ?? container.player
+        self.playlistLibrary = playlistLibrary ?? container.playlistLibrary
     }
     private var store: NeteaseSearchStore? { account.search }
 
@@ -73,7 +82,7 @@ final class SearchMusicIntegration {
             queryTask?.cancel(); queryID = UUID()
             resources = [:]; artworkURLs = [:]; publishedSongs = [:]
             lastPublished = []
-            LocalLibrary.songLibrary.replaceExternalSongs([], source: "search")
+            container.songLibrary.replaceExternalSongs([], source: "search")
             model.cachedGroups = [:]; model.groups = []; model.suggestions = []; model.categoryItems = []
             showsLogin = false
             Task { await store?.loadCategories() }
@@ -87,7 +96,7 @@ final class SearchMusicIntegration {
         withObservationTracking {
             _ = account.downloads?.records
             if let downloads = account.downloads, !downloads.availableFileIDs.isEmpty {
-                _ = LocalLibrary.songLibrary.songs
+                _ = container.songLibrary.songs
             }
             _ = account.music?.likedIDs
         } onChange: { [weak self] in Task { @MainActor in self?.observeSongState() } }
@@ -102,9 +111,7 @@ final class SearchMusicIntegration {
             displayedQuery = query
             model.cachedGroups = [:]; model.groups = []
             if !publishedSongs.isEmpty || !resources.isEmpty {
-                let playlistSongs = playlistLibrary.playlists.filter { !$0.isReadOnly && !$0.isSystem }
-                    .flatMap { playlistLibrary.songs(in: $0.id) }
-                let referenced = player.queue + playlistSongs
+                let referenced = ReferencedLibrarySongs.collect(player: player, playlists: playlistLibrary)
                 let ids = Set(referenced.map(\.id))
                 let owner = store?.sessionOwnerID ?? "search-guest"
                 let onlineIDs = Set(referenced.filter { $0.onlineOwnerID == owner }.compactMap(\.onlineSongID))
@@ -205,11 +212,11 @@ final class SearchMusicIntegration {
                 favoriteAddedAt: account.music?.likedAt[value.id]
             )
             if retainingPreviousArtwork {
-                song = song?.retainingArtwork(from: publishedSongs[id] ?? LocalLibrary.songLibrary.song(id: id))
+                song = song?.retainingArtwork(from: publishedSongs[id] ?? container.songLibrary.song(id: id))
             }
             if let downloads = account.downloads, downloads.availableFileIDs.contains(value.id),
                let record = downloads.records[value.id],
-               let local = LocalLibrary.songLibrary.song(id: record.relativePath) { song = local }
+               let local = container.songLibrary.song(id: record.relativePath) { song = local }
             if let song { publishedSongs[song.id] = song }
         }
         let route: LibraryRoute?
@@ -231,16 +238,20 @@ final class SearchMusicIntegration {
         return .deferred(id: key, placeholder: .missing)
     }
     func requestArtwork(for id: String) {
-        guard let store, sessionID == store.sessionID, let url = artworkURLs[id] else { return }
+        guard let store, let sessionID, sessionID == store.sessionID,
+              DeferredArtworkRoute.key(id, session: sessionID, domain: .search) != nil,
+              let url = artworkURLs[id] else { return }
         store.requestArtwork(url)
     }
     func cachedArtworkFile(for id: String) async -> URL? {
-        guard let store, let sessionID, sessionID == store.sessionID,
-              let url = artworkURLs[id] else { return nil }
-        let file = await store.cachedArtworkFile(url)
-        guard sessionID == store.sessionID, !Task.isCancelled else { return nil }
-        return file
+        guard let store, let sessionID else { return nil }
+        return await DeferredArtworkRoute.cachedFile(id, session: sessionID, domain: .search,
+            isCurrent: { sessionID == store.sessionID }) { key in
+                guard let url = artworkURLs[key.rawValue] else { return nil }
+                return await store.cachedArtworkFile(url)
+            }
     }
+
     private func publishArtwork(_ urls: Set<URL>) {
         guard sessionID == store?.sessionID else { return }
         let affected = resources.values.filter { $0.artworkURL.map(urls.contains) == true }
@@ -259,7 +270,7 @@ final class SearchMusicIntegration {
         for groups in model.cachedGroups.values {
             for group in groups { update(group.items) }
         }
-        LocalLibrary.songLibrary.updateOnlineArtwork(songs, source: "search")
+        container.songLibrary.updateOnlineArtwork(songs, source: "search")
         playlistLibrary.updateArtwork(songs: songs)
     }
 
@@ -267,7 +278,7 @@ final class SearchMusicIntegration {
         let values = publishedSongs.values.sorted { $0.id < $1.id }
         guard values != lastPublished else { return }
         lastPublished = values
-        LocalLibrary.songLibrary.replaceExternalSongs(values, source: "search")
+        container.songLibrary.replaceExternalSongs(values, source: "search")
         onPublication?()
     }
 
@@ -286,7 +297,7 @@ final class SearchMusicIntegration {
     }
 
     var songActions: SongMenuActions {
-        var actions = LocalLibrary.songActions(for: .category(.songs))
+        var actions = container.songActions(for: .category(.songs))
         let next = actions.playNext, later = actions.playLater, favorite = actions.toggleFavorite, add = actions.addToPlaylist
         func authorized(_ song: LibrarySongItem, _ action: (LibrarySongItem) -> Void) {
             if requiresLogin(for: song) { showsLogin = true } else { action(song) }

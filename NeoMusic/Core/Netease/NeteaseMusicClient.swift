@@ -9,17 +9,13 @@ final class NeteaseMusicClient: Sendable {
     }
     @concurrent func playlists(userID: Int64, credential: NeteaseCredential) async throws -> [NeteaseMusicPlaylist] {
         struct Response: Decodable { let playlist: [Playlist]; let more: Bool }
-        var offset = 0, seen = Set<Int64>(), result: [NeteaseMusicPlaylist] = []
-        while true {
+        return try await NeteasePagination.collect(id: \.id) { offset in
             let page: Response = try await read("/api/user/playlist", ["uid": userID, "limit": 200, "offset": offset], credential)
-            let previousCount = result.count
-            result += page.playlist.filter { seen.insert($0.id).inserted }.map { item in
+            let items = page.playlist.map { item in
                 let value = item.model
                 return NeteaseMusicPlaylist(id: value.id, title: value.title, creator: value.creator, creatorID: value.creatorID, artworkURL: value.artworkURL, trackCount: value.trackCount, isFavorites: value.isFavorites && value.creatorID == userID, isSubscribed: item.subscribed == true && item.creator.userId != userID && item.specialType != 5, createTime: value.createTime, updateTime: value.updateTime)
             }
-            if !page.more { return result }
-            guard result.count > previousCount else { throw NeteaseAccountError.invalidResponse }
-            offset += 200
+            return .init(items: items, hasMore: page.more, advance: 200)
         }
     }
     @concurrent func detail(id: Int64, credential: NeteaseCredential?, trackLimit: Int? = nil,
@@ -148,10 +144,5 @@ final class NeteaseMusicClient: Sendable {
         let id: Int64; let name: String; let creator: Creator; let coverImgUrl: String?; let trackCount: Int; let specialType: Int?; let subscribed: Bool?; let trackIds: [Track]?; let tracks: [Song]?; let createTime: Double?; let updateTime: Double?
         var model: NeteaseMusicPlaylist { .init(id: id, title: name, creator: creator.nickname, creatorID: creator.userId, artworkURL: NeteaseMusicClient.url(coverImgUrl), trackCount: trackCount, isFavorites: specialType == 5, createTime: createTime.map { Date(timeIntervalSince1970: $0 / 1000) }, updateTime: updateTime.map { Date(timeIntervalSince1970: $0 / 1000) }) }
     }
-    struct Song: Decodable {
-        struct Artist: Decodable { let id: Int64?; let name: String }
-        struct Album: Decodable { let id: Int64?; let name: String; let picUrl: String? }
-        let id: Int64; let name: String; let ar: [Artist]; let al: Album; let dt: Double; let no: Int?; let cd: String?
-        var model: NeteaseMusicSong { .init(id: id, title: name, artist: ar.map(\.name).joined(separator: " / "), album: al.name, artworkURL: NeteaseMusicClient.url(al.picUrl), duration: dt / 1000, artists: ar.compactMap { artist in artist.id.map { NeteaseArtistReference(id: $0, name: artist.name, artworkURL: nil) } }, albumID: al.id, trackNumber: max(0, no ?? 0), discNumber: max(1, Int(cd ?? "1") ?? 1)) }
-    }
+    typealias Song = NeteaseSongPayload.Music
 }

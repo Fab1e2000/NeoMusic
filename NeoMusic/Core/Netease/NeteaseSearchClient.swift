@@ -71,7 +71,8 @@ final class NeteaseSearchClient: Sendable {
     }
 
     @concurrent func search(_ query: String, kind: NeteaseSearchKind, offset: Int = 0,
-                            credential: NeteaseCredential?) async throws -> NeteaseSearchPage {
+                            credential: NeteaseCredential?,
+                            onAuthenticationRequired: (@MainActor @Sendable () -> Void)? = nil) async throws -> NeteaseSearchPage {
         let data = try await transport.request(path: "/api/search/get",
             fields: ["s": query, "type": kind.rawValue, "limit": 30, "offset": offset],
             credential: credential, profile: .search, retryTLS: true)
@@ -91,14 +92,18 @@ final class NeteaseSearchClient: Sendable {
                     }
                 }
             } catch is CancellationError { throw CancellationError() }
-            catch { try Task.checkCancellation() }
+            catch {
+                try Task.checkCancellation()
+                if error as? NeteaseAccountError == .authenticationRequired { await onAuthenticationRequired?() }
+            }
         }
         return page
     }
 
-    @concurrent func suggestions(_ query: String, credential: NeteaseCredential?) async throws -> NeteaseSearchSuggestions {
+    @concurrent func suggestions(_ query: String, credential: NeteaseCredential?,
+        onAuthenticationRequired: (@MainActor @Sendable () -> Void)? = nil) async throws -> NeteaseSearchSuggestions {
         async let words = keywords(query, credential: credential)
-        async let matches = entities(query, credential: credential)
+        async let matches = entities(query, credential: credential, onAuthenticationRequired: onAuthenticationRequired)
         return try await .init(keywords: words, resources: matches)
     }
 
@@ -116,7 +121,8 @@ final class NeteaseSearchClient: Sendable {
         return Array((response.result?.allMatch ?? []).map(\.keyword).filter { !$0.isEmpty && seen.insert($0).inserted }.prefix(8))
     }
 
-    @concurrent private func entities(_ query: String, credential: NeteaseCredential?) async throws -> [NeteaseSearchResource] {
+    @concurrent private func entities(_ query: String, credential: NeteaseCredential?,
+        onAuthenticationRequired: (@MainActor @Sendable () -> Void)?) async throws -> [NeteaseSearchResource] {
         struct Response: Decodable {
             struct Result: Decodable { let artist: [Artist]?; let album: [Album]?; let orders: [String]? }
             let result: Result?
@@ -131,7 +137,11 @@ final class NeteaseSearchClient: Sendable {
                 default: [] }
             }).prefix(3).map { $0 }
         } catch is CancellationError { throw CancellationError() }
-        catch { try Task.checkCancellation(); return [] }
+        catch {
+            try Task.checkCancellation()
+            if error as? NeteaseAccountError == .authenticationRequired { await onAuthenticationRequired?() }
+            return []
+        }
     }
 
     static func parse(_ data: Data, kind: NeteaseSearchKind, offset: Int) throws -> NeteaseSearchPage {
@@ -184,28 +194,30 @@ final class NeteaseSearchClient: Sendable {
         let songs: [Song]?; let artists: [Artist]?; let albums: [Album]?; let playlists: [Playlist]?
         let songCount: Int?; let artistCount: Int?; let albumCount: Int?; let playlistCount: Int?; let hasMore: Bool?
     }
-    private struct Artist: Decodable {
-        let id: Int64; let name: String; let picUrl: String?; let img1v1Url: String?
-        var resource: NeteaseSearchResource { .init(kind: .artist, resourceID: id, title: name, subtitle: "艺人", artworkURL: NeteaseArtworkURL.artist(img1v1Url: img1v1Url, picUrl: picUrl)) }
-    }
-    private struct Album: Decodable {
-        let id: Int64; let name: String; let picUrl: String?; let artist: Artist?; let artists: [Artist]?
-        var resource: NeteaseSearchResource { .init(kind: .album, resourceID: id, title: name, subtitle: artists?.map(\.name).joined(separator: " / ") ?? artist?.name ?? "", artworkURL: NeteaseMusicClient.url(picUrl)) }
-    }
+    private typealias Artist = NeteaseSongPayload.Search.Artist
+    private typealias Album = NeteaseSongPayload.Search.Album
+    private typealias Song = NeteaseSongPayload.Search
     private struct Playlist: Decodable {
         struct Creator: Decodable { let nickname: String }
         let id: Int64; let name: String; let coverImgUrl: String?; let creator: Creator?
         var resource: NeteaseSearchResource { .init(kind: .playlist, resourceID: id, title: name, subtitle: creator?.nickname ?? "", artworkURL: NeteaseMusicClient.url(coverImgUrl)) }
     }
-    private struct Song: Decodable {
-        let id: Int64; let name: String; let ar: [Artist]?; let artists: [Artist]?; let al: Album?; let album: Album?; let dt: Double?; let duration: Double?
-        var resource: NeteaseSearchResource {
-            let performers = ar ?? artists ?? []
-            let release = al ?? album
-            let song = NeteaseMusicSong(id: id, title: name, artist: performers.map(\.name).joined(separator: " / "), album: release?.name ?? "",
-                artworkURL: NeteaseMusicClient.url(release?.picUrl), duration: (dt ?? duration ?? 0) / 1000,
-                artists: performers.map { .init(id: $0.id, name: $0.name, artworkURL: NeteaseArtworkURL.artist(img1v1Url: $0.img1v1Url, picUrl: $0.picUrl)) }, albumID: release?.id)
-            return NeteaseSearchClient.resource(song)
-        }
+}
+
+private extension NeteaseSongPayload.Search {
+    var resource: NeteaseSearchResource { NeteaseSearchClient.resource(model) }
+}
+
+private extension NeteaseSongPayload.Search.Artist {
+    var resource: NeteaseSearchResource {
+        .init(kind: .artist, resourceID: id, title: name, subtitle: "艺人", artworkURL: reference.artworkURL)
+    }
+}
+
+private extension NeteaseSongPayload.Search.Album {
+    var resource: NeteaseSearchResource {
+        .init(kind: .album, resourceID: id, title: name,
+            subtitle: artists?.map(\.name).joined(separator: " / ") ?? artist?.name ?? "",
+            artworkURL: NeteaseMusicClient.url(picUrl))
     }
 }

@@ -154,7 +154,7 @@ struct HomeQuickActionCardLabel: View {
                 LibraryCardArtwork(content: AnyView(
                     HomeQuickActionArtwork(item: item, onVisibleArtworkChange: { hasVisibleArtwork = $0 })
                         .id(sourceID)
-                ), sources: sources, sourceID: sourceID, cornerRadius: 16)
+                ), sources: sources, sourceID: sourceID, cornerRadius: DesignTokens.Radius.heroCard)
                 .overlay {
                     if hasVisibleArtwork {
                         LinearGradient(colors: [.clear, .black.opacity(0.6)], startPoint: .center, endPoint: .bottom)
@@ -163,13 +163,13 @@ struct HomeQuickActionCardLabel: View {
                     }
                 }
             }
-            .clipShape(.rect(cornerRadius: 16))
+            .clipShape(.rect(cornerRadius: DesignTokens.Radius.heroCard))
             .background {
-                RoundedRectangle(cornerRadius: 16)
+                RoundedRectangle(cornerRadius: DesignTokens.Radius.heroCard)
                     .fill(Color(.systemBackground))
                     .shadow(color: .black.opacity(0.18), radius: 16, x: 0, y: 12)
             }
-            .contentShape(.rect(cornerRadius: 16))
+            .contentShape(.rect(cornerRadius: DesignTokens.Radius.heroCard))
     }
 }
 
@@ -211,7 +211,7 @@ struct HomeQuickActionCardContent: View {
         }
         .foregroundStyle(textColor)
         .multilineTextAlignment(.leading)
-        .padding(16)
+        .padding(DesignTokens.Spacing.heroCardInset)
         .frame(width: HomeMetrics.heroWidth, alignment: .leading)
         .frame(minHeight: HomeMetrics.heroHeight, alignment: .bottomLeading)
     }
@@ -301,7 +301,7 @@ private struct HomeContentShelf: View {
                             VStack(spacing: 0) {
                                 ForEach(group) { item in
                                     HomeSongRecommendationRow(item: item, ownerID: ownerID, prepareNavigation: prepareNavigation) { play(item) }
-                                    if item.id != group.last?.id { Divider().padding(.leading, 60) }
+                                    if item.id != group.last?.id { Divider().padding(.leading, DesignTokens.Spacing.rowDividerInset) }
                                 }
                             }.containerRelativeFrame(.horizontal, count: 1, spacing: 32)
                                 .padding(.trailing, 12)
@@ -384,11 +384,11 @@ private struct HomeContentCard: View {
                 cover
                     .frame(width: large ? HomeMetrics.heroWidth : HomeMetrics.artworkSize,
                            height: large ? nil : HomeMetrics.artworkSize)
-                    .clipShape(.rect(cornerRadius: large ? 16 : 8))
-                    .overlay { if !large { RoundedRectangle(cornerRadius: 8).strokeBorder(.black.opacity(0.10), lineWidth: 1 / displayScale) } }
+                    .clipShape(.rect(cornerRadius: large ? DesignTokens.Radius.heroCard : DesignTokens.Radius.card))
+                    .overlay { if !large { RoundedRectangle(cornerRadius: DesignTokens.Radius.card).strokeBorder(.black.opacity(0.10), lineWidth: 1 / displayScale) } }
                     .background {
                         if large {
-                            RoundedRectangle(cornerRadius: 16)
+                            RoundedRectangle(cornerRadius: DesignTokens.Radius.heroCard)
                                 .fill(Color(.systemBackground))
                                 .shadow(color: .black.opacity(0.18), radius: 16, x: 0, y: 12)
                         }
@@ -418,10 +418,10 @@ private struct HomeContentCard: View {
             .frame(width: HomeMetrics.heroWidth)
             .frame(minHeight: HomeMetrics.heroHeight, alignment: .bottomLeading)
             .background {
-                LibraryCardArtwork(content: AnyView(artwork), sources: sources, sourceID: sourceID, cornerRadius: 16)
+                LibraryCardArtwork(content: AnyView(artwork), sources: sources, sourceID: sourceID, cornerRadius: DesignTokens.Radius.heroCard)
             }
         } else {
-            LibraryCardArtwork(content: AnyView(artwork), sources: sources, sourceID: sourceID, cornerRadius: large ? 16 : 8)
+            LibraryCardArtwork(content: AnyView(artwork), sources: sources, sourceID: sourceID, cornerRadius: large ? DesignTokens.Radius.heroCard : DesignTokens.Radius.card)
         }
     }
 
@@ -453,6 +453,6 @@ private struct HomeContentCard: View {
         .multilineTextAlignment(.leading)
         .foregroundStyle(.white)
         .frame(width: HomeMetrics.heroWidth - 32, alignment: .leading)
-        .padding(16)
+        .padding(DesignTokens.Spacing.heroCardInset)
     }
 }

@@ -17,10 +17,6 @@ enum NativePlaylistSwipeMode {
 
 @MainActor
 enum CollectionTrackUI {
-    static func solidSecondaryColor(on background: UIColor, isDark: Bool, traitCollection: UITraitCollection) -> UIColor {
-        CollectionPagePalette(background: background, isDark: isDark).secondary
-    }
-
     static func translucentCellBackground(for cell: UICollectionViewListCell,
                                           state: UICellConfigurationState,
                                           traitCollection: UITraitCollection,
@@ -186,15 +182,27 @@ enum CollectionTrackUI {
     }
 }
 
+enum NativeTrackRowStyle {
+    case artwork, trackNumber
+}
+
+struct NativeTrackSection: Equatable {
+    let title: String
+    let songIDs: [String]
+}
+
 struct NativePlaylistTrackList: UIViewControllerRepresentable {
     let songs: [LibrarySongItem]
     let title: String
-    let header: AnyView
+    let header: AnyView?
     let banner: AnyView?
     let footer: AnyView?
     let showsAddMusicRow: Bool
     let pageColor: UIColor
     let scheme: ColorScheme
+    var rowStyle: NativeTrackRowStyle = .artwork
+    var indexedSections: [NativeTrackSection]? = nil
+    var usesLibrarySongAppearance = false
     var rowCornerRadius: CGFloat = 5
     var headerSeparatorInset: CGFloat = 0
     var lastSongSeparatorLeading: CGFloat = 20
@@ -216,8 +224,12 @@ struct NativePlaylistTrackList: UIViewControllerRepresentable {
 
 @MainActor
 final class PlaylistTracksController: UICollectionViewController, UICollectionViewDataSourcePrefetching {
+    private enum Section: Hashable {
+        case main, indexed(String)
+    }
+
     private enum Item: Hashable {
-        case header, banner, song(String), addMusic, footer
+        case header, banner, sectionHeading(String), song(String), addMusic, footer
     }
 
     private var model: NativePlaylistTrackList?
@@ -225,7 +237,22 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
     private var uniqueSongIDs: [String] = []
     private var songsByID: [String: LibrarySongItem] = [:]
     private var indexByID: [String: Int] = [:]
-    private var source: UICollectionViewDiffableDataSource<Int, Item>!
+    private final class TrackDataSource: UICollectionViewDiffableDataSource<Section, Item> {
+        override func indexTitles(for collectionView: UICollectionView) -> [String]? {
+            let titles = snapshot().sectionIdentifiers.compactMap { section -> String? in
+                if case .indexed(let title) = section { return title }
+                return nil
+            }
+            return titles.isEmpty ? nil : titles
+        }
+
+        override func collectionView(_ collectionView: UICollectionView, indexPathForIndexTitle title: String,
+                                     at index: Int) -> IndexPath {
+            IndexPath(item: 0, section: snapshot().indexOfSection(.indexed(title)) ?? 0)
+        }
+    }
+
+    private var source: TrackDataSource!
     private let headerHost = UIHostingController(rootView: AnyView(EmptyView()))
     private let bannerHost = UIHostingController(rootView: AnyView(EmptyView()))
     private var prefetchTasks: [IndexPath: Task<Void, Never>] = [:]
@@ -247,6 +274,8 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
         collectionView.clipsToBounds = false
         collectionView.prefetchDataSource = self
         collectionView.register(PlaylistTrackCell.self, forCellWithReuseIdentifier: "song")
+        collectionView.register(AlbumSelectionCell.self, forCellWithReuseIdentifier: "trackNumber")
+        collectionView.register(UICollectionViewListCell.self, forCellWithReuseIdentifier: "sectionHeading")
         collectionView.register(PlaylistAddMusicCell.self, forCellWithReuseIdentifier: "addMusic")
         collectionView.register(UICollectionViewListCell.self, forCellWithReuseIdentifier: "header")
         collectionView.register(UICollectionViewListCell.self, forCellWithReuseIdentifier: "banner")
@@ -266,10 +295,14 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
             case .header:
                 let inset = model?.headerSeparatorInset ?? 0
                 result.topSeparatorVisibility = .hidden
-                result.bottomSeparatorVisibility = (model?.songs.isEmpty == false || model?.showsAddMusicRow == true) ? .automatic : .hidden
+                let hasRows = model?.songs.isEmpty == false || model?.showsAddMusicRow == true
+                result.bottomSeparatorVisibility = hasRows && model?.usesLibrarySongAppearance != true ? .automatic : .hidden
                 result.bottomSeparatorInsets = .init(top: 0, leading: inset, bottom: 0, trailing: inset)
-            case .banner, .footer:
+            case .banner, .sectionHeading:
                 result.topSeparatorVisibility = .hidden
+                result.bottomSeparatorVisibility = .hidden
+            case .footer:
+                if model?.rowStyle != .trackNumber { result.topSeparatorVisibility = .hidden }
                 result.bottomSeparatorVisibility = .hidden
             case .song(let id):
                 result.topSeparatorVisibility = .automatic
@@ -277,7 +310,7 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
                 let isLastSong = id == uniqueSongIDs.last
                 let leading: CGFloat = (isLastSong && model?.showsAddMusicRow == false)
                     ? (model?.lastSongSeparatorLeading ?? 20)
-                    : 80
+                    : (model?.rowStyle == .trackNumber ? 51 : 80)
                 result.bottomSeparatorInsets = .init(top: 0, leading: leading, bottom: 0, trailing: 20)
             case .addMusic:
                 result.topSeparatorVisibility = .automatic
@@ -304,13 +337,21 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
                 notify: environment.collectionMenuActions.notify
             )
         }
-        self.listConfiguration = configuration
-        collectionView.setCollectionViewLayout(UICollectionViewCompositionalLayout.list(using: configuration), animated: false)
+        collectionView.setCollectionViewLayout(UICollectionViewCompositionalLayout { section, environment in
+            var sectionConfiguration = configuration
+            if section > 0 { sectionConfiguration.headerMode = .firstItemInSection }
+            return NSCollectionLayoutSection.list(using: sectionConfiguration, layoutEnvironment: environment)
+        }, animated: false)
 
-        source = UICollectionViewDiffableDataSource<Int, Item>(collectionView: collectionView) { [weak self] collection, path, item in
+        source = TrackDataSource(collectionView: collectionView) { [weak self] collection, path, item in
             guard let self else { return nil }
             switch item {
             case .song(let id):
+                if model?.rowStyle == .trackNumber {
+                    let cell = collection.dequeueReusableCell(withReuseIdentifier: "trackNumber", for: path) as! AlbumSelectionCell
+                    configureTrackNumberCell(cell, id: id)
+                    return cell
+                }
                 let cell = collection.dequeueReusableCell(withReuseIdentifier: "song", for: path) as! PlaylistTrackCell
                 configureSongCell(cell, id: id)
                 return cell
@@ -321,6 +362,18 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
                 return hostedCell(in: collection, at: path, identifier: "header", host: headerHost)
             case .banner:
                 return hostedCell(in: collection, at: path, identifier: "banner", host: bannerHost)
+            case .sectionHeading(let title):
+                let cell = collection.dequeueReusableCell(withReuseIdentifier: "sectionHeading", for: path) as! UICollectionViewListCell
+                var content = UIListContentConfiguration.plainHeader()
+                content.text = title
+                content.textProperties.color = .label
+                content.textProperties.font = UIFontMetrics(forTextStyle: .subheadline)
+                    .scaledFont(for: .systemFont(ofSize: 15, weight: .semibold))
+                content.directionalLayoutMargins = .init(top: path.section == 1 ? 8 : 18, leading: 20, bottom: 6, trailing: 20)
+                cell.contentConfiguration = content
+                cell.backgroundConfiguration = .clear()
+                cell.accessibilityTraits = .header
+                return cell
             case .footer:
                 let cell = collection.dequeueReusableCell(withReuseIdentifier: "footer", for: path) as! UICollectionViewListCell
                 cell.backgroundConfiguration = .clear()
@@ -349,8 +402,10 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
                             host: UIHostingController<AnyView>) -> UICollectionViewListCell {
         let cell = collection.dequeueReusableCell(withReuseIdentifier: identifier, for: path) as! UICollectionViewListCell
         cell.backgroundConfiguration = .clear()
-        cell.clipsToBounds = false
-        cell.contentView.clipsToBounds = false
+        if model?.rowStyle != .trackNumber {
+            cell.clipsToBounds = false
+            cell.contentView.clipsToBounds = false
+        }
         if host.view.superview !== cell.contentView {
             cell.contentView.addSubview(host.view)
             NSLayoutConstraint.activate([
@@ -369,6 +424,8 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
             .environment(\.collectionMenuActions, environment.collectionMenuActions)
             .environment(\.libraryDownloads, environment.libraryDownloads)
             .environment(\.songRowPlayback, environment.songRowPlayback)
+            .environment(\.songPlaybackIndicatorsActive, model?.rowStyle == .trackNumber ? environment.songPlaybackIndicatorsActive : true)
+            .environment(\.collectionPagePalette, model?.rowStyle == .trackNumber ? environment.collectionPagePalette : nil)
             .environment(\.playlistScrollDistance, model?.scrollDistance)
             .environment(\.colorScheme, model?.scheme ?? environment.colorScheme)
             .environment(\.locale, environment.locale)
@@ -386,6 +443,9 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
         let previousBanner = self.model?.banner != nil
         let previousAddMusic = self.model?.showsAddMusicRow
         let previousFooter = self.model?.footer != nil
+        let previousHeader = self.model?.header != nil
+        let previousTitle = self.model?.title
+        let sectionsChanged = self.model?.indexedSections != model.indexedSections
         let previousLastID = uniqueSongIDs.last
         let previousPendingSongID = self.model?.pendingPlaybackSongID
         let songsChanged = self.model?.songs != model.songs
@@ -423,7 +483,8 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
 
         overrideUserInterfaceStyle = model.scheme == .dark ? .dark : .light
         collectionView.backgroundColor = model.pageColor
-        headerHost.rootView = AnyView(hosted(model.header))
+        collectionView.clipsToBounds = model.rowStyle == .trackNumber
+        headerHost.rootView = model.header.map { AnyView(hosted($0)) } ?? AnyView(EmptyView())
         bannerHost.rootView = model.banner.map { AnyView(hosted($0)) } ?? AnyView(EmptyView())
 
         if previousPendingSongID != model.pendingPlaybackSongID {
@@ -437,29 +498,43 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
 
         let structureChanged = previousBanner != (model.banner != nil)
             || previousFooter != (model.footer != nil)
+            || previousHeader != (model.header != nil)
             || previousAddMusic != model.showsAddMusicRow
             || previousSongs.count != ids.count
+            || sectionsChanged
         let globalAppearanceChanged = schemeChanged || backgroundChanged || environmentChanged
-        guard songsChanged || structureChanged || globalAppearanceChanged || (ids.isEmpty && model.footer != nil) else {
+        let albumTitleChanged = model.rowStyle == .trackNumber && previousTitle != model.title
+        let albumPlaybackChanged = model.rowStyle == .trackNumber && playbackVisualsChanged
+        guard songsChanged || structureChanged || globalAppearanceChanged || albumTitleChanged || albumPlaybackChanged
+            || (ids.isEmpty && model.footer != nil) else {
             if playbackVisualsChanged { observePlayback() }
             return
         }
 
-        let oldIDs = source.snapshot().itemIdentifiers
-        var snapshot = NSDiffableDataSourceSnapshot<Int, Item>()
-        snapshot.appendSections([0])
-        var items: [Item] = [.header]
+        let previous = source.snapshot()
+        let oldIDs = previous.itemIdentifiers
+        var snapshot = NSDiffableDataSourceSnapshot<Section, Item>()
+        snapshot.appendSections([.main])
+        var items: [Item] = model.header == nil ? [] : [.header]
         if model.banner != nil { items.append(.banner) }
-        items.append(contentsOf: ids.map(Item.song))
+        if model.indexedSections == nil { items.append(contentsOf: ids.map(Item.song)) }
         if model.showsAddMusicRow { items.append(.addMusic) }
         if model.footer != nil { items.append(.footer) }
         snapshot.appendItems(items)
+        var groupedIDs: Set<String> = []
+        for group in model.indexedSections ?? [] {
+            let songs = group.songIDs.filter { songsByID[$0] != nil && groupedIDs.insert($0).inserted }
+            guard !songs.isEmpty else { continue }
+            let section = Section.indexed(group.title)
+            snapshot.appendSections([section])
+            snapshot.appendItems([.sectionHeading(group.title)] + songs.map(Item.song), toSection: section)
+        }
 
         var reconfigured: [Item] = []
         let isNewAppearance = oldIDs.isEmpty
         if !isNewAppearance {
-            if structureChanged || globalAppearanceChanged {
-                reconfigured.append(.header)
+            if structureChanged || globalAppearanceChanged || albumTitleChanged {
+                if model.header != nil && previousHeader { reconfigured.append(.header) }
                 if model.banner != nil && previousBanner { reconfigured.append(.banner) }
                 if model.footer != nil && previousFooter { reconfigured.append(.footer) }
             } else if ids.isEmpty, model.footer != nil, previousFooter {
@@ -473,26 +548,33 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
                     || old.isFavorite != current.isFavorite
                     || old.unavailabilityReason != current.unavailabilityReason
                     || old.artwork != current.artwork
-                if visualMetadataChanged || globalAppearanceChanged || separatorChanged {
+                    || old.trackNumber != current.trackNumber
+                let playbackRowAffected = albumPlaybackChanged && environment.songRowPlayback?.hasCurrent == true
+                    && environment.songRowPlayback?.current.id == id
+                if visualMetadataChanged || globalAppearanceChanged || separatorChanged || playbackRowAffected {
                     reconfigured.append(.song(id))
                 }
             }
         }
-        guard oldIDs != items || !reconfigured.isEmpty else {
+        let snapshotChanged = sectionsChanged || oldIDs != snapshot.itemIdentifiers
+        guard snapshotChanged || !reconfigured.isEmpty else {
             if environmentChanged || playbackVisualsChanged || isNewAppearance { observePlayback() }
             return
         }
-        if !reconfigured.isEmpty { snapshot.reconfigureItems(reconfigured) }
+        let present = Set(snapshot.itemIdentifiers)
+        snapshot.reconfigureItems(reconfigured.filter { present.contains($0) })
         let isSmallShrink = !isNewAppearance
             && ids.count < previousSongs.count
             && (previousSongs.count - ids.count) <= 2
             && !collectionView.isDragging
             && !collectionView.isDecelerating
-        let wasAtTop = !isNewAppearance
+        let wasAtTop = model.rowStyle == .artwork && !model.usesLibrarySongAppearance && !isNewAppearance
             && !collectionView.isDragging
             && !collectionView.isDecelerating
             && collectionView.contentOffset.y <= -collectionView.adjustedContentInset.top + 1
-        source.apply(snapshot, animatingDifferences: isSmallShrink)
+        let animateAlbumChanges = model.rowStyle == .trackNumber && !isNewAppearance && snapshotChanged
+            && !collectionView.isDragging && !collectionView.isDecelerating && !environment.accessibilityReduceMotion
+        source.apply(snapshot, animatingDifferences: model.rowStyle == .trackNumber ? animateAlbumChanges : isSmallShrink)
         if wasAtTop {
             collectionView.layoutIfNeeded()
             let topOffset = -collectionView.adjustedContentInset.top
@@ -502,8 +584,6 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
         }
         if environmentChanged || isNewAppearance { observePlayback() }
     }
-
-    private var listConfiguration: UICollectionLayoutListConfiguration?
 
     private var currentPalette: CollectionPagePalette {
         CollectionPagePalette(
@@ -525,9 +605,9 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
             song: song,
             cornerRadius: model.rowCornerRadius,
             subtitleColor: secondary,
-            favoriteColor: secondary,
+            favoriteColor: model.usesLibrarySongAppearance ? .systemYellow : secondary,
             downloadColor: secondary,
-            moreColor: secondary,
+            moreColor: model.usesLibrarySongAppearance ? .label : secondary,
             isCurrent: isCurrent,
             isPlayingActive: isCurrent && observedActive,
             analyzer: environment.songRowPlayback?.spectrumAnalyzer,
@@ -537,6 +617,22 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
             menuProvider: { [weak self] in self?.menu(for: id) ?? UIMenu(children: []) }
         )
         cell.setPreparingPlayback(id == model.pendingPlaybackSongID)
+    }
+
+    private func configureTrackNumberCell(_ cell: AlbumSelectionCell, id: String) {
+        guard let song = songsByID[id] else { return }
+        let secondary = currentPalette.secondary
+        cell.palette = currentPalette
+        cell.more.tintColor = secondary
+        cell.contentConfiguration = UIHostingConfiguration {
+            hosted(NativeAlbumRowContent(song: song, secondary: Color(secondary)))
+        }.margins(.all, 0).margins(.leading, 20).margins(.trailing, 2)
+        cell.more.menu = UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] completion in
+            completion(self?.menu(for: id).children ?? [])
+        }])
+        cell.accessibilityLabel = CollectionTrackUI.songAccessibilityLabel(for: song)
+        cell.accessibilityTraits.insert(.button)
+        cell.setNeedsUpdateConfiguration()
     }
 
     private func song(at path: IndexPath) -> LibrarySongItem? {
@@ -588,6 +684,14 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
             removeAction = nil
         }
         let open = environment.openLibraryRoute
+        if model?.rowStyle == .trackNumber {
+            let downloads = environment.libraryDownloads
+            let sections = environment.songMenuActions.albumTrackSections(for: song,
+                isDownloaded: downloads?.state(of: id) == .downloaded,
+                download: { downloads?.download([song]) }, removeDownload: { downloads?.requestRemoval([song]) },
+                notify: environment.collectionMenuActions.notify, open: { open($0) })
+            return sections.nativeMenu(firstSectionIsRow: (sections.first?.count ?? 0) > 1)
+        }
         let sections = environment.songMenuActions.rowMenuSections(
             for: song,
             inAlbum: false,
@@ -663,6 +767,7 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
     }
 
     func collectionView(_ collectionView: UICollectionView, prefetchItemsAt indexPaths: [IndexPath]) {
+        guard model?.rowStyle != .trackNumber else { return }
         let pixels = LocalArtworkImages.pixelSize(48 * max(1, traitCollection.displayScale))
         let loadAction = environment.artworkLoadAction
         for path in indexPaths {
@@ -1323,6 +1428,48 @@ private final class PlaylistAddMusicCell: UICollectionViewListCell {
     var palette: CollectionPagePalette? {
         didSet { if oldValue != palette { setNeedsUpdateConfiguration() } }
     }
+
+    override func updateConfiguration(using state: UICellConfigurationState) {
+        super.updateConfiguration(using: state)
+        backgroundConfiguration = CollectionTrackUI.translucentCellBackground(for: self, state: state, traitCollection: traitCollection, palette: palette)
+    }
+}
+
+private struct NativeAlbumRowContent: View {
+    let song: LibrarySongItem
+    let secondary: Color
+    @Environment(\.libraryDownloads) private var downloads
+    @Environment(\.dynamicTypeSize) private var textSize
+    var body: some View {
+        HStack(spacing: 9) {
+            AlbumSongPosition(song: song, foreground: secondary)
+            Text(song.title).font(.callout).foregroundStyle(.primary)
+                .lineLimit(textSize.isAccessibilitySize ? nil : 1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            SongDownloadStatus(song: song, secondaryStyle: AnyShapeStyle(secondary))
+        }
+        .frame(minHeight: 52 + 1.0 / 3)
+    }
+}
+
+final class AlbumSelectionCell: UICollectionViewListCell {
+    let more = UIButton(type: .system)
+    var palette: CollectionPagePalette? {
+        didSet { if oldValue != palette { setNeedsUpdateConfiguration() } }
+    }
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+        automaticallyUpdatesBackgroundConfiguration = false
+        more.frame = CGRect(x: 0, y: 0, width: 44, height: 44)
+        more.setImage(UIImage(systemName: "ellipsis", withConfiguration: UIImage.SymbolConfiguration(pointSize: 16, weight: .semibold)), for: .normal)
+        more.tintColor = .label
+        more.showsMenuAsPrimaryAction = true
+        more.accessibilityLabel = "更多"
+        accessories = [.customView(configuration: .init(customView: more, placement: .trailing(),
+            reservedLayoutWidth: .custom(44), maintainsFixedSize: true))]
+    }
+    required init?(coder: NSCoder) { fatalError() }
 
     override func updateConfiguration(using state: UICellConfigurationState) {
         super.updateConfiguration(using: state)

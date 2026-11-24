@@ -166,15 +166,6 @@ class PrePushTests(RepositoryFixture):
         result = self.push(self.code_commit(), self.base, environment={"FIXTURE_CI_EXIT": "7"})
         self.assertEqual(result.returncode, 7)
 
-    def test_result_and_source_record_are_archived_together(self):
-        code = self.code_commit()
-        (self.directory / "build/ci/TestResults.xcresult").mkdir(parents=True)
-        self.write("build/ci/source-state.json", '{"commit":"previous"}\n')
-        self.assert_ci(self.push(code, self.base))
-        self.assertTrue((self.directory / "build/ci/TestResults.previous.xcresult").is_dir())
-        self.assertEqual(json.loads((self.directory / "build/ci/source-state.previous.json").read_text()),
-                         {"commit": "previous"})
-
 
 class CIRecordTests(RepositoryFixture):
     def setUp(self):
@@ -188,6 +179,12 @@ class CIRecordTests(RepositoryFixture):
                     self.assertNotEqual(os.environ.get("FIXTURE_GATE_FAIL"), "1")
         '''))
         self.write("scripts/check-module-boundaries.py", 'print("FIXTURE_BOUNDARIES")\n')
+        self.write("scripts/check-vendor-notices.py", 'print("FIXTURE_VENDOR_NOTICES")\n')
+        self.executable("bin/swift", '''
+            #!/bin/bash
+            echo "FIXTURE_SWIFT $*"
+            exit "${FIXTURE_SWIFT_EXIT:-0}"
+        ''')
         self.executable("bin/xcodegen", '#!/bin/bash\necho "FIXTURE_XCODEGEN"\n')
         self.executable("bin/xcrun", '''
             #!/bin/bash
@@ -214,6 +211,10 @@ class CIRecordTests(RepositoryFixture):
     def test_success_records_clean_commit_without_paths(self):
         result = self.run_ci()
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("FIXTURE_VENDOR_NOTICES", result.stdout)
+        self.assertIn("FIXTURE_SWIFT test --package-path Packages/AudioStreaming", result.stdout)
+        self.assertIn("FIXTURE_SWIFT test --package-path Packages/AudioStreaming",
+                      (self.directory / "build/ci/audio-streaming.log").read_text())
         state = self.state()
         self.assertEqual(state["commit"], self.head)
         self.assertFalse(state["dirty"])
@@ -242,13 +243,34 @@ class CIRecordTests(RepositoryFixture):
         self.assertEqual(state["exitCode"], 9)
         self.assertNotIn("PrivateFixture", json.dumps(state))
 
-    def test_existing_result_preserves_its_source_record(self):
-        (self.directory / "build/ci/TestResults.xcresult").mkdir(parents=True)
+    def test_package_test_failure_stops_before_build_and_records_failure(self):
+        result = self.run_ci({"FIXTURE_SWIFT_EXIT": "8"})
+        self.assertEqual(result.returncode, 8)
+        self.assertNotIn("FIXTURE_XCODEGEN", result.stdout)
+        self.assertEqual(self.state()["status"], "failed")
+
+    def test_existing_result_is_rotated_with_its_source_record(self):
+        self.write("build/ci/TestResults.xcresult/record", "latest result")
+        self.write("build/ci/TestResults.previous.xcresult/obsolete", "older result")
         self.write("build/ci/source-state.json", '{"commit":"previous"}\n')
         result = self.run_ci()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(self.state(), {"commit": "previous"})
-        self.assertNotIn("FIXTURE_XCODEGEN", result.stdout)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        previous = self.directory / "build/ci/TestResults.previous.xcresult"
+        self.assertEqual((previous / "record").read_text(), "latest result")
+        self.assertFalse((previous / "obsolete").exists())
+        record = self.directory / "build/ci/source-state.previous.json"
+        self.assertEqual(json.loads(record.read_text()), {"commit": "previous"})
+        self.assertTrue((self.directory / "build/ci/TestResults.xcresult").is_dir())
+        self.assertEqual(self.state()["commit"], self.head)
+
+    def test_failure_before_xcode_preserves_the_previous_result_record(self):
+        self.write("build/ci/TestResults.xcresult/record", "latest result")
+        self.write("build/ci/source-state.json", '{"commit":"previous"}\n')
+        for _ in range(2):
+            result = self.run_ci({"FIXTURE_SWIFT_EXIT": "8"})
+            self.assertEqual(result.returncode, 8)
+        record = self.directory / "build/ci/source-state.previous.json"
+        self.assertEqual(json.loads(record.read_text()), {"commit": "previous"})
 
 
 class ReleaseDraftTests(unittest.TestCase):

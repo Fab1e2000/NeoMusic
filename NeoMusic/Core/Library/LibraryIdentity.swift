@@ -1,18 +1,29 @@
 import Foundation
 
 enum OnlineSongIdentity: Equatable, Hashable, Sendable {
+    static func hasReservedPrefix(_ id: String) -> Bool {
+        id.hasPrefix("netease:")
+    }
+
     static func parse(_ id: String) -> (owner: Int64, song: Int64)? {
-        let parts = id.split(separator: ":", omittingEmptySubsequences: false)
-        guard parts.count == 3, parts[0] == "netease",
-              let owner = Int64(parts[1]), let song = Int64(parts[2]) else { return nil }
-        return (owner, song)
+        guard let parsed = parseOwnerAndSong(id), let owner = Int64(parsed.ownerID) else { return nil }
+        return (owner, parsed.songID)
     }
 
     static func parseOwnerAndSong(_ id: String) -> (ownerID: String, songID: Int64)? {
-        let parts = id.split(separator: ":", omittingEmptySubsequences: false)
-        guard parts.count == 3, parts[0] == "netease", !parts[1].isEmpty,
-              let song = Int64(parts[2]) else { return nil }
-        return (String(parts[1]), song)
+        guard let parts = fields(id), let song = Int64(parts.song) else { return nil }
+        return (String(parts.owner), song)
+    }
+
+    // Older playback snapshots classified ownership without parsing the track token as a number.
+    static func snapshotOwnerID(_ id: String) -> String? {
+        fields(id, omittingEmptySubsequences: true).map { String($0.owner) }
+    }
+
+    private static func fields(_ id: String, omittingEmptySubsequences: Bool = false) -> (owner: Substring, song: Substring)? {
+        let parts = id.split(separator: ":", omittingEmptySubsequences: omittingEmptySubsequences)
+        guard parts.count == 3, parts[0] == "netease", !parts[1].isEmpty else { return nil }
+        return (parts[1], parts[2])
     }
 
     static func format(owner: Int64, song: Int64) -> String {

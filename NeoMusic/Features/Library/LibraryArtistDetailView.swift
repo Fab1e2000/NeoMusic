@@ -38,8 +38,7 @@ struct LibraryArtistDetailView: View {
                 ContentUnavailableView("暂无专辑", systemImage: "square.stack")
                     .listRowSeparator(.hidden)
             } else if layout == .grid {
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .top),
-                                         count: textSize.isAccessibilitySize ? 1 : 2), spacing: 16) {
+                LibraryCollectionGrid(rowSpacing: 16, alignment: .center) {
                     ForEach(albums) { album in
                         Button { openAlbum(album) } label: {
                             AlbumCard(item: displayAlbum(album))

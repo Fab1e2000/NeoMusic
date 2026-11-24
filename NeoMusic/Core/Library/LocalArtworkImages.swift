@@ -1,15 +1,21 @@
 import UIKit
-import ImageIO
 
 @MainActor enum LocalArtworkImages {
     private final class Variants {
         var images: [Int: UIImage] = [:]
-        var sourcePixels: Int?
+        var sourceSize: CGSize?
         var backdrop: AlbumArtworkBackdrop?
         var cost: Int { images.values.reduce(0) { $0 + ($1.cgImage?.bytesPerRow ?? 0) * ($1.cgImage?.height ?? 0) } }
 
-        func image(for pixels: Int, allowingSmaller: Bool) -> UIImage? {
-            let required = min(pixels, sourcePixels ?? pixels)
+        func requiredPixels(for size: ImageSourceThumbnail.Size) -> Int {
+            let pixels = size.maximumDimension(for: sourceSize)
+            guard let sourceSize else { return pixels }
+            return min(pixels, Int(max(sourceSize.width, sourceSize.height)))
+        }
+
+        func image(for size: ImageSourceThumbnail.Size, allowingSmaller: Bool) -> UIImage? {
+            let required = requiredPixels(for: size)
+            if case .target = size, !allowingSmaller { return images[required] }
             if let size = images.keys.filter({ $0 >= required }).min() { return images[size] }
             return allowingSmaller ? images.keys.max().flatMap { images[$0] } : nil
         }
@@ -21,8 +27,7 @@ import ImageIO
     }()
     private struct Request: Hashable {
         let url: URL
-        let pixels: Int
-        let prepareBackdrop: Bool
+        let size: ImageSourceThumbnail.Size
     }
     private static var loading: [Request: Task<UIImage?, Never>] = [:]
     private static let decoder = LocalArtworkDecoder()
@@ -30,11 +35,11 @@ import ImageIO
     static func pixelSize(_ size: CGFloat) -> Int { max(64, Int(ceil(size / 64)) * 64) }
 
     static func cached(_ url: URL, pixels: Int) -> UIImage? {
-        images.object(forKey: url as NSURL)?.image(for: pixels, allowingSmaller: true)
+        cached(url, size: .maximumDimension(pixels), allowingSmaller: true)
     }
 
-    static func cachedThumbnail(_ url: URL, pixels: Int) -> UIImage? {
-        images.object(forKey: url as NSURL)?.image(for: pixels, allowingSmaller: false)
+    static func cached(_ url: URL, size: ImageSourceThumbnail.Size, allowingSmaller: Bool = false) -> UIImage? {
+        images.object(forKey: url as NSURL)?.image(for: size, allowingSmaller: allowingSmaller)
     }
 
     private static var resolvedArtwork: [String: URL] = [:]
@@ -49,12 +54,7 @@ import ImageIO
     static func resolvedURL(for id: String) -> URL? { resolvedArtwork[id] }
 
     static func cachedBackdrop(for artwork: Artwork) -> AlbumArtworkBackdrop? {
-        let url: URL
-        switch artwork {
-        case .file(let file): url = file
-        case .deferred(let id, _): guard let file = resolvedArtwork[id] else { return nil }; url = file
-        default: return nil
-        }
+        guard let url = artwork.resolvedFileURL else { return nil }
         return images.object(forKey: url as NSURL)?.backdrop
     }
 
@@ -90,32 +90,30 @@ import ImageIO
     }
 
     static func load(_ url: URL, pixels: Int) async -> UIImage? {
-        await load(url, pixels: pixels, prepareBackdrop: true)
+        await load(url, size: .maximumDimension(pixels))
     }
 
     static func loadThumbnail(_ url: URL, pixels: Int) async -> UIImage? {
-        await load(url, pixels: pixels, prepareBackdrop: false)
+        await load(url, pixels: pixels)
     }
 
-    private static func load(_ url: URL, pixels: Int, prepareBackdrop: Bool) async -> UIImage? {
+    static func load(_ url: URL, size: ImageSourceThumbnail.Size) async -> UIImage? {
         guard !Task.isCancelled else { return nil }
-        if let variants = images.object(forKey: url as NSURL),
-           let image = variants.image(for: pixels, allowingSmaller: false),
-           (!prepareBackdrop || variants.backdrop != nil) {
-            return image
-        }
-        let request = Request(url: url, pixels: pixels, prepareBackdrop: prepareBackdrop)
+        if let image = cached(url, size: size) { return image }
+        let requestedSize = images.object(forKey: url as NSURL).flatMap { variants in
+            variants.sourceSize.map { _ in ImageSourceThumbnail.Size.maximumDimension(variants.requiredPixels(for: size)) }
+        } ?? size
+        let request = Request(url: url, size: requestedSize)
         let task: Task<UIImage?, Never>
         if let pending = loading[request] {
             task = pending
         } else {
             task = Task {
                 defer { loading[request] = nil }
-                guard let prepared = await decoder.load(url, pixels: pixels, prepareBackdrop: prepareBackdrop) else { return nil }
+                guard let prepared = await decoder.load(url, size: requestedSize) else { return nil }
                 let variants = images.object(forKey: url as NSURL) ?? Variants()
                 variants.images[prepared.pixels] = prepared.image
-                if let sourcePixels = prepared.sourcePixels { variants.sourcePixels = sourcePixels }
-                if let backdrop = prepared.backdrop { variants.backdrop = backdrop }
+                if let sourceSize = prepared.sourceSize { variants.sourceSize = sourceSize }
                 images.setObject(variants, forKey: url as NSURL, cost: variants.cost)
                 return prepared.image
             }
@@ -129,12 +127,10 @@ import ImageIO
 private actor LocalArtworkDecoder {
     struct Prepared: Sendable {
         let image: UIImage
-        let backdrop: AlbumArtworkBackdrop?
         let pixels: Int
-        let sourcePixels: Int?
+        let sourceSize: CGSize?
     }
-    private let backdrops = AlbumArtworkBackdropPreparer(
-        cacheURL: URL.cachesDirectory.appending(path: "ArtworkBackdrops.json"))
+    private let backdrops = AlbumArtworkBackdropPreparer.shared
 
     func loadBackdrop(_ url: URL) async -> AlbumArtworkBackdrop? {
         guard !Task.isCancelled else { return nil }
@@ -144,27 +140,13 @@ private actor LocalArtworkDecoder {
         return colors?[url.absoluteString]
     }
 
-    func load(_ url: URL, pixels: Int, prepareBackdrop: Bool) async -> Prepared? {
+    func load(_ url: URL, size: ImageSourceThumbnail.Size) -> Prepared? {
         guard !Task.isCancelled else { return nil }
         guard let data = try? Data(contentsOf: url) else { return nil }
-        let colors = prepareBackdrop ? (try? await backdrops.prepareAdditionalArtwork([url.absoluteString: data])) : nil
-        guard !Task.isCancelled else { return nil }
         return autoreleasepool {
-            guard let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
-                  let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, [
-                    kCGImageSourceCreateThumbnailFromImageAlways: true,
-                    kCGImageSourceCreateThumbnailWithTransform: true,
-                    kCGImageSourceShouldCacheImmediately: true,
-                    kCGImageSourceThumbnailMaxPixelSize: pixels
-                  ] as CFDictionary) else { return nil }
-            let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
-            let sourcePixels: Int?
-            if let width = properties?[kCGImagePropertyPixelWidth] as? Int,
-               let height = properties?[kCGImagePropertyPixelHeight] as? Int, width > 0, height > 0 {
-                sourcePixels = max(width, height)
-            } else { sourcePixels = nil }
-            return Prepared(image: UIImage(cgImage: thumbnail), backdrop: colors?[url.absoluteString],
-                            pixels: max(thumbnail.width, thumbnail.height), sourcePixels: sourcePixels)
+            guard let thumbnail = ImageSourceThumbnail.decode(data, size: size) else { return nil }
+            return Prepared(image: UIImage(cgImage: thumbnail.image),
+                            pixels: max(thumbnail.image.width, thumbnail.image.height), sourceSize: thumbnail.sourceSize)
         }
     }
 }

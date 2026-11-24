@@ -2,13 +2,16 @@ import Foundation
 import SQLite3
 
 actor NeteasePageCache {
+    private static let databaseName = "content.sqlite"
     private let directory: URL
+    private let legacyDirectoryToDiscard: URL?
     private let capacity: Int
     private var connection: Connection?
 
-    init(directory: URL, capacity: Int = 256) {
+    init(directory: URL, capacity: Int = 256, legacyDirectoryToDiscard: URL? = nil) {
         self.directory = directory
         self.capacity = min(max(capacity, 1), 256)
+        self.legacyDirectoryToDiscard = legacyDirectoryToDiscard
     }
 
     func load<Value: Decodable & Sendable>(_ type: Value.Type, scope: String, key: String) throws -> Value? {
@@ -121,9 +124,9 @@ actor NeteasePageCache {
     private func database() throws -> OpaquePointer {
         if let connection { return connection.handle }
         try Task.checkCancellation()
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try AppStoragePaths.prepareCacheDirectory(directory)
         var handle: OpaquePointer?
-        let status = sqlite3_open_v2(directory.appendingPathComponent("content.sqlite").path, &handle,
+        let status = sqlite3_open_v2(directory.appendingPathComponent(Self.databaseName).path, &handle,
                                      SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, nil)
         guard status == SQLITE_OK, let handle else {
             let error = failure(handle, code: status)
@@ -142,6 +145,15 @@ actor NeteasePageCache {
             )
             """, database: handle)
         connection = opened
+        if let legacyDirectoryToDiscard,
+           legacyDirectoryToDiscard.resolvingSymlinksInPath().standardizedFileURL != directory.resolvingSymlinksInPath().standardizedFileURL {
+            // Only discard the recreatable SQLite store, including SQLite sidecar files.
+            for suffix in ["", "-wal", "-shm", "-journal"] {
+                let file = legacyDirectoryToDiscard.appendingPathComponent(Self.databaseName + suffix)
+                guard (try? file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
+                try? FileManager.default.removeItem(at: file)
+            }
+        }
         return handle
     }
 

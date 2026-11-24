@@ -115,6 +115,32 @@ final class LibraryListAccessibilityTests: XCTestCase {
                        "夜曲, 周杰伦, 暂无完整音源")
     }
 
+    func testTrackListUsesNativeIndexForGroupsAndPreservesPlaybackOffsets() async throws {
+        let first = song(title: "Angelic")
+        let last = LibrarySongItem(id: "last", title: "夜曲", artist: "周杰伦", album: "Album",
+                                   albumArtist: "周杰伦", trackNumber: 2, artwork: .missing)
+        let controller = PlaylistTracksController()
+        var selectedOffset: Int?
+        var list = NativePlaylistTrackList(songs: [first, last], title: "歌曲", header: AnyView(EmptyView()),
+            banner: nil, footer: nil, showsAddMusicRow: false, pageColor: .systemBackground, scheme: .light,
+            indexedSections: [.init(title: "A", songIDs: [first.id]), .init(title: "#", songIDs: [last.id])],
+            usesLibrarySongAppearance: true, onPlaySong: { _, offset in selectedOffset = offset })
+        controller.update(list, environment: EnvironmentValues())
+        let collection = try XCTUnwrap(controller.collectionView)
+        let dataSource = try XCTUnwrap(collection.dataSource)
+        XCTAssertEqual(dataSource.indexTitles?(for: collection), ["A", "#"])
+        XCTAssertEqual(dataSource.collectionView?(collection, indexPathForIndexTitle: "#", at: 1),
+                       IndexPath(item: 0, section: 2))
+        XCTAssertFalse(controller.collectionView(collection, shouldSelectItemAt: IndexPath(item: 0, section: 2)))
+        controller.collectionView(collection, didSelectItemAt: IndexPath(item: 1, section: 2))
+        XCTAssertEqual(selectedOffset, 1)
+
+        list.indexedSections = nil
+        controller.update(list, environment: EnvironmentValues())
+        XCTAssertNil(dataSource.indexTitles?(for: collection))
+        XCTAssertEqual(collection.numberOfSections, 1)
+    }
+
     func testSwipeActionsCarryTheirOwnVoiceOverLabels() throws {
         let actions = SongMenuActions()
         let leading = CollectionTrackUI.leadingSwipeConfiguration(

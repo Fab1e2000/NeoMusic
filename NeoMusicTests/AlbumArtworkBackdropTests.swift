@@ -53,6 +53,7 @@ final class AlbumArtworkBackdropTests: XCTestCase {
         let id = "playlist-preview:" + UUID().uuidString
         LocalArtworkImages.registerResolvedArtwork(id, url: file)
         _ = await LocalArtworkImages.load(file, pixels: 128)
+        _ = await LocalArtworkImages.loadBackdrop(for: file)
         let cover = Artwork.deferred(id: id, placeholder: .playlist)
         let preview = LibraryNavigationPreview(route: .playlist("test"), ownerID: nil, title: "Test", artwork: cover)
         XCTAssertNotNil(preview.albumBackdrop)
@@ -343,6 +344,7 @@ final class AlbumArtworkBackdropTests: XCTestCase {
         try imageData(.black).write(to: url)
         XCTAssertNil(LocalArtworkImages.cached(url, pixels: 0))
         _ = await LocalArtworkImages.load(url, pixels: 128)
+        _ = await LocalArtworkImages.loadBackdrop(for: url)
         XCTAssertNotNil(LocalArtworkImages.cached(url, pixels: 128))
         let color = try XCTUnwrap(LocalArtworkImages.cachedBackdrop(for: .file(url)))
         XCTAssertEqual(color.colorScheme, .dark)
@@ -394,6 +396,7 @@ final class AlbumArtworkBackdropTests: XCTestCase {
         await fulfillment(of: [imageReady], timeout: 3)
         let file = try XCTUnwrap(store.cachedArtworkURL(remote))
         _ = await LocalArtworkImages.load(file, pixels: 128)
+        _ = await LocalArtworkImages.loadBackdrop(for: file)
         let expected = try XCTUnwrap(LocalArtworkImages.cachedBackdrop(for: .file(file)))
         XCTAssertNil(store.albums[8], "The visible source does not need the full album page")
         let integration = ArtistMusicIntegration(account: account)

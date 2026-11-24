@@ -53,7 +53,7 @@ struct PlaylistDetailView: View {
         guard let playlist else { return .missing }
         if playlist.artwork == .playlist, let preview = navigationPreview,
            preview.route == .playlist(playlistID), preview.ownerID == playlist.sourceOwnerID {
-            return preview.artwork
+            return preview.backdropFile.map(Artwork.file) ?? preview.artwork
         }
         return playlist.artwork
     }
@@ -240,11 +240,11 @@ struct PlaylistDetailView: View {
         VStack(spacing: 0) {
             LibraryArtworkSurface(content: Group {
                 if let externalArtwork {
-                    externalArtwork.clipShape(.rect(cornerRadius: 10))
+                    externalArtwork.clipShape(.rect(cornerRadius: DesignTokens.Radius.detailCover))
                 } else {
                     detailArtwork(playlist)
                 }
-            }.environment(\.nativeArtworkSurfaceEnabled, false), cornerRadius: 10, isZoomAlignmentTarget: true)
+            }.environment(\.nativeArtworkSurfaceEnabled, false), cornerRadius: DesignTokens.Radius.detailCover, isZoomAlignmentTarget: true)
                 .frame(width: Self.coverSize, height: Self.coverSize)
                 .shadow(color: .black.opacity(0.06), radius: 12, y: 6)
                 .padding(.top, Self.coverTopInset)
@@ -315,19 +315,19 @@ struct PlaylistDetailView: View {
             $0.route == .playlist(playlistID) && $0.ownerID == playlist.sourceOwnerID ? $0 : nil
         }
         if case .playlist = playlist.artwork, preview == nil {
-            RoundedRectangle(cornerRadius: 10)
+            RoundedRectangle(cornerRadius: DesignTokens.Radius.detailCover)
                 .fill(Color(.systemGray5))
                 .overlay {
                     Image(systemName: "music.note.list")
                         .font(.system(size: 266 * 0.391))
                         .foregroundStyle(Color(.systemGray2))
                 }
-                .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(Color(.separator), lineWidth: 1 / displayScale) }
+                .overlay { RoundedRectangle(cornerRadius: DesignTokens.Radius.detailCover).strokeBorder(Color(.separator), lineWidth: 1 / displayScale) }
                 .accessibilityHidden(true)
         } else {
             ArtworkView(artwork: playlist.artwork == .playlist ? preview?.artwork ?? playlist.artwork : playlist.artwork,
                         contentID: preview?.contentID ?? "\(playlist.sourceOwnerID ?? "local"):\(playlistID)",
-                        previewArtwork: preview?.artwork, cornerRadius: 10)
+                        previewArtwork: preview?.artwork, cornerRadius: DesignTokens.Radius.detailCover)
         }
     }
 

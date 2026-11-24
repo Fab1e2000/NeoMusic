@@ -47,7 +47,13 @@ private final class AccountPreviewStorage {
     }
 }
 
-#Preview("未登录") { AccountPreviewRoot(state: "signed-out") }
-#Preview("已登录") { AccountPreviewRoot(state: "signed-in") }
-#Preview("账户设置") { AccountPreviewRoot(state: "settings") }
+#Preview("未登录") {
+    AccountPreviewRoot(state: "signed-out").environment(PlaylistLibrary(playlists: []))
+}
+#Preview("已登录") {
+    AccountPreviewRoot(state: "signed-in").environment(PlaylistLibrary(playlists: []))
+}
+#Preview("账户设置") {
+    AccountPreviewRoot(state: "settings").environment(PlaylistLibrary(playlists: []))
+}
 #endif

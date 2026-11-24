@@ -35,7 +35,7 @@ final class LibraryArtistPreferences {
 
     private var snapshot: Snapshot
     private let defaults: UserDefaults
-    private let key = "libraryArtistPreferences.v1"
+    private let key = AppDefaultsKey.libraryArtistPreferences
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults

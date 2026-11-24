@@ -19,24 +19,7 @@ enum NeteaseHomeSupplemental {
         let songs: [Song]
         var models: [NeteaseMusicSong] { NeteaseHomeSupplemental.songs(songs) }
     }
-    struct Song: Decodable, Sendable {
-        let model: NeteaseMusicSong
-        private enum CodingKeys: String, CodingKey { case id, name, artists, ar, album, al, duration, dt }
-        init(from decoder: any Decoder) throws {
-            let values = try decoder.container(keyedBy: CodingKeys.self)
-            let artists = try values.decodeIfPresent([NeteaseMusicClient.Song.Artist].self, forKey: .artists)
-                ?? values.decode([NeteaseMusicClient.Song.Artist].self, forKey: .ar)
-            let album = try values.decodeIfPresent(NeteaseMusicClient.Song.Album.self, forKey: .album)
-                ?? values.decode(NeteaseMusicClient.Song.Album.self, forKey: .al)
-            let duration = try values.decodeIfPresent(Double.self, forKey: .duration) ?? values.decode(Double.self, forKey: .dt)
-            model = try .init(id: values.decode(Int64.self, forKey: .id), title: values.decode(String.self, forKey: .name),
-                artist: artists.map(\.name).joined(separator: " / "), album: album.name,
-                artworkURL: NeteaseMusicClient.url(album.picUrl), duration: duration / 1000,
-                artists: artists.compactMap { artist in
-                    artist.id.map { .init(id: $0, name: artist.name, artworkURL: nil) }
-                }, albumID: album.id)
-        }
-    }
+    typealias Song = NeteaseSongPayload.Home
     private static func songs(_ items: [Song]) -> [NeteaseMusicSong] {
         var seen = Set<Int64>()
         return items.map(\.model).filter { $0.id > 0 && !$0.title.isEmpty && seen.insert($0.id).inserted }
@@ -130,7 +113,8 @@ extension NeteaseMusicClient {
         let response: NeteaseHomeSupplemental.Charts = try await read("/api/toplist", [:], credential)
         return response.block
     }
-    @concurrent func followedArtistReleases(credential: NeteaseCredential, cached: NeteaseHomeFeed.Block? = nil) async throws -> NeteaseHomeFeed.Block {
+    @concurrent func followedArtistReleases(credential: NeteaseCredential, cached: NeteaseHomeFeed.Block? = nil,
+        onAuthenticationRequired: (@MainActor @Sendable () -> Void)? = nil) async throws -> NeteaseHomeFeed.Block {
         let response: NeteaseHomeSupplemental.Followed = try await read("/api/sub/artist/new/works/song/list",
             ["limit": 20, "startTimestamp": Int64(Date().timeIntervalSince1970 * 1000)], credential)
         let block = response.block
@@ -147,6 +131,7 @@ extension NeteaseMusicClient {
             } catch {
                 try Task.checkCancellation()
                 if error is CancellationError { throw error }
+                if error as? NeteaseAccountError == .authenticationRequired { await onAuthenticationRequired?() }
             }
         }
         try Task.checkCancellation()

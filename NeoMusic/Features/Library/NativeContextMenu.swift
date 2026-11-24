@@ -211,7 +211,9 @@ private final class NativeContextMenuView: UIView, UIContextMenuInteractionDeleg
     }
 
     @objc private func openCard() {
+        #if DEBUG
         NavigationDiagnostics.event("Card.tap", page: identity ?? "nil")
+        #endif
         guard identity != nil, !menuIsPresented else { return }
         if let tapAction { tapAction() } else { commit(artworkSourceProvider()) }
     }

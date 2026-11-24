@@ -36,7 +36,9 @@ final class LibraryDetailNavigation: NSObject, UINavigationControllerDelegate {
         navigationController = nav
         displayedChrome = page.chrome
         nav.delegate = self
-        NavigationDiagnostics.recorder.attach(nav)
+        #if DEBUG
+        if NavigationDiagnostics.isEnabled { NavigationDiagnostics.recorder.attach(nav) }
+        #endif
         for route in initialPath { open(route, animated: false) }
         return nav
     }
@@ -81,7 +83,9 @@ final class LibraryDetailNavigation: NSObject, UINavigationControllerDelegate {
 
     func open(_ route: LibraryRoute, source: UIView? = nil, animated: Bool = true,
               sourceProvider: (() -> UIView?)? = nil, preview: LibraryNavigationPreview? = nil) {
+        #if DEBUG
         NavigationDiagnostics.event("UIKitLibrary.openRequested", page: route.diagnosticPage)
+        #endif
         guard let nav = navigationController, let destination else { return }
         let page = makePage(destination(route), route: route, preview: preview?.route == route ? preview : nil)
         switch route {
@@ -101,7 +105,9 @@ final class LibraryDetailNavigation: NSObject, UINavigationControllerDelegate {
             }
         default: break
         }
+        #if DEBUG
         NavigationDiagnostics.event("UIKitLibrary.push", page: route.diagnosticPage)
+        #endif
         nav.pushViewController(page, animated: animated)
     }
 
@@ -151,6 +157,7 @@ private struct LibraryHostedPageEnvironment: ViewModifier {
     func body(content: Content) -> some View {
         content
             .environment(sourceEnvironment[NeteaseAccount.self])
+            .environment(sourceEnvironment[PlaylistLibrary.self])
             .environment(\.collectionMenuActions, sourceEnvironment.collectionMenuActions)
             .environment(\.songMenuActions, sourceEnvironment.songMenuActions)
             .environment(\.songRowPlayback, sourceEnvironment.songRowPlayback)
@@ -319,7 +326,7 @@ final class LibraryNavigationChrome: NSObject, UISearchResultsUpdating, UISearch
         apply()
         setSearch(query, prompt: searchPrompt)
     }
-    func setSearch(_ binding: Binding<String>?, prompt: String) {
+    func setSearch(_ binding: Binding<String>?, prompt: String, usesStackedPlacement: Bool = false) {
         query = binding
         searchPrompt = prompt
         guard let controller else { return }
@@ -340,6 +347,7 @@ final class LibraryNavigationChrome: NSObject, UISearchResultsUpdating, UISearch
             controller.navigationItem.hidesSearchBarWhenScrolling = true
             controller.definesPresentationContext = true
         }
+        if usesStackedPlacement { controller.navigationItem.preferredSearchBarPlacement = .stacked }
         search?.searchBar.placeholder = prompt
         if search?.searchBar.text != binding.wrappedValue { search?.searchBar.text = binding.wrappedValue }
     }
@@ -403,8 +411,8 @@ extension View {
     func libraryNavigationTitle(_ title: String) -> some View { modifier(LibraryTitle(title: title)) }
     func libraryTitleDisplayMode(_ mode: NavigationBarItem.TitleDisplayMode) -> some View { modifier(LibraryTitleMode(mode: mode)) }
     func libraryHomeNavigation(title: String = "资料库") -> some View { modifier(LibraryHomeChrome(title: title)) }
-    func librarySearchable(text: Binding<String>, prompt: String, enabled: Bool = true) -> some View {
-        modifier(LibrarySearch(query: text, prompt: prompt, enabled: enabled))
+    func librarySearchable(text: Binding<String>, prompt: String, enabled: Bool = true, usesStackedPlacement: Bool = false) -> some View {
+        modifier(LibrarySearch(query: text, prompt: prompt, enabled: enabled, usesStackedPlacement: usesStackedPlacement))
     }
     func librarySearchPage(_ model: SearchPageModel) -> some View { modifier(LibrarySearchPage(model: model)) }
 }
@@ -469,10 +477,14 @@ private struct LibrarySearch: ViewModifier {
     @Binding var query: String
     let prompt: String
     let enabled: Bool
+    let usesStackedPlacement: Bool
     @Environment(\.libraryNavigationChrome) private var chrome
     @ViewBuilder func body(content: Content) -> some View {
         if let chrome {
-            content.background { LibraryChromeUpdate { chrome.setSearch(enabled ? $query : nil, prompt: prompt) }.frame(width: 0, height: 0) }
+            content.background {
+                LibraryChromeUpdate { chrome.setSearch(enabled ? $query : nil, prompt: prompt, usesStackedPlacement: usesStackedPlacement) }
+                    .frame(width: 0, height: 0)
+            }
         } else if enabled { content.searchable(text: $query, placement: .navigationBarDrawer(displayMode: .automatic), prompt: Text(prompt)) }
         else { content }
     }

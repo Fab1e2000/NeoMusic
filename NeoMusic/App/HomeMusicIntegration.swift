@@ -35,6 +35,7 @@ import Observation
     var showsLogin = false
     private(set) var cachedSongs: [LibrarySongItem] = []
     private let account: NeteaseAccount
+    private let container: AppContainer
     private let player: NowPlayingModel
     private var connected = false
     private var completingLogin = false
@@ -72,11 +73,10 @@ import Observation
     @ObservationIgnored private var projectedLikedIDs: Set<Int64> = []
     @ObservationIgnored private var projectedLikedAt: [Int64: Date] = [:]
     @ObservationIgnored private var cachedSongIndices: [String: Int] = [:]
-    @ObservationIgnored private var artworkBatchSession: UUID?
-    @ObservationIgnored private var pendingArtworkURLs: Set<URL> = []
-    @ObservationIgnored private(set) var artworkPublishTask: Task<Void, Never>?
     @ObservationIgnored private var hasConnectedPublish = false
     @ObservationIgnored private let projectionCache = OnlineSongProjectionCache()
+    private let artworkBatcher = ArtworkUpdateBatcher()
+    var artworkPublishTask: Task<Void, Never>? { artworkBatcher.task }
     @ObservationIgnored private var roamingFill: Task<Void, Never>?
     @ObservationIgnored private var roamingGeneration = UUID()
     @ObservationIgnored private var roamingAdvance = false
@@ -86,9 +86,14 @@ import Observation
         let songID: Int64?
         let shuffled: Bool
     }
-    init(account: NeteaseAccount, player: NowPlayingModel = LocalLibrary.player) {
+    convenience init(account: NeteaseAccount, player: NowPlayingModel = AppContainer.shared.player) {
+        self.init(account: account, container: .shared, player: player)
+    }
+
+    init(account: NeteaseAccount, container: AppContainer, player: NowPlayingModel? = nil) {
         self.account = account
-        self.player = player
+        self.container = container
+        self.player = player ?? container.player
     }
     func connect() {
         guard !connected else { return }
@@ -129,11 +134,11 @@ import Observation
         player.replenishQueue = { [weak self] continuation, advance, ended in
             self?.replenishRoaming(continuation: continuation, shouldAdvance: advance, playbackEnded: ended)
         }
-        player.onCollectionPlaybackStarted = { reference in
-            if reference.kind == .localPlaylist { LocalLibrary.playlistLibrary.markPlayed(reference.id) }
+        player.onCollectionPlaybackStarted = { [playlistLibrary = container.playlistLibrary] reference in
+            if reference.kind == .localPlaylist { playlistLibrary.markPlayed(reference.id) }
             if reference.kind == .onlinePlaylist, let owner = reference.ownerID {
                 let id = reference.id.hasPrefix("netease-playlist:") ? reference.id : "netease-playlist:\(owner):\(reference.id)"
-                LocalLibrary.playlistLibrary.markPlayed(id)
+                playlistLibrary.markPlayed(id)
             }
         }
         account.home?.onChange = { [weak self] in self?.publish() }
@@ -232,15 +237,14 @@ import Observation
     private func retainReferencedSongs(adding songs: [NeteaseMusicSong] = []) -> Bool {
         guard let home = account.home, let owner, home.userID.map(String.init) == owner,
               account.profile?.userID == home.userID else { return false }
-        let playlistSongs = LocalLibrary.playlistLibrary.playlists.filter { !$0.isReadOnly && !$0.isSystem }
-            .flatMap { LocalLibrary.playlistLibrary.songs(in: $0.id) }
-        let ids = Set((player.queue + playlistSongs).filter { $0.onlineOwnerID == owner }.compactMap(\.onlineSongID))
+        let references = ReferencedLibrarySongs.collect(player: player, playlists: container.playlistLibrary)
+        let ids = Set(references.filter { $0.onlineOwnerID == owner }.compactMap(\.onlineSongID))
         return home.retainReferencedSongs(ids: ids.union(songs.map(\.id)), adding: songs)
     }
     private func observeRecent() {
         withObservationTracking {
-            _ = LocalLibrary.playlistLibrary.playlists
-            _ = LocalLibrary.songLibrary.songs
+            _ = container.playlistLibrary.playlists
+            _ = container.songLibrary.songs
         } onChange: { [weak self] in
             Task { @MainActor in self?.observeRecent() }
         }
@@ -264,9 +268,7 @@ import Observation
     }
     func requestArtwork(for id: String) {
         guard let home = account.home, home.userID == account.sessionOwnerID,
-              let key = DeferredArtworkKey(rawValue: id),
-              key.matches(domain: .home, session: home.sessionRevision),
-              let url = key.remoteURL else { return }
+              let url = DeferredArtworkRoute.remote(id, session: home.sessionRevision, domain: .home) else { return }
         home.requestArtwork([url])
     }
 
@@ -274,29 +276,25 @@ import Observation
                              after pending: Task<Void, Never>? = nil) -> Task<Void, Never>? {
         guard !account.isLoggingOut, let home = account.home,
               let userID = home.userID, userID == account.sessionOwnerID,
-              let key = DeferredArtworkKey(rawValue: id),
-              key.matches(domain: .home, session: home.sessionRevision),
-              let url = key.remoteURL else { pending?.cancel(); return nil }
+              let url = DeferredArtworkRoute.remote(id, session: home.sessionRevision, domain: .home) else { pending?.cancel(); return nil }
         return home.requestQueueArtwork(url, foreground: foreground, after: pending)
     }
     func resolveArtworkFile(for id: String) async -> URL? {
-        guard let home = account.home, home.userID == account.sessionOwnerID, !Task.isCancelled else { return nil }
+        guard let home = account.home else { return nil }
         let revision = home.sessionRevision, owner = home.userID
-        guard let key = DeferredArtworkKey(rawValue: id), key.session == revision.uuidString else { return nil }
-        let file: URL?
-        switch key.domain {
-        case .home:
-            guard let remote = key.remoteURL else { return nil }
-            file = await home.cachedArtworkFile(remote)
-        case .homePlaylist:
-            guard let number = key.playlistID else { return nil }
-            file = try? await home.playlistArtworkFile(id: number)
-        default:
-            return nil
-        }
-        guard revision == home.sessionRevision, home.userID == owner,
-              account.sessionOwnerID == owner, !Task.isCancelled else { return nil }
-        return file
+        return await DeferredArtworkRoute.cachedFile(id, session: revision,
+            isCurrent: { revision == home.sessionRevision && home.userID == owner && account.sessionOwnerID == owner }) { key in
+                switch key.domain {
+                case .home:
+                    guard let remote = key.remoteURL else { return nil }
+                    return await home.cachedArtworkFile(remote)
+                case .homePlaylist:
+                    guard let number = key.playlistID else { return nil }
+                    return try? await home.playlistArtworkFile(id: number)
+                default:
+                    return nil
+                }
+            }
     }
     private func publish() {
         let currentOwner = account.profile.map { String($0.userID) }
@@ -326,9 +324,7 @@ import Observation
             projectionCache.removeAll()
             projectedCatalog = nil
             cachedSongIndices.removeAll()
-            artworkPublishTask?.cancel()
-            artworkPublishTask = nil
-            pendingArtworkURLs.removeAll()
+            artworkBatcher.cancel()
             cachedSongsPublishTask?.cancel()
             cachedSongsPublishTask = nil
             cachedSongsGeneration &+= 1
@@ -343,7 +339,7 @@ import Observation
         }
         publishFeed()
         resumePendingPlayback()
-        if LocalLibrary.playbackAccountID != currentOwner { LocalLibrary.playbackAccountID = currentOwner }
+        if container.playbackAccountID != currentOwner { container.playbackAccountID = currentOwner }
         resumePendingQuickAction()
         if let pendingFeedPlayback, let userID = account.profile?.userID,
            account.validationState == .valid, account.home?.userID == userID, account.music?.userID == userID {
@@ -464,7 +460,7 @@ import Observation
             cachedSongs = songs
             cachedSongIndices = Dictionary(uniqueKeysWithValues: songs.indices.map { (songs[$0].id, $0) })
         }
-        LocalLibrary.songLibrary.replaceExternalSongs(songs)
+        container.songLibrary.replaceExternalSongs(songs)
     }
 
     private func refreshRetainedArtwork(contentChanged: Bool = false) {
@@ -472,33 +468,19 @@ import Observation
             retainedArtworkIDs = []; retainedArtworkSession = nil
             return
         }
-        let ids = Set(LocalLibrary.playlistLibrary.playlists.filter { $0.sourceOwnerID == owner }.map(\.id))
+        let ids = Set(container.playlistLibrary.playlists.filter { $0.sourceOwnerID == owner }.map(\.id))
         guard contentChanged || retainedArtworkSession != home.sessionRevision || retainedArtworkIDs != ids else { return }
         retainedArtworkIDs = ids
         retainedArtworkSession = home.sessionRevision
-        Self.updateRetainedArtwork(in: LocalLibrary.playlistLibrary, home: home, owner: owner)
+        Self.updateRetainedArtwork(in: container.playlistLibrary, home: home, owner: owner)
     }
 
     private func scheduleArtworkPublish(_ urls: Set<URL>) {
-        guard !urls.isEmpty, let home = account.home, home.userID == account.profile?.userID else { return }
+        guard let home = account.home, home.userID == account.profile?.userID else { return }
         let session = home.sessionRevision
-        if artworkBatchSession != session {
-            artworkPublishTask?.cancel()
-            artworkPublishTask = nil
-            pendingArtworkURLs.removeAll()
-            artworkBatchSession = session
-        }
-        pendingArtworkURLs.formUnion(urls)
-        guard artworkPublishTask == nil else { return }
-        artworkPublishTask = Task { [weak self] in
-            do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
-            guard let self else { return }
-            let batch = pendingArtworkURLs
-            pendingArtworkURLs.removeAll(keepingCapacity: true)
-            artworkPublishTask = nil
-            guard account.home === home, home.sessionRevision == session else { return }
-            publishArtwork(batch)
-        }
+        artworkBatcher.enqueue(urls, session: session,
+            isCurrent: { [weak self] in self?.account.home === home && home.sessionRevision == session },
+            publish: { [weak self] in self?.publishArtwork($0) })
     }
 
     private func publishArtwork(_ urls: Set<URL>) {
@@ -561,12 +543,12 @@ import Observation
         }
         detailLibrary.updateArtwork(songs: songs, playlists: covers)
         if let owner {
-            Self.updateRetainedArtwork(in: LocalLibrary.playlistLibrary, home: home, owner: owner, urls: urls, songs: songs)
+            Self.updateRetainedArtwork(in: container.playlistLibrary, home: home, owner: owner, urls: urls, songs: songs)
         }
         for (id, replacement) in songs {
             if let index = cachedSongIndices[id] { cachedSongs[index].publishArtwork(from: replacement) }
         }
-        LocalLibrary.songLibrary.updateOnlineArtwork(songs, source: "home")
+        container.songLibrary.updateOnlineArtwork(songs, source: "home")
     }
     static func updateRetainedArtwork(in library: PlaylistLibrary, home: NeteaseHomeStore, owner: String,
                                       urls: Set<URL>? = nil, songs: [String: LibrarySongItem] = [:]) {
@@ -952,7 +934,7 @@ import Observation
 
     private func mapSong(_ song: NeteaseMusicSong, cachedCovers: [URL: URL]?) -> LibrarySongItem {
         let item = makeSong(song, cachedCovers: cachedCovers)
-        return item.retainingArtwork(from: LocalLibrary.songLibrary.song(id: item.id))
+        return item.retainingArtwork(from: container.songLibrary.song(id: item.id))
     }
 
     private func makeSong(_ song: NeteaseMusicSong, cachedCovers: [URL: URL]? = nil) -> LibrarySongItem {
@@ -971,7 +953,7 @@ import Observation
         guard case .homePlaylist(let number) = PlaylistRouteIdentity(id) else { return item }
         var item = item
         if let owner {
-            let retained = LocalLibrary.playlistLibrary.playlist(PlaylistRouteIdentity.accountID(owner: owner, playlistID: number))
+            let retained = container.playlistLibrary.playlist(PlaylistRouteIdentity.accountID(owner: owner, playlistID: number))
             item.isFavorite = retained?.isFavorite ?? false
             item.isPinned = retained?.isPinned ?? false
         }
@@ -1064,10 +1046,11 @@ import Observation
         detailLibrary.unsubscribeOnlinePlaylist = { [weak self] targetID in
             self?.changeCollection(targetID, subscribed: false)
         }
+        let container = container
         var actions = ExternalPlaylistActions(addSongs: { [weak self] in
             guard let self else { return }
             self.withCompleteCollection(id) { songs in
-                LocalLibrary.playlistLibrary.pendingAddition = .init(songs: songs)
+                container.playlistLibrary.pendingAddition = .init(songs: songs)
             }
         })
         if case .homePlaylist = routeIdentity {
@@ -1076,22 +1059,22 @@ import Observation
             actions.moveToFolder = { [weak self] in self?.retain(id, action: .folder) }
             actions.collect = { [weak self] in self?.changeCollection(id, subscribed: true) }
         }
-        var collection = LocalLibrary.menuActions
+        var collection = container.menuActions
         collection.defersQueueNotice = true
         collection.play = { [weak self] _, shuffled in self?.requestPlayback(id, songID: nil, shuffled: shuffled) }
-        collection.playNext = { [weak self] _ in self?.withCompleteCollection(id) { [weak self] in self?.player.insertNext($0); LocalLibrary.toasts.show(.playingNext) } }
-        collection.playLater = { [weak self] _ in self?.withCompleteCollection(id) { [weak self] in self?.player.appendLater($0); LocalLibrary.toasts.show(.addedToQueue) } }
-        var songs = LocalLibrary.songActions(for: route)
+        collection.playNext = { [weak self] _ in self?.withCompleteCollection(id) { [weak self] in self?.player.insertNext($0); container.toasts.show(.playingNext) } }
+        collection.playLater = { [weak self] _ in self?.withCompleteCollection(id) { [weak self] in self?.player.appendLater($0); container.toasts.show(.addedToQueue) } }
+        var songs = container.songActions(for: route)
         songs.defersQueueNotice = true
         songs.play = { [weak self] list, index, _ in
             guard list.indices.contains(index) else { return }
             let target = list[index]
-            guard let songID = target.onlineSongID ?? LocalLibrary.catalog.downloadedOnlineSongID?(target.id) else { return }
+            guard let songID = target.onlineSongID ?? container.catalog.downloadedOnlineSongID?(target.id) else { return }
             self?.requestPlayback(id, songID: songID, shuffled: false)
         }
-        songs.playNext = { [weak self] song in guard self?.owner != nil else { self?.showsLogin = true; return }; self?.player.insertNext([song]); LocalLibrary.toasts.show(.playingNext) }
-        songs.playLater = { [weak self] song in guard self?.owner != nil else { self?.showsLogin = true; return }; self?.player.appendLater([song]); LocalLibrary.toasts.show(.addedToQueue) }
-        songs.addToPlaylist = { [weak self] song in guard self?.owner != nil else { self?.showsLogin = true; return }; LocalLibrary.playlistLibrary.pendingAddition = .init(songs: [song]) }
+        songs.playNext = { [weak self] song in guard self?.owner != nil else { self?.showsLogin = true; return }; self?.player.insertNext([song]); container.toasts.show(.playingNext) }
+        songs.playLater = { [weak self] song in guard self?.owner != nil else { self?.showsLogin = true; return }; self?.player.appendLater([song]); container.toasts.show(.addedToQueue) }
+        songs.addToPlaylist = { [weak self] song in guard self?.owner != nil else { self?.showsLogin = true; return }; container.playlistLibrary.pendingAddition = .init(songs: [song]) }
         songs.toggleFavorite = { [weak self] song in self?.setOnlineLiked(song, liked: !song.isFavorite, playsSuccessHaptic: !song.isFavorite) }
         songs.removeFromFavorites = { [weak self] song in self?.setOnlineLiked(song, liked: false, playsSuccessHaptic: false) }
         return AnyView(HomeCollectionDetailView(playlistID: id, library: detailLibrary, actions: actions,
@@ -1102,25 +1085,17 @@ import Observation
 
     private func setOnlineLiked(_ song: LibrarySongItem, liked: Bool, playsSuccessHaptic: Bool) {
         guard let owner,
-              let number = song.onlineSongID ?? LocalLibrary.catalog.downloadedOnlineSongID?(song.id) else {
+              let number = song.onlineSongID ?? container.catalog.downloadedOnlineSongID?(song.id) else {
             showsLogin = true
             return
         }
         Task { [weak self] in
             guard let self, self.owner == owner, self.account.profile.map({ String($0.userID) }) == owner,
                   let music = self.account.music, music.userID.map(String.init) == owner else { return }
-            let revision = music.sessionRevision
-            do {
-                try await music.setLiked(songID: number, liked: liked)
-                guard revision == music.sessionRevision, self.owner == owner,
-                      self.account.profile.map({ String($0.userID) }) == owner else { return }
-                if playsSuccessHaptic { LibraryHaptics.success() }
-                LocalLibrary.toasts.show(liked ? .favorited : .unfavorited)
-            }
-            catch is CancellationError {} catch {
-                guard self.owner == owner, self.account.profile.map({ String($0.userID) }) == owner else { return }
-                LocalLibrary.toasts.show(.error(error.localizedDescription))
-            }
+            let matchesOwner = { [self] in self.owner == owner && account.profile.map { String($0.userID) } == owner }
+            await OnlineFavoriteAction.perform(music: music, revision: music.sessionRevision, songID: number,
+                liked: liked, playsSuccessHaptic: playsSuccessHaptic, toasts: container.toasts,
+                isCurrent: matchesOwner, canReportError: matchesOwner)
         }
     }
 
@@ -1133,7 +1108,7 @@ import Observation
                 guard !Task.isCancelled, self.owner == owner,
                       self.account.profile.map({ String($0.userID) }) == owner else { return }
                 action(self.detailLibrary.songs(in: id))
-            } catch is CancellationError {} catch { LocalLibrary.toasts.show(.error(error.localizedDescription)) }
+            } catch is CancellationError {} catch { container.toasts.show(.error(error.localizedDescription)) }
         }
     }
     private func isPlaylistSubscribed(_ id: Int64) -> Bool {
@@ -1151,6 +1126,7 @@ import Observation
                   id,
                   subscribed: subscribed,
                   account: account,
+                  container: container,
                   onSubscribedChanged: { [weak self] in self?.syncCollectedPlaylists() }
               ) else {
             showsLogin = true
@@ -1168,17 +1144,17 @@ import Observation
                 try await self.load(id, complete: true)
                 guard self.owner == owner, self.account.profile.map({ String($0.userID) }) == owner, let detail = self.detailLibrary.playlist(id) else { return }
                 let stableID = PlaylistRouteIdentity.accountID(owner: owner, playlistID: number)
-                var item = LocalLibrary.playlistLibrary.playlist(stableID) ?? LibraryPlaylistItem(id: stableID, title: detail.title, artwork: detail.artwork, sourceOwnerID: owner, subtitle: detail.subtitle)
+                var item = container.playlistLibrary.playlist(stableID) ?? LibraryPlaylistItem(id: stableID, title: detail.title, artwork: detail.artwork, sourceOwnerID: owner, subtitle: detail.subtitle)
                 item.sourceOwnerID = owner
-                LocalLibrary.playlistLibrary.retainOnlinePlaylist(item, songs: self.detailLibrary.songs(in: id))
+                container.playlistLibrary.retainOnlinePlaylist(item, songs: self.detailLibrary.songs(in: id))
                 withAnimation {
                     switch action {
-                    case .favorite: LocalLibrary.playlistLibrary.toggleFavorite(stableID)
-                    case .pin: LocalLibrary.playlistLibrary.togglePin(stableID)
-                    case .folder: LocalLibrary.playlistLibrary.pendingMove = LocalLibrary.playlistLibrary.playlist(stableID)
+                    case .favorite: container.playlistLibrary.toggleFavorite(stableID)
+                    case .pin: container.playlistLibrary.togglePin(stableID)
+                    case .folder: container.playlistLibrary.pendingMove = container.playlistLibrary.playlist(stableID)
                     }
                 }
-                if let retained = LocalLibrary.playlistLibrary.playlist(stableID) {
+                if let retained = container.playlistLibrary.playlist(stableID) {
                     if var value = self.loaded[id] {
                         value.0.isFavorite = retained.isFavorite; value.0.isPinned = retained.isPinned
                         self.loaded[id] = value; self.updateDetail(id, item: value.0, songs: value.1)
@@ -1186,14 +1162,14 @@ import Observation
                     switch action {
                     case .favorite:
                         LibraryHaptics.success()
-                        LocalLibrary.toasts.show(retained.isFavorite ? .favorited : .unfavorited)
+                        container.toasts.show(retained.isFavorite ? .favorited : .unfavorited)
                     case .pin:
                         LibraryHaptics.success()
-                        LocalLibrary.toasts.show(retained.isPinned ? .pinned : .unpinned)
+                        container.toasts.show(retained.isPinned ? .pinned : .unpinned)
                     case .folder: break
                     }
                 }
-            } catch is CancellationError {} catch { LocalLibrary.toasts.show(.error(error.localizedDescription)) }
+            } catch is CancellationError {} catch { container.toasts.show(.error(error.localizedDescription)) }
         }
     }
 
@@ -1258,7 +1234,7 @@ import Observation
                     self.player.requestPlay(list, startingAt: index, from: reference.title, collection: reference)
                 }
                 else { self.player.requestPlay(list, from: reference.title, shuffled: request.shuffled, collection: reference) }
-            } catch is CancellationError {} catch { LocalLibrary.toasts.show(.error(error.localizedDescription)) }
+            } catch is CancellationError {} catch { container.toasts.show(.error(error.localizedDescription)) }
         }
     }
 }

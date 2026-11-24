@@ -24,7 +24,7 @@ final class LocalLibraryRuntime {
     private func configurePlayer() {
         if onlineResolver == nil, offlineResolver == nil {
             player.configurePlayback(resolveURL: { [weak self, root] id in
-                guard !id.hasPrefix("netease:"), self?.failedIDs.contains(id) != true else { return nil }
+                guard !OnlineSongIdentity.hasReservedPrefix(id), self?.failedIDs.contains(id) != true else { return nil }
                 let url = root.appending(path: id)
                 return FileManager.default.fileExists(atPath: url.path) ? url : nil
             }, persistenceURL: store.appending(path: "playback.json"))
@@ -32,7 +32,7 @@ final class LocalLibraryRuntime {
         }
         player.configurePlayback(resolveResource: { [weak self, root] id in
             if let offline = self?.offlineResolver?(id) { return offline }
-            if id.hasPrefix("netease:") {
+            if OnlineSongIdentity.hasReservedPrefix(id) {
                 guard let resolver = self?.onlineResolver else { throw URLError(.userAuthenticationRequired) }
                 return try await resolver(id)
             }
@@ -49,7 +49,7 @@ final class LocalLibraryRuntime {
     private var pendingImports: Set<String> = []
     private var cacheWarning: String?
     private let scanner = LocalMusicScanner()
-    private let cache = LocalLibraryTrackCache()
+    private let cache: LocalLibraryTrackCache
     let root: URL
     private let store: URL
     private let documents: URL
@@ -65,10 +65,11 @@ final class LocalLibraryRuntime {
     private var cachedTracks: [LocalTrack] = []
 
     init(documents: URL = .documentsDirectory,
-         store: URL = URL.applicationSupportDirectory.appending(path: "LocalLibrary", directoryHint: .isDirectory),
+         store: URL = AppStoragePaths.library,
          songLibrary: SongLibrary, playlistLibrary: PlaylistLibrary, player: NowPlayingModel,
          favoriteAlbums: LibrarySelectionSet, pinnedAlbums: LibrarySelectionSet,
          deletedAlbums: LibrarySelectionSet, defaults: UserDefaults = .standard,
+         backdropPreparer: AlbumArtworkBackdropPreparer = .shared,
          onLocalSongsApplied: @escaping @MainActor ([LibrarySongItem]) -> Void) {
         self.songLibrary = songLibrary
         self.playlistLibrary = playlistLibrary
@@ -77,9 +78,10 @@ final class LocalLibraryRuntime {
         self.pinnedAlbums = pinnedAlbums
         self.deletedAlbums = deletedAlbums
         self.defaults = defaults
+        self.cache = LocalLibraryTrackCache(backdropPreparer: backdropPreparer)
         self.onLocalSongsApplied = onLocalSongsApplied
         self.documents = documents
-        self.root = documents.appending(path: "音乐", directoryHint: .isDirectory)
+        self.root = AppStoragePaths.musicDirectory(in: documents)
         self.store = store
     }
 
@@ -272,9 +274,9 @@ final class LocalLibraryRuntime {
 
     private func apply(_ tracks: [LocalTrack]) {
         cachedTracks = tracks
-        let favorites = Set(defaults.stringArray(forKey: "favoriteSongs") ?? [])
-        let pins = Set(defaults.stringArray(forKey: "pinnedSongs") ?? [])
-        let hidden = Set(defaults.stringArray(forKey: "hiddenSongs") ?? [])
+        let favorites = Set(defaults.stringArray(forKey: AppDefaultsKey.favoriteSongs) ?? [])
+        let pins = Set(defaults.stringArray(forKey: AppDefaultsKey.pinnedSongs) ?? [])
+        let hidden = Set(defaults.stringArray(forKey: AppDefaultsKey.hiddenSongs) ?? [])
         let artworkDirectory = store.appending(path: "tracks.json.startup", directoryHint: .isDirectory)
         songLibrary.replace(tracks.filter { !hidden.contains($0.id) }.map { track in
             let url = track.artworkKey.map { artworkDirectory.appending(path: $0 + ".image") }
@@ -291,18 +293,18 @@ final class LocalLibraryRuntime {
 
 actor LocalLibraryTrackCache {
     private var saved: (url: URL, tracks: [LocalTrack])?
-    private var backdropPreparer: AlbumArtworkBackdropPreparer?
+    private let backdropPreparer: AlbumArtworkBackdropPreparer
+
+    init(backdropPreparer: AlbumArtworkBackdropPreparer = AlbumArtworkBackdropPreparer()) {
+        self.backdropPreparer = backdropPreparer
+    }
 
     func restoreQueue(from url: URL) -> Result<NowPlayingModel.SavedQueue?, Error> {
         Result { try Task.checkCancellation(); return try PlaybackQueuePersistence.load(from: url) }
     }
 
     func restore<Value: Decodable & Sendable>(_ type: Value.Type, from url: URL) -> Result<Value?, Error> {
-        do {
-            try Task.checkCancellation()
-            guard FileManager.default.fileExists(atPath: url.path) else { return .success(nil) }
-            return .success(try JSONDecoder().decode(type, from: Data(contentsOf: url)))
-        } catch { return .failure(error) }
+        Result { try AtomicJSONStore.read(type, from: url) }
     }
 
     func prepare(documents: URL, store: URL) throws {
@@ -314,8 +316,7 @@ actor LocalLibraryTrackCache {
     func read(from url: URL) async throws -> [LocalTrack]? {
         try Task.checkCancellation()
         saved = nil
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-        let tracks = try JSONDecoder().decode([LocalTrack].self, from: Data(contentsOf: url))
+        guard let tracks = try AtomicJSONStore.read([LocalTrack].self, from: url) else { return nil }
         saved = (url, tracks)
         return try await externalizeArtwork(tracks, at: url)
     }
@@ -338,9 +339,7 @@ actor LocalLibraryTrackCache {
         let normalized = try await externalizeArtwork(tracks, at: url)
         try Task.checkCancellation()
         if saved?.url != url || saved?.tracks != normalized {
-            let data = try JSONEncoder().encode(normalized)
-            try Task.checkCancellation()
-            try data.write(to: url, options: .atomic)
+            try AtomicJSONStore.write(normalized, to: url)
             saved = (url, normalized)
         }
         return normalized
@@ -352,11 +351,8 @@ actor LocalLibraryTrackCache {
                                  uniquingKeysWith: { first, _ in first })
         let artworkKeys = Set(tracks.compactMap(\.artworkKey))
         guard !pending.isEmpty || !artworkKeys.isEmpty else { return tracks }
-        if backdropPreparer == nil {
-            backdropPreparer = AlbumArtworkBackdropPreparer(cacheURL: url.deletingLastPathComponent().appending(path: "artwork-backdrops.json"))
-        }
         let directory = url.appendingPathExtension("startup")
-        let restoredColors = try await backdropPreparer!.cachedColors(for: artworkKeys)
+        let restoredColors = try await backdropPreparer.cachedColors(for: artworkKeys)
         var restoredArtwork: [String: Data] = [:]
         for key in artworkKeys where restoredColors.index(forKey: key) == nil {
             try Task.checkCancellation()
@@ -366,14 +362,16 @@ actor LocalLibraryTrackCache {
             try Task.checkCancellation()
             if let key = track.artworkKey, let data = restoredArtwork[key] { pending[track.id] = data }
         }
-        let colors = try await backdropPreparer!.prepareAdditionalArtwork(pending)
+        let colors = try await backdropPreparer.prepareAdditionalArtwork(pending)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         var keys: [Data: String] = [:]
         return try tracks.map { track in
             try Task.checkCancellation()
             var track = track
             guard let data = pending[track.id] else {
-                if let key = track.artworkKey { track.artworkBackdrop = restoredColors[key] ?? nil }
+                if let key = track.artworkKey, let restored = restoredColors[key] {
+                    track.artworkBackdrop = restored
+                }
                 return track
             }
             let key: String

@@ -34,6 +34,7 @@ struct NeoMusicApp: App {
             #if DEBUG
             if DebugLaunchRouter.isPreviewLaunch {
                 DebugLaunchRouter.previewRoot(account: account)
+                    .environment(runtime.container.playlistLibrary)
             } else {
                 libraryApp
             }
@@ -45,15 +46,13 @@ struct NeoMusicApp: App {
         .onChange(of: account.profile?.userID) { _, _ in
             if runtime.startupTask != nil { runtime.downloads.scheduleMetadataPublication() }
         }
-        .onChange(of: LocalLibrary.runtime.hasRestoredPlayback) { _, _ in runtime.completeRestoredPlayback() }
-        .onChange(of: LocalLibrary.player.hasCurrent) { _, _ in runtime.completeRestoredPlayback() }
+        .onChange(of: runtime.container.runtime.hasRestoredPlayback) { _, _ in runtime.completeRestoredPlayback() }
+        .onChange(of: runtime.container.player.hasCurrent) { _, _ in runtime.completeRestoredPlayback() }
         .onChange(of: scenePhase) { previous, phase in runtime.sceneDidChange(from: previous, to: phase) }
     }
 
     private var libraryApp: some View {
-        LocalLibrary.app
-            .downloadRemovalConfirmation()
-            .environment(\.libraryDownloads, LocalLibrary.downloads)
+        runtime.container.app
             .environment(account)
             .environment(\.homeMusicIntegration, home)
             .environment(\.artistMusicIntegration, artists)

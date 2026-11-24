@@ -270,6 +270,42 @@ final class NeteaseAccountClientTests: XCTestCase, @unchecked Sendable {
         }
     }
 
+    @MainActor func testWEAPIClassifiesBusinessAuthenticationAndPreservesOtherErrors() async throws {
+        let credential = try credential()
+        for body in [
+            #"{"code":301}"#,
+            #"{"code":301,"message":null,"msg":"  "}"#,
+            #"{"code":301,"message":"请先登录。"}"#,
+            #"{"code":301,"msg":"Session expired"}"#,
+            #"{"code":401,"message":"专辑暂不支持收藏"}"#,
+            #"{"code":401,"message":1}"#
+        ] {
+            let (client, session) = makeClient(body: body)
+            defer { session.invalidateAndCancel() }
+            do {
+                _ = try await client.requestWeb(path: "/api/test", fields: [:], credential: credential)
+                XCTFail("Accepted business authentication failure")
+            } catch { XCTAssertEqual(error as? NeteaseAccountError, .authenticationRequired) }
+        }
+        for (body, code, message) in [
+            (#"{"code":301,"msg":"专辑暂不支持收藏"}"#, 301, "专辑暂不支持收藏"),
+            (#"{"code":301,"message":" ","msg":"暂时无法收藏"}"#, 301, "暂时无法收藏"),
+            (#"{"code":301,"message":"暂时无法收藏","msg":"请先登录"}"#, 301, "暂时无法收藏"),
+            (#"{"code":301,"message":"登录状态正常，但专辑暂不支持收藏"}"#, 301, "登录状态正常，但专辑暂不支持收藏"),
+            (#"{"code":-460,"message":"primary","msg":"fallback"}"#, -460, "primary"),
+            (#"{"code":-460,"msg":"fallback"}"#, -460, "fallback")
+        ] {
+            let (client, session) = makeClient(body: body)
+            defer { session.invalidateAndCancel() }
+            do {
+                _ = try await client.requestWeb(path: "/api/test", fields: [:], credential: credential)
+                XCTFail("Accepted other business failure")
+            } catch {
+                XCTAssertEqual(error as? NeteaseWebResponseError, .init(code: code, message: message))
+            }
+        }
+    }
+
     @MainActor func testWEAPIPreservesNetworkAndCancellationErrors() async throws {
         for code in [URLError.Code.notConnectedToInternet, .cancelled] {
             let (client, session) = makeClient(error: URLError(code))

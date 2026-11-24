@@ -16,17 +16,18 @@ struct HomeArtwork: View {
                 Image(name).resizable().scaledToFill()
                     .frame(width: size.width, height: size.height).clipped()
             case .favorites:
-                Color(white: 0.575)
+                DesignTokens.Colors.homeFavoritesBackdrop
                     .overlay(alignment: .top) {
-                        RoundedRectangle(cornerRadius: 7)
-                            .fill(Color(white: 0.92))
+                        RoundedRectangle(cornerRadius: DesignTokens.Radius.homeFavoritesTile)
+                            .fill(DesignTokens.Colors.homeFavoritesTile)
                             .overlay {
                                 Image(systemName: "star.fill")
                                     .font(.system(size: 116, weight: .regular))
                                     .foregroundStyle(DesignTokens.Colors.favoritesRed)
                             }
-                            .frame(width: size.width - 32, height: size.width - 32)
-                            .padding(.top, 16)
+                            .frame(width: size.width - 2 * DesignTokens.Spacing.heroCardInset,
+                                   height: size.width - 2 * DesignTokens.Spacing.heroCardInset)
+                            .padding(.top, DesignTokens.Spacing.heroCardInset)
                     }
             }
         }

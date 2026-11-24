@@ -59,7 +59,7 @@
         clear()
         source = url; itemID = UUID(); initialPosition = max(0, position); isLoading = true
         operation = "load"; operationStarted = ProcessInfo.processInfo.systemUptime
-        PerformanceDiagnostics.restoration("stream.load.request")
+        AppLogger.playback.notice("stream.load.request")
         let identity = itemID
         if url.isFileURL {
             preparation = Task { [weak self] in
@@ -80,7 +80,7 @@
                     self.localNode = node
                     self.isLoading = false
                     if self.wantsPlayback { node.play() }
-                    PerformanceDiagnostics.restoration("stream.\(self.operation).ready elapsed_ms=\((ProcessInfo.processInfo.systemUptime - self.operationStarted) * 1000) position=\(node.currentTime ?? 0)")
+                    AppLogger.playback.notice("stream.\(self.operation, privacy: .public).ready elapsed_ms=\((ProcessInfo.processInfo.systemUptime - self.operationStarted) * 1000) position=\(node.currentTime ?? 0)")
                     self.finishReadiness(.success(()))
                     self.onChange?()
                 } catch {
@@ -158,10 +158,10 @@
     func seek(to seconds: Double) {
         guard itemID != nil else { return }
         operation = "seek"; operationStarted = ProcessInfo.processInfo.systemUptime
-        PerformanceDiagnostics.restoration("stream.seek.request target=\(seconds)")
+        AppLogger.playback.notice("stream.seek.request target=\(seconds)")
         if let localNode {
             localNode.seek(to: seconds)
-            PerformanceDiagnostics.restoration("stream.seek.ready elapsed_ms=\((ProcessInfo.processInfo.systemUptime - operationStarted) * 1000) position=\(localNode.currentTime ?? 0)")
+            AppLogger.playback.notice("stream.seek.ready elapsed_ms=\((ProcessInfo.processInfo.systemUptime - self.operationStarted) * 1000) position=\(localNode.currentTime ?? 0)")
             onChange?()
             return
         }
@@ -235,7 +235,7 @@
             let wasLoading = isLoading
             isLoading = false
             if wasLoading {
-                PerformanceDiagnostics.restoration("stream.\(operation).ready elapsed_ms=\((ProcessInfo.processInfo.systemUptime - operationStarted) * 1000) position=\(player.progress)")
+                AppLogger.playback.notice("stream.\(self.operation, privacy: .public).ready elapsed_ms=\((ProcessInfo.processInfo.systemUptime - self.operationStarted) * 1000) position=\(player.progress)")
             }
             if !wantsPlayback {
                 renderGate?.deactivate()

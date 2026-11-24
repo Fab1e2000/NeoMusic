@@ -1,7 +1,6 @@
 import SwiftUI
 import PhotosUI
 import UniformTypeIdentifiers
-import ImageIO
 
 struct PlaylistDraftSnapshot: Equatable {
     let title: String
@@ -315,16 +314,7 @@ final class PlaylistCoverSelection {
         try Task.checkCancellation()
         let accessed = url.startAccessingSecurityScopedResource()
         defer { if accessed { url.stopAccessingSecurityScopedResource() } }
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary) else {
-            return nil
-        }
-        let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceShouldCacheImmediately: true,
-            kCGImageSourceThumbnailMaxPixelSize: 1536
-        ] as CFDictionary)
-        return thumbnail.map { UIImage(cgImage: $0) }
+        return ImageSourceThumbnail.image(at: url, maxPixels: 1536).map { UIImage(cgImage: $0) }
     }
 
     private static func isCancellation(_ error: Error) -> Bool {

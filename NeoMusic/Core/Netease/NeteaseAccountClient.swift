@@ -34,22 +34,16 @@ final class NeteaseAccountClient: Sendable {
         try Task.checkCancellation()
         let request = try prepareEAPIRequest(credential: credential)
         let data: Data
-        let response: URLResponse
         do {
-            (data, response) = try await dataWithTLSRetry(for: request, enabled: true)
+            data = try await validatedData(for: request, retryTLS: true)
         } catch let error as URLError {
             if Task.isCancelled || error.code == .cancelled { throw CancellationError() }
             throw NeteaseAccountError.network(error.code)
         }
-        try Task.checkCancellation()
-        guard let http = response as? HTTPURLResponse else { throw NeteaseAccountError.invalidResponse }
-        if http.statusCode == 401 { throw NeteaseAccountError.authenticationRequired }
-        guard (200..<300).contains(http.statusCode) else { throw NeteaseAccountError.http(http.statusCode) }
         let envelope: AccountResponse
         do { envelope = try JSONDecoder().decode(AccountResponse.self, from: data) }
         catch { throw NeteaseAccountError.invalidResponse }
-        if envelope.code == 301 || envelope.code == 401 { throw NeteaseAccountError.authenticationRequired }
-        guard envelope.code == 200 else { throw NeteaseAccountError.server(envelope.code) }
+        try Self.validateCode(envelope.code) { NeteaseAccountError.server(envelope.code) }
         if envelope.isExplicitlySignedOut { throw NeteaseAccountError.authenticationRequired }
         guard let profile = envelope.profile else { throw NeteaseAccountError.invalidResponse }
         guard profile.userId > 0, !profile.nickname.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -137,7 +131,11 @@ final class NeteaseAccountClient: Sendable {
     private func responseData(path: String, fields: [String: any Sendable], credential: NeteaseCredential?, profile: EAPIProfile, retryTLS: Bool) async throws -> Data {
         try Task.checkCancellation()
         let request = try prepareEAPIRequest(credential: credential, path: path, fields: fields, profile: profile)
-        let (data, response) = try await dataWithTLSRetry(for: request, enabled: retryTLS || profile == .playback)
+        return try await validatedData(for: request, retryTLS: retryTLS || profile == .playback)
+    }
+
+    private func validatedData(for request: PreparedRequest, retryTLS: Bool) async throws -> Data {
+        let (data, response) = try await dataWithTLSRetry(for: request, enabled: retryTLS)
         try Task.checkCancellation()
         guard let http = response as? HTTPURLResponse else { throw NeteaseAccountError.invalidResponse }
         if http.statusCode == 401 { throw NeteaseAccountError.authenticationRequired }
@@ -257,6 +255,14 @@ final class NeteaseAccountClient: Sendable {
         }
     }
 
+    private static func validateCode(_ code: Int, requiresAuthenticationFor301: Bool = true,
+                                     failure: () throws -> any Error) throws {
+        if code == 401 || (code == 301 && requiresAuthenticationFor301) {
+            throw NeteaseAccountError.authenticationRequired
+        }
+        guard code == 200 else { throw try failure() }
+    }
+
     private struct EmptyResponse: Decodable {}
     private struct CheckedResponse<Value: Decodable>: Decodable {
         let value: Value
@@ -264,8 +270,7 @@ final class NeteaseAccountClient: Sendable {
         init(from decoder: any Decoder) throws {
             let values = try decoder.container(keyedBy: CodingKeys.self)
             let code = try values.decode(Int.self, forKey: .code)
-            if code == 301 || code == 401 { throw NeteaseAccountError.authenticationRequired }
-            guard code == 200 else { throw NeteaseAccountError.server(code) }
+            try NeteaseAccountClient.validateCode(code) { NeteaseAccountError.server(code) }
             value = try Value(from: decoder)
         }
     }
@@ -344,18 +349,53 @@ final class NeteaseAccountClient: Sendable {
     }
     @concurrent func requestWeb(path: String, fields: [String: any Sendable], credential: NeteaseCredential?, retryTLS: Bool = false) async throws -> Data {
         try Task.checkCancellation()
-        let (data, response) = try await dataWithTLSRetry(for: prepareWebRequest(path: path, fields: fields, credential: credential), enabled: retryTLS)
-        try Task.checkCancellation()
-        guard let http = response as? HTTPURLResponse else { throw NeteaseAccountError.invalidResponse }
-        if http.statusCode == 401 { throw NeteaseAccountError.authenticationRequired }
-        guard (200..<300).contains(http.statusCode) else { throw NeteaseAccountError.http(http.statusCode) }
-        struct Status: Decodable { let code: Int; let message: String?; let msg: String? }
-        let status: Status
-        do { status = try JSONDecoder().decode(Status.self, from: data) }
+        let request = try prepareWebRequest(path: path, fields: fields, credential: credential)
+        let data = try await validatedData(for: request, retryTLS: retryTLS)
+        do { _ = try JSONDecoder().decode(CheckedWebResponse.self, from: data) }
         catch is DecodingError { throw NeteaseAccountError.invalidResponse }
-        guard status.code == 200 else { throw NeteaseWebResponseError(code: status.code, message: status.message ?? status.msg) }
         return data
     }
+
+    private struct CheckedWebResponse: Decodable {
+        private enum CodingKeys: String, CodingKey { case code, message, msg }
+
+        init(from decoder: any Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            let code = try values.decode(Int.self, forKey: .code)
+            func messages() throws -> (primary: String?, fallback: String?) {
+                try (values.decodeIfPresent(String.self, forKey: .message),
+                     values.decodeIfPresent(String.self, forKey: .msg))
+            }
+            try NeteaseAccountClient.validateCode(code, requiresAuthenticationFor301: false) {
+                let (primary, fallback) = try messages()
+                if code == 301 {
+                    // WEAPI also uses 301 for business rejections, including subscription writes.
+                    guard let reason = [primary, fallback].compactMap({ $0 }).first(where: Self.isBusinessMessage) else {
+                        return NeteaseAccountError.authenticationRequired
+                    }
+                    return NeteaseWebResponseError(code: code, message: reason)
+                }
+                return NeteaseWebResponseError(code: code, message: primary ?? fallback)
+            }
+            _ = try messages()
+        }
+
+        private static func isBusinessMessage(_ message: String) -> Bool {
+            let normalized = message.trimmingCharacters(in: .whitespacesAndNewlines.union(.init(charactersIn: ".。!！")))
+                .replacingOccurrences(of: "登陆", with: "登录")
+                .lowercased()
+            switch normalized {
+            case "", "未登录", "用户未登录", "需要登录", "请登录", "请先登录", "请重新登录",
+                 "请登录网易云音乐", "请先登录网易云音乐", "请登录后重试", "登录失效", "登录已失效", "登录过期", "登录已过期",
+                 "login required", "not logged in", "please log in", "please login", "please log in again",
+                 "login expired", "session expired":
+                return false
+            default:
+                return true
+            }
+        }
+    }
+
     private static func encryptCBC(_ data: Data, key: Data) throws -> Data {
         var output = Data(count: data.count + kCCBlockSizeAES128)
         let capacity = output.count

@@ -1,21 +1,29 @@
 import XCTest
 import SwiftUI
-import Nuke
 @testable import NeoMusic
 @testable import FullScreenPlayer
 
 @MainActor
 final class ArtworkRenderingTests: XCTestCase {
-    func testRowThumbnailSkipsBackdropPreparationAndLargeArtworkStillPreparesIt() async throws {
+    func testDefaultImageLoadsSkipColorUntilTheBackdropIsRequested() async throws {
         let url = fileURL()
         try XCTUnwrap(solid(.red).pngData()).write(to: url)
         defer { try? FileManager.default.removeItem(at: url) }
-        let thumbnail = await LocalArtworkImages.loadThumbnail(url, pixels: 192)
+        let thumbnail = await LocalArtworkImages.load(url, pixels: 192)
         XCTAssertNotNil(thumbnail)
         XCTAssertNil(LocalArtworkImages.cachedBackdrop(for: .file(url)))
         let large = await LocalArtworkImages.load(url, pixels: 512)
         XCTAssertNotNil(large)
+        XCTAssertNil(LocalArtworkImages.cachedBackdrop(for: .file(url)))
+        let preview = LibraryNavigationPreview(route: .album("album"), ownerID: nil, title: "Album",
+            artwork: .image(Image(uiImage: try XCTUnwrap(large))), originalArtwork: .file(url))
+        XCTAssertNil(preview.albumBackdrop)
+        XCTAssertEqual(preview.backdropFile, url)
+        let backdrop = await LocalArtworkImages.loadBackdrop(for: url)
+        XCTAssertNotNil(backdrop)
         XCTAssertNotNil(LocalArtworkImages.cachedBackdrop(for: .file(url)))
+        let reused = await LocalArtworkImages.load(url, pixels: 512)
+        XCTAssertTrue(reused === large)
     }
 
     func testPlayerCoverSurvivesSameSongRefreshAndNeverLeaksToAnotherSong() async throws {
@@ -26,10 +34,7 @@ final class ArtworkRenderingTests: XCTestCase {
             try? FileManager.default.removeItem(at: firstURL)
             try? FileManager.default.removeItem(at: secondURL)
         }
-        let size = CGSize(width: 96, height: 96)
-        let requests = [firstURL, secondURL].compactMap {
-            ArtworkImagePipeline.request(for: $0, size: size, displayScale: 1)
-        }
+        let requests = [firstURL, secondURL].map { PlayerArtworkRequest(url: $0, pixelWidth: 128, pixelHeight: 128) }
         await ArtworkImagePipeline.prefetch(requests)
         let state = ArtworkRenderingState(.deferred(id: "first-arrival", placeholder: .missing), contentID: "song-1")
         let scene = try await applicationWindowScene()

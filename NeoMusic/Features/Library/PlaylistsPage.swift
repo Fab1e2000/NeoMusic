@@ -139,14 +139,14 @@ struct PlaylistsListView: View {
     @State private var isCreatingPlaylist = false
     @Namespace private var playlistCreationTransition
     @Environment(\.collectionMenuActions) private var collectionActions
+    @Environment(\.libraryToastCenter) private var toastCenter
+    @Environment(\.libraryNavigationChrome) private var chrome
     @State private var folderName = ""
     @State private var renamingFolder: PlaylistFolder?
     @State private var deletingFolder: PlaylistFolder?
     @Environment(\.openLibraryRoute) private var openLibraryRoute
     @Environment(\.dismiss) private var dismiss
     @Environment(\.closeLibraryDetail) private var closeLibraryDetail
-    @Environment(\.dynamicTypeSize) private var textSize
-    @Environment(\.accessibilityReduceMotion) private var reducesMotion
     @State private var renameText = ""
 
     private var title: String { folderID.flatMap { library.folder($0)?.name } ?? "播放列表" }
@@ -160,19 +160,38 @@ struct PlaylistsListView: View {
         let filter: LibraryFilter
         let sort: PlaylistSort
 
-        func calculate() -> [PlaylistEntry] {
-            let playlists = playlists.filter { placement[$0.id] == folderID }
-            let entries: [PlaylistEntry]
-            if filter == .favorites {
-                entries = playlists.filter(\.isFavorite).map(PlaylistEntry.playlist)
-            } else {
-                let folders = folders.filter { $0.parentID == folderID }.map { folder in
-                    PlaylistEntry.folder(folder, playlists: self.playlists.filter { placement[$0.id] == folder.id })
-                }
-                entries = folders + playlists.map(PlaylistEntry.playlist)
+        var playlistEntries: [PlaylistSortEntry] {
+            playlists.enumerated().map { index, item in
+                PlaylistSortEntry(
+                    index: index, id: item.id, title: item.title, isFavorite: item.isFavorite, isSystem: item.isSystem,
+                    addedOrder: item.addedOrder, lastPlayedOrder: item.lastPlayedOrder, updatedOrder: item.updatedOrder,
+                    addedAt: item.addedAt, lastPlayedAt: item.lastPlayedAt, updatedAt: item.updatedAt,
+                    folderID: placement[item.id]
+                )
             }
-            let matching = query.isEmpty ? entries : entries.filter { $0.title.localizedStandardContains(query) }
-            return matching.sorted(by: sort)
+        }
+
+        var folderEntries: [FolderSortEntry] {
+            folders.enumerated().map { index, folder in
+                FolderSortEntry(index: index, id: folder.id, name: folder.name,
+                                parentID: folder.parentID, addedOrder: folder.addedOrder)
+            }
+        }
+
+        func finish(_ projected: [ProjectedEntry]) -> [PlaylistEntry] {
+            projected.map { entry in
+                switch entry {
+                case .folder(let folderIndex, let playlistIndices):
+                    .folder(folders[folderIndex], playlists: playlistIndices.map { playlists[$0] })
+                case .playlist(let playlistIndex):
+                    .playlist(playlists[playlistIndex])
+                }
+            }
+        }
+
+        func calculate() -> [PlaylistEntry] {
+            finish(PlaylistsListView.computeProjectedEntries(playlists: playlistEntries, folders: folderEntries,
+                                                             folderID: folderID, query: query, filter: filter, sort: sort))
         }
     }
 
@@ -309,7 +328,7 @@ struct PlaylistsListView: View {
                         if !library.isRefreshingOnline, library.retryOnline != nil {
                             Button("重试") { Task { await library.retryOnline?() } }.font(.caption)
                         }
-                    }.padding(.horizontal, 20).padding(.vertical, 8)
+                    }.padding(.horizontal, DesignTokens.Spacing.pageMargin).padding(.vertical, 8)
                         .background(Color(.systemBackground))
                 }
             }
@@ -324,46 +343,21 @@ struct PlaylistsListView: View {
                         }
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
-                        .padding(.horizontal, 20)
+                        .padding(.horizontal, DesignTokens.Spacing.pageMargin)
                     } else if entries.isEmpty {
                         LibraryListEmptyState(noun: "播放列表", symbol: "music.note.list", query: $query, filter: $filter)
                     }
                 }
             }
-            .overlay(alignment: .bottom) {
-                if let move = library.recentMove, let folder = library.folder(move.folderID) {
-                    MovedToFolderToast(folderName: folder.name) { openLibraryRoute(.playlistFolder(folder.id)) }
-                        .padding(.bottom, 12)
-                        .transition(reducesMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.9)))
-                        .task(id: move.id) {
-                            do {
-                                try await Task.sleep(for: .seconds(3))
-                                try Task.checkCancellation()
-                            } catch { return }
-                            withAnimation(reducesMotion ? .easeOut(duration: 0.15) : .smooth(duration: 0.3)) {
-                                library.clearRecentMove(move)
-                            }
-                        }
-                }
-            }
-            .animation(reducesMotion ? .easeOut(duration: 0.15) : .smooth(duration: 0.3), value: library.recentMove)
+            .onChange(of: library.recentMove, initial: true) { _, _ in presentMoveToast() }
+            .onChange(of: chrome?.isActive ?? true) { _, _ in presentMoveToast() }
             .libraryNavigationTitle(title)
             .libraryTitleDisplayMode(.large)
             .libraryRootAccountButton()
             .modifier(PlaylistSearch(query: $query, isEnabled: !entries.isEmpty || !query.isEmpty || !resolved))
             .task(id: input) {
-                let playlistEntries = input.playlists.enumerated().map { index, item in
-                    PlaylistSortEntry(
-                        index: index, id: item.id, title: item.title, isFavorite: item.isFavorite, isSystem: item.isSystem,
-                        addedOrder: item.addedOrder, lastPlayedOrder: item.lastPlayedOrder, updatedOrder: item.updatedOrder,
-                        addedAt: item.addedAt, lastPlayedAt: item.lastPlayedAt, updatedAt: item.updatedAt,
-                        folderID: input.placement[item.id]
-                    )
-                }
-                let folderEntries = input.folders.enumerated().map { index, folder in
-                    FolderSortEntry(index: index, id: folder.id, name: folder.name,
-                                    parentID: folder.parentID, addedOrder: folder.addedOrder)
-                }
+                let playlistEntries = input.playlistEntries
+                let folderEntries = input.folderEntries
                 let targetFolderID = input.folderID
                 let currentQuery = input.query
                 let currentFilter = input.filter
@@ -376,16 +370,7 @@ struct PlaylistsListView: View {
                                                      folderID: targetFolderID, query: currentQuery,
                                                      filter: currentFilter, sort: currentSort)
                     },
-                    finish: { projected in
-                        projected.map { entry in
-                            switch entry {
-                            case .folder(let folderIndex, let playlistIndices):
-                                .folder(input.folders[folderIndex], playlists: playlistIndices.map { input.playlists[$0] })
-                            case .playlist(let playlistIndex):
-                                .playlist(input.playlists[playlistIndex])
-                            }
-                        }
-                    }
+                    finish: input.finish
                 )
             }
             .toolbar {
@@ -451,6 +436,13 @@ struct PlaylistsListView: View {
             }
     }
 
+    private func presentMoveToast() {
+        guard chrome?.isActive ?? true, let move = library.recentMove,
+              let folder = library.consumeRecentMove(move) else { return }
+        let toast = LibraryToast.movedToFolder(folderName: folder.name, folderID: folder.id)
+        if let toastCenter { toastCenter.show(toast) } else { collectionActions.notify(toast) }
+    }
+
     func folderSections(_ folder: PlaylistFolder) -> LibraryMenuSections {
         let targets = library.folders.filter { !library.isDescendant($0.id, of: folder.id) }
         let move: LibraryMenuItem
@@ -500,16 +492,14 @@ struct PlaylistsListView: View {
             .ignoresSafeArea(.container, edges: .vertical)
         case .grid:
             ScrollView {
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .top),
-                                         count: textSize.isAccessibilitySize ? 1 : 2),
-                          alignment: .leading, spacing: 21) {
+                LibraryCollectionGrid(rowSpacing: 21) {
                     ForEach(entries) { entry in
                         CollectionCardLink(item: entry.shelfItem, menuSections: entry.folder.map { folder in { _ in folderSections(folder) } }) {
                             AlbumCard(item: entry.shelfItem)
                         }
                     }
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, DesignTokens.Spacing.pageMargin)
                 .padding(.bottom, 24)
             }
         }
@@ -527,35 +517,6 @@ private struct PlaylistSearch: ViewModifier {
 
 extension PlaylistEntry {
     var folder: PlaylistFolder? { if case .folder(let folder, _) = self { folder } else { nil } }
-}
-
-private struct MovedToFolderToast: View {
-    let folderName: String
-    let open: () -> Void
-
-    var body: some View {
-        Button(action: open) {
-            HStack(spacing: 10) {
-                Image(systemName: "folder")
-                    .font(.system(size: 17))
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("已移至").font(.caption).foregroundStyle(.secondary)
-                    HStack(spacing: 2) {
-                        Text(folderName).font(.subheadline.weight(.semibold)).lineLimit(1)
-                        Image(systemName: "chevron.right").font(.caption.weight(.semibold))
-                    }
-                }
-            }
-            .foregroundStyle(.primary)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-            .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 14))
-            .contentShape(.rect(cornerRadius: 14))
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("已移至\(folderName)")
-        .accessibilityHint("打开文件夹")
-    }
 }
 
 extension View {
@@ -590,12 +551,18 @@ private struct PlaylistDeletionConfirmation: ViewModifier {
 struct PlaylistListRow: View {
     let item: LibraryShelfItem
     var usesCellArtwork = false
+    var wrapsAccessibilityText = false
+    @Environment(\.dynamicTypeSize) private var textSize
 
     var body: some View {
         HStack(spacing: 12) {
             Group {
-                if usesCellArtwork { PlaylistCellArtwork(artwork: item.artwork) }
-                else { ArtworkView(artwork: item.artwork, cornerRadius: 6) }
+                if usesCellArtwork {
+                    LibraryArtworkSurface(content: ArtworkView(artwork: item.artwork, cornerRadius: DesignTokens.Radius.songRowCover),
+                                          cornerRadius: DesignTokens.Radius.songRowCover, hostedBackgroundColor: nil)
+                } else {
+                    ArtworkView(artwork: item.artwork, cornerRadius: DesignTokens.Radius.songRowCover)
+                }
             }
                 .frame(width: 64, height: 64)
                 .overlay(alignment: .leading) { FavoriteMark(isFavorite: item.isFavorite, color: .yellow) }
@@ -605,7 +572,7 @@ struct PlaylistListRow: View {
                     Text(subtitle).font(.subheadline).foregroundStyle(.secondary)
                 }
             }
-            .lineLimit(1)
+            .lineLimit(wrapsAccessibilityText && textSize.isAccessibilitySize ? nil : 1)
         }
         .frame(minHeight: 80)
         .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] + 76 }

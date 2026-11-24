@@ -5,6 +5,7 @@ import UIKit
 struct FrontendLibraryAuditPreview: View {
     @State private var fixture = LibraryAuditFixture()
     @State private var navigation = LibraryDetailNavigation()
+    @State private var toasts = LibraryToastCenter()
     @State private var showsLayoutCandidate = ProcessInfo.processInfo.arguments.contains("-libraryAuditLayoutCandidate")
 
     private var initialPath: [LibraryRoute] {
@@ -21,7 +22,8 @@ struct FrontendLibraryAuditPreview: View {
         LibraryNavigationContainer(
             navigation: navigation,
             root: LibraryAuditHome(fixture: fixture),
-            destination: { AnyView(LibraryAuditDestination(route: $0, fixture: fixture)) },
+            destination: { AnyView(LibraryAuditDestination(route: $0, fixture: fixture)
+                .libraryToasts(toasts).libraryToastFeedback(toasts)) },
             initialPath: initialPath
         )
         .environment(\.libraryDownloads, fixture.downloads)

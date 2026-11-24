@@ -115,6 +115,7 @@ private final class NeteaseLoginBrowser {
     }
 }
 
+#if DEBUG
 #Preview("登录核查进度") {
     NavigationStack {
         Color(.systemBackground)
@@ -128,3 +129,4 @@ private final class NeteaseLoginBrowser {
             }
     }
 }
+#endif

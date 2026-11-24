@@ -7,6 +7,7 @@ enum LibraryToast {
     case playingNext, addedToQueue
     case addedToPlaylist(count: Int, title: String, artwork: Artwork, playlistID: String)
     case addedToPlaylists(count: Int, playlistCount: Int)
+    case movedToFolder(folderName: String, folderID: String)
 
     var title: String {
         switch self {
@@ -19,6 +20,7 @@ enum LibraryToast {
         case .addedToQueue: "已添加到队列"
         case .addedToPlaylist(let count, _, _, _): "已添加\(count)首歌曲"
         case .addedToPlaylists(let count, let playlists): "已将\(count)首歌曲添加到\(playlists)个播放列表"
+        case .movedToFolder(let name, _): "已移至\(name)"
         }
     }
 
@@ -32,6 +34,7 @@ enum LibraryToast {
         case .playingNext: "text.line.first.and.arrowtriangle.forward"
         case .addedToQueue: "text.line.last.and.arrowtriangle.forward"
         case .addedToPlaylist, .addedToPlaylists: "text.badge.plus"
+        case .movedToFolder: "folder"
         }
     }
 
@@ -41,9 +44,16 @@ enum LibraryToast {
             voiceOverEnabled ? nil : .seconds(5)
         case .addedToPlaylists:
             .seconds(5)
+        case .movedToFolder:
+            voiceOverEnabled ? nil : .seconds(3)
         default:
             .seconds(1.5)
         }
+    }
+
+    var insets: EdgeInsets {
+        if case .movedToFolder = self { return .init(top: 0, leading: 0, bottom: 12, trailing: 0) }
+        return .init(top: 0, leading: 12, bottom: 25, trailing: 12)
     }
 
     var accessibilityAnnouncement: AttributedString {
@@ -127,6 +137,10 @@ final class LibraryToastCenter {
     }
 }
 
+extension EnvironmentValues {
+    @Entry var libraryToastCenter: LibraryToastCenter? = nil
+}
+
 extension View {
     func libraryToasts(_ center: LibraryToastCenter) -> some View {
         modifier(LibraryToastOverlay(center: center))
@@ -145,7 +159,7 @@ private struct LibraryToastFeedback: ViewModifier {
         content.sensoryFeedback(.success, trigger: center.current?.id) { _, new in
             guard new != nil else { return false }
             switch center.current?.toast {
-            case .favorited, .unfavorited, .pinned, .unpinned, .playingNext, .addedToQueue, .error:
+            case .favorited, .unfavorited, .pinned, .unpinned, .playingNext, .addedToQueue, .error, .movedToFolder:
                 return false
             default:
                 return true
@@ -229,12 +243,12 @@ private struct LibraryToastOverlay: ViewModifier {
 
     func body(content: Content) -> some View {
         content
+            .environment(\.libraryToastCenter, center)
             .overlay(alignment: .bottom) {
                 if let presentation = center.current {
                     LibraryToastView(toast: presentation.toast, dismiss: { center.dismiss(presentation) },
                                      openRoute: openLibraryRoute)
-                        .padding(.horizontal, 12)
-                        .padding(.bottom, 25)
+                        .padding(presentation.toast.insets)
                         .transition(reducesMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.9)))
                         .id(presentation.id)
                 }
@@ -249,11 +263,45 @@ struct LibraryToastView: View {
     let openRoute: OpenLibraryRouteAction
 
     var body: some View {
-        content
-            .frame(minHeight: 53)
-            .background(.regularMaterial, in: .rect(cornerRadius: 18))
-            .accessibilityElement(children: .combine)
-            .accessibilityAction(named: "关闭提示", dismiss)
+        Group {
+            if case .movedToFolder(let name, let folderID) = toast {
+                movedFolder(name: name, id: folderID)
+            } else {
+                content
+                    .frame(minHeight: 53)
+                    .background(.regularMaterial, in: .rect(cornerRadius: 18))
+                    .accessibilityElement(children: .combine)
+            }
+        }
+        .accessibilityAction(named: "关闭提示", dismiss)
+    }
+
+    func openFolder(_ folderID: String) {
+        dismiss()
+        openRoute(.playlistFolder(folderID))
+    }
+
+    private func movedFolder(name: String, id: String) -> some View {
+        Button { openFolder(id) } label: {
+            HStack(spacing: 10) {
+                Image(systemName: toast.systemImage).font(.system(size: 17))
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("已移至").font(.caption).foregroundStyle(.secondary)
+                    HStack(spacing: 2) {
+                        Text(name).font(.subheadline.weight(.semibold)).lineLimit(1)
+                        Image(systemName: "chevron.right").font(.caption.weight(.semibold))
+                    }
+                }
+            }
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(Color(.secondarySystemBackground), in: .rect(cornerRadius: 14))
+            .contentShape(.rect(cornerRadius: 14))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(toast.title)
+        .accessibilityHint("打开文件夹")
     }
 
     func openPlaylist(_ playlistID: String) {

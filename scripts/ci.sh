@@ -2,11 +2,16 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-if [ -e build/ci/TestResults.xcresult ]; then
-  echo "请先移走 build/ci/TestResults.xcresult，保留上一轮测试记录。" >&2
-  exit 1
-fi
 mkdir -p build/ci
+if [ -e build/ci/TestResults.xcresult ] || [ -L build/ci/TestResults.xcresult ]; then
+  rm -rf build/ci/TestResults.previous.xcresult
+  mv build/ci/TestResults.xcresult build/ci/TestResults.previous.xcresult
+  if [ -f build/ci/source-state.json ]; then
+    mv -f build/ci/source-state.json build/ci/source-state.previous.json
+  else
+    rm -f build/ci/source-state.previous.json
+  fi
+fi
 python3 - <<'PY'
 from datetime import datetime, timezone
 import json, subprocess
@@ -42,6 +47,8 @@ trap record_result EXIT
 
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/tests
 python3 scripts/check-module-boundaries.py
+python3 scripts/check-vendor-notices.py
+swift test --package-path Packages/AudioStreaming 2>&1 | tee build/ci/audio-streaming.log
 xcodegen generate
 xcodebuild -version
 

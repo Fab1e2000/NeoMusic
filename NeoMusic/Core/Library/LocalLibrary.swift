@@ -21,7 +21,7 @@ final class PinnedOrderStore {
     @ObservationIgnored private let key: String
     @ObservationIgnored private let canWrite: Bool
 
-    init(defaults: UserDefaults = .standard, key: String = "pinnedShelfOrder.v1") {
+    init(defaults: UserDefaults = .standard, key: String = AppDefaultsKey.pinnedShelfOrder) {
         self.defaults = defaults
         self.key = key
         if let stored = defaults.object(forKey: key) {
@@ -70,11 +70,14 @@ final class PinnedOrderStore {
 
 @MainActor @Observable
 final class LibrarySelectionSet {
-    private(set) var ids: Set<String> { didSet { if let key { UserDefaults.standard.set(Array(ids), forKey: key) } } }
+    private(set) var ids: Set<String> { didSet { if let key { defaults.set(Array(ids), forKey: key) } } }
     private let key: String?
-    init(ids: Set<String>, key: String? = nil) {
+    private let defaults: UserDefaults
+
+    init(ids: Set<String>, key: String? = nil, defaults: UserDefaults = .standard) {
         self.key = key
-        self.ids = key.flatMap { UserDefaults.standard.stringArray(forKey: $0) }.map(Set.init) ?? ids
+        self.defaults = defaults
+        self.ids = key.flatMap { defaults.stringArray(forKey: $0) }.map(Set.init) ?? ids
     }
 
     func toggle(_ id: String) {
@@ -267,7 +270,7 @@ final class SongLibrary {
         var transaction = Transaction(animation: nil)
         transaction.disablesAnimations = true
         withTransaction(transaction) {
-            let dates = defaults.dictionary(forKey: "favoriteSongDates") as? [String: Double] ?? [:]
+            let dates = defaults.dictionary(forKey: AppDefaultsKey.favoriteSongDates) as? [String: Double] ?? [:]
             let updated = songs.map { song in
                 var song = song
                 if song.isFavorite { song.favoriteAddedAt = dates[song.id].map(Date.init(timeIntervalSince1970:)) }
@@ -343,13 +346,13 @@ final class SongLibrary {
         guard let index = songs.firstIndex(where: { $0.id == id }), songs[index].isFavorite != value else { return }
         var updated = songs[index]
         updated.isFavorite = value
-        var ids = Set(defaults.stringArray(forKey: "favoriteSongs") ?? [])
+        var ids = Set(defaults.stringArray(forKey: AppDefaultsKey.favoriteSongs) ?? [])
         if value { ids.insert(id) } else { ids.remove(id) }
-        defaults.set(Array(ids), forKey: "favoriteSongs")
-        var dates = defaults.dictionary(forKey: "favoriteSongDates") as? [String: Double] ?? [:]
+        defaults.set(Array(ids), forKey: AppDefaultsKey.favoriteSongs)
+        var dates = defaults.dictionary(forKey: AppDefaultsKey.favoriteSongDates) as? [String: Double] ?? [:]
         let date = value ? Date() : nil
         dates[id] = date?.timeIntervalSince1970
-        defaults.set(dates, forKey: "favoriteSongDates")
+        defaults.set(dates, forKey: AppDefaultsKey.favoriteSongDates)
         updated.favoriteAddedAt = date
         songs[index] = updated
     }
@@ -362,8 +365,8 @@ final class SongLibrary {
     func togglePin(_ id: String) {
         guard let index = songs.firstIndex(where: { $0.id == id }) else { return }
         songs[index].isPinned.toggle()
-        LocalLibraryRuntime.setFlag(id, value: songs[index].isPinned, key: "pinnedSongs", defaults: defaults)
+        LocalLibraryRuntime.setFlag(id, value: songs[index].isPinned, key: AppDefaultsKey.pinnedSongs, defaults: defaults)
     }
 
-    func delete(_ id: String) { LocalLibraryRuntime.setFlag(id, value: true, key: "hiddenSongs", defaults: defaults); songs.removeAll { $0.id == id } }
+    func delete(_ id: String) { LocalLibraryRuntime.setFlag(id, value: true, key: AppDefaultsKey.hiddenSongs, defaults: defaults); songs.removeAll { $0.id == id } }
 }

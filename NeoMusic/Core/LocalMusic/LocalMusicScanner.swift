@@ -42,7 +42,7 @@ actor LocalMusicScanner {
     private var generation = 0
 
     static func prepareDirectory(documents: URL) throws -> URL {
-        let root = documents.appendingPathComponent("音乐", isDirectory: true)
+        let root = AppStoragePaths.musicDirectory(in: documents)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let instructions = root.appendingPathComponent("如何添加音乐.txt")
         let oldInstructions = """

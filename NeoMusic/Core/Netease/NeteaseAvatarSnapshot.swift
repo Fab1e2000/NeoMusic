@@ -1,5 +1,4 @@
 import Foundation
-import ImageIO
 
 struct NeteaseAvatarSnapshot: Codable, Equatable, Sendable {
     static let maximumPixelSize = 192
@@ -17,7 +16,7 @@ struct NeteaseAvatarSnapshotStore: Sendable {
     private static let maximumFileSize = 256 * 1024
     private let fileURL: URL
 
-    init(fileURL: URL = URL.cachesDirectory.appending(path: "NeteaseAvatarDisplay.plist")) {
+    init(fileURL: URL = AppStoragePaths.neteaseAvatarDisplay) {
         self.fileURL = fileURL
     }
 
@@ -35,21 +34,9 @@ struct NeteaseAvatarSnapshotStore: Sendable {
     func save(_ data: Data, for profile: NeteaseProfile) async {
         guard !Task.isCancelled, let url = profile.avatarURL else { return }
         let encoded: Data? = autoreleasepool {
-            guard let source = CGImageSourceCreateWithData(data as CFData,
-                    [kCGImageSourceShouldCache: false] as CFDictionary),
-                  let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, [
-                    kCGImageSourceCreateThumbnailFromImageAlways: true,
-                    kCGImageSourceCreateThumbnailWithTransform: true,
-                    kCGImageSourceShouldCacheImmediately: true,
-                    kCGImageSourceThumbnailMaxPixelSize: NeteaseAvatarSnapshot.maximumPixelSize
-                  ] as CFDictionary), !Task.isCancelled else { return nil }
-            let png = NSMutableData()
-            guard let destination = CGImageDestinationCreateWithData(png, "public.png" as CFString, 1, nil) else {
-                return nil
-            }
-            CGImageDestinationAddImage(destination, thumbnail, nil)
-            guard CGImageDestinationFinalize(destination) else { return nil }
-            let snapshot = NeteaseAvatarSnapshot(userID: profile.userID, avatarURL: url, data: png as Data)
+            guard let thumbnail = ImageSourceThumbnail.image(data, maxPixels: NeteaseAvatarSnapshot.maximumPixelSize),
+                  !Task.isCancelled, let png = ImageSourceThumbnail.encodePNG(thumbnail) else { return nil }
+            let snapshot = NeteaseAvatarSnapshot(userID: profile.userID, avatarURL: url, data: png)
             let encoder = PropertyListEncoder()
             encoder.outputFormat = .binary
             return try? encoder.encode(snapshot)
@@ -60,6 +47,7 @@ struct NeteaseAvatarSnapshotStore: Sendable {
                                                     withIntermediateDirectories: true)
             guard !Task.isCancelled else { return }
             try encoded.write(to: fileURL, options: .atomic)
+            AppStoragePaths.excludeFromBackup(fileURL)
         } catch {}
     }
 

@@ -1,3 +1,4 @@
+#if DEBUG
 import Foundation
 import SwiftUI
 import UIKit
@@ -6,9 +7,9 @@ import UIKit
     static let isEnabled = ProcessInfo.processInfo.arguments.contains("-navigationDiagnostics")
     static let recorder = NavigationDiagnosticRecorder()
 
-    static func event(_ name: String, page: String) {
+    static func event(_ name: String, page: @autoclosure () -> String) {
         guard isEnabled else { return }
-        recorder.event(name, page: page)
+        recorder.event(name, page: page())
     }
 }
 
@@ -24,8 +25,8 @@ final class NavigationDiagnosticFile: Sendable {
         let url = url
         queue.async {
             do {
-                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
                 if !FileManager.default.fileExists(atPath: url.path) {
+                    try AppStoragePaths.prepareCacheDirectory(url.deletingLastPathComponent())
                     _ = FileManager.default.createFile(atPath: url.path, contents: nil)
                 }
                 var data = try JSONEncoder().encode(fields)
@@ -35,7 +36,7 @@ final class NavigationDiagnosticFile: Sendable {
                 try handle.seekToEnd()
                 try handle.write(contentsOf: data)
             } catch {
-                NSLog("Navigation diagnostics write failed: %@", error.localizedDescription)
+                AppLogger.navigation.error("Navigation diagnostics write failed: \(error.localizedDescription)")
             }
         }
     }
@@ -46,7 +47,7 @@ final class NavigationDiagnosticFile: Sendable {
 }
 
 @MainActor final class NavigationDiagnosticRecorder {
-    private let file = NavigationDiagnosticFile(directory: URL.applicationSupportDirectory.appendingPathComponent("NavigationDiagnostics"))
+    private let file = NavigationDiagnosticFile(directory: AppStoragePaths.navigationDiagnostics)
     private let start = ProcessInfo.processInfo.systemUptime
     private var viewStates: [ObjectIdentifier: [String: String]] = [:]
     private var sequence = 0
@@ -301,6 +302,7 @@ final class NavigationDiagnosticController: UIViewController {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override func loadView() { view = UIView(); view.isUserInteractionEnabled = false; view.backgroundColor = .clear }
     private func record(_ event: String) {
+        guard NavigationDiagnostics.isEnabled else { return }
         if let navigationController { NavigationDiagnostics.recorder.attach(navigationController) }
         NavigationDiagnostics.event(event, page: page)
     }
@@ -337,3 +339,4 @@ extension LibraryRoute {
         }
     }
 }
+#endif

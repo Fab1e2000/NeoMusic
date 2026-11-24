@@ -59,7 +59,7 @@ struct NowPlayingBackdropPalette: Hashable, Sendable {
                 let r = lut[Int(px[0])]
                 let g = lut[Int(px[1])]
                 let b = lut[Int(px[2])]
-                let lab = linearToOklab(r: r, g: g, b: b)
+                let lab = ArtworkColorSpace.linearToOKLab(r: r, g: g, b: b) { cbrt(max($0, 0)) }
                 let c = hypot(lab.a, lab.b)
 
                 lSamples.append(lab.l)
@@ -164,11 +164,11 @@ struct NowPlayingBackdropPalette: Hashable, Sendable {
             let blendedL = cellL + (meanL - cellL) * wash
             let l = min(max(targetCenterL + (blendedL - meanL) * lSpreadScale * 0.72, 0.16), 0.68)
             let row = index / columns
-            let linear = oklabToLinearSRGB(l: l, a: a, b: b) * verticalShade(row: row)
+            let linear = ArtworkColorSpace.oklabToLinearSRGB(l: l, a: a, b: b) * verticalShade(row: row)
             return Swatch(
-                red: linearToSRGB(linear.x),
-                green: linearToSRGB(linear.y),
-                blue: linearToSRGB(linear.z)
+                red: ArtworkColorSpace.linearToSRGB(linear.x),
+                green: ArtworkColorSpace.linearToSRGB(linear.y),
+                blue: ArtworkColorSpace.linearToSRGB(linear.z)
             )
         }
 
@@ -273,41 +273,7 @@ struct NowPlayingBackdropPalette: Hashable, Sendable {
     }
 
     private static let sRGBToLinearLUT: [Float] = (0..<256).map { index in
-        let u = Float(index) / 255.0
-        return u <= 0.04045 ? (u / 12.92) : pow((u + 0.055) / 1.055, 2.4)
-    }
-
-    private static func linearToOklab(r: Float, g: Float, b: Float) -> (l: Float, a: Float, b: Float) {
-        let l = 0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b
-        let m = 0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b
-        let s = 0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b
-        let l_ = cbrt(max(l, 0))
-        let m_ = cbrt(max(m, 0))
-        let s_ = cbrt(max(s, 0))
-        return (
-            l: 0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_,
-            a: 1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_,
-            b: 0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_
-        )
-    }
-
-    private static func oklabToLinearSRGB(l: Float, a: Float, b: Float) -> SIMD3<Float> {
-        let l_ = l + 0.3963377774 * a + 0.2158037573 * b
-        let m_ = l - 0.1055613458 * a - 0.0638541728 * b
-        let s_ = l - 0.0894841775 * a - 1.2914855480 * b
-        let l3 = l_ * l_ * l_
-        let m3 = m_ * m_ * m_
-        let s3 = s_ * s_ * s_
-        return SIMD3<Float>(
-            4.0767416621 * l3 - 3.3077115913 * m3 + 0.2309699292 * s3,
-            -1.2684380046 * l3 + 2.6097574011 * m3 - 0.3413193965 * s3,
-            -0.0041960863 * l3 - 0.7034186147 * m3 + 1.7076147010 * s3
-        )
-    }
-
-    private static func linearToSRGB(_ value: Float) -> Float {
-        let v = min(max(value, 0), 1)
-        return v <= 0.0031308 ? v * 12.92 : 1.055 * pow(v, 1.0 / 2.4) - 0.055
+        ArtworkColorSpace.sRGBToLinear(Float(index) / 255.0, power: pow)
     }
 
     private static func smoothstep(edge0: Float, edge1: Float, x: Float) -> Float {

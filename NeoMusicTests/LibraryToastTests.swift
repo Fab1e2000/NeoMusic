@@ -147,6 +147,26 @@ final class LibraryToastTests: XCTestCase {
         XCTAssertEqual(opened, .playlist("night"))
         XCTAssertNil(center.current)
     }
+
+    func testMovedFolderToastAnnouncesAndDismissesBeforeRouting() throws {
+        let toast = LibraryToast.movedToFolder(folderName: "夜间", folderID: "folder")
+        XCTAssertEqual(toast.dismissalDelay(voiceOverEnabled: false), .seconds(3))
+        XCTAssertNil(toast.dismissalDelay(voiceOverEnabled: true))
+        let center = LibraryToastCenter(voiceOverEnabled: true)
+        center.show(.favorited)
+        center.show(toast)
+        let announcement = try XCTUnwrap(center.takeAccessibilityAnnouncement())
+        XCTAssertEqual(String(announcement.characters), "已移至夜间")
+        let presentation = try XCTUnwrap(center.current)
+        var opened: LibraryRoute?
+        let view = LibraryToastView(toast: toast, dismiss: { center.dismiss(presentation) },
+                                    openRoute: OpenLibraryRouteAction { route in
+            XCTAssertNil(center.current)
+            opened = route
+        })
+        view.openFolder("folder")
+        XCTAssertEqual(opened, .playlistFolder("folder"))
+    }
 }
 
 @MainActor

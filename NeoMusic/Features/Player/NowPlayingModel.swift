@@ -7,37 +7,14 @@ import UIKit
 final class NowPlayingModel {
     enum RepeatMode: String, Codable, Sendable { case off, all, one }
 
-    struct TrackPlaybackEvent: Identifiable {
-        let id = UUID()
-        let song: LibrarySongItem
-    }
-
-    private var trackPlaybackEvents: [TrackPlaybackEvent] = []
-    private var lastRecordedPlayback: (generation: UInt64, entryID: UUID, eventID: UUID)?
+    private let history = NowPlayingHistory()
+    private var currentEntryID: UUID? { hasCurrent ? entryIDs[currentIndex] : nil }
 
     var playbackHistory: [TrackPlaybackEvent] {
-        let currentEventID = currentRecordedPlayback?.eventID
-        return trackPlaybackEvents.filter { $0.id != currentEventID && isInHistoryScope($0.song) }
+        history.visible(owner: resolvedOnlineOwnerID, generation: playbackGeneration, entry: currentEntryID)
     }
 
-    private var currentRecordedPlayback: (generation: UInt64, entryID: UUID, eventID: UUID)? {
-        guard let lastRecordedPlayback, lastRecordedPlayback.generation == playbackGeneration,
-              hasCurrent, entryIDs[currentIndex] == lastRecordedPlayback.entryID else { return nil }
-        return lastRecordedPlayback
-    }
-
-    private func isInHistoryScope(_ song: LibrarySongItem) -> Bool {
-        guard let owner = song.onlineOwnerID else { return true }
-        return owner == resolvedOnlineOwnerID
-    }
-
-    func clearPlaybackHistory() {
-        let ownerID = resolvedOnlineOwnerID
-        trackPlaybackEvents.removeAll {
-            guard let owner = $0.song.onlineOwnerID else { return true }
-            return owner == ownerID
-        }
-    }
+    func clearPlaybackHistory() { history.clear(owner: resolvedOnlineOwnerID) }
 
     func playFromHistory(_ eventID: UUID) {
         guard let event = playbackHistory.first(where: { $0.id == eventID }) else { return }
@@ -50,12 +27,12 @@ final class NowPlayingModel {
         }
     }
 
-    private(set) var queue: [LibrarySongItem] { didSet { queueRevision &+= 1; updateRemoteCommandAvailability() } }
+    var queue: [LibrarySongItem] { didSet { queueRevision &+= 1; updateRemoteCommandAvailability() } }
     private(set) var queueRevision: UInt64 = 0
     private(set) var playbackGeneration: UInt64 = 0
-    private(set) var currentIndex: Int { didSet { updateRemoteCommandAvailability() } }
-    private(set) var entryIDs: [UUID]
-    private var originalOrder: [UUID] = []
+    var currentIndex: Int { didSet { updateRemoteCommandAvailability() } }
+    var entryIDs: [UUID]
+    var originalOrder: [UUID] = []
     private var applyingState = false
     var isPlaying: Bool
     @ObservationIgnored private var idleAnchorTimestamp: TimeInterval = ProcessInfo.processInfo.systemUptime
@@ -101,8 +78,8 @@ final class NowPlayingModel {
         prepareNext(); saveQueue()
     } }
     var sourceTitle: String?
-    private(set) var continuation: PlaybackQueueContinuation? { didSet { updateRemoteCommandAvailability() } }
-    private var userQueuedIDs: Set<UUID> = []
+    var continuation: PlaybackQueueContinuation? { didSet { updateRemoteCommandAvailability() } }
+    var userQueuedIDs: Set<UUID> = []
     var pendingPlay: PendingPlay?
     var onCollectionPlaybackStarted: ((PlaybackCollectionReference) -> Void)?
     var queueContinues: Bool { continuation != nil }
@@ -112,103 +89,12 @@ final class NowPlayingModel {
     var onRecommendationsQueued: (() -> Void)?
     var canAutomaticallyContinue: Bool { hasCurrent && recommendationOwner?(current) != nil }
     var isAutomaticContinuationEnabled: Bool { continuation?.kind == .recommendations }
-    private var hasRecommendationBatch = false
-    private var suspended: [(UUID, LibrarySongItem)] = []
-    private var recommendedEntries = Set<UUID>()
-    @ObservationIgnored private(set) var recommendationTask: Task<Void, Never>?
-    private var advanceAfterRecommendations: UUID?
-    private var endedWaitingForRecommendations = false
-
-    func toggleAutomaticContinuation() {
-        if isAutomaticContinuationEnabled { stopAutomaticContinuation(); return }
-        guard hasCurrent, let owner = recommendationOwner?(current), fetchRecommendations != nil else { return }
-        repeatMode = .off
-        continuation = PlaybackQueueContinuation(ownerID: owner, kind: .recommendations)
-        saveQueue()
-        requestRecommendations()
-    }
-
-    func stopAutomaticContinuation() {
-        guard isAutomaticContinuationEnabled else { return }
-        let ended = endedWaitingForRecommendations && advanceAfterRecommendations == (hasCurrent ? entryIDs[currentIndex] : nil)
-        continuation = nil
-        hasRecommendationBatch = false
-        recommendationTask?.cancel()
-        recommendationTask = nil
-        advanceAfterRecommendations = nil
-        endedWaitingForRecommendations = false
-        let playingEntry = hasCurrent ? entryIDs[currentIndex] : nil
-        if let playingEntry { recommendedEntries.remove(playingEntry) }
-        let remove = recommendedEntries
-        recommendedEntries.removeAll()
-        if !remove.isEmpty {
-            queue = zip(entryIDs, queue).compactMap { remove.contains($0.0) ? nil : $0.1 }
-            entryIDs.removeAll { remove.contains($0) }
-            originalOrder.removeAll { remove.contains($0) }
-            if let playingEntry, let index = entryIDs.firstIndex(of: playingEntry) { currentIndex = index }
-        }
-        if !suspended.isEmpty {
-            var known = Set(queue.map(\.id))
-            let restored = suspended.filter { known.insert($0.1.id).inserted }
-            entryIDs.append(contentsOf: restored.map(\.0))
-            queue.append(contentsOf: restored.map(\.1))
-            suspended.removeAll()
-            let retained = Set(entryIDs)
-            originalOrder.removeAll { !retained.contains($0) }
-        }
-        prepareNext()
-        if ended { isPlaying = false }
-        saveQueue()
-    }
-
-    private func replenish(_ token: PlaybackQueueContinuation, _ advance: Bool, _ ended: Bool) {
-        guard token.kind == .recommendations else { replenishQueue?(token, advance, ended); return }
-        guard recommendationOwner?(current) == token.ownerID else { stopAutomaticContinuation(); return }
-        guard upcoming.count <= 1 else { return }
-        if advance && next == nil {
-            advanceAfterRecommendations = entryIDs[currentIndex]
-            endedWaitingForRecommendations = endedWaitingForRecommendations || ended
-        }
-        requestRecommendations()
-    }
-
-    private func requestRecommendations() {
-        guard let token = continuation, recommendationTask == nil, let fetchRecommendations else { return }
-        let seed = current
-        recommendationTask = Task { [weak self] in
-            guard !Task.isCancelled else { return }
-            let batch = try? await fetchRecommendations(seed)
-            guard let self, !Task.isCancelled, continuation == token else { return }
-            recommendationTask = nil
-            guard recommendationOwner?(current) == token.ownerID else { stopAutomaticContinuation(); return }
-            // Only the first successful response takes over the source queue.
-            let ordinary = hasRecommendationBatch ? [] : entryIDs.indices.dropFirst(currentIndex + 1).filter {
-                !userQueuedIDs.contains(entryIDs[$0]) && !recommendedEntries.contains(entryIDs[$0])
-            }
-            let parked = Set(ordinary.map { entryIDs[$0] })
-            var known = Set(zip(entryIDs, queue).compactMap { parked.contains($0.0) ? nil : $0.1.id })
-            let additions = (batch ?? []).filter { $0.unavailabilityReason == nil && known.insert($0.id).inserted }
-            guard !additions.isEmpty else {
-                stopAutomaticContinuation()
-                return
-            }
-            if !parked.isEmpty {
-                suspended = ordinary.map { (entryIDs[$0], queue[$0]) }
-                queue = zip(entryIDs, queue).compactMap { parked.contains($0.0) ? nil : $0.1 }
-                entryIDs.removeAll { parked.contains($0) }
-            }
-            hasRecommendationBatch = true
-            let advance = advanceAfterRecommendations == entryIDs[currentIndex]
-            let resume = advance && endedWaitingForRecommendations
-            advanceAfterRecommendations = nil
-            endedWaitingForRecommendations = false
-            appendToEnd(additions, userQueued: false, recommended: true)
-            onRecommendationsQueued?()
-
-            if resume { isPlaying = true }
-            if advance { select(currentIndex + 1) }
-        }
-    }
+    var hasRecommendationBatch = false
+    var suspended: [(UUID, LibrarySongItem)] = []
+    var recommendedEntries = Set<UUID>()
+    @ObservationIgnored var recommendationTask: Task<Void, Never>?
+    var advanceAfterRecommendations: UUID?
+    var endedWaitingForRecommendations = false
 
     private var pendingCollection: PlaybackCollectionReference?
 
@@ -303,15 +189,8 @@ final class NowPlayingModel {
         } else {
             let targetIndex = currentIndex - 1
             if queue.indices.contains(targetIndex) {
-                if let currentEventID = currentRecordedPlayback?.eventID {
-                    trackPlaybackEvents.removeAll { $0.id == currentEventID }
-                }
-                let targetEntry = entryIDs[targetIndex]
-                let targetSongID = queue[targetIndex].id
-                if let lastScopedEvent = trackPlaybackEvents.last(where: { isInHistoryScope($0.song) }),
-                   lastScopedEvent.song.id == targetSongID {
-                    lastRecordedPlayback = (generation: playbackGeneration, entryID: targetEntry, eventID: lastScopedEvent.id)
-                }
+                history.returnToPrevious(generation: playbackGeneration, entry: currentEntryID,
+                    targetEntry: entryIDs[targetIndex], targetSongID: queue[targetIndex].id, owner: resolvedOnlineOwnerID)
             }
             select(targetIndex)
         }
@@ -329,9 +208,7 @@ final class NowPlayingModel {
         recommendedEntries.remove(selectedEntry)
         userQueuedIDs.remove(selectedEntry)
         playbackGeneration &+= 1
-        if lastRecordedPlayback?.entryID == selectedEntry {
-            lastRecordedPlayback?.generation = playbackGeneration
-        }
+        history.carryRecording(for: selectedEntry, to: playbackGeneration)
         updatingTime = true; elapsed = 0; updatingTime = false
         startCurrent()
         if let continuation { replenish(continuation, false, false) }
@@ -470,7 +347,7 @@ final class NowPlayingModel {
         appendToEnd(songs, userQueued: false)
     }
 
-    private func appendToEnd(_ songs: [LibrarySongItem], userQueued: Bool, recommended: Bool = false) {
+    func appendToEnd(_ songs: [LibrarySongItem], userQueued: Bool, recommended: Bool = false) {
         guard !songs.isEmpty else { return }
         let previousNextEntry = nextPlaybackIndex.map { entryIDs[$0] }
         queueRestorationFailed = false
@@ -511,10 +388,8 @@ final class NowPlayingModel {
     @ObservationIgnored private var resolveURL: ((String) -> URL?)?
     @ObservationIgnored private var persistenceURL: URL?
     @ObservationIgnored private let queuePersistence = PlaybackQueuePersistence()
-    @ObservationIgnored private var queuePersistenceTask: Task<Void, Never>?
+    @ObservationIgnored private let persistenceQueue = BackgroundTaskPersistenceQueue()
     @ObservationIgnored private var queuePersistenceDebounceTask: Task<Void, Never>?
-    @ObservationIgnored private var queuePersistenceRevision = 0
-    @ObservationIgnored private var persistenceBackgroundTask = UIBackgroundTaskIdentifier.invalid
     @ObservationIgnored private var updatingTime = false
     var errorMessage: String?
     private(set) var unavailableIDs: Set<String> = []
@@ -699,7 +574,7 @@ final class NowPlayingModel {
 
     private func resolveCurrent(at position: Double, replacing: Bool = false) {
         guard hasCurrent, let resolveResource else { return }
-        PerformanceDiagnostics.restoration("player.resource.request online=\(current.onlineOwnerID != nil) replacing=\(replacing) resume=\(position > 0) target=\(position)")
+        AppLogger.playback.notice("player.resource.request online=\(self.current.onlineOwnerID != nil) replacing=\(replacing) resume=\(position > 0) target=\(position)")
         if offlineSong?(current.id) == nil, let owner = current.onlineOwnerID,
            (hasResolvedOnlineIdentity ? owner != resolvedOnlineOwnerID : unavailableIDs.contains(current.id)) {
             resourceRevision = UUID()
@@ -744,7 +619,7 @@ final class NowPlayingModel {
                     self.ensureAudioEngine().load(url: resource.url, position: resume, autoplay: autoplay)
                     self.configuringAudio = false
                 }
-                PerformanceDiagnostics.restoration("player.resource.ready replacing=\(replacing) resume=\(resume > 0)")
+                AppLogger.playback.notice("player.resource.ready replacing=\(replacing) resume=\(resume > 0)")
                 self.resolvingResource = false
                 self.actualQuality = resource.quality
                 self.resourceTask = nil
@@ -755,7 +630,7 @@ final class NowPlayingModel {
                 self.syncTransport()
             } catch {
                 guard let self, self.resourceRevision == revision, !Task.isCancelled else { return }
-                PerformanceDiagnostics.restoration("player.resource.failed")
+                AppLogger.playback.notice("player.resource.failed")
                 self.resolvingResource = false; self.resourceTask = nil
                 if !replacing { self.isPlaying = false; self.loadedEntry = nil }
                 self.errorMessage = error.localizedDescription
@@ -778,9 +653,7 @@ final class NowPlayingModel {
             self.recommendedEntries.remove(entry)
             self.userQueuedIDs.remove(entry)
             self.playbackGeneration &+= 1
-            if self.lastRecordedPlayback?.entryID == entry {
-                self.lastRecordedPlayback?.generation = self.playbackGeneration
-            }
+            self.history.carryRecording(for: entry, to: self.playbackGeneration)
             self.loadedEntry = entry
             self.actualQuality = quality
             self.errorMessage = nil
@@ -816,7 +689,7 @@ final class NowPlayingModel {
         if queueContinues { return nil }
         return repeatMode == .all ? 0 : nil
     }
-    private func prepareNext() {
+    func prepareNext() {
         guard !applyingState, !configuringAudio, audio != nil else { return }
         let next = nextPlaybackIndex
         nextResourceTask?.cancel()
@@ -847,11 +720,9 @@ final class NowPlayingModel {
             updatingTime = false
         }
         if !audio.isActivating, isPlaying != audio.isPlaying { isPlaying = audio.isPlaying }
-        if audio.isPlaybackConfirmed, !audio.isLoading, !resolvingResource, hasCurrent, currentRecordedPlayback == nil,
-           let loadedEntry, loadedEntry == entryIDs[currentIndex], isInHistoryScope(current) {
-            let event = TrackPlaybackEvent(song: current)
-            lastRecordedPlayback = (playbackGeneration, loadedEntry, event.id)
-            trackPlaybackEvents.append(event)
+        if audio.isPlaybackConfirmed, !audio.isLoading, !resolvingResource, hasCurrent,
+           let loadedEntry, loadedEntry == currentEntryID {
+            history.record(current, generation: playbackGeneration, entry: loadedEntry, owner: resolvedOnlineOwnerID)
         }
         if audio.isPlaying, let collection = pendingCollection {
             pendingCollection = nil
@@ -919,56 +790,38 @@ final class NowPlayingModel {
                                entryIDs: content.entries, originalOrder: originalOrder, userQueuedIDs: userQueuedIDs,
                                suspendedCount: suspended.count, hasRecommendationBatch: hasRecommendationBatch,
                                recommendedEntries: recommendedEntries, crossfadeEnabled: isCrossfadeEnabled, songs: content.songs, continuation: continuation)
-        let previous = queuePersistenceTask
         let persistence = queuePersistence
-        queuePersistenceRevision += 1
-        let revision = queuePersistenceRevision
-        queuePersistenceTask = Task { [weak self] in
-            await previous?.value
+        persistenceQueue.enqueue { [weak self] in
             do {
                 try await persistence.save(state, contentID: content.id, to: persistenceURL)
                 if self?.errorMessage?.hasPrefix("播放状态保存失败：") == true {
                     self?.errorMessage = nil
                 }
             } catch {
-                PerformanceDiagnostics.restoration("queue.persist.failed")
-            }
-            if self?.queuePersistenceRevision == revision {
-                self?.queuePersistenceTask = nil
+                AppLogger.playback.notice("queue.persist.failed")
             }
         }
     }
 
     func flushQueuePersistence() async {
+        flushDebouncedQueueSave()
+        await persistenceQueue.flush()
+    }
+
+    private func flushDebouncedQueueSave() {
         if queuePersistenceDebounceTask != nil, let persistenceURL {
             queuePersistenceDebounceTask?.cancel()
             queuePersistenceDebounceTask = nil
             commitQueueSave(to: persistenceURL)
         }
-        while let pending = queuePersistenceTask {
-            await pending.value
-        }
     }
 
     func saveQueueForBackground() {
         guard persistenceURL != nil else { return }
-        if persistenceBackgroundTask == .invalid {
-            persistenceBackgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Save playback queue") { [weak self] in
-                self?.endPersistenceBackgroundTask()
-            }
+        persistenceQueue.saveInBackground(named: "Save playback queue") {
+            saveQueue(immediate: true)
+            flushDebouncedQueueSave()
         }
-        saveQueue(immediate: true)
-        Task { [weak self] in
-            guard let self else { return }
-            await flushQueuePersistence()
-            endPersistenceBackgroundTask()
-        }
-    }
-
-    private func endPersistenceBackgroundTask() {
-        guard persistenceBackgroundTask != .invalid else { return }
-        UIApplication.shared.endBackgroundTask(persistenceBackgroundTask)
-        persistenceBackgroundTask = .invalid
     }
 
     @discardableResult
@@ -1083,11 +936,8 @@ final class NowPlayingModel {
                     }
                 }
             }
-            for index in trackPlaybackEvents.indices where trackPlaybackEvents[index].song.id == id {
-                if offline == nil, let owner = trackPlaybackEvents[index].song.onlineOwnerID,
-                   !hasResolvedOnlineIdentity || owner != resolvedOnlineOwnerID { continue }
-                changed = trackPlaybackEvents[index].song.publishArtwork(from: replacement) || changed
-            }
+            changed = history.updateArtwork(id: id, replacement: replacement, isOffline: offline != nil,
+                hasResolvedIdentity: hasResolvedOnlineIdentity, owner: resolvedOnlineOwnerID) || changed
         }
         if changed || currentChanged { cachedQueueContent = nil }
         if currentChanged { updateNowPlaying() }

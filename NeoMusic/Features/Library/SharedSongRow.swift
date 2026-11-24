@@ -246,3 +246,81 @@ private struct SongListRowModifier: ViewModifier {
         }
     }
 }
+
+struct SwipedSongBackground: UIViewRepresentable {
+    let color: UIColor
+    let colorScheme: ColorScheme
+
+    func makeUIView(context: Context) -> BackgroundProbe {
+        let view = BackgroundProbe()
+        view.isUserInteractionEnabled = false
+        return view
+    }
+
+    func updateUIView(_ view: BackgroundProbe, context: Context) {
+        view.pageColor = color
+        view.isDark = colorScheme == .dark
+        view.attach()
+    }
+
+    static func dismantleUIView(_ view: BackgroundProbe, coordinator: ()) {
+        view.detach()
+    }
+
+    final class BackgroundProbe: UIView {
+        var pageColor: UIColor = .systemBackground
+        var isDark = false
+        private weak var cell: UICollectionViewCell?
+        private var previousHandler: UICollectionViewCell.ConfigurationUpdateHandler?
+        private var previousBackground: UIBackgroundConfiguration?
+        private var previousAutomaticUpdates = true
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            if window != nil { attach() } else { detach() }
+        }
+
+        func attach() {
+            var ancestor = superview
+            while let view = ancestor, !(view is UICollectionViewCell) { ancestor = view.superview }
+            guard let target = ancestor as? UICollectionViewCell else { return }
+            if cell !== target {
+                detach()
+                cell = target
+                previousHandler = target.configurationUpdateHandler
+                previousBackground = target.backgroundConfiguration
+                previousAutomaticUpdates = target.automaticallyUpdatesBackgroundConfiguration
+            }
+            target.automaticallyUpdatesBackgroundConfiguration = false
+            target.configurationUpdateHandler = { [weak self] cell, state in
+                guard let self else { return }
+                self.previousHandler?(cell, state)
+                self.apply(to: cell, state: state)
+            }
+            apply(to: target, state: target.configurationState)
+        }
+
+        private func apply(to cell: UICollectionViewCell, state: UICellConfigurationState) {
+            let traits = cell.traitCollection.modifyingTraits {
+                $0.userInterfaceStyle = isDark ? .dark : .light
+            }
+            let base = pageColor.resolvedColor(with: traits)
+            let swiped = CollectionPagePalette(background: base, isDark: isDark).swiped
+            var background = cell.defaultBackgroundConfiguration().updated(for: state)
+            if state.isSwiped { background.backgroundColor = swiped }
+            else if !state.isHighlighted && !state.isSelected { background.backgroundColor = base }
+            background.cornerRadius = state.isSwiped ? 26 : 0
+            cell.backgroundConfiguration = background
+        }
+
+        func detach() {
+            guard let cell else { return }
+            cell.configurationUpdateHandler = previousHandler
+            cell.automaticallyUpdatesBackgroundConfiguration = previousAutomaticUpdates
+            cell.backgroundConfiguration = previousBackground
+            self.cell = nil
+            previousHandler = nil
+            previousBackground = nil
+        }
+    }
+}

@@ -5,6 +5,7 @@ typealias OnlineMusicIntegration = OnlineLibraryIntegration
 @MainActor
 final class OnlineLibraryIntegration {
     private let account: NeteaseAccount
+    private let container: AppContainer
     var onPublication: (() -> Void)?
     private struct Content: Equatable, Sendable {
         let owner: Int64
@@ -20,14 +21,20 @@ final class OnlineLibraryIntegration {
     private var retainedArtworkByID: [Int64: NeteaseMusicSong] = [:]
     private let projectionCache = OnlineSongProjectionCache()
     private var publishTask: Task<Void, Never>?
-    private var artworkPublishTask: Task<Void, Never>?
-    private var pendingArtworkURLs: Set<URL> = []
+    private let artworkBatcher = ArtworkUpdateBatcher()
     private var publishGeneration = 0
-    private var artworkGeneration = 0
-    init(account: NeteaseAccount) { self.account = account }
+    convenience init(account: NeteaseAccount) {
+        self.init(account: account, container: .shared)
+    }
+
+    init(account: NeteaseAccount, container: AppContainer) {
+        self.account = account
+        self.container = container
+    }
 
     func connect() {
         guard let music = account.music else { return }
+        let container = container
         music.onChange = { [weak self] in
             guard let self, let music = self.account.music else { return }
             if self.published == nil && music.songs.count <= 250 { self.publish() } else { self.schedulePublish() }
@@ -35,50 +42,42 @@ final class OnlineLibraryIntegration {
         music.onArtworkChange = { [weak self] in self?.scheduleArtworkPublish($0) }
         music.onSessionInvalidated = { [weak self] in
             self?.publishGeneration &+= 1
-            self?.artworkGeneration &+= 1
             self?.publishTask?.cancel()
             self?.publishTask = nil
-            self?.artworkPublishTask?.cancel()
-            self?.artworkPublishTask = nil
-            self?.pendingArtworkURLs.removeAll(keepingCapacity: false)
+            self?.artworkBatcher.cancel()
             self?.published = nil
             self?.artworkSongs = [:]
             self?.retainedArtworkByID = [:]
             self?.projectionCache.removeAll()
-            LocalLibrary.player.invalidateOnlinePlayback(ownerID: nil)
-            LocalLibrary.songLibrary.replaceOnline([])
-            LocalLibrary.playlistLibrary.replaceOnlinePlaylists(items: [], songs: [:], ownerID: nil)
+            container.player.invalidateOnlinePlayback(ownerID: nil)
+            container.songLibrary.replaceOnline([])
+            container.playlistLibrary.replaceOnlinePlaylists(items: [], songs: [:], ownerID: nil)
             self?.onPublication?()
         }
-        music.onQualityChange = { LocalLibrary.player.reloadCurrentResource() }
-        LocalLibrary.runtime.onLibraryRestored = { [weak self] in
+        music.onQualityChange = { container.player.reloadCurrentResource() }
+        container.runtime.onLibraryRestored = { [weak self] in
             self?.publish()
         }
-        LocalLibrary.runtime.configureOnlineResolver { [weak music] id in
+        container.runtime.configureOnlineResolver { [weak music] id in
             guard let music, let parts = OnlineSongIdentity.parse(id), music.userID == parts.owner else {
                 throw NeteaseAccountError.authenticationRequired
             }
             let stream = try await music.stream(songID: parts.song)
             return PlaybackResource(url: stream.url, expiresAt: stream.expiresAt, quality: stream.quality.rawValue)
         }
-        LocalLibrary.songLibrary.onlineFavoriteAction = { [weak music] id, liked, playsSuccessHaptic in
+        container.songLibrary.onlineFavoriteAction = { [weak music, toasts = container.toasts] id, liked, playsSuccessHaptic in
             guard let music, let parts = OnlineSongIdentity.parse(id), music.userID == parts.owner else {
-                LocalLibrary.toasts.show(.error("请登录原网易云账号后重试"))
+                toasts.show(.error("请登录原网易云账号后重试"))
                 return
             }
             let revision = music.sessionRevision
             Task {
-                do {
-                    try await music.setLiked(songID: parts.song, liked: liked)
-                    guard revision == music.sessionRevision, music.userID == parts.owner else { return }
-                    if playsSuccessHaptic { LibraryHaptics.success() }
-                    LocalLibrary.toasts.show(liked ? .favorited : .unfavorited)
-                }
-                catch is CancellationError { }
-                catch { LocalLibrary.toasts.show(.error(error.localizedDescription)) }
+                await OnlineFavoriteAction.perform(music: music, revision: revision, songID: parts.song,
+                    liked: liked, playsSuccessHaptic: playsSuccessHaptic, toasts: toasts,
+                    isCurrent: { music.userID == parts.owner })
             }
         }
-        LocalLibrary.playlistLibrary.loadOnlinePlaylist = { [weak self, weak music] id in
+        container.playlistLibrary.loadOnlinePlaylist = { [weak self, weak music] id in
             guard let self, let music, let playlistID = Self.playlistID(id, music: music) else { return }
             let revision = music.sessionRevision
             await self.restoreHomePlaylist(playlistID, music: music, revision: revision)
@@ -87,7 +86,7 @@ final class OnlineLibraryIntegration {
             guard revision == music.sessionRevision else { return }
             await self.publishAsync()
         }
-        LocalLibrary.playlistLibrary.loadMoreOnlinePlaylist = { [weak self, weak music] id in
+        container.playlistLibrary.loadMoreOnlinePlaylist = { [weak self, weak music] id in
             guard let self, let music, let playlistID = Self.playlistID(id, music: music) else { return }
             let revision = music.sessionRevision
             await self.restoreHomePlaylist(playlistID, music: music, revision: revision)
@@ -96,7 +95,7 @@ final class OnlineLibraryIntegration {
             guard revision == music.sessionRevision else { return }
             await self.publishAsync()
         }
-        LocalLibrary.playlistLibrary.completeOnlinePlaylist = { [weak self, weak music] id in
+        container.playlistLibrary.completeOnlinePlaylist = { [weak self, weak music] id in
             guard let self, let music else { return false }
             guard let playlistID = Self.playlistID(id, music: music) else { return id == "favorites" }
             let revision = music.sessionRevision
@@ -107,8 +106,8 @@ final class OnlineLibraryIntegration {
             await self.publishAsync()
             return complete
         }
-        LocalLibrary.playlistLibrary.retryOnline = { [weak music] in await music?.refresh(force: true) }
-        LocalLibrary.playlistLibrary.unsubscribeOnlinePlaylist = { [weak self] id in self?.changePlaylistCollection(id, subscribed: false) }
+        container.playlistLibrary.retryOnline = { [weak music] in await music?.refresh(force: true) }
+        container.playlistLibrary.unsubscribeOnlinePlaylist = { [weak self] id in self?.changePlaylistCollection(id, subscribed: false) }
         publish()
     }
 
@@ -123,13 +122,16 @@ final class OnlineLibraryIntegration {
         music.adoptCachedPlaylist(detail, ownerID: owner, revision: revision)
     }
 
-    func restoreReferencedMetadata(player: NowPlayingModel = LocalLibrary.player,
-                                   playlistLibrary: PlaylistLibrary = LocalLibrary.playlistLibrary) async {
+    func restoreReferencedMetadata() async {
+        await restoreReferencedMetadata(player: container.player, playlistLibrary: container.playlistLibrary)
+    }
+
+    func restoreReferencedMetadata(player: NowPlayingModel, playlistLibrary: PlaylistLibrary) async {
         guard let music = account.music, let owner = music.userID, account.profile?.userID == owner,
               !Task.isCancelled else { return }
         let home = account.home, artists = account.artists
         guard home == nil || home?.userID == owner, artists == nil || artists?.userID == owner else { return }
-        let referenced = Self.referencedSongs(player: player, playlistLibrary: playlistLibrary)
+        let referenced = ReferencedLibrarySongs.collect(player: player, playlists: playlistLibrary)
         let ids = Set(referenced.compactMap { item -> Int64? in
             guard let identity = OnlineSongIdentity.parse(item.id), identity.owner == owner else { return nil }
             let needsArtwork = item.artworkData == nil && (item.artworkURL == nil
@@ -162,11 +164,11 @@ final class OnlineLibraryIntegration {
             for value in resolved { recoveredByID[value.id] = value }
         }
         guard !recoveredByID.isEmpty else { return }
-        let currentReferences = Self.referencedSongs(player: player, playlistLibrary: playlistLibrary)
+        let currentReferences = ReferencedLibrarySongs.collect(player: player, playlists: playlistLibrary)
         let currentIDs = Set(currentReferences.filter { $0.onlineOwnerID == String(owner) }.compactMap(\.onlineSongID))
         let values = recoveredByID.values.filter { currentIDs.contains($0.id) }
         updateArtworkIndex(Array(values), retainingIDs: currentIDs.union(music.songs.keys))
-        var merged = Dictionary((LocalLibrary.allSongs + currentReferences).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var merged = Dictionary((container.allSongs + currentReferences).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         for value in values {
             let id = OnlineSongIdentity.format(owner: owner, song: value.id)
             merged[id] = song(value, owner: owner, music: music).retainingArtwork(from: merged[id])
@@ -177,11 +179,6 @@ final class OnlineLibraryIntegration {
         player.saveQueue()
         let adjacent = Set([player.current.onlineSongID, player.previous?.onlineSongID, player.next?.onlineSongID].compactMap { $0 })
         music.requestArtwork(values.filter { adjacent.contains($0.id) }.compactMap(\.artworkURL))
-    }
-
-    private static func referencedSongs(player: NowPlayingModel, playlistLibrary: PlaylistLibrary) -> [LibrarySongItem] {
-        player.queue + playlistLibrary.playlists.filter { !$0.isReadOnly && !$0.isSystem }
-            .flatMap { playlistLibrary.songs(in: $0.id) }
     }
 
     private func updateArtworkIndex(_ values: [NeteaseMusicSong], retainingIDs: Set<Int64>) {
@@ -206,7 +203,7 @@ final class OnlineLibraryIntegration {
     func connectLyrics() async {
         guard let music = account.music else { return }
         let downloads = account.downloads
-        await LocalLibrary.referenceLibrary.reader.configureRemoteLyrics { [weak music, weak downloads] id in
+        await container.referenceLibrary.reader.configureRemoteLyrics { [weak music, weak downloads] id in
             try Task.checkCancellation()
             guard let parts = OnlineSongIdentity.parse(id) else {
                 throw NeteaseAccountError.authenticationRequired
@@ -231,6 +228,7 @@ final class OnlineLibraryIntegration {
     static func changePlaylistSubscription(_ id: String,
                                            subscribed: Bool,
                                            account: NeteaseAccount,
+                                           container: AppContainer = .shared,
                                            onSubscribedChanged: (@MainActor () -> Void)? = nil) -> Bool {
         guard let music = account.music, let owner = music.userID, account.profile?.userID == owner else {
             return false
@@ -252,7 +250,7 @@ final class OnlineLibraryIntegration {
                 guard revision == music.sessionRevision, music.userID == owner,
                       account.profile?.userID == owner else { return }
                 if !subscribed, music.playlists.contains(where: { $0.id == playlistID && $0.isSubscribed == true }) == false {
-                    LocalLibrary.playlistLibrary.releaseRetainedOnlinePlaylist(PlaylistRouteIdentity.accountID(owner: owner, playlistID: playlistID))
+                    container.playlistLibrary.releaseRetainedOnlinePlaylist(PlaylistRouteIdentity.accountID(owner: owner, playlistID: playlistID))
                 }
                 if subscribed { LibraryHaptics.success() }
                 onSubscribedChanged?()
@@ -260,14 +258,14 @@ final class OnlineLibraryIntegration {
             catch {
                 guard revision == music.sessionRevision, music.userID == owner,
                       account.profile?.userID == owner else { return }
-                LocalLibrary.toasts.show(.error(error.localizedDescription))
+                container.toasts.show(.error(error.localizedDescription))
             }
         }
         return true
     }
 
     private func changePlaylistCollection(_ id: String, subscribed: Bool) {
-        _ = Self.changePlaylistSubscription(id, subscribed: subscribed, account: account)
+        _ = Self.changePlaylistSubscription(id, subscribed: subscribed, account: account, container: container)
     }
 
     private static func playlistID(_ id: String, music: NeteaseMusicStore) -> Int64? {
@@ -310,21 +308,21 @@ final class OnlineLibraryIntegration {
     }
 
     private func runOffMainPublish(generation: Int, music: NeteaseMusicStore?) async {
-        guard LocalLibrary.runtime.hasRestoredPlayback else { return }
+        guard container.runtime.hasRestoredPlayback else { return }
         guard let music else { return }
-        if LocalLibrary.playlistLibrary.onlineStatus != music.error { LocalLibrary.playlistLibrary.onlineStatus = music.error }
-        if LocalLibrary.playlistLibrary.isRefreshingOnline != music.isLoading { LocalLibrary.playlistLibrary.isRefreshingOnline = music.isLoading }
+        if container.playlistLibrary.onlineStatus != music.error { container.playlistLibrary.onlineStatus = music.error }
+        if container.playlistLibrary.isRefreshingOnline != music.isLoading { container.playlistLibrary.isRefreshingOnline = music.isLoading }
         guard let owner = music.userID else {
             applySignedOutState()
             return
         }
         let ownerID = String(owner)
         let revision = music.sessionRevision
-        LocalLibrary.player.restoreOnlineIdentity(ownerID: ownerID)
+        container.player.restoreOnlineIdentity(ownerID: ownerID)
         let content = Content(owner: owner, revision: revision, playlists: music.playlists, songs: music.songs,
                               tracks: music.playlistTracks, liked: music.likedIDs, likedAt: music.likedAt)
         let previous = published
-        let referenced = Self.referencedSongs(player: LocalLibrary.player, playlistLibrary: LocalLibrary.playlistLibrary)
+        let referenced = ReferencedLibrarySongs.collect(player: container.player, playlists: container.playlistLibrary)
         let referencedIDs = Set(referenced.filter { $0.onlineOwnerID == ownerID }.compactMap(\.onlineSongID))
         let existingRetained = (previous?.owner == owner) ? retainedArtworkByID : [:]
         let existingProjectedKeys = (previous?.owner == owner) ? Set(projectionCache.keys) : []
@@ -337,7 +335,7 @@ final class OnlineLibraryIntegration {
         guard !Task.isCancelled, publishGeneration == generation,
               let currentMusic = account.music, currentMusic.sessionRevision == revision,
               currentMusic.userID == owner, account.profile?.userID == owner,
-              LocalLibrary.runtime.hasRestoredPlayback else { return }
+              container.runtime.hasRestoredPlayback else { return }
         applyPublicationPlan(plan, owner: owner, music: currentMusic)
     }
 
@@ -345,19 +343,19 @@ final class OnlineLibraryIntegration {
         publishTask?.cancel()
         publishTask = nil
         publishGeneration &+= 1
-        guard LocalLibrary.runtime.hasRestoredPlayback else { return }
+        guard container.runtime.hasRestoredPlayback else { return }
         guard let music = account.music else { return }
-        if LocalLibrary.playlistLibrary.onlineStatus != music.error { LocalLibrary.playlistLibrary.onlineStatus = music.error }
-        if LocalLibrary.playlistLibrary.isRefreshingOnline != music.isLoading { LocalLibrary.playlistLibrary.isRefreshingOnline = music.isLoading }
+        if container.playlistLibrary.onlineStatus != music.error { container.playlistLibrary.onlineStatus = music.error }
+        if container.playlistLibrary.isRefreshingOnline != music.isLoading { container.playlistLibrary.isRefreshingOnline = music.isLoading }
         guard let owner = music.userID else {
             applySignedOutState()
             return
         }
         let ownerID = String(owner)
-        LocalLibrary.player.restoreOnlineIdentity(ownerID: ownerID)
+        container.player.restoreOnlineIdentity(ownerID: ownerID)
         let content = Content(owner: owner, revision: music.sessionRevision, playlists: music.playlists, songs: music.songs,
                               tracks: music.playlistTracks, liked: music.likedIDs, likedAt: music.likedAt)
-        let referenced = Self.referencedSongs(player: LocalLibrary.player, playlistLibrary: LocalLibrary.playlistLibrary)
+        let referenced = ReferencedLibrarySongs.collect(player: container.player, playlists: container.playlistLibrary)
         let referencedIDs = Set(referenced.filter { $0.onlineOwnerID == ownerID }.compactMap(\.onlineSongID))
         let existingRetained = (published?.owner == owner) ? retainedArtworkByID : [:]
         let existingProjectedKeys = (published?.owner == owner) ? Set(projectionCache.keys) : []
@@ -376,8 +374,8 @@ final class OnlineLibraryIntegration {
         artworkSongs = [:]
         retainedArtworkByID = [:]
         projectionCache.removeAll()
-        LocalLibrary.songLibrary.replaceOnline([])
-        LocalLibrary.playlistLibrary.replaceOnlinePlaylists(items: [], songs: [:], ownerID: nil)
+        container.songLibrary.replaceOnline([])
+        container.playlistLibrary.replaceOnlinePlaylists(items: [], songs: [:], ownerID: nil)
     }
 
     nonisolated private static func preparePublicationPlan(previous: Content?,
@@ -446,9 +444,9 @@ final class OnlineLibraryIntegration {
                     replacements[item.id] = item
                 }
             }
-            LocalLibrary.songLibrary.updateOnlineFavorites(replacements, order: favoriteOrder.map { OnlineSongIdentity.format(owner: owner, song: $0) })
-            LocalLibrary.playlistLibrary.updateSongFavorites(replacements)
-            LocalLibrary.player.reconcileAvailability(songs: LocalLibrary.allSongs)
+            container.songLibrary.updateOnlineFavorites(replacements, order: favoriteOrder.map { OnlineSongIdentity.format(owner: owner, song: $0) })
+            container.playlistLibrary.updateSongFavorites(replacements)
+            container.player.reconcileAvailability(songs: container.allSongs)
             published = content
             notifiedChange = true
         case .full(let content, let order, let newArtworkSongs, let newRetainedByID, let ownerChanged, let removedProjectedIDs, let uniqueArtworkURLs):
@@ -478,7 +476,7 @@ final class OnlineLibraryIntegration {
                 byID[item.id] = item
             }
 
-            let songsChanged = LocalLibrary.songLibrary.replaceOnline(songs)
+            let songsChanged = container.songLibrary.replaceOnline(songs)
             let playlists = music.playlists.filter { !$0.isFavorites }.enumerated().map { index, value in
                 let cover = value.creatorID == owner
                     ? artwork(value.artworkURL, music: music, placeholder: .playlist, cachedCovers: cachedCovers)
@@ -499,22 +497,22 @@ final class OnlineLibraryIntegration {
                     return byID[stableID] ?? .unavailable(stableID)
                 }
             }
-            LocalLibrary.playlistLibrary.replaceOnlinePlaylists(items: playlists, songs: contents, ownerID: ownerID)
+            container.playlistLibrary.replaceOnlinePlaylists(items: playlists, songs: contents, ownerID: ownerID)
             if songsChanged || ownerChanged {
-                LocalLibrary.playlistLibrary.reconcileOnlineSongs(LocalLibrary.allSongs, excludingReadOnly: true)
-                LocalLibrary.player.reconcileAvailability(songs: LocalLibrary.allSongs)
+                container.playlistLibrary.reconcileOnlineSongs(container.allSongs, excludingReadOnly: true)
+                container.player.reconcileAvailability(songs: container.allSongs)
             }
         }
-        let localFavoritesCount = LocalLibrary.songLibrary.localSongs.filter(\.isFavorite).count
-        for item in LocalLibrary.playlistLibrary.playlists where item.sourceOwnerID == ownerID || item.id == "favorites" {
+        let localFavoritesCount = container.songLibrary.localSongs.filter(\.isFavorite).count
+        for item in container.playlistLibrary.playlists where item.sourceOwnerID == ownerID || item.id == "favorites" {
             guard let id = Self.playlistID(item.id, music: music) else {
-                LocalLibrary.playlistLibrary.setOnlineHasMore(item.id, false)
+                container.playlistLibrary.setOnlineHasMore(item.id, false)
                 continue
             }
-            LocalLibrary.playlistLibrary.setPlaylistDetailReceived(music.hasReceivedPlaylistPage(id: id), for: item.id)
+            container.playlistLibrary.setPlaylistDetailReceived(music.hasReceivedPlaylistPage(id: id), for: item.id)
             let localCount = item.id == "favorites" ? localFavoritesCount : 0
-            LocalLibrary.playlistLibrary.setOnlineHasMore(item.id, music.hasMorePlaylist(id: id), totalCount: music.playlistTotalCount(id: id) + localCount)
-            LocalLibrary.playlistLibrary.updateOnlineSongs(playlistID: item.id, songs: LocalLibrary.playlistLibrary.songs(in: item.id),
+            container.playlistLibrary.setOnlineHasMore(item.id, music.hasMorePlaylist(id: id), totalCount: music.playlistTotalCount(id: id) + localCount)
+            container.playlistLibrary.updateOnlineSongs(playlistID: item.id, songs: container.playlistLibrary.songs(in: item.id),
                 error: music.playlistErrors[id], loading: music.loadingPlaylists.contains(id))
         }
     }
@@ -547,7 +545,7 @@ final class OnlineLibraryIntegration {
     private func song(_ value: NeteaseMusicSong, owner: Int64, music: NeteaseMusicStore,
                       cachedCovers: [URL: URL]? = nil) -> LibrarySongItem {
         let item = makeSong(value, owner: owner, music: music, cachedCovers: cachedCovers)
-        return item.retainingArtwork(from: LocalLibrary.songLibrary.song(id: item.id))
+        return item.retainingArtwork(from: container.songLibrary.song(id: item.id))
     }
 
     private func makeSong(_ value: NeteaseMusicSong, owner: Int64, music: NeteaseMusicStore,
@@ -571,42 +569,30 @@ final class OnlineLibraryIntegration {
     }
     func requestArtwork(for id: String) {
         guard let music = account.music, let owner = music.userID, owner == account.profile?.userID,
-              let key = DeferredArtworkKey(rawValue: id),
-              key.matches(domain: .music, session: music.sessionRevision),
-              let url = key.remoteURL else { return }
+              let url = DeferredArtworkRoute.remote(id, session: music.sessionRevision, domain: .music) else { return }
         music.requestArtwork([url])
     }
+
     func cachedArtworkFile(for id: String) async -> URL? {
-        guard let music = account.music, let owner = music.userID,
-              owner == account.profile?.userID, !Task.isCancelled else { return nil }
+        guard let music = account.music, let owner = music.userID else { return nil }
         let revision = music.sessionRevision
-        guard let key = DeferredArtworkKey(rawValue: id),
-              key.matches(domain: .music, session: revision),
-              let url = key.remoteURL else { return nil }
-        let file = await music.cachedArtworkFile(url)
-        guard revision == music.sessionRevision, music.userID == owner,
-              account.profile?.userID == owner, !Task.isCancelled else { return nil }
-        return file
+        return await DeferredArtworkRoute.cachedFile(id, session: revision, domain: .music,
+            isCurrent: { revision == music.sessionRevision && music.userID == owner && account.profile?.userID == owner }) { key in
+                guard let url = key.remoteURL else { return nil }
+                return await music.cachedArtworkFile(url)
+            }
     }
 
     private func scheduleArtworkPublish(_ urls: Set<URL>) {
-        guard !urls.isEmpty else { return }
-        pendingArtworkURLs.formUnion(urls)
-        guard artworkPublishTask == nil else { return }
-        let generation = artworkGeneration
-        artworkPublishTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(16))
-            guard let self, !Task.isCancelled, self.artworkGeneration == generation else { return }
-            let batch = self.pendingArtworkURLs
-            self.pendingArtworkURLs.removeAll(keepingCapacity: true)
-            self.artworkPublishTask = nil
-            guard !batch.isEmpty else { return }
-            self.publishArtwork(batch)
-        }
+        guard let music = account.music else { return }
+        let session = music.sessionRevision
+        artworkBatcher.enqueue(urls, session: session,
+            isCurrent: { [weak self] in self?.account.music === music && music.sessionRevision == session },
+            publish: { [weak self] in self?.publishArtwork($0) })
     }
 
     private func publishArtwork(_ urls: Set<URL>) {
-        guard LocalLibrary.runtime.hasRestoredPlayback, let music = account.music, let owner = music.userID,
+        guard container.runtime.hasRestoredPlayback, let music = account.music, let owner = music.userID,
               owner == account.profile?.userID, published?.owner == owner else { return }
         var songs: [String: LibrarySongItem] = [:]
         for url in urls {
@@ -632,8 +618,8 @@ final class OnlineLibraryIntegration {
                 covers[PlaylistRouteIdentity.accountID(owner: owner, playlistID: item.id)] = artwork(remote, music: music, placeholder: .playlist)
             }
         }
-        LocalLibrary.player.updateArtwork(songs)
-        LocalLibrary.songLibrary.updateOnlineArtwork(songs)
-        LocalLibrary.playlistLibrary.updateArtwork(songs: songs, playlists: covers)
+        container.player.updateArtwork(songs)
+        container.songLibrary.updateOnlineArtwork(songs)
+        container.playlistLibrary.updateArtwork(songs: songs, playlists: covers)
     }
 }

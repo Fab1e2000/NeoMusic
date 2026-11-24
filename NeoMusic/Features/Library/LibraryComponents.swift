@@ -1,5 +1,21 @@
 import SwiftUI
 
+struct LibraryCollectionGrid<Content: View>: View {
+    let rowSpacing: CGFloat
+    var columnAlignment: Alignment? = .top
+    var alignment: HorizontalAlignment = .leading
+    @ViewBuilder var content: Content
+    @Environment(\.dynamicTypeSize) private var textSize
+
+    var body: some View {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12, alignment: columnAlignment),
+                                 count: textSize.isAccessibilitySize ? 1 : 2),
+                  alignment: alignment, spacing: rowSpacing) {
+            content
+        }
+    }
+}
+
 struct PlayShuffleButtons: View {
     let play: () -> Void
     let shuffle: () -> Void
@@ -77,7 +93,7 @@ struct LibraryNavigationPreview: Equatable {
     var contentID: String { "\(ownerID ?? "public"):\(route)" }
 
     @MainActor init(route: LibraryRoute, ownerID: String?, title: String, subtitle: String? = nil,
-                    artwork: Artwork, albumBackdrop: AlbumArtworkBackdrop? = nil) {
+                    artwork: Artwork, albumBackdrop: AlbumArtworkBackdrop? = nil, originalArtwork: Artwork? = nil) {
         self.route = route
         self.ownerID = ownerID
         self.title = title
@@ -85,7 +101,9 @@ struct LibraryNavigationPreview: Equatable {
         self.artwork = artwork
         switch route {
         case .album, .libraryArtistAlbum, .playlist:
-            self.albumBackdrop = albumBackdrop ?? LocalArtworkImages.cachedBackdrop(for: artwork)
+            let source = originalArtwork ?? artwork
+            self.albumBackdrop = albumBackdrop ?? LocalArtworkImages.cachedBackdrop(for: source)
+            self.backdropFile = source.resolvedFileURL
         default: self.albumBackdrop = nil
         }
     }
@@ -120,7 +138,7 @@ struct OpenLibraryRouteAction {
         }
         let preview = LibraryNavigationPreview(route: route, ownerID: item.sourceOwnerID,
             title: item.title, subtitle: item.albumArtist ?? item.subtitle, artwork: artwork,
-            albumBackdrop: item.albumBackdrop ?? LocalArtworkImages.cachedBackdrop(for: item.artwork))
+            albumBackdrop: item.albumBackdrop, originalArtwork: item.artwork)
         callAsFunction(route, preview: preview, sourceProvider: sourceProvider)
     }
 }

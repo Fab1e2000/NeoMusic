@@ -39,6 +39,24 @@ class ModuleBoundaryTests(unittest.TestCase):
                 self.assertTrue(boundaries.check_source(path, "let session = URLSession.shared"))
                 self.assertTrue(boundaries.check_source(path, "import Security"))
 
+    def test_features_cannot_access_local_library_even_in_previews(self):
+        for filename in ["Account/AccountPage.swift", "Library/ExamplePreview.swift", "Home/Helper.mm"]:
+            with self.subTest(filename=filename):
+                path = Path("NeoMusic/Features") / filename
+                self.assertTrue(boundaries.check_source(path, "LocalLibrary.playlistLibrary"))
+                self.assertTrue(boundaries.check_source(path, "LocalLibrary\n  .playlistLibrary"))
+                self.assertEqual(boundaries.check_source(path, "playlistLibrary.playlists"), [])
+
+        app = Path("NeoMusic/App/LocalLibraryComposition.swift")
+        self.assertEqual(boundaries.check_source(app, "LocalLibrary.playlistLibrary"), [])
+
+    def test_storage_folder_names_are_not_netease_type_references(self):
+        path = Path("NeoMusic/Core/AppStoragePaths.swift")
+        self.assertEqual(boundaries.check_source(path, 'let folder = "NeteaseMusic"'), [])
+        self.assertEqual(boundaries.check_source(path, 'let file = "NeteaseAvatarDisplay.plist"'), [])
+        self.assertTrue(boundaries.check_source(path, 'let client = NeteaseMusicClient()'))
+        self.assertTrue(boundaries.check_source(path, r'let value = "\(NeteaseMusicClient.self)"'))
+
     def test_account_ui_cannot_own_credentials_or_transport(self):
         path = Path("NeoMusic/Features/Account/Account.swift")
         self.assertTrue(boundaries.check_source(path, "SecItemDelete(query)"))
@@ -49,10 +67,11 @@ class ModuleBoundaryTests(unittest.TestCase):
         self.assertTrue(boundaries.check_source(path, "LocalLibrary.player.stop()"))
         self.assertTrue(boundaries.check_source(path, "import SwiftUI"))
 
-    def test_imageio_is_limited_to_the_avatar_snapshot_source(self):
-        self.assertEqual(boundaries.check_source(Path("NeoMusic/Core/Netease/NeteaseAvatarSnapshot.swift"),
+    def test_netease_uses_the_shared_imageio_decoder(self):
+        self.assertEqual(boundaries.check_source(Path("NeoMusic/Core/ImageSourceThumbnail.swift"),
                                                 "import Foundation\nimport ImageIO"), [])
-        self.assertTrue(boundaries.check_source(Path("NeoMusic/Core/Netease/Account.swift"), "import ImageIO"))
+        for filename in ["NeteaseAvatarSnapshot.swift", "Account.swift"]:
+            self.assertTrue(boundaries.check_source(Path("NeoMusic/Core/Netease") / filename, "import ImageIO"))
 
     def test_artist_image_filter_keeps_transport_in_netease(self):
         path = Path("NeoMusic/Features/Library/ArtistDetailBackdrop.swift")
