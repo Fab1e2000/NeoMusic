@@ -118,7 +118,7 @@ import XCTest
             integration.requestArtwork(for: loadID)
             try await self.waitUntil { !ControlledRoamingProtocol.state.withLock { $0.artworkRequests }.isEmpty }
             let image = try XCTUnwrap(ControlledRoamingProtocol.state.withLock { $0.artworkRequests.first })
-            image.respond(body: "fixture artwork")
+            image.respond(data: NeteaseArtworkTestFixture.png)
             try await self.waitUntil { player.current.artworkURL != nil }
 
             let file = try XCTUnwrap(player.current.artworkURL)
@@ -255,6 +255,10 @@ private final class ControlledRoamingProtocol: URLProtocol, @unchecked Sendable 
     }
 
     func respond(body: String) {
+        respond(data: Data(body.utf8))
+    }
+
+    func respond(data: Data) {
         let shouldFinish = finished.withLock { finished in
             guard !finished else { return false }
             finished = true
@@ -263,7 +267,7 @@ private final class ControlledRoamingProtocol: URLProtocol, @unchecked Sendable 
         guard shouldFinish, let url = request.url,
               let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil) else { return }
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: Data(body.utf8))
+        client?.urlProtocol(self, didLoad: data)
         client?.urlProtocolDidFinishLoading(self)
     }
 

@@ -322,10 +322,11 @@ import XCTest
 
     func testRuntimeResolvesSearchArtworkFromDiskOnlyForItsSession() async throws {
         let remote = try XCTUnwrap(URL(string: "https://example.com/a.jpg"))
+        let category = Data(#"{"code":200,"sub":[{"name":"热门","category":3,"hot":true}]}"#.utf8)
         let (client, network) = client(responses: [
             "/eapi/search/get": [Data(#"{"code":200,"result":{"songs":[{"id":1,"name":"Song 1"}],"songCount":1}}"#.utf8)],
             "/eapi/v3/song/detail": [songs([1])],
-            "/eapi/playlist/catalogue": [Data(#"{"code":200,"sub":[]}"#.utf8)],
+            "/eapi/playlist/catalogue": [category, category],
             remote.path: [NeteaseArtworkTestFixture.png]
         ])
         let root = directory()
@@ -355,7 +356,12 @@ import XCTest
         let resolved = await resolve(id)
         XCTAssertEqual(resolved, saved)
 
+        runtime.search.model.cancel()
+        await store.cancelQuery()
+        await store.loadCategories()
         await store.setSession(owner: 42, credential: try .init(musicU: "fixture"))
+        await store.loadCategories()
+        XCTAssertEqual(store.categories.map(\.name), ["热门"])
         let stale = await resolve(id)
         XCTAssertNil(stale)
     }
@@ -363,11 +369,12 @@ import XCTest
     func testClosedSearchPublishesLateArtworkToQueueAndRetainedPlaylistThenEvictsIt() async throws {
         let remote = URL(string: "https://example.com/a.jpg")!
         let replacement = URL(string: "https://example.com/next.jpg")!
+        let category = Data(#"{"code":200,"sub":[{"name":"热门","category":3,"hot":true}]}"#.utf8)
         let (client, network) = client(responses: [
             "/eapi/search/get": [Data(#"{"code":200,"result":{"songs":[{"id":1,"name":"Song 1"}],"songCount":1}}"#.utf8),
                                   Data(#"{"code":200,"result":{"songs":[],"songCount":0}}"#.utf8)],
             "/eapi/v3/song/detail": [songs([1])],
-            "/eapi/playlist/catalogue": [Data(#"{"code":200,"sub":[]}"#.utf8)],
+            "/eapi/playlist/catalogue": [category, category],
             remote.path: [NeteaseArtworkTestFixture.png], replacement.path: [NeteaseArtworkTestFixture.png]
         ])
         let images = NeteaseArtworkCache(directory: directory(), session: network, countLimit: 1)
@@ -425,9 +432,11 @@ import XCTest
         XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
         integration.model.cancel()
         await store.cancelQuery()
+        await store.loadCategories()
         try await account.logout()
         try await waitForPublication { integration.model.ownerID == nil }
         await store.loadCategories()
+        XCTAssertEqual(store.categories.map(\.name), ["热门"])
     }
 
     private func waitForPublication(_ condition: @MainActor () -> Bool) async throws {

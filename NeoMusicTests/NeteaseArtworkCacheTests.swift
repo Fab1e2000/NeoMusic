@@ -211,14 +211,15 @@ import XCTest
         defer { try? FileManager.default.removeItem(at: directory) }
         let session = network()
         defer { session.invalidateAndCancel() }
-        let cache = NeteaseArtworkCache(directory: directory, session: session, byteLimit: 10, countLimit: 2)
+        let byteLimit = NeteaseArtworkTestFixture.png.count
+        let cache = NeteaseArtworkCache(directory: directory, session: session, byteLimit: byteLimit, countLimit: 2)
         let first = try await cache.imageURL(for: remote, scope: "42")
         let next = remote.appendingPathComponent("next")
         let second = try await cache.imageURL(for: next, scope: "42")
         XCTAssertFalse(FileManager.default.fileExists(atPath: first.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: second.path))
         XCTAssertNil(cache.cachedURL(for: remote, scope: "42"))
-        let restored = NeteaseArtworkCache(directory: directory, session: session, byteLimit: 10, countLimit: 2)
+        let restored = NeteaseArtworkCache(directory: directory, session: session, byteLimit: byteLimit, countLimit: 2)
         await restored.restore(scope: "42")
         XCTAssertNil(restored.cachedURL(for: remote, scope: "42"))
         XCTAssertEqual(restored.cachedURL(for: next, scope: "42"), second)

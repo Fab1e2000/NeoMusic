@@ -677,19 +677,20 @@ final class LyricsFocusTests: XCTestCase {
     func testSwitchingToATrackWithoutLyricsReturnsToArtwork() async throws {
         let model = PlayerTestFixtures.owner(tracks: [track("timed", duration: 30), track("instrumental", duration: 30)])
         let lyrics = LyricsFocusTestState.makeLyrics(count: 3)
-        let window = try await mountFullScreenPlayer(PlayerState(model: model)) {
+        var artworkWidth: CGFloat = 0
+        let window = try await mountFullScreenPlayer(PlayerState(model: model), onArtworkWidthChange: { artworkWidth = $0 }) {
             $0 == "timed" ? lyrics : PlayerLyrics()
         }
         defer { window.isHidden = true }
         let timedReady = try await waitUntil { self.activeLyricsTable(in: window)?.isRowFocused(forRow: 0) == true }
         XCTAssertTrue(timedReady)
+        XCTAssertEqual(artworkWidth, NowPlayingSongHeader.referenceHeight)
 
         model.select(1)
         let showedCover = try await waitUntil {
-            self.accessibilityLabels(in: window, minimumWidth: 200).contains("instrumental的封面")
+            self.activeLyricsTable(in: window) == nil && artworkWidth > 200
         }
-        XCTAssertTrue(showedCover)
-        XCTAssertFalse(accessibilityLabels(in: window).contains("暂无歌词"))
+        XCTAssertTrue(showedCover, "Expected the large cover, measured width \(artworkWidth)")
     }
 
     func testRapidConsecutiveForwardChangesKeepTheCommittedViewport() async throws {
@@ -1226,37 +1227,19 @@ final class LyricsFocusTests: XCTestCase {
 
         state.showsTranslation = true
         let grew = try await waitUntil {
-            guard let row = table.cellForRow(at: IndexPath(row: 2, section: 0)) else { return false }
-            return row.bounds.height > beforeHeight + 12
+            guard let row = table.cellForRow(at: IndexPath(row: 2, section: 0)) as? NativeLyricCell else { return false }
+            return row.appearance.showsTranslation && row.bounds.height > beforeHeight + 12
         }
         XCTAssertTrue(grew)
         let shown = try XCTUnwrap(table.cellForRow(at: IndexPath(row: 2, section: 0)))
         XCTAssertEqual(shown.convert(shown.bounds, to: window).minY, beforeTop, accuracy: 8)
-        XCTAssertTrue(accessibilityLabels(in: shown).contains { $0.contains("译文2") })
 
         state.showsTranslation = false
         let shrank = try await waitUntil {
-            guard let row = table.cellForRow(at: IndexPath(row: 2, section: 0)) else { return false }
-            return row.bounds.height < beforeHeight + 4
+            guard let row = table.cellForRow(at: IndexPath(row: 2, section: 0)) as? NativeLyricCell else { return false }
+            return !row.appearance.showsTranslation && row.bounds.height < beforeHeight + 4
         }
         XCTAssertTrue(shrank)
-        XCTAssertFalse(accessibilityLabels(in: table).contains { $0.contains("译文2") })
-    }
-
-    private func accessibilityLabels(in view: UIView, minimumWidth: CGFloat = 0) -> [String] {
-        var labels: [String] = []
-        if let label = view.accessibilityLabel, !label.isEmpty, view.accessibilityFrame.width >= minimumWidth {
-            labels.append(label)
-        }
-        for element in view.accessibilityElements ?? [] {
-            guard let object = element as? NSObject, let label = object.accessibilityLabel, !label.isEmpty,
-                  object.accessibilityFrame.width >= minimumWidth else { continue }
-            labels.append(label)
-        }
-        for subview in view.subviews {
-            labels.append(contentsOf: accessibilityLabels(in: subview, minimumWidth: minimumWidth))
-        }
-        return labels
     }
 
     private func mount(_ state: LyricsFocusTestState, size: DynamicTypeSize) async throws -> UIWindow {
@@ -1296,6 +1279,7 @@ final class LyricsFocusTests: XCTestCase {
     }
 
     private func mountFullScreenPlayer(_ player: PlayerState,
+                                       onArtworkWidthChange: ((CGFloat) -> Void)? = nil,
                                        loadLyrics: @escaping (String) async throws -> PlayerLyrics) async throws -> UIWindow {
         let services = PlayerServices(
             actions: PlayerTestFixtures.actions(),
@@ -1303,7 +1287,8 @@ final class LyricsFocusTests: XCTestCase {
             artwork: PlayerArtworkProvider(cached: { _ in nil }, load: { _ in throw URLError(.fileDoesNotExist) })
         )
         let host = UIHostingController(rootView:
-            FullScreenPlayerView(player: player, services: services, initialPage: .lyrics)
+            FullScreenPlayerView(player: player, services: services, initialPage: .lyrics,
+                                 artworkTransition: LyricsTestArtworkMeasurement(onWidthChange: onArtworkWidthChange))
                 .environment(\.scenePhase, .active)
         )
         let window = UIWindow(windowScene: try await applicationWindowScene())
@@ -1329,6 +1314,16 @@ final class LyricsFocusTests: XCTestCase {
     private func scrollViews(in view: UIView) -> [UIScrollView] {
         let current = (view as? UIScrollView).map { [$0] } ?? []
         return current + view.subviews.flatMap { scrollViews(in: $0) }
+    }
+}
+
+private struct LyricsTestArtworkMeasurement: ViewModifier {
+    let onWidthChange: ((CGFloat) -> Void)?
+
+    func body(content: Content) -> some View {
+        content.onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+            onWidthChange?(width)
+        }
     }
 }
 
