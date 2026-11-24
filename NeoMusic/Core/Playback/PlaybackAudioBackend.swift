@@ -237,6 +237,7 @@ final class PlaybackAudioBackend {
         do {
             try await candidate.waitUntilReady()
         } catch {
+            AppLogger.failure(AppLogger.playback, "backend.replacement.prepare", error: error)
             candidate.clear()
             throw error
         }

@@ -80,6 +80,7 @@ actor LocalMusicScanner {
         let manager = FileManager.default
         var isDirectory: ObjCBool = false
         guard manager.fileExists(atPath: root.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+            AppLogger.library.error("library.scan.root_unavailable")
             throw CocoaError(.fileReadNoSuchFile)
         }
         let keys: [URLResourceKey] = [.isRegularFileKey, .isSymbolicLinkKey, .creationDateKey, .isPackageKey]
@@ -91,7 +92,10 @@ actor LocalMusicScanner {
             let children: [URL]
             do { children = try manager.contentsOfDirectory(at: directory, includingPropertiesForKeys: keys + [.isDirectoryKey], options: [.skipsHiddenFiles]) }
             catch {
-                if directory == root { throw error }
+                if directory == root {
+                    AppLogger.failure(AppLogger.library, "library.scan.list_root", error: error)
+                    throw error
+                }
                 throw DirectoryReadFailure(url: directory, underlying: error)
             }
             for url in children {
@@ -199,6 +203,9 @@ actor LocalMusicScanner {
         }
         try Task.checkCancellation()
         guard generation == scanGeneration else { throw CancellationError() }
+        if !result.failures.isEmpty || !result.failedDirectoryPaths.isEmpty {
+            AppLogger.library.notice("library.scan.partial files_failed=\(result.failures.count) directories_failed=\(result.failedDirectoryPaths.count)")
+        }
         return result
     }
 }

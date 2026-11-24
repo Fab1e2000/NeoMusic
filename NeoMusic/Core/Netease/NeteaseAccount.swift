@@ -240,6 +240,7 @@ final class NeteaseAccount {
                     AppLogger.account.notice("account.read.failed category=\(status, privacy: .public)")
                 }
                 if error as? NeteaseAccountError == .authenticationRequired {
+                    AppLogger.account.notice("account.session.rejected")
                     let oldRefresh = postLoginRefresh
                     oldRefresh?.cancel()
                     let cleared = await transitionStores(to: nil) {
@@ -505,6 +506,7 @@ final class NeteaseAccount {
     private func setError(_ failure: Error, message: String? = nil) {
         error = message ?? failure.localizedDescription
         let cause = (failure as? CredentialRollbackFailure)?.cause ?? failure
+        AppLogger.failure(AppLogger.account, "account.operation.failed", error: cause)
         errorTechnicalDetails = (cause as? NeteaseAccountError)?.technicalDetails
     }
 
@@ -564,7 +566,9 @@ final class NeteaseAccount {
                 avatarData = data
                 avatarDataURL = url
                 await saveAvatarSnapshot(data, profile)
-            } catch {}
+            } catch {
+                AppLogger.failure(AppLogger.account, "account.avatar.refresh", error: error)
+            }
         }
     }
 }

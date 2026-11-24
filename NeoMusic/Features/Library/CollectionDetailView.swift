@@ -152,6 +152,7 @@ private struct CollectionDetailContent: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.closeLibraryDetail) private var closeLibraryDetail
     @Environment(\.dynamicTypeSize) private var textSize
+    @Environment(\.accessibilityReduceMotion) private var reducesMotion
     @State private var query = ""
     @State private var isConfirmingAlbumDeletion = false
     @State private var favoritesScrollDistance = PlaylistScrollDistance()
@@ -209,7 +210,7 @@ private struct CollectionDetailContent: View {
                 Button("从资料库删除", role: .destructive) {
                     guard let route = detail.route else { return }
                     closeDetail()
-                    withAnimation { collectionActions.delete(route) }
+                    withAnimation(reducesMotion ? nil : .default) { collectionActions.delete(route) }
                 }
                 Button("取消", role: .cancel) {}
             } message: {
@@ -311,6 +312,8 @@ private struct CollectionDetailContent: View {
                     }
                 }
                 .multilineTextAlignment(.center)
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isHeader)
             }
             if let subtitle = detail.subtitle {
                 Text(subtitle).font(.title3)
@@ -398,47 +401,52 @@ private struct CollectionActions: View {
     private var canPlay: Bool { detail.route != nil && !detail.songs.isEmpty }
 
     var body: some View {
+        let layout = textSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(spacing: 14))
+            : AnyLayout(HStackLayout(spacing: 14))
         VStack(spacing: 0) {
-        HStack(spacing: 14) {
-            circleButton("随机播放", systemImage: "shuffle") {
-                guard canPlay, let route = detail.route else { return }
-                actionFeedback &+= 1
-                actions.play(route, true)
-            }
-            .disabled(!canPlay)
-            Button {
-                guard canPlay, let route = detail.route else { return }
-                actionFeedback &+= 1
-                actions.play(route, false)
-            } label: {
-                HStack(spacing: 5.5) {
-                    Image(systemName: "play.fill").font(.system(size: 18, weight: .semibold))
-                    Text("播放")
+            layout {
+                circleButton("随机播放", systemImage: "shuffle") {
+                    guard canPlay, let route = detail.route else { return }
+                    actionFeedback &+= 1
+                    actions.play(route, true)
                 }
-                .font(.headline)
-                .foregroundStyle(palette?.playForeground ?? albumBackground ?? Color(.systemBackground))
-                .padding(.vertical, textSize.isAccessibilitySize ? 10 : 0)
-                .frame(width: 160)
-                .frame(minHeight: 48)
-                .background(Color.primary, in: .capsule)
-            }
-            .buttonStyle(.plain)
-            .disabled(!canPlay)
-            switch detail.kind {
-            case .album:
-                if detail.isOfflineArtistAlbum {
-                    EmptyView()
-                } else if case .album(let id) = detail.route, id.hasPrefix("catalog:"), !detail.isFavorite {
-                    albumCollectionButton
-                } else {
+                .disabled(!canPlay)
+                Button {
+                    guard canPlay, let route = detail.route else { return }
+                    actionFeedback &+= 1
+                    actions.play(route, false)
+                } label: {
+                    HStack(spacing: 5.5) {
+                        Image(systemName: "play.fill").font(.system(size: 18, weight: .semibold))
+                        Text("播放")
+                    }
+                    .font(.headline)
+                    .foregroundStyle(palette?.playForeground ?? albumBackground ?? Color(.systemBackground))
+                    .padding(.vertical, textSize.isAccessibilitySize ? 10 : 0)
+                    .padding(.horizontal, textSize.isAccessibilitySize ? 20 : 0)
+                    .frame(width: textSize.isAccessibilitySize ? nil : 160)
+                    .frame(minHeight: 48)
+                    .background(Color.primary, in: .capsule)
+                    .contentShape(.capsule)
+                }
+                .buttonStyle(.plain)
+                .disabled(!canPlay)
+                switch detail.kind {
+                case .album:
+                    if detail.isOfflineArtistAlbum {
+                        EmptyView()
+                    } else if case .album(let id) = detail.route, id.hasPrefix("catalog:"), !detail.isFavorite {
+                        albumCollectionButton
+                    } else {
+                        if let route = detail.route { CollectionDownloadButton(route: route, songs: detail.songs) }
+                    }
+                case .playlist:
                     if let route = detail.route { CollectionDownloadButton(route: route, songs: detail.songs) }
                 }
-            case .playlist:
-                if let route = detail.route { CollectionDownloadButton(route: route, songs: detail.songs) }
             }
-        }
-        .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.6), trigger: actionFeedback)
-        if let route = detail.route { CollectionDownloadSummary(route: route) }
+            .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.6), trigger: actionFeedback)
+            if let route = detail.route { CollectionDownloadSummary(route: route) }
         }
     }
 
@@ -465,6 +473,7 @@ private struct CollectionActions: View {
 
 struct DrawnCheckmark: View {
     let animates: Bool
+    @Environment(\.accessibilityReduceMotion) private var reducesMotion
     @State private var progress: CGFloat = 1
 
     var body: some View {
@@ -473,7 +482,7 @@ struct DrawnCheckmark: View {
             .stroke(Color.primary, style: StrokeStyle(lineWidth: 2.2, lineCap: .round, lineJoin: .round))
             .frame(width: 48, height: 48)
             .onAppear {
-                guard animates else { return }
+                guard animates, !reducesMotion else { progress = 1; return }
                 progress = 0
                 withAnimation(.timingCurve(0.25, 0.6, 0.35, 1, duration: 0.5)) { progress = 1 }
             }
@@ -493,6 +502,7 @@ private struct CheckmarkShape: Shape {
 }
 
 struct DownloadProgressRing: View {
+    @Environment(\.accessibilityReduceMotion) private var reducesMotion
     let progress: Double
 
     var body: some View {
@@ -502,7 +512,7 @@ struct DownloadProgressRing: View {
                 .trim(from: 0, to: progress)
                 .stroke(Color.primary, style: StrokeStyle(lineWidth: 2, lineCap: .round))
                 .rotationEffect(.degrees(-90))
-                .animation(.linear(duration: 0.1), value: progress)
+                .animation(reducesMotion ? nil : .linear(duration: 0.1), value: progress)
             RoundedRectangle(cornerRadius: 2.5)
                 .fill(Color.primary)
                 .frame(width: 10, height: 10)

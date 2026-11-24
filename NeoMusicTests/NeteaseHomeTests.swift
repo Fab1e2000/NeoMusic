@@ -248,7 +248,7 @@ import Synchronization
             $0.started = { request in
                 guard request == path else { return }
                 if HomePaginationProtocol.count(path) == 1 {
-                    HomePaginationProtocol.state.withLock { $0.blocked.insert(path) }
+                    _ = HomePaginationProtocol.state.withLock { $0.blocked.insert(path) }
                 } else {
                     secondPage.fulfill()
                 }
@@ -893,7 +893,7 @@ import Synchronization
         XCTAssertEqual(store.cachedDetail(id: 12)?.songs.map(\.id), detail.songs.map(\.id))
         XCTAssertEqual(HomePaginationProtocol.count(path), 2)
         XCTAssertEqual(HomePaginationProtocol.count("/eapi/v3/song/detail"), 1)
-        HomePaginationProtocol.state.withLock { $0.failures.insert(path) }
+        _ = HomePaginationProtocol.state.withLock { $0.failures.insert(path) }
         await store.refresh()
         XCTAssertEqual(store.quickActionArtwork(.hotSongs), cover)
         HomePaginationProtocol.state.withLock {
@@ -944,7 +944,7 @@ import Synchronization
         await store.activate(try savedSession())
         guard case .roaming(let originalID, _) = try await store.performQuickAction(.privateRoaming) else { return XCTFail("Missing batch") }
         XCTAssertEqual(store.quickActionArtwork(.privateRoaming), cover)
-        HomePaginationProtocol.state.withLock { $0.failures.insert(path) }
+        _ = HomePaginationProtocol.state.withLock { $0.failures.insert(path) }
         await store.refresh()
         XCTAssertNotNil(store.quickActionStates[.privateRoaming])
         XCTAssertEqual(store.quickActionArtwork(.privateRoaming), cover)
@@ -963,7 +963,7 @@ import Synchronization
         XCTAssertTrue(restored.cachedSongs.isEmpty)
         await restored.activate(try savedSession(), refresh: false)
         XCTAssertEqual(restored.quickActionArtwork(.privateRoaming), cover)
-        HomePaginationProtocol.state.withLock { $0.failures.remove(path) }
+        _ = HomePaginationProtocol.state.withLock { $0.failures.remove(path) }
         guard case .roaming(let renewedID, _) = try await restored.performQuickAction(.privateRoaming) else { return XCTFail("Missing renewed batch") }
         XCTAssertNotEqual(renewedID, originalID)
         await store.activate(nil, refresh: false)
@@ -1345,10 +1345,10 @@ import Synchronization
         await store.activate(try savedSession(), refresh: false)
         _ = try await store.detail(id: 12)
         let path = "/eapi/v3/song/detail"
-        HomePaginationProtocol.state.withLock { $0.failures.insert(path) }
+        _ = HomePaginationProtocol.state.withLock { $0.failures.insert(path) }
         do { _ = try await store.loadMoreDetail(id: 12); XCTFail("Expected page failure") }
         catch { XCTAssertEqual(store.cachedDetail(id: 12)?.nextOffset, 100) }
-        HomePaginationProtocol.state.withLock { $0.failures.remove(path) }
+        _ = HomePaginationProtocol.state.withLock { $0.failures.remove(path) }
         let retry = try await store.loadMoreDetail(id: 12)
         XCTAssertEqual(retry.nextOffset, 200)
         XCTAssertEqual(HomePaginationProtocol.count("/eapi/v6/playlist/detail"), 1)

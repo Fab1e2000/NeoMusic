@@ -37,7 +37,8 @@ struct SearchPageView: View {
                             .buttonStyle(.plain)
                             .accessibilityLabel("清除最近搜索")
                         }
-                        SearchFlowLayout(horizontalSpacing: 10, verticalSpacing: 10) {
+                        SearchFlowLayout(horizontalSpacing: 10, verticalSpacing: 10,
+                                         wrapsOversizedItems: dynamicTypeSize.isAccessibilitySize) {
                             ForEach(model.history, id: \.self) { value in
                                 Button {
                                     model.submit(value)
@@ -71,7 +72,7 @@ struct SearchPageView: View {
                             HStack(spacing: 14) {
                                 Button { model.submit(value) } label: {
                                     Label(value, systemImage: "clock")
-                                        .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+                                        .frame(maxWidth: .infinity, minHeight: dynamicTypeSize.isAccessibilitySize ? 44 : 32, alignment: .leading)
                                         .contentShape(.rect)
                                 }.buttonStyle(.plain)
                                 Button { model.onRemoveHistory?(value) } label: {
@@ -260,6 +261,7 @@ extension SearchResultList: @MainActor Equatable {
 
 private struct SearchTagChip: View {
     let title: String
+    @Environment(\.dynamicTypeSize) private var textSize
 
     var body: some View {
         Text(title)
@@ -267,14 +269,22 @@ private struct SearchTagChip: View {
             .foregroundStyle(.primary)
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
+            .frame(minHeight: textSize.isAccessibilitySize ? 44 : nil)
             .background(Color(.secondarySystemFill), in: Capsule())
-            .lineLimit(1)
+            .lineLimit(textSize.isAccessibilitySize ? nil : 1)
     }
 }
 
 private struct SearchFlowLayout: Layout {
     var horizontalSpacing: CGFloat = 8
     var verticalSpacing: CGFloat = 8
+    var wrapsOversizedItems = false
+
+    private func size(of subview: LayoutSubview, fitting width: CGFloat) -> CGSize {
+        let ideal = subview.sizeThatFits(.unspecified)
+        guard wrapsOversizedItems, ideal.width > width else { return ideal }
+        return subview.sizeThatFits(ProposedViewSize(width: width, height: nil))
+    }
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let maxWidth = proposal.width ?? .infinity
@@ -284,7 +294,7 @@ private struct SearchFlowLayout: Layout {
         var totalWidth: CGFloat = 0
 
         for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
+            let size = size(of: subview, fitting: maxWidth)
             if currentX > 0 && currentX + size.width > maxWidth {
                 currentX = 0
                 currentY += rowHeight + verticalSpacing
@@ -303,7 +313,7 @@ private struct SearchFlowLayout: Layout {
         var rowHeight: CGFloat = 0
 
         for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
+            let size = size(of: subview, fitting: bounds.width)
             if currentX > bounds.minX && currentX + size.width > bounds.maxX {
                 currentX = bounds.minX
                 currentY += rowHeight + verticalSpacing
@@ -317,6 +327,7 @@ private struct SearchFlowLayout: Layout {
 }
 
 struct SearchResultRow: View {
+    @Environment(\.dynamicTypeSize) private var textSize
     let item: MusicSearchItem
     let model: SearchPageModel
     @State private var sources = LibraryArtworkSources()
@@ -357,8 +368,8 @@ struct SearchResultRow: View {
                             sources: sources, sourceID: item.id, cornerRadius: item.kind == .artist ? 28 : 5)
                             .frame(width: 56, height: 56)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(item.title).font(.body).foregroundStyle(.primary).lineLimit(2)
-                            Text(item.subtitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                            Text(item.title).font(.body).foregroundStyle(.primary).lineLimit(textSize.isAccessibilitySize ? nil : 2)
+                            Text(item.subtitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(textSize.isAccessibilitySize ? nil : 1)
                         }.frame(maxWidth: .infinity, alignment: .leading)
                     }.contentShape(.rect)
                 }.buttonStyle(.plain).accessibilityIdentifier("search.result.\(item.id)")

@@ -189,6 +189,19 @@ struct SongsListView: View {
             finish(SongsListView.computeGroupedIndices(entries: entries, query: query, filter: filter, sort: sort))
         }
 
+        @MainActor func project(using projection: AsyncListProjection<Self, Projection>) async {
+            let entries = entries
+            let query = query, filter = filter, sort = sort
+            await projection.computeIfNeeded(
+                for: self,
+                fastPath: SongsListView.fastPath,
+                background: {
+                    SongsListView.computeGroupedIndices(entries: entries, query: query, filter: filter, sort: sort)
+                },
+                finish: finish
+            )
+        }
+
         fileprivate var entries: [SongSortEntry] {
             songs.enumerated().map { index, song in
                 SongSortEntry(index: index, title: song.title, artist: song.artist, album: song.album,
@@ -205,6 +218,11 @@ struct SongsListView: View {
     struct Projection {
         let sections: [TitleSection<LibrarySongItem>]
         let ordered: [LibrarySongItem]
+
+        var indexedSections: [NativeTrackSection]? {
+            guard sections.first?.letter.isEmpty == false else { return nil }
+            return sections.map { NativeTrackSection(title: $0.letter, songIDs: $0.items.map(\.id)) }
+        }
     }
 
     fileprivate struct SongSortEntry: Sendable {
@@ -255,9 +273,6 @@ struct SongsListView: View {
         let result = projection.currentValue(for: input, fastPath: Self.fastPath,
                                              placeholder: { _ in Projection(sections: [], ordered: []) })
         let ordered = result.ordered
-        let groups = result.sections.first?.letter.isEmpty == false
-            ? result.sections.map { NativeTrackSection(title: $0.letter, songIDs: $0.items.map(\.id)) } : nil
-
         NativePlaylistTrackList(songs: ordered, title: "歌曲",
             header: ordered.isEmpty ? nil : AnyView(
                 PlayShuffleButtons(play: { playAll(ordered, false) }, shuffle: { playAll(ordered, true) })
@@ -267,7 +282,7 @@ struct SongsListView: View {
             ),
             banner: nil, footer: nil, showsAddMusicRow: false,
             pageColor: UIColor(Color(.systemBackground)), scheme: colorScheme,
-            indexedSections: groups, usesLibrarySongAppearance: true,
+            indexedSections: result.indexedSections, usesLibrarySongAppearance: true,
             rowCornerRadius: DesignTokens.Radius.songRowCover, lastSongSeparatorLeading: 80,
             onPlaySong: { _, index in actions.play(ordered, index, "歌曲") }
         )
@@ -281,20 +296,7 @@ struct SongsListView: View {
         .libraryTitleDisplayMode(.large)
         .librarySearchable(text: $query, prompt: "搜索歌曲", usesStackedPlacement: true)
         .libraryRootAccountButton()
-        .task(id: input) {
-            let entries = input.entries
-            let currentQuery = input.query
-            let currentFilter = input.filter
-            let currentSort = input.sort
-            await projection.computeIfNeeded(
-                for: input,
-                fastPath: Self.fastPath,
-                background: {
-                    Self.computeGroupedIndices(entries: entries, query: currentQuery, filter: currentFilter, sort: currentSort)
-                },
-                finish: input.finish
-            )
-        }
+        .task(id: input) { await input.project(using: projection) }
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 LibraryFilterMenu(filter: $filter, allTitle: "所有歌曲", allImage: "music.note")
@@ -505,7 +507,6 @@ struct LibraryListEmptyState: View {
                 .accessibilityIdentifier("library.empty.show-all")
             }
         }
-        .accessibilityIdentifier("library.empty-state")
     }
 }
 

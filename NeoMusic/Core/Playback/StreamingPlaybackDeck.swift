@@ -1,7 +1,7 @@
 @preconcurrency import AVFoundation
 @preconcurrency import AudioStreaming
 
-@PlaybackAudioActor final class StreamingPlaybackDeck: NSObject, @preconcurrency AudioPlayerDelegate {
+@PlaybackAudioActor final class StreamingPlaybackDeck: NSObject, AudioPlayerDelegate {
     var onChange: (() -> Void)?
     var onEnded: (() -> Void)?
     private(set) var itemID: UUID?
@@ -70,7 +70,7 @@
                     let file = try AVAudioFile(forReading: url)
                     let startAt = self.initialPosition ?? 0
                     self.initialPosition = nil
-                    let node = LocalFilePlaybackNode(file: file, graph: self.graph, volume: self.volume, initialPosition: startAt)
+                    let node = try LocalFilePlaybackNode(file: file, graph: self.graph, volume: self.volume, initialPosition: startAt)
                     node.onEnded = { [weak self] in
                         guard let self, self.itemID == identity else { return }
                         self.wantsPlayback = false
@@ -84,11 +84,7 @@
                     self.finishReadiness(.success(()))
                     self.onChange?()
                 } catch {
-                    self.error = error
-                    self.isLoading = false
-                    self.wantsPlayback = false
-                    self.finishReadiness(.failure(error))
-                    self.onChange?()
+                    self.failPreparation(error)
                 }
             }
             return
@@ -112,7 +108,12 @@
             let gate = StreamRenderGate(player: player, sourceFormat: renderFormat)
             let node = Self.makeSourceNode(gate: gate, format: nodeFormat)
             node.volume = self.volume
-            self.graph.attach(node, format: nodeFormat)
+            do {
+                try self.graph.attach(node, format: nodeFormat)
+            } catch {
+                self.failPreparation(error)
+                return
+            }
             self.sourceNode = node
             self.renderGate = gate
             self.audio = player
@@ -120,11 +121,20 @@
             player.delegate = self
             if self.wantsPlayback {
                 gate.activate(startHostTime: 0)
-                try? self.graph.startIfNeeded()
+                self.startGraph()
             }
             player.play(url: url)
         }
     }
+    private func failPreparation(_ error: Error) {
+        AppLogger.failure(AppLogger.playback, "deck.prepare", error: error)
+        self.error = error
+        isLoading = false
+        wantsPlayback = false
+        finishReadiness(.failure(error))
+        onChange?()
+    }
+
     nonisolated private static func makeSourceNode(gate: StreamRenderGate, format: AVAudioFormat) -> AVAudioSourceNode {
         AVAudioSourceNode(format: format) { _, timestamp, frameCount, outputData in
             gate.render(timestamp: timestamp, frameCount: frameCount, outputData: outputData)
@@ -139,11 +149,16 @@
             return
         }
         renderGate?.activate(startHostTime: hostTime ?? 0)
-        try? graph.startIfNeeded()
+        startGraph()
         audio?.resumeAfterSeek = true
         if audio?.state == .stopped { seek(to: 0) }
         audio?.resume()
     }
+    private func startGraph() {
+        do { try graph.startIfNeeded() }
+        catch { AppLogger.failure(AppLogger.playback, "deck.graph.start", error: error) }
+    }
+
     func pause() {
         wantsPlayback = false
         renderGate?.deactivate()
@@ -284,6 +299,7 @@
     }
     private func handleUnexpectedError(player: AudioStreaming.AudioPlayer, error: AudioPlayerError) {
         guard player === audio else { return }
+        AppLogger.failure(AppLogger.playback, "deck.stream.failed", error: error)
         self.error = error; isLoading = false; wantsPlayback = false
         finishReadiness(.failure(error))
         onChange?()

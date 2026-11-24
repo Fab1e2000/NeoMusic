@@ -173,13 +173,12 @@ final class NeteaseAccountTests: XCTestCase {
 
     func testServiceAuthenticationRecheckClearsExpiredCredential() async throws {
         let storage = AccountTestStorage()
-        var expired = false
         let account = makeAccount(storage) { _ in
-            if expired { throw NeteaseAccountError.authenticationRequired }
+            if let error = storage.validationError { throw error }
             return self.first
         }
         try await account.completeLogin(credential: credential("expired"))
-        expired = true
+        storage.validationError = NeteaseAccountError.authenticationRequired
         await account.recheckAuthentication()
         XCTAssertNil(storage.saved)
         XCTAssertEqual(account.validationState, .requiresLogin)

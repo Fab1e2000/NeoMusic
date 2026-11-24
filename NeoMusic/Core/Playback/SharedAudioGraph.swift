@@ -7,11 +7,15 @@
 
     nonisolated init() {}
 
-    func attach(_ node: AVAudioNode, format: AVAudioFormat?) {
-        if node.engine !== engine {
-            engine.attach(node)
+    func attach(_ node: AVAudioNode, format: AVAudioFormat?) throws {
+        let needsAttachment = node.engine !== engine
+        if needsAttachment { engine.attach(node) }
+        do {
+            try engine.connectNode(node, to: engine.mainMixerNode, format: format)
+        } catch {
+            if needsAttachment { engine.detach(node) }
+            throw error
         }
-        engine.connect(node, to: engine.mainMixerNode, format: format)
         engine.prepare()
     }
 
@@ -61,17 +65,16 @@
         guard !tapInstalled else { return }
         let format = engine.mainMixerNode.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else { return }
-        engine.mainMixerNode.installTap(
-            onBus: 0,
-            bufferSize: 1024,
-            format: format,
-            block: Self.makeTapBlock(analyzer: analyzer)
-        )
-        tapInstalled = true
-    }
-
-    nonisolated private static func makeTapBlock(analyzer: ThreadSafeSpectrumAnalyzer) -> AVAudioNodeTapBlock {
-        { buffer, _ in analyzer.consume(buffer) }
+        // Both tap APIs document a 100 ms minimum. Keep the previous request when it meets that minimum.
+        let bufferSize = AVAudioFrameCount(max(1024, (format.sampleRate / 10).rounded(.up)))
+        do {
+            try engine.mainMixerNode.installAudioTap(onBus: 0, bufferSize: bufferSize, format: format) { [analyzer] buffer, _ in
+                analyzer.consume(buffer)
+            }
+            tapInstalled = true
+        } catch {
+            AppLogger.failure(AppLogger.playback, "spectrum.tap.install", error: error)
+        }
     }
 }
 
@@ -89,8 +92,12 @@ final class ThreadSafeSpectrumAnalyzer: @unchecked Sendable {
         deinit { raw.removeConsumer() }
     }
 
-    func consume(_ buffer: AVAudioPCMBuffer) {
-        raw.consume(buffer)
+    func consume(_ buffer: AVReadOnlyAudioPCMBuffer) {
+        let frameCount = AVAudioFrameCount(buffer.frameLength)
+        let format = buffer.format
+        buffer.withUnsafeAudioBufferList { buffers in
+            raw.consume(buffers, frameCount: frameCount, format: format)
+        }
     }
 
     func level(at index: Int) -> Float {

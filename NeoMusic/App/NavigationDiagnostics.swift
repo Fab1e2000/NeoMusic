@@ -36,7 +36,7 @@ final class NavigationDiagnosticFile: Sendable {
                 try handle.seekToEnd()
                 try handle.write(contentsOf: data)
             } catch {
-                AppLogger.navigation.error("Navigation diagnostics write failed: \(error.localizedDescription)")
+                AppLogger.failure(AppLogger.navigation, "navigation.diagnostics.write", error: error)
             }
         }
     }

@@ -42,7 +42,10 @@ final class NeteaseAccountClient: Sendable {
         }
         let envelope: AccountResponse
         do { envelope = try JSONDecoder().decode(AccountResponse.self, from: data) }
-        catch { throw NeteaseAccountError.invalidResponse }
+        catch {
+            AppLogger.account.error("transport.profile.decode_failed")
+            throw NeteaseAccountError.invalidResponse
+        }
         try Self.validateCode(envelope.code) { NeteaseAccountError.server(envelope.code) }
         if envelope.isExplicitlySignedOut { throw NeteaseAccountError.authenticationRequired }
         guard let profile = envelope.profile else { throw NeteaseAccountError.invalidResponse }
@@ -115,7 +118,10 @@ final class NeteaseAccountClient: Sendable {
     @concurrent func request(path: String, fields: [String: any Sendable] = [:], credential: NeteaseCredential?, profile: EAPIProfile = .account, retryTLS: Bool = false) async throws -> Data {
         let data = try await responseData(path: path, fields: fields, credential: credential, profile: profile, retryTLS: retryTLS)
         do { _ = try JSONDecoder().decode(CheckedResponse<EmptyResponse>.self, from: data) }
-        catch is DecodingError { throw NeteaseAccountError.invalidResponse }
+        catch is DecodingError {
+            AppLogger.account.error("transport.response.decode_failed")
+            throw NeteaseAccountError.invalidResponse
+        }
         return data
     }
 
@@ -123,7 +129,10 @@ final class NeteaseAccountClient: Sendable {
         let data = try await responseData(path: path, fields: fields, credential: credential, profile: profile, retryTLS: retryTLS)
         let response: Response
         do { response = try JSONDecoder().decode(CheckedResponse<Response>.self, from: data).value }
-        catch is DecodingError { throw NeteaseAccountError.invalidResponse }
+        catch is DecodingError {
+            AppLogger.account.error("transport.response.decode_failed")
+            throw NeteaseAccountError.invalidResponse
+        }
         try Task.checkCancellation()
         return response
     }
@@ -135,11 +144,22 @@ final class NeteaseAccountClient: Sendable {
     }
 
     private func validatedData(for request: PreparedRequest, retryTLS: Bool) async throws -> Data {
-        let (data, response) = try await dataWithTLSRetry(for: request, enabled: retryTLS)
+        let (data, response): (Data, URLResponse)
+        do { (data, response) = try await dataWithTLSRetry(for: request, enabled: retryTLS) }
+        catch {
+            AppLogger.failure(AppLogger.account, "transport.request.failed", error: error)
+            throw error
+        }
         try Task.checkCancellation()
-        guard let http = response as? HTTPURLResponse else { throw NeteaseAccountError.invalidResponse }
-        if http.statusCode == 401 { throw NeteaseAccountError.authenticationRequired }
-        guard (200..<300).contains(http.statusCode) else { throw NeteaseAccountError.http(http.statusCode) }
+        guard let http = response as? HTTPURLResponse else {
+            AppLogger.account.error("transport.response.non_http")
+            throw NeteaseAccountError.invalidResponse
+        }
+        if !(200..<300).contains(http.statusCode) {
+            AppLogger.account.error("transport.response.rejected status=\(http.statusCode)")
+            if http.statusCode == 401 { throw NeteaseAccountError.authenticationRequired }
+            throw NeteaseAccountError.http(http.statusCode)
+        }
         return data
     }
 
@@ -157,6 +177,7 @@ final class NeteaseAccountClient: Sendable {
             result = try await session.data(for: request, delegate: redirects)
         } catch let error as URLError where enabled && error.code == .secureConnectionFailed {
             try Task.checkCancellation()
+            AppLogger.account.notice("transport.tls.retry code=\(error.code.rawValue)")
             result = try await session.data(for: request, delegate: redirects)
         }
         try Task.checkCancellation()
@@ -257,10 +278,11 @@ final class NeteaseAccountClient: Sendable {
 
     private static func validateCode(_ code: Int, requiresAuthenticationFor301: Bool = true,
                                      failure: () throws -> any Error) throws {
-        if code == 401 || (code == 301 && requiresAuthenticationFor301) {
-            throw NeteaseAccountError.authenticationRequired
-        }
-        guard code == 200 else { throw try failure() }
+        guard code != 200 else { return }
+        let needsAuthentication = code == 401 || (code == 301 && requiresAuthenticationFor301)
+        AppLogger.account.error("transport.business.rejected code=\(code)")
+        if needsAuthentication { throw NeteaseAccountError.authenticationRequired }
+        throw try failure()
     }
 
     private struct EmptyResponse: Decodable {}
@@ -352,7 +374,10 @@ final class NeteaseAccountClient: Sendable {
         let request = try prepareWebRequest(path: path, fields: fields, credential: credential)
         let data = try await validatedData(for: request, retryTLS: retryTLS)
         do { _ = try JSONDecoder().decode(CheckedWebResponse.self, from: data) }
-        catch is DecodingError { throw NeteaseAccountError.invalidResponse }
+        catch is DecodingError {
+            AppLogger.account.error("transport.response.decode_failed")
+            throw NeteaseAccountError.invalidResponse
+        }
         return data
     }
 

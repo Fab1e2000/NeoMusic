@@ -1,5 +1,6 @@
 import XCTest
 import AVFoundation
+import Synchronization
 @testable import NeoMusic
 @testable import FullScreenPlayer
 
@@ -290,17 +291,17 @@ final class OnlinePlaybackTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let url = root.appendingPathComponent("audio.wav")
         try PlayerTestFixtures.silentAudio(at: url, seconds: 4)
-        var fail = false
+        let shouldFail = Mutex(false)
         let model = NowPlayingModel(queue: [song("netease:12:34")], currentIndex: 0, isPlaying: false)
         defer { model.shutdownPlayback() }
         model.configurePlayback(resolveResource: { _ in
-            if fail { throw URLError(.notConnectedToInternet) }
+            if shouldFail.withLock({ $0 }) { throw URLError(.notConnectedToInternet) }
             return PlaybackResource(url: url, quality: "lossless")
         }, persistenceURL: root.appendingPathComponent("queue.json"))
         model.startCurrent(at: 1)
         await model.waitForResourceResolution()
         let progress = model.elapsed
-        fail = true
+        shouldFail.withLock { $0 = true }
         model.reloadCurrentResource()
         await model.waitForResourceResolution()
         XCTAssertTrue(model.hasAudioEngine)

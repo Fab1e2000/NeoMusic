@@ -163,9 +163,10 @@ final class LibraryInteractionTests: XCTestCase {
         XCTAssertTrue(playlist.waitForExistence(timeout: 5), "Requires the local playlist fixture")
         playlist.tap()
         app.swipeUp()
-        let cell = app.cells.containing(.staticText, identifier: "湖畔、二人歌").firstMatch
+        let track = "library.track.塌陷于38°C的蓝/湖畔、二人歌.flac"
+        let cell = app.cells.containing(.button, identifier: track).firstMatch
         XCTAssertTrue(cell.waitForExistence(timeout: 5))
-        cell.staticTexts["湖畔、二人歌"].tap()
+        cell.buttons[track].tap()
         let clearQueue = app.buttons["清除队列"]
         if clearQueue.waitForExistence(timeout: 1) { clearQueue.tap() }
         let transport = app.buttons["mini.playPause"]

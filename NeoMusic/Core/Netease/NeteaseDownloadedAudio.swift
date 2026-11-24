@@ -20,7 +20,9 @@ nonisolated enum NeteaseDownloadedAudio {
         let header = try input.read(upToCount: 8) ?? Data()
         if header != Data("CTENFDAM".utf8) {
             guard let format = audioFormat(header) else {
-                throw declaredType.lowercased() == "ncm" ? Failure.damagedContainer : Failure.unsupportedAudio
+                let declaredContainer = declaredType.lowercased() == "ncm"
+                AppLogger.download.error("download.audio.header_rejected declared_ncm=\(declaredContainer)")
+                throw declaredContainer ? Failure.damagedContainer : Failure.unsupportedAudio
             }
             let result = staging.appendingPathComponent(UUID().uuidString).appendingPathExtension(format)
             do {
@@ -29,10 +31,15 @@ nonisolated enum NeteaseDownloadedAudio {
                 return result
             } catch {
                 try? FileManager.default.removeItem(at: result)
+                AppLogger.failure(AppLogger.download, "download.audio.stage", error: error)
                 throw error
             }
         }
-        return try decrypt(input, staging: staging)
+        do { return try decrypt(input, staging: staging) }
+        catch {
+            AppLogger.failure(AppLogger.download, "download.audio.decrypt", error: error)
+            throw error
+        }
     }
 
     private static func audioFormat(_ bytes: Data) -> String? {

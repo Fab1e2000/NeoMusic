@@ -1,8 +1,11 @@
+import hashlib
 import json
 import os
 from pathlib import Path
+import plistlib
 import shutil
 import subprocess
+import sys
 import tempfile
 import textwrap
 import unittest
@@ -10,6 +13,84 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 ZERO = "0" * 40
+
+
+class AppSizeAuditTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="neomusic-app-audit-")
+        self.addCleanup(temporary.cleanup)
+        self.directory = Path(temporary.name)
+        self.app = self.directory / "Sample.app"
+        self.write("Info.plist", plistlib.dumps({"CFBundleExecutable": "MusicBinary"}))
+        self.write("MusicBinary", b"binary")
+        self.write("Assets.car", b'[{"Name":"ProductionArtwork"}]')
+        command = self.directory / "assetutil"
+        command.write_text('#!/bin/sh\n[ "$1" = "--info" ] || exit 2\ncat "$2"\n')
+        command.chmod(0o755)
+
+    def write(self, path, data):
+        destination = self.app / path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(data)
+
+    def run_audit(self):
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "scripts/audit-app-size.py"), str(self.app)],
+            env={**os.environ, "PATH": f"{self.directory}{os.pathsep}{os.environ['PATH']}"},
+            text=True, capture_output=True,
+        )
+        return result, json.loads(result.stdout)
+
+    def test_reports_sizes_and_limits_other_files_to_ten(self):
+        self.write("Frameworks/Player.framework/Player", b"x" * 200)
+        for index in range(12):
+            self.write(f"Resources/file-{index:02d}", b"x" * (300 + index))
+        outside = self.directory / "outside"
+        outside.write_bytes(b"x" * 900)
+        (self.app / "alias").symlink_to(outside)
+
+        result, report = self.run_audit()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(report["main_executable"], {"path": "MusicBinary", "bytes": 6})
+        self.assertEqual(report["frameworks"]["bytes"], 200)
+        self.assertEqual(report["assets_car"]["bytes"], (self.app / "Assets.car").stat().st_size)
+        sizes = [path.stat().st_size for path in self.app.rglob("*") if path.is_file() and not path.is_symlink()]
+        self.assertEqual(report["total_bytes"], sum(sizes))
+        other = report["other_top_files"]
+        self.assertEqual(len(other), 10)
+        self.assertEqual(other[0], {"path": "Resources/file-11", "bytes": 311})
+        self.assertEqual(report["release_audit"]["inspected_catalogs"], ["Assets.car"])
+        self.assertTrue(report["release_audit"]["clean"])
+
+    def test_rejects_catalog_renditions_loose_previews_and_test_products(self):
+        self.write("Assets.car", b'[{"Name":"AlbumSample01","RenditionName":"cover.jpg"}]')
+        self.write("Frameworks/Player.framework/Assets.car", b'[{"RenditionName":"AlbumSample23@2x.png"}]')
+        self.write("HomePreviewAssets.xcassets/Contents.json", b"{}")
+        (self.app / "PlugIns/NeoMusicTests.xctest").mkdir(parents=True)
+        self.write("Frameworks/libXCTestSwiftSupport.dylib", b"test")
+        self.write("__preview.dylib", b"preview")
+
+        result, report = self.run_audit()
+        self.assertEqual(result.returncode, 1)
+        audit = report["release_audit"]
+        self.assertFalse(audit["clean"])
+        self.assertEqual(audit["violations"], [
+            {"path": "Assets.car", "kind": "preview_asset", "asset": "AlbumSample01"},
+            {"path": "Frameworks/Player.framework/Assets.car", "kind": "preview_asset", "asset": "AlbumSample23@2x.png"},
+            {"path": "Frameworks/libXCTestSwiftSupport.dylib", "kind": "test_artifact"},
+            {"path": "HomePreviewAssets.xcassets", "kind": "preview_resource"},
+            {"path": "PlugIns/NeoMusicTests.xctest", "kind": "test_artifact"},
+            {"path": "__preview.dylib", "kind": "preview_resource"},
+        ])
+
+    def test_fails_when_a_catalog_cannot_be_inspected(self):
+        self.write("Assets.car", b"corrupt")
+        result, report = self.run_audit()
+        self.assertEqual(result.returncode, 1)
+        audit = report["release_audit"]
+        self.assertFalse(audit["clean"])
+        self.assertEqual(audit["inspected_catalogs"], [])
+        self.assertEqual(audit["inspection_errors"][0]["path"], "Assets.car")
 
 
 class RepositoryFixture(unittest.TestCase):
@@ -271,6 +352,89 @@ class CIRecordTests(RepositoryFixture):
             self.assertEqual(result.returncode, 8)
         record = self.directory / "build/ci/source-state.previous.json"
         self.assertEqual(json.loads(record.read_text()), {"commit": "previous"})
+
+
+class SmokeUIWorkflowTests(RepositoryFixture):
+    def setUp(self):
+        super().setUp()
+        self.write("scripts/smoke-ui.sh", (ROOT / "scripts/smoke-ui.sh").read_text())
+        self.executable("bin/xcrun", r'''
+            #!/bin/bash
+            printf '%s\n' "$FIXTURE_DEVICES"
+        ''')
+        self.executable("bin/xcodegen", '#!/bin/bash\necho "FIXTURE_XCODEGEN"\n')
+        self.executable("bin/xcodebuild", r'''
+            #!/bin/bash
+            printf '%s\n' "$@"
+            mkdir build/ci/SmokeUIResults.xcresult
+            exit "${FIXTURE_XCODE_EXIT:-0}"
+        ''')
+        self.devices = {
+            "com.apple.CoreSimulator.SimRuntime.iOS-27-1": [
+                {"isAvailable": True, "name": "iPhone 18 Pro", "state": "Shutdown", "udid": "stopped"},
+                {"isAvailable": True, "name": "iPhone 18", "state": "Booted", "udid": "selected"},
+                {"isAvailable": True, "name": "iPhone Duo", "state": "Booted", "udid": "duo"},
+                {"isAvailable": False, "name": "iPhone 18 Pro", "state": "Booted", "udid": "unavailable"},
+            ],
+            "com.apple.CoreSimulator.SimRuntime.iOS-26-0": [
+                {"isAvailable": True, "name": "iPhone 18 Pro", "state": "Booted", "udid": "old"},
+            ],
+        }
+
+    def run_smoke(self, **environment):
+        return subprocess.run(["bash", "scripts/smoke-ui.sh"], cwd=self.directory, text=True,
+                              capture_output=True, env={**self.environment,
+                              "PATH": str(self.directory / "bin") + os.pathsep + os.environ["PATH"],
+                              "FIXTURE_DEVICES": json.dumps({"devices": self.devices}), **environment})
+
+    def test_runs_only_smoke_in_debug_on_available_iphone_and_rotates_result(self):
+        self.write("build/ci/SmokeUIResults.xcresult/current", "latest result")
+        self.write("build/ci/SmokeUIResults.previous.xcresult/old", "older result")
+        result = self.run_smoke(NEOMUSIC_DERIVED_DATA="build/custom")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        log = (self.directory / "build/ci/smoke-ui.log").read_text()
+        self.assertIn("-configuration\nDebug", log)
+        self.assertIn("platform=iOS Simulator,id=selected", log)
+        self.assertIn("-only-testing:NeoMusicNavigationUITests/SmokeJourneyUITests", log)
+        self.assertIn("-derivedDataPath\nbuild/custom", log)
+        self.assertIn("-parallel-testing-enabled\nNO", log)
+        self.assertTrue((self.directory / "build/ci/SmokeUIResults.xcresult").is_dir())
+        self.assertTrue((self.directory / "build/ci/SmokeUIResults.previous.xcresult/current").exists())
+        self.assertFalse((self.directory / "build/ci/SmokeUIResults.previous.xcresult/old").exists())
+        self.assertIn("Smoke UI 通过", result.stdout)
+
+    def test_xcodebuild_failure_survives_tee(self):
+        result = self.run_smoke(FIXTURE_XCODE_EXIT="27")
+        self.assertEqual(result.returncode, 27)
+        self.assertIn("Smoke UI 失败", result.stderr)
+        self.assertTrue((self.directory / "build/ci/smoke-ui.log").exists())
+
+    def test_missing_simulator_leaves_existing_result_in_place(self):
+        del self.devices["com.apple.CoreSimulator.SimRuntime.iOS-27-1"]
+        self.write("build/ci/SmokeUIResults.xcresult/current", "latest result")
+        result = self.run_smoke()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("需要已安装 iOS 27", result.stderr)
+        self.assertNotIn("FIXTURE_XCODEGEN", result.stdout)
+        self.assertTrue((self.directory / "build/ci/SmokeUIResults.xcresult/current").exists())
+
+
+class VendorBaselineTests(unittest.TestCase):
+    def test_baseline_lists_documented_scopes_and_file_fingerprints(self):
+        output = subprocess.check_output(
+            [sys.executable, str(ROOT / "scripts/check-vendor-notices.py"), "--baseline"], text=True)
+        for package, revision, file in [
+            ("LNPopupController", "fe0d1b8ce3c6464a63f0dc5e82d4c1b641adb8cc", "Package.swift"),
+            ("LNPopupUI", "60853564423524c9ed15cc74c5969d3e1ca666f1", "Sources/LNPopupUI/LNPopupUI.swift"),
+            ("AudioStreaming", "3b937b3682f6274ef6157aef156cd59d32ba3dc5", None),
+            ("AudioTags", "deadc2990767dfbda0701e0ab35fdeea653db08f", "Sources/AudioTagBridge/AudioTagBridge.mm"),
+        ]:
+            self.assertIn(f"\n{package} (", output)
+            self.assertIn(revision, output)
+            if file:
+                digest = hashlib.sha256((ROOT / "Packages" / package / file).read_bytes()).hexdigest()
+                self.assertIn(f"{digest}  {file}", output)
+        self.assertRegex(output, r"[a-f0-9]{64}  Sources/AudioStreaming/Streaming/.+\.swift")
 
 
 class ReleaseDraftTests(unittest.TestCase):

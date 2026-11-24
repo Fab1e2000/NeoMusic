@@ -7,6 +7,17 @@ final class LibraryDownloads {
         var isActive: Bool {
             switch self { case .queued, .waiting, .downloading, .finishing: true; default: false }
         }
+        var accessibilityStatus: String {
+            switch self {
+            case .queued: "等待下载"
+            case .waiting: "等待 Wi-Fi"
+            case .downloading(let progress):
+                "正在下载，\(Int((progress.isFinite ? min(1, max(0, progress)) : 0) * 100))%"
+            case .finishing: "正在处理"
+            case .downloaded: "已下载"
+            case .failed: "下载失败"
+            }
+        }
     }
     struct CollectionState: Equatable {
         var totalCount: Int
@@ -231,7 +242,7 @@ struct SongDownloadIndicator: View {
             case .queued:
                 ring(progress: 0)
             case .waiting:
-                ring(progress: 0).accessibilityLabel("等待 Wi-Fi")
+                ring(progress: 0)
             case .downloading(let value):
                 ring(progress: value)
             case .finishing:
@@ -249,6 +260,9 @@ struct SongDownloadIndicator: View {
             }
         }
         .frame(width: 14, height: 14)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(state?.accessibilityStatus ?? "")
+        .accessibilityHidden(state == nil)
     }
 
     private func ring(progress: Double) -> some View {
@@ -260,8 +274,6 @@ struct SongDownloadIndicator: View {
                 .rotationEffect(.degrees(-90))
         }
         .frame(width: 12, height: 12)
-        .accessibilityLabel(progress > 0 ? "正在下载" : "等待下载")
-        .accessibilityValue(progress > 0 ? "\(Int(min(1, max(0, progress)) * 100))%" : "")
     }
 }
 
@@ -270,6 +282,7 @@ struct SongDownloadStatus: View {
     var showsImported = true
     var secondaryStyle = AnyShapeStyle(Color.primary.opacity(0.26))
     @Environment(\.libraryDownloads) private var downloads
+    @Environment(\.dynamicTypeSize) private var textSize
     @State private var feedback = 0
     var body: some View {
         let state = downloads?.state(of: song.id)
@@ -281,7 +294,7 @@ struct SongDownloadStatus: View {
                     feedback &+= 1; downloads?.download([song])
                 } label: {
                     SongDownloadIndicator(state: state, secondaryStyle: secondaryStyle)
-                        .frame(width: 40, height: 44, alignment: .trailing)
+                        .frame(width: textSize.isAccessibilitySize ? 44 : 40, height: 44, alignment: .trailing)
                         .contentShape(.rect)
                 }
                 .padding(.leading, -12)
@@ -289,11 +302,12 @@ struct SongDownloadStatus: View {
             } else if state?.isActive == true {
                 Button { feedback &+= 1; downloads?.stop([song]) } label: {
                     SongDownloadIndicator(state: state, secondaryStyle: secondaryStyle)
-                        .frame(width: 40, height: 44, alignment: .trailing)
+                        .frame(width: textSize.isAccessibilitySize ? 44 : 40, height: 44, alignment: .trailing)
                         .contentShape(.rect)
                 }
                 .padding(.leading, -12)
                 .accessibilityLabel(state == .waiting ? "等待 Wi-Fi，轻点停止下载" : "停止下载")
+                .accessibilityValue(state?.accessibilityStatus ?? "")
             } else { SongDownloadIndicator(state: state, secondaryStyle: secondaryStyle) }
             }
         }

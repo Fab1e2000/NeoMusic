@@ -16,6 +16,8 @@ private struct RootArtworkName: ViewModifier {
 }
 
 struct PlaylistDetailView: View {
+    @Environment(\.dynamicTypeSize) private var textSize
+    @Environment(\.accessibilityReduceMotion) private var reducesMotion
     let playlistID: String
     let library: PlaylistLibrary
     let songs: [LibrarySongItem]
@@ -198,7 +200,7 @@ struct PlaylistDetailView: View {
             lastSongSeparatorLeading: 20,
             swipeMode: playlist.isReadOnly
                 ? .standard(animateFavoriteRemoval: false)
-                : .editablePlaylist(remove: { song in withAnimation { library.removeSong(song.id, from: playlistID) } }),
+                : .editablePlaylist(remove: { song in withAnimation(reducesMotion ? nil : .default) { library.removeSong(song.id, from: playlistID) } }),
             pendingPlaybackSongID: pendingPlayback?.songID,
             onPlaySong: { song, _ in requestPlayback(of: song, in: playlist) },
             onAddMusic: { showsAddMusic = true },
@@ -251,7 +253,7 @@ struct PlaylistDetailView: View {
                 .padding(.bottom, 22)
                 .modifier(RootArtworkName(title: chrome?.isRoot == true ? playlist.title : nil))
             if chrome?.isRoot != true {
-                Text(playlist.title).font(.title2.bold()).multilineTextAlignment(.center)
+                Text(playlist.title).font(.title2.bold()).multilineTextAlignment(.center).accessibilityAddTraits(.isHeader)
             }
             Text(playlist.subtitle ?? "我").font(.title3).padding(.top, 4)
             if externalActions == nil, let updatedAt = playlist.updatedAt {
@@ -261,7 +263,10 @@ struct PlaylistDetailView: View {
                     .padding(.top, 4 + 1.0 / 3)
             }
             if !tracks.isEmpty || playlist.offersCollection {
-                HStack(spacing: 14) {
+                let actionsLayout = textSize.isAccessibilitySize
+                    ? AnyLayout(VStackLayout(spacing: 14))
+                    : AnyLayout(HStackLayout(spacing: 14))
+                actionsLayout {
                     Button {
                         guard !tracks.isEmpty else { return }
                         pendingPlayback = nil
@@ -285,8 +290,12 @@ struct PlaylistDetailView: View {
                         }
                             .font(.headline)
                             .foregroundStyle(palette.playForeground)
-                            .frame(width: 160, height: 48)
+                            .padding(.vertical, textSize.isAccessibilitySize ? 10 : 0)
+                            .padding(.horizontal, textSize.isAccessibilitySize ? 20 : 0)
+                            .frame(width: textSize.isAccessibilitySize ? nil : 160)
+                            .frame(minHeight: 48)
                             .background(Color.primary, in: .capsule)
+                            .contentShape(.capsule)
                     }
                     .buttonStyle(.plain)
                     .disabled(tracks.isEmpty)

@@ -109,16 +109,19 @@ static void processTap(MTAudioProcessingTapRef tap, CMItemCount frames, MTAudioP
     if (_state) atomic_fetch_sub_explicit(&_state->consumers, 1, memory_order_relaxed);
 }
 - (void)consumeBuffer:(AVAudioPCMBuffer *)buffer {
+    [self consumePCMBufferList:buffer.audioBufferList frameCount:buffer.frameLength format:buffer.format];
+}
+- (void)consumePCMBufferList:(const AudioBufferList *)buffers frameCount:(AVAudioFrameCount)frameCount
+                     format:(AVAudioFormat *)format {
     Analysis *s = _state;
-    if (!s || !atomic_load_explicit(&s->consumers, memory_order_relaxed) || _tap || buffer.format.commonFormat != AVAudioPCMFormatFloat32) return;
-    double rate = buffer.format.sampleRate;
+    if (!s || !atomic_load_explicit(&s->consumers, memory_order_relaxed) || _tap || format.commonFormat != AVAudioPCMFormatFloat32) return;
+    double rate = format.sampleRate;
     if (rate <= 0) return;
     if (s->rate != rate) {
         s->rate = rate; s->filled = 0;
         initializeWindow(s);
     }
-    const AudioBufferList *buffers = buffer.audioBufferList;
-    for (AVAudioFrameCount i = 0; i < buffer.frameLength; i++) {
+    for (AVAudioFrameCount i = 0; i < frameCount; i++) {
         float mono = 0; UInt32 channels = 0;
         for (UInt32 b = 0; b < buffers->mNumberBuffers; b++) {
             const AudioBuffer *input = &buffers->mBuffers[b];
@@ -135,7 +138,7 @@ static void processTap(MTAudioProcessingTapRef tap, CMItemCount frames, MTAudioP
             s->filled = N - s->hop;
         }
     }
-    atomic_fetch_add(&s->samples, buffer.frameLength);
+    atomic_fetch_add(&s->samples, frameCount);
 }
 - (BOOL)attachToItem:(AVPlayerItem *)item track:(AVAssetTrack *)track {
     if(_tap || item.audioMix != nil) return NO;

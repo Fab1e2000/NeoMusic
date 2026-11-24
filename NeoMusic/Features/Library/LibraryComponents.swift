@@ -34,7 +34,7 @@ struct PlayShuffleButtons: View {
     private func button(_ title: LocalizedStringKey, systemImage: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 6) {
-                Image(systemName: systemImage)
+                Image(systemName: systemImage).accessibilityHidden(true)
                 Text(title)
             }
                 .font(.headline)

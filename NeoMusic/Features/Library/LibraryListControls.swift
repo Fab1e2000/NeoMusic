@@ -124,6 +124,7 @@ struct LibraryFilterMenu: View {
         } label: {
             Label("筛选", systemImage: "line.3.horizontal.decrease")
         }
+        .accessibilityValue(filter == .all ? allTitle : filter == .favorites ? "喜爱" : "下载")
         .menuActionDismissBehavior(.enabled)
     }
 
@@ -167,6 +168,8 @@ struct LibrarySortMenu<Sort: Hashable & Sendable>: View {
         } label: {
             Label("更多", systemImage: "ellipsis")
         }
+        .accessibilityHint("调整排序或打开其他选项")
+        .accessibilityValue(options.first { $0.sort == sort }?.title ?? "")
         .menuActionDismissBehavior(.enabled)
     }
 

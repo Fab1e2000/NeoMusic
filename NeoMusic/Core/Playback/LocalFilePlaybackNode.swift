@@ -43,14 +43,14 @@
         return Double(anchoredFrame) / sampleRate
     }
 
-    init(file: AVAudioFile, graph: SharedAudioGraph, volume: Float, initialPosition: Double) {
+    init(file: AVAudioFile, graph: SharedAudioGraph, volume: Float, initialPosition: Double) throws {
         self.file = file
         self.graph = graph
         self.volume = volume
         self.sampleRate = max(1, file.processingFormat.sampleRate)
         self.totalFrames = file.length
 
-        graph.attach(playerNode, format: file.processingFormat)
+        try graph.attach(playerNode, format: file.processingFormat)
         playerNode.volume = volume
 
         let clamped = Self.clampedSeconds(initialPosition, duration: Double(totalFrames) / sampleRate)
@@ -146,16 +146,12 @@
     private func startEngineAndNodeIfNeeded(atHostTime hostTime: UInt64? = nil) {
         do {
             try graph.startIfNeeded()
+            try playerNode.playAudio(at: hostTime.map { AVAudioTime(hostTime: $0) })
+            isPlayingState = true
         } catch {
+            AppLogger.failure(AppLogger.playback, "local_audio.start", error: error)
             isPlayingState = false
-            return
         }
-        if let hostTime {
-            playerNode.play(at: AVAudioTime(hostTime: hostTime))
-        } else {
-            playerNode.play()
-        }
-        isPlayingState = true
     }
 
     private func handleSegmentCompleted(generation: Int) {
@@ -170,7 +166,7 @@
     nonisolated private static func makeCompletionHandler(
         node: LocalFilePlaybackNode,
         generation: Int
-    ) -> AVAudioPlayerNodeCompletionHandler {
+    ) -> @Sendable (AVAudioPlayerNodeCompletionCallbackType) -> Void {
         { [weak node] _ in
             Task { @PlaybackAudioActor [weak node] in
                 node?.handleSegmentCompleted(generation: generation)

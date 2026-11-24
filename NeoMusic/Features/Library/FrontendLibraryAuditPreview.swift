@@ -2,6 +2,27 @@
 import SwiftUI
 import UIKit
 
+// Runs the same tab, navigation, and list components with the in-memory audit library.
+struct SmokeJourneyPreview: View {
+    @State private var fixture = LibraryAuditFixture()
+    @State private var selectedTab = AppTab.library
+    @State private var navigation = AppTabNavigationRegistry()
+    @State private var search = SearchPageModel()
+
+    var body: some View {
+        LibraryAppTabs(selection: $selectedTab, storesOrder: false,
+            navigation: navigation.navigation(for: .library),
+            library: LibraryAuditHome(fixture: fixture),
+            destination: { AnyView(LibraryAuditDestination(route: $0, fixture: fixture)) },
+            searchNavigation: navigation.navigation(for: .search),
+            searchContent: AnyView(SearchPageView(model: search)))
+        .ignoresSafeArea()
+        .environment(\.libraryDownloads, fixture.downloads)
+        .environment(\.collectionMenuActions, fixture.collectionActions)
+        .environment(\.songMenuActions, fixture.songActions)
+    }
+}
+
 struct FrontendLibraryAuditPreview: View {
     @State private var fixture = LibraryAuditFixture()
     @State private var navigation = LibraryDetailNavigation()
@@ -194,7 +215,6 @@ private struct LibraryAuditDestination: View {
             })
         case .category(.songs), .downloadedCategory(.songs):
             SongsListView(songs: fixture.songs, playAll: { songs, _ in fixture.recordPlay(songs.first) })
-                .accessibilityIdentifier("library-audit.songs")
         case .category(.artists), .downloadedCategory(.artists):
             ArtistsListView(artists: fixture.artists.map {
                 .init(id: .catalog(id: $0.id, ownerID: nil), name: $0.name, portrait: $0.artwork)

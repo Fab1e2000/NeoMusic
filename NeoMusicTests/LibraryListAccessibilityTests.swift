@@ -115,6 +115,68 @@ final class LibraryListAccessibilityTests: XCTestCase {
                        "夜曲, 周杰伦, 暂无完整音源")
     }
 
+    func testNativeTrackAggregatesPlaybackLabelAndKeepsDownloadAndMenuSeparate() async throws {
+        let scene = try await applicationWindowScene()
+        let window = UIWindow(windowScene: scene)
+        defer { window.isHidden = true }
+
+        let title = String(repeating: "很长的歌曲标题", count: 5)
+        var track = song(title: title)
+        track.isFavorite = true
+        let downloads = LibraryDownloads()
+        downloads.publish(states: [track.id: .downloading(0.42)], managedSongIDs: [track.id])
+        var played: [String] = []
+        let host = UIHostingController(rootView: NativePlaylistTrackList(
+            songs: [track], title: "歌曲", header: nil, banner: nil, footer: nil,
+            showsAddMusicRow: false, pageColor: .systemBackground, scheme: .light,
+            onPlaySong: { song, _ in played.append(song.id) }
+        ).environment(\.libraryDownloads, downloads).dynamicTypeSize(.accessibility3))
+        host.traitOverrides.preferredContentSizeCategory = .accessibilityExtraLarge
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        try await settle()
+
+        let collection = try XCTUnwrap(descendants(of: UICollectionView.self, in: host.view).first)
+        let cell = try XCTUnwrap(collection.visibleCells.first)
+        let label = try XCTUnwrap(descendants(of: UILabel.self, in: cell).first {
+            $0.accessibilityIdentifier == "library.track.song"
+        })
+        XCTAssertEqual(label.accessibilityLabel, "\(title), 周杰伦, 已喜爱")
+        XCTAssertTrue(label.accessibilityTraits.contains(.button))
+        XCTAssertEqual(label.numberOfLines, 0)
+        XCTAssertGreaterThan(label.bounds.height, label.font.lineHeight)
+        XCTAssertTrue(label.accessibilityActivate())
+        XCTAssertEqual(played, [track.id])
+
+        let buttons = descendants(of: UIButton.self, in: cell)
+        let stop = try XCTUnwrap(buttons.first { $0.accessibilityLabel == "停止下载" })
+        XCTAssertEqual(stop.accessibilityValue, "正在下载，42%")
+        for button in [stop, try XCTUnwrap(buttons.first { $0.accessibilityLabel == "更多" })] {
+            XCTAssertTrue(button.isAccessibilityElement)
+            XCTAssertGreaterThanOrEqual(button.bounds.width, 44)
+            XCTAssertGreaterThanOrEqual(button.bounds.height, 44)
+        }
+    }
+
+    func testPlayShuffleLayoutStacksOnlyAtAccessibilitySizes() {
+        let controls = PlayShuffleButtons(play: {}, shuffle: {})
+        let container = CGSize(width: 330, height: 500)
+        let regular = UIHostingController(rootView: controls.dynamicTypeSize(.large))
+        let accessible = UIHostingController(rootView: controls.dynamicTypeSize(.accessibility3))
+        XCTAssertEqual(regular.sizeThatFits(in: container).height, 48, accuracy: 0.5)
+        XCTAssertGreaterThanOrEqual(accessible.sizeThatFits(in: container).height, 108)
+    }
+
+    func testDownloadAccessibilityStatusUsesProgressAndHidesRawFailureDetails() {
+        XCTAssertEqual(LibraryDownloads.SongState.queued.accessibilityStatus, "等待下载")
+        XCTAssertEqual(LibraryDownloads.SongState.waiting.accessibilityStatus, "等待 Wi-Fi")
+        XCTAssertEqual(LibraryDownloads.SongState.finishing.accessibilityStatus, "正在处理")
+        XCTAssertEqual(LibraryDownloads.SongState.downloaded.accessibilityStatus, "已下载")
+        XCTAssertEqual(LibraryDownloads.SongState.downloading(1.2).accessibilityStatus, "正在下载，100%")
+        XCTAssertEqual(LibraryDownloads.SongState.downloading(.nan).accessibilityStatus, "正在下载，0%")
+        XCTAssertEqual(LibraryDownloads.SongState.failed("unknown details").accessibilityStatus, "下载失败")
+    }
+
     func testTrackListUsesNativeIndexForGroupsAndPreservesPlaybackOffsets() async throws {
         let first = song(title: "Angelic")
         let last = LibrarySongItem(id: "last", title: "夜曲", artist: "周杰伦", album: "Album",

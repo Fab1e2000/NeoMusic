@@ -6,6 +6,7 @@ enum DebugLaunchRouter {
     static var isPreviewLaunch: Bool {
         let arguments = ProcessInfo.processInfo.arguments
         let directPreviews = [
+            "-smokeJourney",
             "-frontendReviewPreview",
             "-libraryArtistsPreview",
             "-searchPreview",
@@ -21,7 +22,9 @@ enum DebugLaunchRouter {
     @ViewBuilder
     static func previewRoot(account: NeteaseAccount) -> some View {
         let arguments = ProcessInfo.processInfo.arguments
-        if arguments.contains("-frontendReviewPreview") {
+        if arguments.contains("-smokeJourney") {
+            SmokeJourneyPreview().environment(account)
+        } else if arguments.contains("-frontendReviewPreview") {
             FrontendReviewPreview().environment(account)
         } else if let index = arguments.firstIndex(of: "-libraryArtistsPreview") {
             let scene = arguments.dropFirst(index + 1).first.flatMap(LibraryArtistsPreview.Scene.init(rawValue:))

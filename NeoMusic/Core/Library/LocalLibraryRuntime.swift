@@ -111,6 +111,7 @@ final class LocalLibraryRuntime {
             try await restoreSavedState()
         } catch is CancellationError {
         } catch {
+            AppLogger.failure(AppLogger.library, "library.startup.restore", error: error)
             status = "读取资料库失败：\(error.localizedDescription)"
             isInitialLibraryReady = true
         }
@@ -154,6 +155,7 @@ final class LocalLibraryRuntime {
             } catch is CancellationError {
             } catch {
                 guard !Task.isCancelled else { return }
+                AppLogger.failure(AppLogger.library, "library.refresh.failed", error: error)
                 status = "读取资料库失败：\(error.localizedDescription)"
                 isInitialLibraryReady = true
             }
@@ -200,6 +202,7 @@ final class LocalLibraryRuntime {
             if !result.issues.isEmpty { status = result.issues.joined(separator: "\n") }
             succeeded = true
         } catch {
+            AppLogger.failure(AppLogger.library, "library.import.failed", error: error)
             pendingImports.formUnion(paths)
             status = "读取下载文件失败：\(error.localizedDescription)"
             isScanning = false
@@ -222,6 +225,7 @@ final class LocalLibraryRuntime {
         } catch is CancellationError {
             throw CancellationError()
         } catch {
+            AppLogger.failure(AppLogger.library, "library.cache.rebuild", error: error)
             cacheWarning = "资料库缓存无法读取，已重新扫描：\(error.localizedDescription)"
             apply([])
         }

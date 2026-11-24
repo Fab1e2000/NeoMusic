@@ -7,8 +7,15 @@ enum AtomicJSONStore {
         do { data = try Data(contentsOf: url) }
         catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
             return nil
+        } catch {
+            AppLogger.failure(AppLogger.library, "json.read.failed", error: error)
+            throw error
         }
-        return try JSONDecoder().decode(type, from: data)
+        do { return try JSONDecoder().decode(type, from: data) }
+        catch {
+            AppLogger.failure(AppLogger.library, "json.decode.failed", error: error)
+            throw error
+        }
     }
 
     static func write<Value: Encodable>(_ value: Value, to url: URL) throws {
@@ -25,13 +32,22 @@ enum AtomicJSONStore {
 
     static func encode<Value: Encodable>(_ value: Value) throws -> Data {
         try Task.checkCancellation()
-        return try JSONEncoder().encode(value)
+        do { return try JSONEncoder().encode(value) }
+        catch {
+            AppLogger.failure(AppLogger.library, "json.encode.failed", error: error)
+            throw error
+        }
     }
 
     static func writeData(_ data: Data, to url: URL) throws {
         try Task.checkCancellation()
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Task.checkCancellation()
-        try data.write(to: url, options: .atomic)
+        do {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Task.checkCancellation()
+            try data.write(to: url, options: .atomic)
+        } catch {
+            AppLogger.failure(AppLogger.library, "json.write.failed", error: error)
+            throw error
+        }
     }
 }

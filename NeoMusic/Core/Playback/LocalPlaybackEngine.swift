@@ -220,6 +220,7 @@ struct PlaybackResource: Sendable {
     func load(url: URL, nextURL: URL? = nil, position: Double = 0, autoplay: Bool = false) {
         stop()
         guard !url.isFileURL || FileManager.default.fileExists(atPath: url.path) else {
+            AppLogger.playback.error("engine.load.missing_local_file")
             error = "音乐文件不可用"
             return
         }
@@ -371,6 +372,7 @@ struct PlaybackResource: Sendable {
                 self.activation = nil
                 self.isActivating = false
                 guard activated else {
+                    AppLogger.playback.error("engine.session.activation_declined")
                     self.activationDidFail()
                     return
                 }
@@ -387,6 +389,7 @@ struct PlaybackResource: Sendable {
                 guard !Task.isCancelled, let self, self.generation == token, self.playRequested else { return }
                 self.activation = nil
                 self.isActivating = false
+                AppLogger.failure(AppLogger.playback, "engine.session.activate", error: error)
                 self.activationDidFail()
             }
         }

@@ -124,7 +124,10 @@ final class NeteaseDownloadStore {
             let buffered = eventsBeforeRestore; eventsBeforeRestore = []
             for event in buffered { receive(event) }
             onRecordsChanged?(); onChange?()
-        } catch { self.error = "读取下载记录失败：\(error.localizedDescription)" }
+        } catch {
+            AppLogger.failure(AppLogger.download, "download.index.restore", error: error)
+            self.error = "读取下载记录失败：\(error.localizedDescription)"
+        }
     }
 
     func activate(_ saved: NeteaseSavedSession?) async {
@@ -212,6 +215,7 @@ final class NeteaseDownloadStore {
             do {
                 (songs, collection) = try await build(saved)
             } catch {
+                AppLogger.failure(AppLogger.download, "download.plan.prepare", error: error)
                 self.sessionScope.report(error, revision: revision, signedIn: true)
                 throw error
             }
@@ -397,6 +401,7 @@ final class NeteaseDownloadStore {
                 } catch {
                     guard self.sessionRevision == revision, self.jobs[job.id]?.cancelled == false,
                           !(error is CancellationError) else { return }
+                    AppLogger.failure(AppLogger.download, "download.worker.failed", error: error)
                     self.sessionScope.report(error, revision: revision, signedIn: true)
                     self.fail(job.id, message: error.localizedDescription)
                 }
@@ -434,6 +439,7 @@ final class NeteaseDownloadStore {
             if cancelled {
                 set(.queued, for: job.metadata.song.id); pump(); return
             }
+            AppLogger.download.error("download.transfer.failed")
             fail(id, message: message); pump()
         }
     }
@@ -487,6 +493,7 @@ final class NeteaseDownloadStore {
             committingJobs.remove(job.id)
             jobs.removeValue(forKey: job.id)
         } catch {
+            AppLogger.failure(AppLogger.download, "download.commit.rollback", error: error)
             committingJobs.remove(job.id)
             records[song.id] = previousRecord
             if jobs[job.id] == nil { jobs[job.id] = job }
@@ -564,7 +571,11 @@ final class NeteaseDownloadStore {
         let previous = persistenceTask, directory = directory, writeIndex = writeIndex
         let task = Task.detached {
             _ = await previous?.result
-            try await writeIndex(AtomicJSONStore.encode(value), directory.appending(path: "index.json"))
+            do { try await writeIndex(AtomicJSONStore.encode(value), directory.appending(path: "index.json")) }
+            catch {
+                AppLogger.failure(AppLogger.download, "download.index.write", error: error)
+                throw error
+            }
         }
         persistenceTask = task
         return task

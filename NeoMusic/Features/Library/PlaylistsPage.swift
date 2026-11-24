@@ -128,6 +128,7 @@ enum PlaylistEntry: Identifiable, Equatable {
 }
 
 struct PlaylistsListView: View {
+    @Environment(\.accessibilityReduceMotion) private var reducesMotion
     let library: PlaylistLibrary
     var folderID: String?
     @State private var query = ""
@@ -403,7 +404,7 @@ struct PlaylistsListView: View {
                 Button("创建") {
                     let name = folderName.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !name.isEmpty else { return }
-                    withAnimation { _ = library.createFolder(named: name, in: folderID) }
+                    withAnimation(reducesMotion ? nil : .default) { _ = library.createFolder(named: name, in: folderID) }
                 }
                 .disabled(folderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             } message: {
@@ -420,7 +421,7 @@ struct PlaylistsListView: View {
                     if folder.id == folderID {
                         if let close = closeLibraryDetail.handler { close() } else { dismiss() }
                     }
-                    withAnimation { library.deleteFolder(folder.id) }
+                    withAnimation(reducesMotion ? nil : .default) { library.deleteFolder(folder.id) }
                 }
                 Button("取消", role: .cancel) {}
             } message: { _ in
@@ -431,7 +432,7 @@ struct PlaylistsListView: View {
                 Button("取消", role: .cancel) {}
                 Button("存储") {
                     let name = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if let folder = renamingFolder, !name.isEmpty { withAnimation { library.renameFolder(folder.id, to: name) } }
+                    if let folder = renamingFolder, !name.isEmpty { withAnimation(reducesMotion ? nil : .default) { library.renameFolder(folder.id, to: name) } }
                 }
             }
     }
@@ -454,7 +455,7 @@ struct PlaylistsListView: View {
             move = LibraryMenuItem(title: "移到文件夹", systemImage: "folder", children: options.map { option in
                 LibraryMenuItem(identity: option.id.map { "folder:" + $0 } ?? "playlist-root",
                                 title: option.name, systemImage: option.image, isSelected: option.id == folder.parentID) {
-                    withAnimation { library.move(folderID: folder.id, to: option.id) }
+                    withAnimation(reducesMotion ? nil : .default) { library.move(folderID: folder.id, to: option.id) }
                 }
             })
         }
@@ -484,10 +485,11 @@ struct PlaylistsListView: View {
                 moveItem: { id, folderID in
                     guard library.playlists.contains(where: { $0.id == id }),
                           library.folders.contains(where: { $0.id == folderID }) else { return }
-                    withAnimation { library.move(playlistID: id, to: folderID) }
+                    withAnimation(reducesMotion ? nil : .default) { library.move(playlistID: id, to: folderID) }
                 },
                 shelfItem: { $0.shelfItem },
-                route: { $0.route }
+                route: { $0.route },
+                wrapsAccessibilityText: true
             )
             .ignoresSafeArea(.container, edges: .vertical)
         case .grid:
@@ -526,6 +528,7 @@ extension View {
 }
 
 private struct PlaylistDeletionConfirmation: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reducesMotion
     @Bindable var library: PlaylistLibrary
     var enabled: Bool
     @Environment(\.libraryNavigationChrome) private var chrome
@@ -539,7 +542,7 @@ private struct PlaylistDeletionConfirmation: ViewModifier {
         ) { playlist in
             Button("删除播放列表", role: .destructive) {
                 LibraryHaptics.mediumImpact()
-                withAnimation { library.deletePlaylist(playlist.id) }
+                withAnimation(reducesMotion ? nil : .default) { library.deletePlaylist(playlist.id) }
             }
             Button("取消", role: .cancel) {}
         } message: { _ in

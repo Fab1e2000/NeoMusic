@@ -231,6 +231,7 @@ final class PlaylistLibrary {
                 persistenceError = nil
                 return true
             } catch {
+                AppLogger.failure(AppLogger.library, "playlist.snapshot.restore", error: error)
                 persistenceError = "无法读取播放列表：\(error.localizedDescription)"
                 return false
             }
@@ -320,6 +321,7 @@ final class PlaylistLibrary {
                         restoredMetadataNeedsSave = false
                     }
                 } catch {
+                    AppLogger.failure(AppLogger.library, "playlist.snapshot.write", error: error)
                     persistenceFailures[url] = "\(write.failureMessage)：\(error.localizedDescription)"
                 }
                 persistenceError = persistenceFailures.sorted { $0.key.path < $1.key.path }.first?.value

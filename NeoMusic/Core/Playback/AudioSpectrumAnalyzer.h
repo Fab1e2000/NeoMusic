@@ -5,6 +5,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)addConsumer;
 - (void)removeConsumer;
 - (void)consumeBuffer:(AVAudioPCMBuffer *)buffer NS_SWIFT_NAME(consume(_:));
+- (void)consumePCMBufferList:(const AudioBufferList *)buffers frameCount:(AVAudioFrameCount)frameCount
+                     format:(AVAudioFormat *)format NS_SWIFT_NAME(consume(_:frameCount:format:));
 - (BOOL)attachToItem:(AVPlayerItem *)item track:(AVAssetTrack *)track;
 - (float)levelAtIndex:(NSInteger)index;
 - (unsigned long)sampleCount;

@@ -121,10 +121,11 @@ struct SharedSongRow<Leading: View>: View {
                 Button(action: play, label: label).buttonStyle(.automatic)
             }
         }
+        let label = CollectionTrackUI.songAccessibilityLabel(for: song, subtitle: subtitle)
         if let playButtonAccessibilityIdentifier {
-            button.accessibilityIdentifier(playButtonAccessibilityIdentifier)
+            button.accessibilityLabel(label).accessibilityIdentifier(playButtonAccessibilityIdentifier)
         } else {
-            button
+            button.accessibilityLabel(label)
         }
     }
 }

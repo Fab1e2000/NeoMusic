@@ -9,6 +9,7 @@ struct AccountPage: View {
     private let authenticationEnabled: Bool
     private let tabOrderDefaults: UserDefaults
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.dynamicTypeSize) private var textSize
     @State private var path: [AccountRoute]
 
     init(account: NeteaseAccount, initialRoute: AccountRoute? = nil, authenticationEnabled: Bool = true,
@@ -26,7 +27,7 @@ struct AccountPage: View {
                 Section {
                     NavigationLink(value: account.profile == nil ? AccountRoute.login : .settings) {
                         HStack(spacing: 8) {
-                            AccountAvatar(account: account, size: 55)
+                            AccountAvatar(account: account, size: 55).accessibilityHidden(true)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(account.profile?.nickname ?? "登录网易云音乐")
                                     .font(.body.weight(.semibold))
@@ -41,6 +42,8 @@ struct AccountPage: View {
                     }
                     .allowsHitTesting(authenticationEnabled || account.profile != nil)
                     .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
+                    .accessibilityLabel(account.profile?.nickname ?? "登录网易云音乐")
+                    .accessibilityValue(identitySubtitle)
                     .accessibilityIdentifier("account.identity")
                 } footer: {
                     AccountValidationStatus(account: account) {
@@ -57,6 +60,9 @@ struct AccountPage: View {
                     NavigationLink("标签页", value: AccountRoute.tabs)
                         .accessibilityIdentifier("account.tabs")
                 }
+                #if DEBUG
+                Section { AccountDiagnosticsExportRow() }
+                #endif
             }
             .listStyle(.insetGrouped)
             .navigationBarTitleDisplayMode(.inline)
@@ -64,9 +70,10 @@ struct AccountPage: View {
                 ToolbarItem(placement: .topBarLeading) {
                     HStack(spacing: 8) {
                         Image("AccountBrandIcon").resizable().scaledToFit().frame(width: 28, height: 28)
+                            .accessibilityHidden(true)
                         Text("网易云账户").font(.body.weight(.semibold))
                     }
-                    .fixedSize(horizontal: true, vertical: false)
+                    .fixedSize(horizontal: !textSize.isAccessibilitySize, vertical: false)
                     .padding(.leading, 8)
                 }
                 .sharedBackgroundVisibility(.hidden)
@@ -108,9 +115,57 @@ struct AccountPage: View {
     }
 }
 
+#if DEBUG
+private struct AccountDiagnosticsExportRow: View {
+    private struct Report: Transferable {
+        let data: Data
+
+        static var transferRepresentation: some TransferRepresentation {
+            DataRepresentation(exportedContentType: .plainText) { $0.data }
+        }
+    }
+
+    @State private var isCollecting = false
+    @State private var presentExporter = false
+    @State private var exportFailed = false
+    @State private var report: Report?
+
+    var body: some View {
+        Button("导出诊断日志", systemImage: "doc.badge.arrow.up") {
+            isCollecting = true
+        }
+        .disabled(isCollecting || presentExporter)
+        .task(id: isCollecting) {
+            guard isCollecting else { return }
+            defer { isCollecting = false }
+            do {
+                let text = try await DiagnosticsLogExporter.report()
+                try Task.checkCancellation()
+                report = Report(data: Data(text.utf8))
+                presentExporter = true
+            } catch is CancellationError {
+            } catch {
+                exportFailed = true
+            }
+        }
+        .fileExporter(isPresented: $presentExporter, item: report, contentTypes: [.plainText],
+                      defaultFilename: "NeoMusic-Diagnostics.txt") { result in
+            report = nil
+            if case .failure = result { exportFailed = true }
+        } onCancellation: {
+            report = nil
+        }
+        .alert("无法导出诊断日志", isPresented: $exportFailed) {
+            Button("好", role: .cancel) {}
+        }
+    }
+}
+#endif
+
 private struct AccountSettingsPage: View {
     let account: NeteaseAccount
     let authenticationEnabled: Bool
+    @Environment(\.dynamicTypeSize) private var textSize
     @State private var confirmsLogout = false
     @State private var logoutError: String?
 
@@ -183,12 +238,19 @@ private struct AccountSettingsPage: View {
     }
 
     private func detailRow(_ title: LocalizedStringKey, value: String) -> some View {
-        HStack {
+        let layout = textSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
+            : AnyLayout(HStackLayout())
+        return layout {
             Text(title)
-            Spacer(minLength: 16)
-            Text(value).foregroundStyle(.secondary).multilineTextAlignment(.trailing)
+            if !textSize.isAccessibilitySize { Spacer(minLength: 16) }
+            Text(value).foregroundStyle(.secondary)
+                .multilineTextAlignment(textSize.isAccessibilitySize ? .leading : .trailing)
         }
-        .frame(minHeight: 62)
+        .frame(maxWidth: .infinity, minHeight: 62, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title)
+        .accessibilityValue(value)
     }
 }
 

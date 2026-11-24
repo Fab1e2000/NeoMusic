@@ -297,6 +297,7 @@ struct CollectionCardLink<Label: View>: View {
     var drop: NativeMenuDrop?
     @ViewBuilder var label: Label
     @Environment(\.openLibraryRoute) private var openLibraryRoute
+    @Environment(\.accessibilityReduceMotion) private var reducesMotion
     @Environment(\.collectionMenuActions) private var actions
     @Environment(\.libraryZoomNamespace) private var zoomNamespace
     @State private var isConfirmingDeletion = false
@@ -326,7 +327,7 @@ struct CollectionCardLink<Label: View>: View {
                 .alert("", isPresented: $isConfirmingDeletion) {
                     Button("从资料库删除", role: .destructive) {
                         LibraryHaptics.mediumImpact()
-                        withAnimation { actions.delete(route) }
+                        withAnimation(reducesMotion ? nil : .default) { actions.delete(route) }
                     }
                     Button("取消", role: .cancel) {}
                 } message: {

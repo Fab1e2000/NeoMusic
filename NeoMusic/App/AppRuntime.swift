@@ -27,7 +27,7 @@ final class AppRuntime {
 
     func start() {
         guard startupTask == nil else { return }
-        startupTask = Task {
+        startupTask = Task { [self] in
             guard !Task.isCancelled else { return }
             downloads.requestLogin = { [weak self] in self?.home.showsLogin = true }
             onlineLibrary.onPublication = { [weak self] in self?.downloads.scheduleMetadataPublication() }

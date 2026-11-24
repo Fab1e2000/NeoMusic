@@ -40,11 +40,12 @@ enum CollectionTrackUI {
         return background
     }
 
-    static func songAccessibilityLabel(for song: LibrarySongItem) -> String {
-        var components = [song.title, song.artist]
+    static func songAccessibilityLabel(for song: LibrarySongItem, subtitle: String? = nil) -> String {
+        var components = [song.title, subtitle ?? song.artist].filter { !$0.isEmpty }
         if let reason = song.unavailabilityReason, !reason.isEmpty {
             components.append(reason)
         }
+        if song.isFavorite { components.append("已喜爱") }
         return components.joined(separator: ", ")
     }
 
@@ -147,7 +148,7 @@ enum CollectionTrackUI {
                 done(true)
                 let asyncFavorite = songActions.isAsynchronousFavorite(song)
                 CenteredActionSheet.confirmRemoveFromLiked {
-                    if animateFavoriteRemoval {
+                    if animateFavoriteRemoval && !UIAccessibility.isReduceMotionEnabled {
                         withAnimation { songActions.removeFromFavorites(song) }
                     } else {
                         songActions.removeFromFavorites(song)
@@ -364,7 +365,7 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
                 return hostedCell(in: collection, at: path, identifier: "banner", host: bannerHost)
             case .sectionHeading(let title):
                 let cell = collection.dequeueReusableCell(withReuseIdentifier: "sectionHeading", for: path) as! UICollectionViewListCell
-                var content = UIListContentConfiguration.plainHeader()
+                var content = UIListContentConfiguration.header()
                 content.text = title
                 content.textProperties.color = .label
                 content.textProperties.font = UIFontMetrics(forTextStyle: .subheadline)
@@ -372,7 +373,10 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
                 content.directionalLayoutMargins = .init(top: path.section == 1 ? 8 : 18, leading: 20, bottom: 6, trailing: 20)
                 cell.contentConfiguration = content
                 cell.backgroundConfiguration = .clear()
+                cell.isAccessibilityElement = true
                 cell.accessibilityTraits = .header
+                cell.accessibilityLabel = title
+                cell.accessibilityIdentifier = "library.track.group.\(title)"
                 return cell
             case .footer:
                 let cell = collection.dequeueReusableCell(withReuseIdentifier: "footer", for: path) as! UICollectionViewListCell
@@ -568,6 +572,7 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
             && (previousSongs.count - ids.count) <= 2
             && !collectionView.isDragging
             && !collectionView.isDecelerating
+            && !environment.accessibilityReduceMotion
         let wasAtTop = model.rowStyle == .artwork && !model.usesLibrarySongAppearance && !isNewAppearance
             && !collectionView.isDragging
             && !collectionView.isDecelerating
@@ -613,6 +618,8 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
             analyzer: environment.songRowPlayback?.spectrumAnalyzer,
             samples: { [weak self] in self?.environment.songRowPlayback?.spectrumLevels() ?? [] },
             downloads: environment.libraryDownloads,
+            accessibilityLayout: environment.dynamicTypeSize.isAccessibilitySize,
+            play: { [weak self] in self?.playSong(id: id) ?? false },
             loadAction: environment.artworkLoadAction,
             menuProvider: { [weak self] in self?.menu(for: id) ?? UIMenu(children: []) }
         )
@@ -625,7 +632,9 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
         cell.palette = currentPalette
         cell.more.tintColor = secondary
         cell.contentConfiguration = UIHostingConfiguration {
-            hosted(NativeAlbumRowContent(song: song, secondary: Color(secondary)))
+            hosted(NativeAlbumRowContent(song: song, secondary: Color(secondary), play: { [weak self] in
+                _ = self?.playSong(id: id)
+            }))
         }.margins(.all, 0).margins(.leading, 20).margins(.trailing, 2)
         cell.more.menu = UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] completion in
             completion(self?.menu(for: id).children ?? [])
@@ -716,16 +725,21 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
     }
 
     override func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
-        defer { collectionView.deselectItem(at: indexPath, animated: true) }
+        defer { collectionView.deselectItem(at: indexPath, animated: !environment.accessibilityReduceMotion) }
         switch source.itemIdentifier(for: indexPath) {
         case .song(let id):
-            guard let song = songsByID[id], let index = indexByID[id] else { return }
-            model?.onPlaySong(song, index)
+            _ = playSong(id: id)
         case .addMusic:
             model?.onAddMusic?()
         default:
             break
         }
+    }
+
+    private func playSong(id: String) -> Bool {
+        guard let model, let song = songsByID[id], let index = indexByID[id] else { return false }
+        model.onPlaySong(song, index)
+        return true
     }
 
     override func collectionView(_ collectionView: UICollectionView,
@@ -814,6 +828,14 @@ final class PlaylistTracksController: UICollectionViewController, UICollectionVi
     }
 }
 
+private final class AccessibleTrackTitle: UILabel {
+    var play: (() -> Bool)?
+
+    override func accessibilityActivate() -> Bool {
+        play?() ?? false
+    }
+}
+
 private final class PlaylistTrackCell: UICollectionViewListCell {
     private let favoriteStar = UIImageView()
     private let artworkContainer = UIView()
@@ -827,7 +849,7 @@ private final class PlaylistTrackCell: UICollectionViewListCell {
         spectrumDisplayed = displayed
         if !displayed { spectrumView.active = false }
     }
-    private let titleLabel = UILabel()
+    private let titleLabel = AccessibleTrackTitle()
     private let subtitleLabel = UILabel()
     private let textStack = UIStackView()
     private let downloadBadge = PlaylistDownloadBadgeView()
@@ -902,6 +924,9 @@ private final class PlaylistTrackCell: UICollectionViewListCell {
         titleLabel.font = .preferredFont(forTextStyle: .callout)
         titleLabel.adjustsFontForContentSizeCategory = true
         titleLabel.textColor = .label
+        titleLabel.isAccessibilityElement = true
+        titleLabel.accessibilityTraits = .button
+        subtitleLabel.isAccessibilityElement = false
 
         subtitleLabel.font = .preferredFont(forTextStyle: .footnote)
         subtitleLabel.adjustsFontForContentSizeCategory = true
@@ -1001,6 +1026,8 @@ private final class PlaylistTrackCell: UICollectionViewListCell {
         setSpectrumDisplayed(false)
         setPreparingPlayback(false)
         song = nil
+        titleLabel.play = nil
+        titleLabel.accessibilityIdentifier = nil
         downloads = nil
     }
 
@@ -1015,6 +1042,8 @@ private final class PlaylistTrackCell: UICollectionViewListCell {
                    analyzer: ThreadSafeSpectrumAnalyzer? = nil,
                    samples: @escaping () -> [Float],
                    downloads: LibraryDownloads?,
+                   accessibilityLayout: Bool,
+                   play: @escaping () -> Bool,
                    loadAction: ArtworkLoadAction,
                    menuProvider: @escaping () -> UIMenu) {
         let sameSong = self.song?.id == song.id
@@ -1028,7 +1057,8 @@ private final class PlaylistTrackCell: UICollectionViewListCell {
         artworkContainer.layer.borderWidth = 1 / scale
         playbackOverlay.layer.cornerRadius = cornerRadius
 
-        let isAccessibility = traitCollection.preferredContentSizeCategory.isAccessibilityCategory
+        let isAccessibility = accessibilityLayout || traitCollection.preferredContentSizeCategory.isAccessibilityCategory
+        downloadBadge.usesAccessibilityLayout = isAccessibility
         titleLabel.numberOfLines = isAccessibility ? 0 : 1
         subtitleLabel.numberOfLines = isAccessibility ? 0 : 1
         titleLabel.text = song.title
@@ -1041,8 +1071,11 @@ private final class PlaylistTrackCell: UICollectionViewListCell {
         moreButton.tintColor = moreColor
         downloadBadge.secondaryColor = downloadColor
         isAccessibilityElement = false
-        accessibilityLabel = CollectionTrackUI.songAccessibilityLabel(for: song)
-        accessibilityTraits.insert(.button)
+        let label = CollectionTrackUI.songAccessibilityLabel(for: song)
+        accessibilityLabel = label
+        titleLabel.accessibilityLabel = label
+        titleLabel.accessibilityIdentifier = "library.track.\(song.id)"
+        titleLabel.play = play
 
         updatePlaybackState(isCurrent: isCurrent, isActive: isPlayingActive, analyzer: analyzer, samples: samples)
         observeArtwork(retainingImage: sameSong)
@@ -1053,7 +1086,7 @@ private final class PlaylistTrackCell: UICollectionViewListCell {
     func setPreparingPlayback(_ preparing: Bool) {
         guard isPreparingPlayback != preparing else { return }
         isPreparingPlayback = preparing
-        accessibilityValue = preparing ? "正在准备播放" : nil
+        titleLabel.accessibilityValue = preparing ? "正在准备播放" : nil
         if preparing { playbackPreparationIndicator.startAnimating() }
         else { playbackPreparationIndicator.stopAnimating() }
     }
@@ -1258,6 +1291,7 @@ private final class PlaylistDownloadBadgeView: UIView {
     private let progressLayer = CAShapeLayer()
     private var widthConstraint: NSLayoutConstraint!
     private var tapHandler: (() -> Void)?
+    var usesAccessibilityLayout = false
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -1278,17 +1312,12 @@ private final class PlaylistDownloadBadgeView: UIView {
         spinner.translatesAutoresizingMaskIntoConstraints = false
         addSubview(spinner)
 
-        let ringRect = CGRect(x: 15, y: 16, width: 12, height: 12)
-        let ringPath = UIBezierPath(arcCenter: CGPoint(x: ringRect.midX, y: ringRect.midY),
-                                    radius: 6, startAngle: -.pi / 2, endAngle: 1.5 * .pi, clockwise: true).cgPath
-        trackLayer.path = ringPath
         trackLayer.fillColor = UIColor.clear.cgColor
         trackLayer.lineWidth = 1.7
         trackLayer.strokeColor = UIColor.label.withAlphaComponent(0.3).cgColor
         trackLayer.isHidden = true
         layer.addSublayer(trackLayer)
 
-        progressLayer.path = ringPath
         progressLayer.fillColor = UIColor.clear.cgColor
         progressLayer.lineWidth = 1.7
         progressLayer.lineCap = .round
@@ -1324,6 +1353,14 @@ private final class PlaylistDownloadBadgeView: UIView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let path = UIBezierPath(arcCenter: CGPoint(x: bounds.maxX - 7, y: bounds.midY),
+                                radius: 6, startAngle: -.pi / 2, endAngle: 1.5 * .pi, clockwise: true).cgPath
+        trackLayer.path = path
+        progressLayer.path = path
+    }
+
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
         if button.isUserInteractionEnabled {
             return bounds.inset(by: UIEdgeInsets(top: 0, left: -12, bottom: 0, right: 0)).contains(point)
@@ -1339,6 +1376,10 @@ private final class PlaylistDownloadBadgeView: UIView {
         trackLayer.isHidden = true
         progressLayer.isHidden = true
         button.isUserInteractionEnabled = false
+        button.isAccessibilityElement = false
+        button.accessibilityValue = nil
+        isAccessibilityElement = false
+        accessibilityLabel = nil
 
         guard visible, let state else {
             widthConstraint.constant = 0
@@ -1347,6 +1388,7 @@ private final class PlaylistDownloadBadgeView: UIView {
         }
 
         isHidden = false
+        button.isAccessibilityElement = state != .downloaded
         switch state {
         case .downloaded:
             widthConstraint.constant = 14
@@ -1354,9 +1396,10 @@ private final class PlaylistDownloadBadgeView: UIView {
                                       withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .semibold))
             imageView.tintColor = secondaryColor
             imageView.isHidden = false
+            isAccessibilityElement = true
             accessibilityLabel = "已下载"
         case .failed:
-            widthConstraint.constant = 28
+            widthConstraint.constant = usesAccessibilityLayout ? 44 : 28
             imageView.image = UIImage(systemName: "exclamationmark.circle",
                                       withConfiguration: UIImage.SymbolConfiguration(pointSize: 14))
             imageView.tintColor = .label
@@ -1364,19 +1407,22 @@ private final class PlaylistDownloadBadgeView: UIView {
             button.isUserInteractionEnabled = true
             button.accessibilityLabel = "下载失败，轻点重试"
         case .queued, .waiting, .downloading:
-            widthConstraint.constant = 28
+            widthConstraint.constant = usesAccessibilityLayout ? 44 : 28
             let progress: CGFloat = if case .downloading(let value) = state { CGFloat(min(1, max(0, value))) } else { 0 }
             trackLayer.isHidden = false
             progressLayer.isHidden = false
             progressLayer.strokeEnd = progress
             button.isUserInteractionEnabled = true
             button.accessibilityLabel = state == .waiting ? "等待 Wi-Fi，轻点停止下载" : "停止下载"
+            button.accessibilityValue = state.accessibilityStatus
         case .finishing:
-            widthConstraint.constant = 28
+            widthConstraint.constant = usesAccessibilityLayout ? 44 : 28
             spinner.isHidden = false
             spinner.startAnimating()
+            spinner.accessibilityElementsHidden = true
             button.isUserInteractionEnabled = true
             button.accessibilityLabel = "停止下载"
+            button.accessibilityValue = state.accessibilityStatus
         }
     }
 }
@@ -1438,7 +1484,7 @@ private final class PlaylistAddMusicCell: UICollectionViewListCell {
 private struct NativeAlbumRowContent: View {
     let song: LibrarySongItem
     let secondary: Color
-    @Environment(\.libraryDownloads) private var downloads
+    let play: () -> Void
     @Environment(\.dynamicTypeSize) private var textSize
     var body: some View {
         HStack(spacing: 9) {
@@ -1446,6 +1492,8 @@ private struct NativeAlbumRowContent: View {
             Text(song.title).font(.callout).foregroundStyle(.primary)
                 .lineLimit(textSize.isAccessibilitySize ? nil : 1)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityAction { play() }
+                .accessibilityValue(song.isFavorite ? "已喜爱" : "")
             SongDownloadStatus(song: song, secondaryStyle: AnyShapeStyle(secondary))
         }
         .frame(minHeight: 52 + 1.0 / 3)
