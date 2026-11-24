@@ -95,13 +95,29 @@ final class NeteaseMusicClientTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(MusicFixtureProtocol.requests.withLock { $0.count }, 1)
     }
 
-    @MainActor func testWebRequestUsesScopedNeoDizzyClientProfile() throws {
+    @MainActor func testArtistSubscriptionUsesWebAPI() async throws {
+        let client = makeClient([#"{"code":200}"#, #"{"code":200}"#])
+        try await client.setArtistSubscribed(id: 7, subscribed: true, credential: credential())
+        try await client.setArtistSubscribed(id: 7, subscribed: false, credential: credential())
+        let requests = MusicFixtureProtocol.requests.withLock { $0 }
+        XCTAssertEqual(requests.map { $0.url?.host }, ["music.163.com", "music.163.com"])
+        XCTAssertEqual(requests.map { $0.url?.path }, ["/weapi/artist/sub", "/weapi/artist/unsub"])
+        for body in MusicFixtureProtocol.bodies.withLock({ $0 }) {
+            let fields = String(decoding: body, as: UTF8.self).split(separator: "&")
+            XCTAssertTrue(fields.contains { $0.hasPrefix("params=") })
+            XCTAssertEqual(fields.first { $0.hasPrefix("encSecKey=") }?.dropFirst("encSecKey=".count).count, 256)
+        }
+    }
+
+    @MainActor func testWebRequestUsesWebUserAgentAndScopedCookies() throws {
         let transport = NeteaseAccountClient(deviceID: "test-device")
         let request = try transport.makeWebRequest(path: "/api/album/sub", fields: ["id": 7], credential: .init(musicU: "token+value", csrf: "csrf"))
         let cookie = try XCTUnwrap(request.value(forHTTPHeaderField: "Cookie"))
-        for field in ["MUSIC_U=token%2Bvalue", "__csrf=csrf", "os=ios", "appver=9.0.90", "deviceId=test-device", "WEVNSM=1.0.0", "__remember_me=true"] {
+        for field in ["MUSIC_U=token%2Bvalue", "__csrf=csrf", "deviceId=test-device", "WEVNSM=1.0.0", "__remember_me=true",
+                      "os=pc", "appver=3.1.17.204416", "channel=netease", "NMTID=00O"] {
             XCTAssertTrue(cookie.contains(field), field)
         }
+        XCTAssertTrue(cookie.contains("osver=Microsoft-Windows-10-Professional-build-19045-64bit"))
         XCTAssertEqual(request.value(forHTTPHeaderField: "Referer"), "https://music.163.com")
         XCTAssertTrue(request.value(forHTTPHeaderField: "User-Agent")?.contains("Chrome/124.0.0.0") == true)
     }

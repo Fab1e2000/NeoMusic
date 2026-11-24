@@ -65,6 +65,34 @@ import Synchronization
         await store.invalidate()
     }
 
+    func testArtistUnsubscribeIsConfirmedByTheAccountList() async throws {
+        let (integration, store, directory) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let route = LibraryRoute.artist("catalog:artist:7")
+        await integration.setSubscribed(route, subscribed: true)
+        XCTAssertEqual(store.subscribedArtists.map(\.id), [7])
+        await integration.setSubscribed(route, subscribed: false)
+        XCTAssertTrue(store.subscribedArtists.isEmpty)
+        XCTAssertEqual(ArtistFrontendProtocol.state.withLock { $0.paths }, [
+            "/weapi/artist/sub", "/eapi/artist/sublist", "/weapi/artist/unsub", "/eapi/artist/sublist"
+        ])
+        if let notice = LocalLibrary.toasts.current { LocalLibrary.toasts.dismiss(notice) }
+        await store.invalidate()
+    }
+
+    func testArtistWriteRejectionDoesNotPublishSuccess() async throws {
+        let (integration, store, directory) = try await fixture()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        ArtistFrontendProtocol.state.withLock { $0.rejectArtistWrite = true }
+        await integration.setSubscribed(.artist("catalog:artist:7"), subscribed: true)
+        XCTAssertTrue(store.subscribedArtists.isEmpty)
+        XCTAssertEqual(ArtistFrontendProtocol.state.withLock { $0.paths }, ["/weapi/artist/sub", "/eapi/artist/sublist"])
+        let presentation = try XCTUnwrap(LocalLibrary.toasts.current)
+        guard case .error = presentation.toast else { return XCTFail("Server rejection must remain an error") }
+        LocalLibrary.toasts.dismiss(presentation)
+        await store.invalidate()
+    }
+
     func testArtistFailureDoesNotPublishSuccess() async throws {
         let (integration, store, directory) = try await fixture(offline: true)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -107,6 +135,9 @@ private final class ArtistFrontendProtocol: URLProtocol, @unchecked Sendable {
     struct State {
         var offline = false
         var writes = 0
+        var artistSubscribed = false
+        var rejectArtistWrite = false
+        var paths: [String] = []
     }
     static let state = Mutex(State())
 
@@ -115,17 +146,25 @@ private final class ArtistFrontendProtocol: URLProtocol, @unchecked Sendable {
 
     override func startLoading() {
         let path = request.url!.path
-        let offline = Self.state.withLock { state in
+        let (offline, artistSubscribed, reject) = Self.state.withLock { state in
+            state.paths.append(path)
             if path.hasSuffix("/sub") { state.writes += 1 }
-            return state.offline
+            if !state.offline && !state.rejectArtistWrite {
+                if path == "/weapi/artist/sub" { state.artistSubscribed = true }
+                if path == "/weapi/artist/unsub" { state.artistSubscribed = false }
+            }
+            return (state.offline, state.artistSubscribed, state.rejectArtistWrite)
         }
         if offline {
             client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet))
             return
         }
         let body: String
-        if path.contains("artist/sublist") {
-            body = #"{"code":200,"data":[{"id":7,"name":"Artist"}],"hasMore":false}"#
+        if reject && (path == "/weapi/artist/sub" || path == "/weapi/artist/unsub") {
+            body = #"{"code":-460,"message":"检测到网络环境存在风险"}"#
+        } else if path.contains("artist/sublist") {
+            body = artistSubscribed ? #"{"code":200,"data":[{"id":7,"name":"Artist"}],"hasMore":false}"#
+                : #"{"code":200,"data":[],"hasMore":false}"#
         } else if path.contains("album/sublist") {
             body = #"{"code":200,"data":[{"id":8,"name":"Album","artists":[{"id":7,"name":"Artist"}],"size":10}],"hasMore":false}"#
         } else {

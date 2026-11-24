@@ -8,6 +8,13 @@ final class NeteaseAccountClient: Sendable {
     enum EAPIProfile: Sendable { case account, playback, search }
     private let session: URLSession
     private let deviceID: String
+    private let sessionCookies = SessionCookies()
+
+    private struct PreparedRequest {
+        let request: URLRequest
+        let cookieStorage: HTTPCookieStorage?
+        let sessionCookie: HTTPCookie?
+    }
 
     init(session: URLSession? = nil, deviceID: String = UUID().uuidString.replacingOccurrences(of: "-", with: "")) {
         self.deviceID = deviceID
@@ -25,7 +32,7 @@ final class NeteaseAccountClient: Sendable {
 
     @concurrent func profile(credential: NeteaseCredential) async throws -> NeteaseProfile {
         try Task.checkCancellation()
-        let request = try makeRequest(credential: credential)
+        let request = try prepareEAPIRequest(credential: credential)
         let data: Data
         let response: URLResponse
         do {
@@ -59,21 +66,34 @@ final class NeteaseAccountClient: Sendable {
     }
 
     func makeRequest(credential: NeteaseCredential?, path: String = "/api/w/nuser/account/get", fields: [String: any Sendable] = [:], profile: EAPIProfile = .account) throws -> URLRequest {
-        var header = [
-            "os": "pc", "appver": "3.1.17.204416", "osver": "Microsoft-Windows-10-Professional-build-19045-64bit",
-            "channel": "netease", "versioncode": "140", "mobilename": "", "resolution": "1920x1080",
-            "deviceId": deviceID, "__csrf": credential?.csrf ?? "", "MUSIC_U": credential?.musicU ?? "",
-            "buildver": String(Int(Date().timeIntervalSince1970))
-        ]
-        if credential == nil { header.removeValue(forKey: "MUSIC_U") }
-        header["requestId"] = "\(Int64(Date().timeIntervalSince1970 * 1000))_\(Int.random(in: 1000...9999))"
-        if profile != .account {
-            header = ["os": "ios", "appver": "9.0.90", "osver": "18.0",
-                      "buildver": String(Int(Date().timeIntervalSince1970)),
-                      "channel": "distribution", "__csrf": credential?.csrf ?? "",
-                      "requestId": "\(Int64(Date().timeIntervalSince1970 * 1000))_0000"]
-            if let credential { header["MUSIC_U"] = credential.musicU }
+        try prepareEAPIRequest(credential: credential, path: path, fields: fields, profile: profile).request
+    }
+
+    private func prepareEAPIRequest(credential: NeteaseCredential?, path: String = "/api/w/nuser/account/get",
+                                    fields: [String: any Sendable] = [:], profile: EAPIProfile = .account) throws -> PreparedRequest {
+        let url = URL(string: "https://interface.music.163.com/eapi/" + path.dropFirst(5))!
+        let (storage, cookie) = sessionCookies.snapshot(for: credential, url: url)
+        let timestamp = Date().timeIntervalSince1970
+        let requestSuffix = profile == .account ? String(Int.random(in: 1000...9999)) : "0000"
+        let appVersion = "9.0.90", osVersion = "18.0"
+        var header = ["os": "ios", "appver": appVersion, "osver": osVersion,
+                      "buildver": String(Int(timestamp)), "channel": "distribution",
+                      "__csrf": credential?.csrf ?? "",
+                      "requestId": "\(Int64(timestamp * 1000))_\(requestSuffix)"]
+        if profile == .account { header["deviceId"] = deviceID }
+        if let credential { header["MUSIC_U"] = credential.musicU }
+        let cookies: [String: String]
+        if profile == .account {
+            cookies = header
+        } else {
+            var values = ["os": "ios", "appver": appVersion, "__remember_me": "true"]
+            if let credential {
+                values["MUSIC_U"] = credential.musicU
+                if let csrf = credential.csrf { values["__csrf"] = csrf }
+            }
+            cookies = values
         }
+        if let cookie { header[cookie.name] = cookie.value }
         var payload = fields
         payload["header"] = header
         payload["e_r"] = false
@@ -83,31 +103,19 @@ final class NeteaseAccountClient: Sendable {
         let digest = Insecure.MD5.hash(data: Data("nobody\(path)use\(json)md5forencrypt".utf8))
             .map { String(format: "%02x", $0) }.joined()
         let encrypted = try Self.encrypt(Data("\(path)-36cd479b6b5-\(json)-36cd479b6b5-\(digest)".utf8))
-        var request = URLRequest(url: URL(string: "https://interface.music.163.com/eapi/" + path.dropFirst(5))!)
+        var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.timeoutInterval = 20
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.httpShouldHandleCookies = false
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         request.setValue(profile != .account
-            ? "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148"
-            : "NeteaseMusic 9.0.90/5038 (iPhone; iOS 16.2; zh_CN)", forHTTPHeaderField: "User-Agent")
+            ? "Mozilla/5.0 (iPhone; CPU iPhone OS \(osVersion.replacingOccurrences(of: ".", with: "_")) like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148"
+            : "NeteaseMusic \(appVersion)/5038 (iPhone; iOS \(osVersion); zh_CN)", forHTTPHeaderField: "User-Agent")
         if profile == .account { request.setValue("https://music.163.com/", forHTTPHeaderField: "Referer") }
-        let cookies: [String: String]
-        if profile != .account {
-            var values = ["os": "ios", "appver": "9.0.90", "__remember_me": "true"]
-            if let credential {
-                values["MUSIC_U"] = credential.musicU
-                if let csrf = credential.csrf { values["__csrf"] = csrf }
-            }
-            cookies = values
-        } else { cookies = header }
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
-        request.setValue(cookies.keys.sorted().map {
-            "\($0)=\(cookies[$0]!.addingPercentEncoding(withAllowedCharacters: allowed) ?? "")"
-        }.joined(separator: "; "), forHTTPHeaderField: "Cookie")
+        request.setValue(Self.cookieHeader(fields: cookies, sessionCookie: cookie), forHTTPHeaderField: "Cookie")
         request.httpBody = Data(("params=" + encrypted.map { String(format: "%02X", $0) }.joined()).utf8)
-        return request
+        return PreparedRequest(request: request, cookieStorage: storage, sessionCookie: cookie)
     }
 
     @concurrent func request(path: String, fields: [String: any Sendable] = [:], credential: NeteaseCredential?, profile: EAPIProfile = .account, retryTLS: Bool = false) async throws -> Data {
@@ -128,7 +136,7 @@ final class NeteaseAccountClient: Sendable {
 
     private func responseData(path: String, fields: [String: any Sendable], credential: NeteaseCredential?, profile: EAPIProfile, retryTLS: Bool) async throws -> Data {
         try Task.checkCancellation()
-        let request = try makeRequest(credential: credential, path: path, fields: fields, profile: profile)
+        let request = try prepareEAPIRequest(credential: credential, path: path, fields: fields, profile: profile)
         let (data, response) = try await dataWithTLSRetry(for: request, enabled: retryTLS || profile == .playback)
         try Task.checkCancellation()
         guard let http = response as? HTTPURLResponse else { throw NeteaseAccountError.invalidResponse }
@@ -137,13 +145,115 @@ final class NeteaseAccountClient: Sendable {
         return data
     }
 
-    private func dataWithTLSRetry(for request: URLRequest, enabled: Bool) async throws -> (Data, URLResponse) {
+    private func dataWithTLSRetry(for prepared: PreparedRequest, enabled: Bool) async throws -> (Data, URLResponse) {
         try Task.checkCancellation()
+        let request = prepared.request
+        let redirects: CookieScopedRedirects?
+        if let cookie = prepared.sessionCookie, let storage = prepared.cookieStorage {
+            redirects = CookieScopedRedirects(cookie: cookie, storage: storage)
+        } else {
+            redirects = nil
+        }
+        let result: (Data, URLResponse)
         do {
-            return try await session.data(for: request)
+            result = try await session.data(for: request, delegate: redirects)
         } catch let error as URLError where enabled && error.code == .secureConnectionFailed {
             try Task.checkCancellation()
-            return try await session.data(for: request)
+            result = try await session.data(for: request, delegate: redirects)
+        }
+        try Task.checkCancellation()
+        if let response = result.1 as? HTTPURLResponse, let storage = prepared.cookieStorage,
+           Self.sameOrigin(request.url, response.url) {
+            sessionCookies.accept(response, in: storage)
+        }
+        return result
+    }
+
+    func clearSessionCookies(for credential: NeteaseCredential) {
+        sessionCookies.clear(for: credential)
+    }
+
+    private static func sameOrigin(_ source: URL?, _ target: URL?) -> Bool {
+        guard let source, let target, source.scheme == "https", target.scheme == "https",
+              let host = source.host else { return false }
+        return host.lowercased() == target.host?.lowercased() && (source.port ?? 443) == (target.port ?? 443)
+    }
+
+    private final class CookieScopedRedirects: NSObject, URLSessionTaskDelegate {
+        private let cookie: HTTPCookie
+        private let storage: HTTPCookieStorage
+
+        init(cookie: HTTPCookie, storage: HTTPCookieStorage) {
+            self.cookie = cookie
+            self.storage = storage
+        }
+
+        func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                        newRequest request: URLRequest) async -> URLRequest? {
+            guard let url = request.url, NeteaseAccountClient.sameOrigin(response.url, url) else { return nil }
+            return storage.cookies(for: url)?.contains(where: {
+                $0.name == cookie.name && $0.domain == cookie.domain && $0.path == cookie.path && $0.value == cookie.value
+            }) == true ? request : nil
+        }
+    }
+
+    private static func cookieHeader(fields: [String: String], sessionCookie: HTTPCookie?) -> String {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
+        var pairs = fields.sorted { $0.key < $1.key }.map { name, value in
+            "\(name)=\(value.addingPercentEncoding(withAllowedCharacters: allowed) ?? "")"
+        }
+        if let sessionCookie, let pair = HTTPCookie.requestHeaderFields(with: [sessionCookie])["Cookie"] {
+            pairs.append(pair)
+        }
+        return pairs.joined(separator: "; ")
+    }
+
+    private static func randomHex(byteCount: Int) -> String {
+        let alphabet = Array("0123456789abcdef".utf8)
+        var generator = SystemRandomNumberGenerator()
+        return String(decoding: (0..<(byteCount * 2)).map { _ in alphabet.randomElement(using: &generator)! }, as: UTF8.self)
+    }
+
+    private final class SessionCookies: @unchecked Sendable {
+        private let lock = NSLock()
+        private var jars: [SHA256.Digest?: HTTPCookieStorage] = [:]
+
+        func snapshot(for credential: NeteaseCredential?, url: URL) -> (HTTPCookieStorage?, HTTPCookie?) {
+            let key = credential.map { SHA256.hash(data: Data($0.musicU.utf8)) }
+            return lock.withLock {
+                let jar = jars[key] ?? URLSessionConfiguration.ephemeral.httpCookieStorage
+                jars[key] = jar
+                let cookie = jar?.cookies(for: url)?.first { $0.name == "NMTID" }
+                return (jar, cookie)
+            }
+        }
+
+        func accept(_ response: HTTPURLResponse, in jar: HTTPCookieStorage) {
+            guard let url = response.url, let host = url.host?.lowercased(),
+                  let value = response.value(forHTTPHeaderField: "Set-Cookie") else { return }
+            let cookies = HTTPCookie.cookies(withResponseHeaderFields: ["Set-Cookie": value], for: url).filter { cookie in
+                let domain = cookie.domain.lowercased()
+                let isProviderDomain = domain.hasPrefix(".") && domain.hasSuffix(".163.com")
+                let matchesDomain = isProviderDomain && (host == domain.dropFirst() || host.hasSuffix(domain))
+                return cookie.name == "NMTID" && (domain == host || matchesDomain)
+            }
+            lock.withLock {
+                for cookie in cookies {
+                    if cookie.value.isEmpty || cookie.expiresDate.map({ $0 <= Date() }) == true {
+                        for existing in jar.cookies ?? []
+                            where existing.name == cookie.name && existing.domain == cookie.domain && existing.path == cookie.path {
+                            jar.deleteCookie(existing)
+                        }
+                    } else {
+                        jar.setCookies([cookie], for: url, mainDocumentURL: url)
+                    }
+                }
+            }
+        }
+
+        func clear(for credential: NeteaseCredential) {
+            let key = SHA256.hash(data: Data(credential.musicU.utf8))
+            lock.withLock { _ = jars.removeValue(forKey: key) }
         }
     }
 
@@ -184,6 +294,11 @@ final class NeteaseAccountClient: Sendable {
     THE SOFTWARE.
     */
     func makeWebRequest(path: String, fields: [String: any Sendable], credential: NeteaseCredential?) throws -> URLRequest {
+        try prepareWebRequest(path: path, fields: fields, credential: credential).request
+    }
+
+    private func prepareWebRequest(path: String, fields: [String: any Sendable],
+                                   credential: NeteaseCredential?) throws -> PreparedRequest {
         var payload = fields
         payload["csrf_token"] = credential?.csrf ?? ""
         let json = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
@@ -200,7 +315,9 @@ final class NeteaseAccountClient: Sendable {
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
         let encoded = params.addingPercentEncoding(withAllowedCharacters: allowed)!
         let rsa = encrypted.map { String(format: "%02x", $0) }.joined()
-        var request = URLRequest(url: URL(string: "https://music.163.com/weapi/" + path.dropFirst(5))!)
+        let url = URL(string: "https://music.163.com/weapi/" + path.dropFirst(5))!
+        let (storage, cookie) = sessionCookies.snapshot(for: credential, url: url)
+        var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.timeoutInterval = 20
         request.httpShouldHandleCookies = false
@@ -209,22 +326,25 @@ final class NeteaseAccountClient: Sendable {
         request.setValue("https://music.163.com", forHTTPHeaderField: "Referer")
         request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
         // Web client profile adapted from NeoDizzy NeteaseClient.makeWebRequest (GPL-3.0).
+        // Same browser/device cookie profile NeteaseCloudMusicApiEnhanced applies to weapi
+        // requests in util/request.js; web endpoints answer with an empty body or a refusal
+        // when only MUSIC_U is forwarded.
         let timestamp = Int64(Date().timeIntervalSince1970 * 1000)
         var cookies = ["__csrf": credential?.csrf ?? "",
-                       "os": "ios", "appver": "9.0.90", "osver": "16.2", "channel": "distribution",
+                       "os": "pc", "appver": "3.1.17.204416",
+                       "osver": "Microsoft-Windows-10-Professional-build-19045-64bit", "channel": "netease",
                        "deviceId": deviceID, "__remember_me": "true", "ntes_kaola_ad": "1",
                        "_ntes_nuid": deviceID, "_ntes_nnid": "\(deviceID),\(timestamp)", "WEVNSM": "1.0.0",
-                       "WNMCID": "\(deviceID.prefix(6)).\(timestamp).01.0", "NMTID": UUID().uuidString.replacingOccurrences(of: "-", with: "")]
+                       "WNMCID": "\(deviceID.prefix(6)).\(timestamp).01.0"]
         if let credential { cookies["MUSIC_U"] = credential.musicU }
-        request.setValue(cookies.keys.sorted().map {
-            "\($0)=\(cookies[$0]!.addingPercentEncoding(withAllowedCharacters: allowed) ?? "")"
-        }.joined(separator: "; "), forHTTPHeaderField: "Cookie")
+        if cookie == nil { cookies["NMTID"] = "00O" + Self.randomHex(byteCount: 19) }
+        request.setValue(Self.cookieHeader(fields: cookies, sessionCookie: cookie), forHTTPHeaderField: "Cookie")
         request.httpBody = Data("params=\(encoded)&encSecKey=\(rsa)".utf8)
-        return request
+        return PreparedRequest(request: request, cookieStorage: storage, sessionCookie: cookie)
     }
     @concurrent func requestWeb(path: String, fields: [String: any Sendable], credential: NeteaseCredential?, retryTLS: Bool = false) async throws -> Data {
         try Task.checkCancellation()
-        let (data, response) = try await dataWithTLSRetry(for: makeWebRequest(path: path, fields: fields, credential: credential), enabled: retryTLS)
+        let (data, response) = try await dataWithTLSRetry(for: prepareWebRequest(path: path, fields: fields, credential: credential), enabled: retryTLS)
         try Task.checkCancellation()
         guard let http = response as? HTTPURLResponse else { throw NeteaseAccountError.invalidResponse }
         if http.statusCode == 401 { throw NeteaseAccountError.authenticationRequired }

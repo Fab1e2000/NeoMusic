@@ -48,7 +48,12 @@ final class NeteaseAccountClientTests: XCTestCase, @unchecked Sendable {
         XCTAssertFalse(request.httpShouldHandleCookies)
         XCTAssertEqual(request.cachePolicy, .reloadIgnoringLocalCacheData)
         XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/x-www-form-urlencoded")
-        XCTAssertTrue(request.value(forHTTPHeaderField: "Cookie")?.contains("MUSIC_U=fixture-token") == true)
+        let cookies = try XCTUnwrap(request.value(forHTTPHeaderField: "Cookie"))
+        XCTAssertTrue(cookies.contains("MUSIC_U=fixture-token"))
+        XCTAssertTrue(cookies.contains("os=ios"))
+        XCTAssertTrue(cookies.contains("osver=18.0"))
+        XCTAssertFalse(cookies.contains("NMTID="))
+        XCTAssertEqual(request.value(forHTTPHeaderField: "User-Agent"), "NeteaseMusic 9.0.90/5038 (iPhone; iOS 18.0; zh_CN)")
         let body = String(decoding: try XCTUnwrap(request.httpBody), as: UTF8.self)
         XCTAssertTrue(body.hasPrefix("params="))
         XCTAssertFalse(body.contains("fixture-token"))
@@ -62,10 +67,88 @@ final class NeteaseAccountClientTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(header["MUSIC_U"], "fixture-token")
         XCTAssertEqual(header["__csrf"], "fixture-csrf")
         XCTAssertEqual(header["deviceId"], "fixture-device")
+        XCTAssertEqual(header["os"], "ios")
+        XCTAssertEqual(header["osver"], "18.0")
+        XCTAssertEqual(header["appver"], "9.0.90")
+        XCTAssertNil(header["NMTID"])
         XCTAssertEqual(payload["e_r"] as? Bool, false)
         let expectedDigest = Insecure.MD5.hash(data: Data("nobody\(parts[0])use\(parts[1])md5forencrypt".utf8))
             .map { String(format: "%02x", $0) }.joined()
         XCTAssertEqual(parts[2], expectedDigest)
+    }
+
+    @MainActor func testServerNMTIDIsReusedAcrossWebAndEAPIForSameCredential() async throws {
+        let (client, session) = makeClient(body: #"{"code":200,"profile":{"userId":7,"nickname":"Name"}}"#)
+        defer { session.invalidateAndCancel() }
+        let credential = try credential()
+        let other = try NeteaseCredential(musicU: "other-credential")
+        let token = "issued+value=="
+        let initial = try client.makeWebRequest(path: "/api/album/sub", fields: [:], credential: credential)
+        XCTAssertFalse(initial.value(forHTTPHeaderField: "Cookie")?.contains("NMTID=\(token)") == true)
+
+        NeteaseAccountURLProtocol.state.withLock {
+            $0.headers = ["set-cookie": "NMTID=\(token); Domain=.music.163.com; Path=/; Secure; HttpOnly"]
+        }
+        _ = try await client.requestWeb(path: "/api/album/sub", fields: [:], credential: credential)
+        NeteaseAccountURLProtocol.state.withLock { $0.headers = [:] }
+
+        for profile in [NeteaseAccountClient.EAPIProfile.account, .playback, .search] {
+            let request = try client.makeRequest(credential: credential, profile: profile)
+            XCTAssertEqual(try eapiHeader(of: request)["NMTID"], token)
+            XCTAssertTrue(request.value(forHTTPHeaderField: "Cookie")?.contains("NMTID=\(token)") == true)
+        }
+        _ = try await client.profile(credential: credential)
+        _ = try await client.requestWeb(path: "/api/album/sub", fields: [:], credential: credential)
+        let sentCookies = NeteaseAccountURLProtocol.state.withLock { $0.sentCookies }
+        XCTAssertEqual(sentCookies.map { $0.contains("NMTID=\(token)") }, [false, true, true])
+
+        for credential in [other, nil] {
+            let request = try client.makeRequest(credential: credential)
+            XCTAssertNil(try eapiHeader(of: request)["NMTID"])
+            XCTAssertFalse(request.value(forHTTPHeaderField: "Cookie")?.contains("NMTID=") == true)
+        }
+        client.clearSessionCookies(for: credential)
+        XCTAssertNil(try eapiHeader(of: client.makeRequest(credential: credential))["NMTID"])
+    }
+
+    @MainActor func testNMTIDHonorsHostPathAndServerDeletion() async throws {
+        let (client, session) = makeClient(body: #"{"code":200,"profile":{"userId":7,"nickname":"Name"}}"#)
+        defer { session.invalidateAndCancel() }
+        let credential = try credential()
+        NeteaseAccountURLProtocol.state.withLock {
+            $0.headers = ["Set-Cookie": "NMTID=host-only; Path=/eapi/w; Secure"]
+        }
+        _ = try await client.profile(credential: credential)
+        XCTAssertEqual(try eapiHeader(of: client.makeRequest(credential: credential))["NMTID"], "host-only")
+
+        let web = try client.makeWebRequest(path: "/api/album/sub", fields: [:], credential: credential)
+        let otherPath = try client.makeRequest(credential: credential, path: "/api/artist/sub")
+        XCTAssertFalse(web.value(forHTTPHeaderField: "Cookie")?.contains("NMTID=host-only") == true)
+        XCTAssertNil(try eapiHeader(of: otherPath)["NMTID"])
+
+        NeteaseAccountURLProtocol.state.withLock {
+            $0.headers = ["Set-Cookie": "NMTID=; Path=/eapi/w; Max-Age=0; Secure"]
+        }
+        _ = try await client.profile(credential: credential)
+        XCTAssertNil(try eapiHeader(of: client.makeRequest(credential: credential))["NMTID"])
+    }
+
+    @MainActor func testClearedSessionDoesNotAcceptLateResponseIntoNewCookieStorage() async throws {
+        let (client, session) = makeClient(body: #"{"code":200,"profile":{"userId":7,"nickname":"Name"}}"#)
+        defer { session.invalidateAndCancel() }
+        let credential = try credential()
+        let started = expectation(description: "Old request started")
+        NeteaseAccountURLProtocol.state.withLock {
+            $0.wait = true
+            $0.started = started
+            $0.headers = ["Set-Cookie": "NMTID=old; Path=/; Secure"]
+        }
+        let request = Task { try await client.profile(credential: credential) }
+        await fulfillment(of: [started], timeout: 2)
+        client.clearSessionCookies(for: credential)
+        NeteaseAccountURLProtocol.finishPending()
+        _ = try await request.value
+        XCTAssertNil(try eapiHeader(of: client.makeRequest(credential: credential))["NMTID"])
     }
 
     @MainActor func testProfileDecodesStableIdentityAndOptionalAvatar() async throws {
@@ -271,6 +354,14 @@ final class NeteaseAccountClientTests: XCTestCase, @unchecked Sendable {
 
     private func credential() throws -> NeteaseCredential { try .init(musicU: "fixture-token") }
 
+    private func eapiHeader(of request: URLRequest) throws -> [String: String] {
+        let body = String(decoding: try XCTUnwrap(request.httpBody), as: UTF8.self)
+        let frame = try decrypt(String(body.dropFirst("params=".count)))
+        let json = try XCTUnwrap(frame.components(separatedBy: "-36cd479b6b5-").dropFirst().first)
+        let payload = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        return try XCTUnwrap(payload["header"] as? [String: String])
+    }
+
     private func cookie(_ name: String, _ value: String, domain: String = "music.163.com", expires: Date? = nil) -> HTTPCookie {
         var properties: [HTTPCookiePropertyKey: Any] = [.name: name, .value: value, .domain: domain, .path: "/", .secure: "TRUE"]
         if let expires { properties[.expires] = expires }
@@ -306,6 +397,9 @@ private final class NeteaseAccountURLProtocol: URLProtocol, @unchecked Sendable 
         var body = Data()
         var status = 200
         var error: URLError?
+        var headers: [String: String] = [:]
+        var sentCookies: [String] = []
+        var pending: NeteaseAccountURLProtocol?
         var wait = false
         var started: XCTestExpectation?
         var stopped: XCTestExpectation?
@@ -316,20 +410,38 @@ private final class NeteaseAccountURLProtocol: URLProtocol, @unchecked Sendable 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
-        let state = Self.state.withLock { $0 }
+        let state = Self.state.withLock { state in
+            state.sentCookies.append(request.value(forHTTPHeaderField: "Cookie") ?? "")
+            if state.wait { state.pending = self }
+            return state
+        }
         stopExpectation.withLock { $0 = state.stopped }
         state.started?.fulfill()
         guard !state.wait else { return }
+        finish(state)
+    }
+
+    static func finishPending() {
+        let snapshot = state.withLock { state in
+            let snapshot = state
+            state.pending = nil
+            return snapshot
+        }
+        snapshot.pending?.finish(snapshot)
+    }
+
+    private func finish(_ state: State) {
         if let error = state.error {
             client?.urlProtocol(self, didFailWithError: error)
             return
         }
-        let response = HTTPURLResponse(url: request.url!, statusCode: state.status, httpVersion: nil, headerFields: nil)!
+        let response = HTTPURLResponse(url: request.url!, statusCode: state.status, httpVersion: nil, headerFields: state.headers)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: state.body)
         client?.urlProtocolDidFinishLoading(self)
     }
     override func stopLoading() {
+        Self.state.withLock { if $0.pending === self { $0.pending = nil } }
         let expectation = stopExpectation.withLock { pending in
             defer { pending = nil }
             return pending
