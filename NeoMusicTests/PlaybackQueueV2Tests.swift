@@ -592,18 +592,16 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
         let screenYImmediate = songCellImmediate.frame.minY - list.contentOffset.y
         XCTAssertEqual(screenYImmediate, screenYBefore, accuracy: 0.5,
                        "SongHeader must not jump upward and slide back down when a history row is appended")
-        func verifyNonAdditiveMaskAnimations(in layer: CALayer) {
+        func verifyMaskAnimations(in layer: CALayer) {
             if let mask = layer.mask,
                let anim = mask.animation(forKey: "trackTransitionMask") as? CABasicAnimation {
-                XCTAssertFalse(anim.isAdditive, "Track transition mask animation must not be additive")
-                let fromPos = (anim.fromValue as? NSValue)?.cgPointValue
-                let toPos = (anim.toValue as? NSValue)?.cgPointValue
-                XCTAssertEqual(fromPos?.x, mask.position.x)
-                XCTAssertEqual(toPos?.x, mask.position.x)
+                XCTAssertTrue(anim.isAdditive, "Scroll updates must be able to move the mask's base frame")
+                XCTAssertEqual((anim.fromValue as? NSValue)?.cgPointValue.x, 0)
+                XCTAssertEqual((anim.toValue as? NSValue)?.cgPointValue, .zero)
             }
-            for sub in layer.sublayers ?? [] { verifyNonAdditiveMaskAnimations(in: sub) }
+            for sub in layer.sublayers ?? [] { verifyMaskAnimations(in: sub) }
         }
-        for cell in list.visibleCells { verifyNonAdditiveMaskAnimations(in: cell.layer) }
+        for cell in list.visibleCells { verifyMaskAnimations(in: cell.layer) }
 
         coordinator.playFromHistory(selectableHistoryEntry.id)
         XCTAssertEqual(inputs.player.currentTrack?.id, selectableHistoryEntry.song.id)
@@ -902,7 +900,7 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
         XCTAssertTrue(custom.mask === customMask)
     }
 
-    func testEdgeMasksCoverReplacedSublayerWithoutCellRelayout() throws {
+    func testEdgeMasksKeepRoundedArtworkCoveredAcrossSublayerReplacement() throws {
         let list = NowPlayingQueueList.EdgeFadedCollectionView(
             frame: CGRect(x: 0, y: 0, width: 320, height: 400),
             collectionViewLayout: UICollectionViewFlowLayout()
@@ -912,28 +910,168 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
         list.addSubview(cell)
 
         let rowContainer = CALayer()
+        let artwork = NowPlayingQueueArtworkSurface.Surface.EdgeFadeLayer()
         let placeholderArtwork = CALayer()
         let vibrantArtist = CALayer()
         rowContainer.frame = cell.bounds
-        placeholderArtwork.frame = CGRect(x: 0, y: 6, width: 48, height: 48)
+        artwork.frame = CGRect(x: 0, y: 6, width: 48, height: 48)
+        placeholderArtwork.frame = artwork.bounds
         vibrantArtist.frame = CGRect(x: 60, y: 30, width: 120, height: 18)
         vibrantArtist.compositingFilter = "plusL"
         cell.contentView.layer.addSublayer(rowContainer)
-        rowContainer.addSublayer(placeholderArtwork)
+        rowContainer.addSublayer(artwork)
+        artwork.addSublayer(placeholderArtwork)
         rowContainer.addSublayer(vibrantArtist)
 
         list.updateEdgeMask(for: cell)
-        XCTAssertTrue(placeholderArtwork.mask is CAGradientLayer)
+        let edgeMask = try XCTUnwrap(artwork.mask as? CAGradientLayer)
+        XCTAssertNil(cell.layer.mask)
         XCTAssertTrue(vibrantArtist.mask is CAGradientLayer)
 
         placeholderArtwork.removeFromSuperlayer()
         let loadedArtwork = CALayer()
-        loadedArtwork.frame = CGRect(x: 0, y: 6, width: 48, height: 48)
-        rowContainer.addSublayer(loadedArtwork)
+        loadedArtwork.frame = artwork.bounds
+        let relativeMask = CAShapeLayer()
+        relativeMask.frame = loadedArtwork.bounds
+        relativeMask.path = UIBezierPath(roundedRect: loadedArtwork.bounds, cornerRadius: 6).cgPath
+        loadedArtwork.mask = relativeMask
+        artwork.addSublayer(loadedArtwork)
+
+        // An image can arrive with no cell layout or scroll update.
+        XCTAssertTrue(loadedArtwork.superlayer?.mask === edgeMask)
+        XCTAssertTrue(loadedArtwork.mask === relativeMask)
+        XCTAssertEqual(artwork.convert(edgeMask.frame, to: list.layer).minY, list.bounds.minY, accuracy: 0.01)
+        XCTAssertTrue(vibrantArtist.mask is CAGradientLayer)
+    }
+
+    func testAsyncQueueArtworkStaysClippedAtPinnedHeader() async throws {
+        let inputs = QueueListTestInputs()
+        let url = try XCTUnwrap(URL(string: "https://example.invalid/queue-artwork"))
+        inputs.entries = (0..<12).map { index in
+            PlayerQueueEntry(id: UUID(), queueIndex: index + 1, song: PlayerTrack(
+                id: "queue-\(index)", title: "Song", artists: "Artist", albumTitle: "Album",
+                coverURL: index == 0 ? url : nil, duration: 60
+            ))
+        }
+        let request = expectation(description: "Queue artwork decode started")
+        request.assertForOverFulfill = false
+        let (images, loader) = AsyncStream<UIImage>.makeStream()
+        defer { loader.finish() }
+        inputs.services = PlayerServices(actions: inputs.actions, lyrics: inputs.library.source,
+            artwork: PlayerArtworkProvider(cached: { _ in nil }, load: { _ in
+                request.fulfill()
+                var iterator = images.makeAsyncIterator()
+                guard let image = await iterator.next() else { throw CancellationError() }
+                return image
+            }))
+        let (window, host) = try mount(inputs)
+        defer { window.isHidden = true }
+        await fulfillment(of: [request], timeout: 3)
+        try await settle(host)
+
+        let list = try XCTUnwrap(collection(in: host.view) as? NowPlayingQueueList.EdgeFadedCollectionView)
+        let source = try XCTUnwrap((list.delegate as? Coordinator)?.dataSource)
+        let path = try XCTUnwrap(source.indexPath(for: .track(inputs.entries[0].id)))
+        // Leave part of the first row under the pinned title and part in the readable area.
+        list.contentOffset.y = list.queueRestOffset + inputs.headerHeight + 18
+        try await settle(host)
+        let cell = try XCTUnwrap(list.cellForItem(at: path))
+        func artwork(in view: UIView) -> NowPlayingQueueArtworkSurface.Surface? {
+            (view as? NowPlayingQueueArtworkSurface.Surface) ?? view.subviews.lazy.compactMap(artwork).first
+        }
+        let surface = try XCTUnwrap(artwork(in: cell))
+        let mask = try XCTUnwrap(surface.layer.mask as? CAGradientLayer)
+        let header = try XCTUnwrap(list.queueHeader)
+        let coveredHeight = list.convert(header.bounds, from: header).maxY
+            - list.convert(surface.bounds, from: surface).minY
+        XCTAssertGreaterThan(coveredHeight, 2)
+        XCTAssertLessThan(coveredHeight + NowPlayingQueueList.topFadeHeight, surface.bounds.height - 5)
+        let offset = list.contentOffset
+
+        func isRed(x: CGFloat, y: CGFloat) -> Bool {
+            let point = surface.convert(CGPoint(x: x, y: y), to: host.view)
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 1
+            format.preferredRange = .standard
+            let snapshot = UIGraphicsImageRenderer(size: CGSize(width: 1, height: 1), format: format).image { _ in
+                host.view.drawHierarchy(in: host.view.bounds.offsetBy(dx: -point.x, dy: -point.y), afterScreenUpdates: true)
+            }
+            guard let image = snapshot.cgImage else { return false }
+            var pixel = [UInt8](repeating: 0, count: 4)
+            return pixel.withUnsafeMutableBytes { bytes in
+                guard let context = CGContext(data: bytes.baseAddress, width: 1, height: 1, bitsPerComponent: 8,
+                                              bytesPerRow: 4, space: CGColorSpaceCreateDeviceRGB(),
+                                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+                context.draw(image, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+                return bytes[0] > 220 && bytes[1] < 35 && bytes[2] < 35
+            }
+        }
+        let middleX = surface.bounds.midX
+        let readableY = surface.bounds.maxY - 5
+        XCTAssertFalse(isRed(x: middleX, y: readableY))
+        loader.yield(UIGraphicsImageRenderer(size: CGSize(width: 48, height: 48)).image { context in
+            UIColor.red.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 48, height: 48))
+        })
+        for _ in 0..<10 {
+            try await settle(host)
+            if isRed(x: middleX, y: readableY) { break }
+        }
+        XCTAssertTrue(isRed(x: middleX, y: readableY))
+        XCTAssertFalse(isRed(x: middleX, y: 1))
+        XCTAssertFalse(isRed(x: 0, y: surface.bounds.maxY - 1))
+        XCTAssertTrue(artwork(in: cell) === surface)
+        XCTAssertTrue(surface.layer.mask === mask)
+        XCTAssertEqual(list.contentOffset, offset)
+    }
+
+    func testEdgeMasksRebaseAtBothEdgesDuringTrackTransitionAndClearOnReuse() throws {
+        let list = NowPlayingQueueList.EdgeFadedCollectionView(
+            frame: CGRect(x: 0, y: 0, width: 320, height: 400),
+            collectionViewLayout: UICollectionViewFlowLayout()
+        )
+        list.contentSize.height = 900
+        let cell = NowPlayingQueueList.EdgeFadedListCell(frame: CGRect(x: 0, y: 300, width: 320, height: 60))
+        cell.edgeFadeCollectionView = list
+        list.addSubview(cell)
+        let artwork = NowPlayingQueueArtworkSurface.Surface.EdgeFadeLayer()
+        artwork.frame = CGRect(x: 0, y: 6, width: 48, height: 48)
+        cell.contentView.layer.addSublayer(artwork)
+
+        cell.isAnimatingTrackTransition = true
+        let spring = CASpringAnimation(keyPath: "transform")
+        spring.duration = 0.28
+        spring.beginTime = CACurrentMediaTime()
+        list.animateTransitionEdgeMask(for: cell, deltaY: 56, matching: spring)
+        let mask = try XCTUnwrap(artwork.mask as? CAGradientLayer)
+        let animation = try XCTUnwrap(mask.animation(forKey: "trackTransitionMask") as? CASpringAnimation)
+        XCTAssertTrue(animation.isAdditive)
+        XCTAssertEqual((animation.fromValue as? NSValue)?.cgPointValue, CGPoint(x: 0, y: -56))
+        XCTAssertEqual((animation.toValue as? NSValue)?.cgPointValue, .zero)
+        XCTAssertEqual(animation.duration, spring.duration)
+
+        for offset: CGFloat in [0, 315] {
+            list.contentOffset.y = offset
+            list.updateEdgeMask(for: cell)
+            XCTAssertTrue(artwork.mask === mask)
+            let maskFrame = artwork.convert(mask.frame, to: list.layer)
+            XCTAssertEqual(maskFrame.minY, offset, accuracy: 0.01)
+            XCTAssertEqual(maskFrame.maxY, offset + list.bounds.height, accuracy: 0.01)
+            XCTAssertEqual(mask.animation(forKey: "trackTransitionMask")?.beginTime, animation.beginTime)
+        }
+
+        cell.transform = CGAffineTransform(translationX: 0, y: 56)
+        cell.alpha = 0.35
+        cell.prepareForReuse()
+        XCTAssertNil(artwork.mask)
+        XCTAssertFalse(cell.isAnimatingTrackTransition)
+        XCTAssertEqual(cell.transform, .identity)
+        XCTAssertEqual(cell.alpha, 1)
 
         list.updateEdgeMask(for: cell)
-        XCTAssertTrue(loadedArtwork.mask is CAGradientLayer, "Async replaced artwork layer must receive the edge fade mask")
-        XCTAssertTrue(vibrantArtist.mask is CAGradientLayer)
+        let reusedMask = try XCTUnwrap(artwork.mask as? CAGradientLayer)
+        XCTAssertNil(reusedMask.animation(forKey: "trackTransitionMask"))
+        XCTAssertEqual(artwork.convert(reusedMask.frame, to: list.layer).minY, list.bounds.minY, accuracy: 0.01)
     }
 }
 

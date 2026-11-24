@@ -11,9 +11,9 @@ struct NowPlayingPortraitArtwork: View {
     let song: PlayerTrack
     let isArtworkPage: Bool
     var decodeSize: CGSize? = nil
+    var clipsToQueueEdges = false
 
-
-    var body: some View {
+    private var image: ArtworkImage {
         ArtworkImage(
             url: song.coverURL,
             contentID: song.id,
@@ -21,6 +21,16 @@ struct NowPlayingPortraitArtwork: View {
             cornerRadius: 12,
             decodeSize: decodeSize
         )
+    }
+
+    var body: some View {
+        Group {
+            if clipsToQueueEdges {
+                NowPlayingQueueArtworkSurface(artwork: image)
+            } else {
+                image
+            }
+        }
         .geometryGroup()
         .shadow(
             color: .black.opacity(shadowOpacity),

@@ -1,5 +1,6 @@
 // Direct source port from MeloX (GPL-3.0), b8bc60f.
 import SwiftUI
+import UIKit
 
 struct NowPlayingQueuePage: View {
     @Environment(PlayerState.self) private var player
@@ -209,12 +210,12 @@ struct NowPlayingQueueRow: View {
     private func row(for song: PlayerTrack) -> some View {
         Button(action: onPlay) {
             HStack(spacing: 12) {
-                ArtworkImage(
+                NowPlayingQueueArtworkSurface(artwork: ArtworkImage(
                     url: song.coverURL,
                     contentID: song.id,
                     artworkLoadID: song.artworkLoadID,
                     cornerRadius: 6, decodeSize: CGSize(width: 48, height: 48)
-                )
+                ))
                 .frame(width: 48, height: 48)
 
                 VStack(alignment: .leading, spacing: 2) {
@@ -231,5 +232,54 @@ struct NowPlayingQueueRow: View {
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
+    }
+}
+
+struct NowPlayingQueueArtworkSurface: UIViewRepresentable {
+    let artwork: ArtworkImage
+    @Environment(PlayerServices.self) private var services: PlayerServices?
+
+    func makeUIView(context: Context) -> Surface {
+        Surface(content: configuration.makeContentView())
+    }
+
+    func updateUIView(_ surface: Surface, context: Context) {
+        surface.content.configuration = configuration
+    }
+
+    private var configuration: some UIContentConfiguration {
+        UIHostingConfiguration { artwork.environment(services) }
+            .margins(.all, 0)
+            .minSize(width: 0, height: 0)
+    }
+
+    final class Surface: UIView {
+        final class EdgeFadeLayer: CALayer {}
+        override class var layerClass: AnyClass { EdgeFadeLayer.self }
+        let content: UIView & UIContentView
+
+        init(content: UIView & UIContentView) {
+            self.content = content
+            super.init(frame: .zero)
+            isUserInteractionEnabled = false
+            accessibilityElementsHidden = true
+            addSubview(content)
+        }
+
+        required init?(coder: NSCoder) { nil }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            content.frame = bounds
+            // The host can first be laid out after its containing list cell.
+            var ancestor = superview
+            while let view = ancestor {
+                if let cell = view as? NowPlayingQueueList.EdgeFadedListCell {
+                    cell.edgeFadeCollectionView?.updateEdgeMask(for: cell)
+                    break
+                }
+                ancestor = view.superview
+            }
+        }
     }
 }

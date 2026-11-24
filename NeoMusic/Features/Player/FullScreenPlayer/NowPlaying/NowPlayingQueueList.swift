@@ -120,6 +120,8 @@ struct NowPlayingQueueList: UIViewRepresentable {
     }
 
     private final class QueueEdgeMaskLayer: CAGradientLayer {
+        static let trackTransitionKey = "trackTransitionMask"
+
         override init() {
             super.init()
             let clear = UIColor.clear.cgColor
@@ -139,11 +141,17 @@ struct NowPlayingQueueList: UIViewRepresentable {
         var contentRevision: UInt64?
         var isAnimatingTrackTransition = false
         var transitionGeneration: UInt64 = 0
+        fileprivate var edgeMaskTransition: (spring: CABasicAnimation, deltaY: CGFloat)?
 
         override func prepareForReuse() {
             super.prepareForReuse()
-            isAnimatingTrackTransition = false
             transitionGeneration &+= 1
+            if isAnimatingTrackTransition {
+                layer.removeAnimation(forKey: "transform")
+                layer.removeAnimation(forKey: "opacity")
+            }
+            isAnimatingTrackTransition = false
+            edgeMaskTransition = nil
             transform = .identity
             alpha = 1
             contentView.transform = .identity
@@ -154,7 +162,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
 
         override func layoutSublayers(of layer: CALayer) {
             super.layoutSublayers(of: layer)
-            if layer === self.layer, !isAnimatingTrackTransition {
+            if layer === self.layer {
                 edgeFadeCollectionView?.updateEdgeMask(for: self)
             }
         }
@@ -208,8 +216,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
             let queueMetrics = rowFadeMetrics(inHistory: false)
             let historyMetrics = historyHeight > 0 ? rowFadeMetrics(inHistory: true) : queueMetrics
             let viewportMetrics = viewportFadeMetrics()
-            for cell in visibleCells {
-                if (cell as? EdgeFadedListCell)?.isAnimatingTrackTransition == true { continue }
+            for cell in visibleCells where cell.isDescendant(of: self) {
                 let metrics = edgeFadeMetrics(for: cell, historyMetrics: historyMetrics,
                                               viewportMetrics: viewportMetrics, queueMetrics: queueMetrics)
                 applyEdgeMask(to: cell, metrics: metrics)
@@ -220,8 +227,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
         }
 
         func updateEdgeMask(for cell: UICollectionViewCell) {
-            guard !isUpdatingEdgeMasks, bounds.height > 0, cell.superview != nil else { return }
-            if (cell as? EdgeFadedListCell)?.isAnimatingTrackTransition == true { return }
+            guard !isUpdatingEdgeMasks, bounds.height > 0, cell.isDescendant(of: self) else { return }
             isUpdatingEdgeMasks = true
             defer { isUpdatingEdgeMasks = false }
             let queueMetrics = rowFadeMetrics(inHistory: false)
@@ -257,46 +263,20 @@ struct NowPlayingQueueList: UIViewRepresentable {
             }
         }
 
-        fileprivate func prepareTransitionEdgeMask(for cell: UICollectionViewCell, deltaY: CGFloat) {
-            guard bounds.height > 0, cell.superview != nil else { return }
-            let queueMetrics = rowFadeMetrics(inHistory: false)
-            let historyMetrics = historyHeight > 0 ? rowFadeMetrics(inHistory: true) : queueMetrics
-            let viewportMetrics = viewportFadeMetrics()
-            let metrics = edgeFadeMetrics(for: cell, historyMetrics: historyMetrics,
-                                          viewportMetrics: viewportMetrics, queueMetrics: queueMetrics)
-            // cell.transform is currently translation(0, deltaY); its final frame at t=1 is shifted by -deltaY.
-            let currentFrame = convert(cell.bounds, from: cell)
-            let sweepMinY = min(currentFrame.minY, currentFrame.minY - deltaY)
-            let sweepMaxY = max(currentFrame.maxY, currentFrame.maxY - deltaY)
-            let touchesFadeZone = sweepMinY < metrics.fadeTopEnd || sweepMaxY > metrics.fadeBottomStart
-            applyEdgeMask(to: cell, metrics: metrics, forceMask: touchesFadeZone)
-        }
-
-        fileprivate func animateTransitionEdgeMask(for cell: UICollectionViewCell, matching spring: CABasicAnimation?) {
-            guard bounds.height > 0, cell.superview != nil, maskedCells.contains(cell) else { return }
-            let queueMetrics = rowFadeMetrics(inHistory: false)
-            let historyMetrics = historyHeight > 0 ? rowFadeMetrics(inHistory: true) : queueMetrics
-            let viewportMetrics = viewportFadeMetrics()
-            let metrics = edgeFadeMetrics(for: cell, historyMetrics: historyMetrics,
-                                          viewportMetrics: viewportMetrics, queueMetrics: queueMetrics)
-            var targets: [CALayer] = []
-            collectEdgeMaskTargets(in: cell.layer, targets: &targets)
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
-            for target in targets {
-                let oldPosition = (target.mask as? QueueEdgeMaskLayer)?.position
-                setEdgeMask(on: target, metrics: metrics)
-                if let spring, let oldPosition, let maskLayer = target.mask as? QueueEdgeMaskLayer,
-                   let maskAnimation = spring.copy() as? CABasicAnimation {
-                    maskAnimation.isAdditive = false
-                    maskAnimation.valueFunction = nil
-                    maskAnimation.keyPath = "position"
-                    maskAnimation.fromValue = NSValue(cgPoint: oldPosition)
-                    maskAnimation.toValue = NSValue(cgPoint: maskLayer.position)
-                    maskLayer.add(maskAnimation, forKey: "trackTransitionMask")
+        func animateTransitionEdgeMask(for cell: EdgeFadedListCell, deltaY: CGFloat, matching spring: CABasicAnimation?) {
+            if let animation = spring?.copy() as? CABasicAnimation {
+                animation.delegate = nil
+                animation.isAdditive = true
+                animation.valueFunction = nil
+                animation.keyPath = "position"
+                animation.byValue = nil
+                animation.toValue = NSValue(cgPoint: .zero)
+                if animation.beginTime == 0 {
+                    animation.beginTime = cell.layer.convertTime(CACurrentMediaTime(), from: nil)
                 }
+                cell.edgeMaskTransition = (animation, deltaY)
             }
-            CATransaction.commit()
+            updateEdgeMask(for: cell)
         }
 
         fileprivate func clearEdgeMasks(for cell: UICollectionViewCell) {
@@ -384,9 +364,11 @@ struct NowPlayingQueueList: UIViewRepresentable {
             )
         }
 
-        private func applyEdgeMask(to cell: UICollectionViewCell, metrics: EdgeFadeMetrics, forceMask: Bool = false) {
+        private func applyEdgeMask(to cell: UICollectionViewCell, metrics: EdgeFadeMetrics) {
+            let listCell = cell as? EdgeFadedListCell
             let cellFrame = convert(cell.bounds, from: cell)
-            if !forceMask, cellFrame.minY >= metrics.fadeTopEnd && cellFrame.maxY <= metrics.fadeBottomStart {
+            if listCell?.isAnimatingTrackTransition != true,
+               cellFrame.minY >= metrics.fadeTopEnd && cellFrame.maxY <= metrics.fadeBottomStart {
                 if maskedCells.contains(cell) {
                     CATransaction.begin()
                     CATransaction.setDisableActions(true)
@@ -403,7 +385,20 @@ struct NowPlayingQueueList: UIViewRepresentable {
             var targets: [CALayer] = []
             collectEdgeMaskTargets(in: cell.layer, targets: &targets)
             for target in targets {
-                setEdgeMask(on: target, metrics: metrics)
+                let mask = setEdgeMask(on: target, metrics: metrics)
+                if let transition = listCell?.edgeMaskTransition {
+                    // Rebase the model frame as the list scrolls. The inverse spring only
+                    // compensates the animated row translation, so the fade stays at the edge.
+                    if mask.animation(forKey: QueueEdgeMaskLayer.trackTransitionKey) == nil,
+                       let animation = transition.spring.copy() as? CABasicAnimation {
+                        let origin = target.convert(CGPoint.zero, from: layer)
+                        let offset = target.convert(CGPoint(x: 0, y: -transition.deltaY), from: layer)
+                        animation.fromValue = NSValue(cgPoint: CGPoint(x: offset.x - origin.x, y: offset.y - origin.y))
+                        mask.add(animation, forKey: QueueEdgeMaskLayer.trackTransitionKey)
+                    }
+                } else {
+                    mask.removeAnimation(forKey: QueueEdgeMaskLayer.trackTransitionKey)
+                }
             }
             CATransaction.commit()
         }
@@ -419,16 +414,23 @@ struct NowPlayingQueueList: UIViewRepresentable {
 
         @discardableResult
         private func collectEdgeMaskTargets(in layer: CALayer, targets: inout [CALayer]) -> Bool {
+            // This UIKit layer survives artwork loading; the hosted rounded clip stays inside it.
+            if layer is NowPlayingQueueArtworkSurface.Surface.EdgeFadeLayer {
+                targets.append(layer)
+                return true
+            }
+
             let firstChildTarget = targets.count
             let hasFilter = layer.compositingFilter != nil
-            var descendantsHaveFilter = false
+            var descendantsNeedSeparateMasks = false
             for sublayer in layer.sublayers ?? [] {
-                let childHasFilter = collectEdgeMaskTargets(in: sublayer, targets: &targets)
-                descendantsHaveFilter = descendantsHaveFilter || childHasFilter
+                if collectEdgeMaskTargets(in: sublayer, targets: &targets) {
+                    descendantsNeedSeparateMasks = true
+                }
             }
 
             let hasCustomMask = layer.mask != nil && !(layer.mask is QueueEdgeMaskLayer)
-            if (hasFilter || !descendantsHaveFilter) && !hasCustomMask {
+            if (hasFilter || !descendantsNeedSeparateMasks) && !hasCustomMask {
                 for target in targets[firstChildTarget...] where target.mask is QueueEdgeMaskLayer {
                     target.mask = nil
                 }
@@ -437,10 +439,10 @@ struct NowPlayingQueueList: UIViewRepresentable {
             } else if layer.mask is QueueEdgeMaskLayer {
                 layer.mask = nil
             }
-            return hasFilter || descendantsHaveFilter
+            return hasFilter || descendantsNeedSeparateMasks
         }
 
-        private func setEdgeMask(on targetLayer: CALayer, metrics: EdgeFadeMetrics) {
+        private func setEdgeMask(on targetLayer: CALayer, metrics: EdgeFadeMetrics) -> QueueEdgeMaskLayer {
             let maskLayer = (targetLayer.mask as? QueueEdgeMaskLayer) ?? QueueEdgeMaskLayer()
             let localRect = targetLayer.convert(metrics.viewportRect, from: self.layer)
             let topY = targetLayer.convert(CGPoint(x: 0, y: metrics.fadeTop), from: self.layer).y
@@ -456,6 +458,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
             if maskLayer.contentsScale != scale { maskLayer.contentsScale = scale }
             if maskLayer.locations != metrics.locations { maskLayer.locations = metrics.locations }
             if targetLayer.mask !== maskLayer { targetLayer.mask = maskLayer }
+            return maskLayer
         }
     }
 
@@ -1053,6 +1056,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
                         usesArtworkTransition: false,
                         showsArtwork: true,
                         artworkDecodeSize: latest.songHeader.artworkDecodeSize,
+                        clipsToQueueEdges: true,
                         onImportLyrics: importLyrics
                     )
                     .frame(height: NowPlayingSongHeader.referenceHeight)
@@ -1146,7 +1150,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
         ) {
             guard historySlideY != 0 || queueSlideY != 0 || animateSongHeader, let dataSource else { return }
 
-            var animatedRows: [(cell: EdgeFadedListCell, generation: UInt64)] = []
+            var animatedRows: [(cell: EdgeFadedListCell, generation: UInt64, deltaY: CGFloat)] = []
             var songHeaderCell: UICollectionViewCell?
 
             UIView.performWithoutAnimation {
@@ -1161,8 +1165,9 @@ struct NowPlayingQueueList: UIViewRepresentable {
                         listCell.isAnimatingTrackTransition = true
                         listCell.transform = CGAffineTransform(translationX: 0, y: historySlideY)
                         listCell.alpha = insertedHistoryIDs.contains(id) ? 0.35 : 1
-                        collectionView.prepareTransitionEdgeMask(for: listCell, deltaY: historySlideY)
-                        animatedRows.append((listCell, listCell.transitionGeneration))
+                        listCell.edgeMaskTransition = nil
+                        collectionView.updateEdgeMask(for: listCell)
+                        animatedRows.append((listCell, listCell.transitionGeneration, historySlideY))
 
                     case .track where queueSlideY != 0:
                         guard let listCell = cell as? EdgeFadedListCell else { continue }
@@ -1171,8 +1176,9 @@ struct NowPlayingQueueList: UIViewRepresentable {
                         listCell.isAnimatingTrackTransition = true
                         listCell.transform = CGAffineTransform(translationX: 0, y: queueSlideY)
                         listCell.alpha = 1
-                        collectionView.prepareTransitionEdgeMask(for: listCell, deltaY: queueSlideY)
-                        animatedRows.append((listCell, listCell.transitionGeneration))
+                        listCell.edgeMaskTransition = nil
+                        collectionView.updateEdgeMask(for: listCell)
+                        animatedRows.append((listCell, listCell.transitionGeneration, queueSlideY))
 
                     case .songHeader where animateSongHeader:
                         cell.layoutIfNeeded()
@@ -1194,15 +1200,16 @@ struct NowPlayingQueueList: UIViewRepresentable {
                     initialSpringVelocity: 0,
                     options: [.allowUserInteraction, .beginFromCurrentState]
                 ) {
-                    for (cell, _) in animatedRows {
+                    for (cell, _, deltaY) in animatedRows {
                         cell.transform = .identity
                         cell.alpha = 1
                         let spring = cell.layer.animation(forKey: "transform") as? CABasicAnimation
-                        collectionView.animateTransitionEdgeMask(for: cell, matching: spring)
+                        collectionView.animateTransitionEdgeMask(for: cell, deltaY: deltaY, matching: spring)
                     }
                 } completion: { _ in
-                    for (cell, generation) in animatedRows where cell.transitionGeneration == generation {
+                    for (cell, generation, _) in animatedRows where cell.transitionGeneration == generation {
                         cell.isAnimatingTrackTransition = false
+                        cell.edgeMaskTransition = nil
                         collectionView.updateEdgeMask(for: cell)
                     }
                 }
@@ -1498,13 +1505,6 @@ struct NowPlayingQueueList: UIViewRepresentable {
 
         func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
             finishHistoryClear()
-            if let collectionView {
-                for case let cell as EdgeFadedListCell in collectionView.visibleCells where cell.isAnimatingTrackTransition {
-                    cell.transitionGeneration &+= 1
-                    cell.isAnimatingTrackTransition = false
-                    collectionView.updateEdgeMask(for: cell)
-                }
-            }
             guard let latest else { return }
             let historyHeight = collectionView?.historyHeight ?? 0
             let offset = scrollView.contentOffset.y - (historyHeight - scrollView.adjustedContentInset.top)
