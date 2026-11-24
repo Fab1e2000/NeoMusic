@@ -60,6 +60,25 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
         XCTAssertEqual(accessory.value(forKey: "tintColor") as? UIColor, UIColor.white.withAlphaComponent(0.45))
     }
 
+    func testHandoffHidesHeaderWithoutReplacingMaskedContent() async throws {
+        let (window, host) = try mount(QueueListTestInputs())
+        defer { window.isHidden = true }
+        try await settle(host)
+        let coordinator = try coordinator(in: host.view)
+        var list = try XCTUnwrap(coordinator.latest)
+        let source = try XCTUnwrap(coordinator.dataSource)
+        let marked = try markConfigurations(in: host.view, source: source)
+        let header = try XCTUnwrap(marked[.songHeader])
+        let content = header.contentView
+        for visible in [false, true] {
+            list.showsSongHeader = visible
+            XCTAssertTrue(coordinator.update(with: list))
+            XCTAssertTrue(content === header.contentView)
+            XCTAssertEqual(content.isHidden, !visible)
+            XCTAssertTrue(reconfiguredCells(marked).isEmpty)
+        }
+    }
+
     func testUnchangedInputsSkipApplyAndHeaderChangesLeaveRowsAlone() async throws {
         let inputs = QueueListTestInputs()
         let (window, host) = try mount(inputs)
@@ -414,6 +433,10 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
         let songPath = try XCTUnwrap(source.indexPath(for: .songHeader))
         let songCell = try XCTUnwrap(list.cellForItem(at: songPath))
         XCTAssertEqual(list.convert(songCell.bounds, from: songCell).minY, list.bounds.minY, accuracy: 1)
+        XCTAssertEqual(list.adjustedContentInset.top, 4, accuracy: 0.01,
+                       "The artwork has four extra visible points above the unchanged pinning edge")
+        XCTAssertEqual(songCell.bounds.height - list.adjustedContentInset.top, inputs.headerHeight, accuracy: 1,
+                       "Extending the cell must not extend its scroll-to-collapse distance")
         XCTAssertNil(coordinator.trailingActions(at: songPath))
         let queueHeader = try XCTUnwrap(list.queueHeader)
         XCTAssertEqual(list.convert(queueHeader.bounds, from: queueHeader).minY,
@@ -493,7 +516,9 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
         list.contentOffset.y = 80
         try await settle(host)
         let header = try XCTUnwrap(list.historyHeader)
-        XCTAssertEqual(list.convert(header.bounds, from: header).minY, list.bounds.minY, accuracy: 1)
+        // History still pins at the original screen edge, below the extra artwork viewport.
+        XCTAssertEqual(list.convert(header.bounds, from: header).minY,
+                       list.bounds.minY + list.adjustedContentInset.top, accuracy: 1)
         let path = try XCTUnwrap(list.indexPathsForVisibleItems.first {
             if case .history = source.itemIdentifier(for: $0) { return true }
             return false

@@ -75,9 +75,9 @@ public class LNPopupContentHostingController<PopupContent: View> : UIHostingCont
 	}
 	
 	internal
-	var backgroundViewForTransitionViewLookup: UIView? = nil
+	weak var backgroundViewForTransitionViewLookup: LNPopupUITransitionHelperView?
 	internal
-	var foregroundViewForTransitionViewLookup: UIView? = nil
+	weak var foregroundViewForTransitionViewLookup: LNPopupUITransitionHelperView?
 	
 	@objc(_ln_transitionViewForPopupTransitionFromPresentationState:toPresentationState:view:) internal
 	func transitionViewForPopupTransition(from fromState: UIViewController.PopupPresentationState, to toState: UIViewController.PopupPresentationState, view outView: UnsafeMutablePointer<LNPopupTransitionView>) -> UIView? {

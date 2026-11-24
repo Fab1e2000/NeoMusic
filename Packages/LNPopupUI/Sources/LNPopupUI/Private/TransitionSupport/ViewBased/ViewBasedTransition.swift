@@ -126,7 +126,9 @@ extension LNPopupContentHostingController {
 	@available(iOS, obsoleted: 26.0)
 	fileprivate
 	func findTransitionView() -> (UIView, Bool)? {
-		guard let backgroundViewForTransitionViewLookup else {
+		guard let backgroundViewForTransitionViewLookup,
+			  backgroundViewForTransitionViewLookup.isEnabled,
+			  backgroundViewForTransitionViewLookup.isDescendant(of: view) else {
 			return nil
 		}
 		

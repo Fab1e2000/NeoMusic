@@ -39,10 +39,11 @@ struct NowPlayingPagePresentation: ViewModifier {
                                   : .easeOut(duration: 0.22))
         }
         GeometryReader { proxy in
-            let anchor = UnitPoint(x: 0.5, y: layout.pageY(319.3) / proxy.size.height)
+            let topExtension = page == .queue ? NowPlayingSongHeader.lift : 0
+            let anchor = UnitPoint(x: 0.5, y: (layout.pageY(319.3) + topExtension) / proxy.size.height)
             Color.clear
                 .frame(width: proxy.size.width,
-                       height: clipsAboveControls ? min(proxy.size.height, max(0, layout.pageY(557))) : proxy.size.height)
+                       height: clipsAboveControls ? min(proxy.size.height, max(0, layout.pageY(557) + topExtension)) : proxy.size.height)
                 .overlay(alignment: .top) {
                     content
                         .scaleEffect(isVisible ? 1 : hiddenScale, anchor: anchor)
@@ -62,6 +63,24 @@ struct NowPlayingPageChange {
     let id = UUID()
     let source: NowPlayingPage
     let destination: NowPlayingPage
-    let entersFromHiddenQueue: Bool
+    // The queue has no visible artwork to match. Keep the other page's artwork size.
+    let stationaryArtworkPage: NowPlayingPage?
     let startsFromRest: Bool
+
+    static let stationaryFade = Animation.easeInOut(duration: 0.18)
+
+    static func resolveStationaryArtworkPage(
+        from source: NowPlayingPage,
+        to destination: NowPlayingPage,
+        queueArtworkOffscreen: Bool,
+        interrupting change: Self?
+    ) -> NowPlayingPage? {
+        guard source == .queue || destination == .queue else { return nil }
+        let otherPage = source == .queue ? destination : source
+        // A reversal keeps the original endpoints even if the list reports a new viewport.
+        if otherPage == .artwork, let change, change.source == destination, change.destination == source {
+            return change.stationaryArtworkPage
+        }
+        return queueArtworkOffscreen ? otherPage : nil
+    }
 }

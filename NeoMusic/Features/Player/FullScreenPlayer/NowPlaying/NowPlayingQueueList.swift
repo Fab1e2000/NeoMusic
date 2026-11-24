@@ -18,6 +18,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
     var trackTransitionKey: String = ""
     var subtitle: String = "接下来播放的歌曲"
     var songHeader: NowPlayingQueueSongHeader
+    var showsSongHeader = true
     var onImportLyrics: (() -> Void)? = nil
     let headerHeight: CGFloat
     let horizontalInset: CGFloat
@@ -62,8 +63,13 @@ struct NowPlayingQueueList: UIViewRepresentable {
                 let headerHeight = max(coordinator?.latest?.headerHeight ?? NowPlayingQueuePage.songHeaderHeight, 1)
                 let rowSize = NSCollectionLayoutSize(widthDimension: .fractionalWidth(1),
                                                      heightDimension: .absolute(headerHeight))
-                let group = NSCollectionLayoutGroup.vertical(layoutSize: rowSize,
-                    subitems: [NSCollectionLayoutItem(layoutSize: rowSize)])
+                // Shift only the song cell within its group; the following section and snap distance stay put.
+                let group = NSCollectionLayoutGroup.custom(layoutSize: rowSize) { environment in
+                    [NSCollectionLayoutGroupCustomItem(frame: CGRect(
+                        x: 0, y: -NowPlayingSongHeader.lift,
+                        width: environment.container.effectiveContentSize.width, height: headerHeight + NowPlayingSongHeader.lift
+                    ))]
+                }
                 return NSCollectionLayoutSection(group: group)
             }
             let listSection = NSCollectionLayoutSection.list(
@@ -89,7 +95,9 @@ struct NowPlayingQueueList: UIViewRepresentable {
         collectionView.panGestureRecognizer.name = PlayerInteraction.queueScrollGestureName
         collectionView.backgroundColor = .clear
         collectionView.contentInsetAdjustmentBehavior = .never
+        collectionView.contentInset.top = NowPlayingSongHeader.lift
         collectionView.contentInset.bottom = Self.bottomFadeHeight
+        collectionView.contentOffset.y = -collectionView.contentInset.top
         collectionView.topEdgeEffect.isHidden = true
         collectionView.bottomEdgeEffect.isHidden = true
         collectionView.allowsSelection = false
@@ -637,6 +645,14 @@ struct NowPlayingQueueList: UIViewRepresentable {
                 configureHeader(header)
                 refreshed = true
             }
+            // Ownership changes hide the host, not its artwork subtree: replacing the image
+            // after the list has applied its stationary edge mask would reveal an unfaded cover.
+            if previousList?.showsSongHeader != list.showsSongHeader,
+               let path = dataSource.indexPath(for: .songHeader),
+               let cell = collectionView?.cellForItem(at: path) {
+                cell.contentView.isHidden = !list.showsSongHeader
+                refreshed = true
+            }
             let visualsChanged = previousList?.visualsActive != list.visualsActive
             let becameActive = list.visualsActive && previousList?.visualsActive == false
             let servicesChanged = previousList?.services !== list.services
@@ -853,7 +869,10 @@ struct NowPlayingQueueList: UIViewRepresentable {
                   let item = dataSource?.itemIdentifier(for: indexPath) else { return }
             requestVisibleArtwork(for: cell, item: item, at: indexPath)
             if let prepared = cell as? EdgeFadedListCell,
-               prepared.contentRevision == contentRevision { return }
+               prepared.contentRevision == contentRevision {
+                cell.contentView.isHidden = item == .songHeader && latest?.showsSongHeader == false
+                return
+            }
             configure(cell, item: item)
         }
 
@@ -1032,17 +1051,13 @@ struct NowPlayingQueueList: UIViewRepresentable {
                         artworkNamespace: latest.songHeader.artworkNamespace,
                         usesReferenceLayout: true,
                         usesArtworkTransition: false,
-                        showsArtwork: latest.songHeader.isVisible,
+                        showsArtwork: true,
                         artworkDecodeSize: latest.songHeader.artworkDecodeSize,
                         onImportLyrics: importLyrics
                     )
-                    .opacity(latest.songHeader.isVisible ? 1 : 0)
-                    .allowsHitTesting(latest.songHeader.isVisible)
-                    .accessibilityHidden(!latest.songHeader.isVisible)
-                    .animation(nil, value: latest.songHeader.isVisible)
                     .frame(height: NowPlayingSongHeader.referenceHeight)
                     .padding(.top, NowPlayingSongHeader.topInset)
-                    .frame(height: latest.headerHeight, alignment: .top)
+                    .frame(height: latest.headerHeight + NowPlayingSongHeader.lift, alignment: .top)
                     .environment(latest.player)
                     .environment(latest.actions)
                     .environment(latest.services)
@@ -1104,6 +1119,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
                 .margins(.vertical, 4)
                 .minSize(height: 0)
             }
+            cell.contentView.isHidden = item == .songHeader && !latest.showsSongHeader
             (cell as? EdgeFadedListCell)?.contentRevision = contentRevision
         }
 

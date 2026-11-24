@@ -583,14 +583,16 @@ public extension View {
 	/// Apply this modifier to designate a view as the popup transition target. The system will transition to and from this view when the popup opens and closes.
 	///
 	/// There should only be a single transition target per popup content view. Applying more will result in undefined behavior.
+	/// Pass `false` when the target is hidden or outside its viewport.
 	///
 	/// - Note: Transitions are only available for prominent and floating popup bar styles with drag interaction style. Any other combination will result in no transition.
-	func popupTransitionTarget() -> some View {
+	func popupTransitionTarget(isEnabled: Bool = true) -> some View {
 		if #available(iOS 26, *) {
-			return overlay(LNPopupUITransitionForeground().accessibilityHidden(true)).compositingGroup()
+			return overlay(LNPopupUITransitionForeground(isEnabled: isEnabled).accessibilityHidden(true)).compositingGroup()
 		}
 		
-		return background(LNPopupUITransitionBackground().accessibilityHidden(true)).overlay(LNPopupUITransitionForeground().accessibilityHidden(true))
+		return background(LNPopupUITransitionBackground(isEnabled: isEnabled).accessibilityHidden(true))
+			.overlay(LNPopupUITransitionForeground(isEnabled: isEnabled).accessibilityHidden(true))
 	}
 	
 	/// Sets the popup content background color. Provide `nil`, `.clear` or any color with opacity less than 1.0 to have a translucent background.

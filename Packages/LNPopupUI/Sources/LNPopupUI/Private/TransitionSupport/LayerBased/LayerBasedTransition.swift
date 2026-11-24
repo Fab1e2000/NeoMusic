@@ -121,6 +121,8 @@ extension LNPopupContentHostingController {
 	func findTransitionLayer() -> (CALayer, Bool)? {
 		//iOS 26 changes how non-UIViews are handled
 		guard let foregroundViewForTransitionViewLookup,
+			  foregroundViewForTransitionViewLookup.isEnabled,
+			  foregroundViewForTransitionViewLookup.isDescendant(of: view),
 			  let foregroundWrapper = foregroundViewForTransitionViewLookup.superview,
 			  let foregroundContainer = foregroundWrapper.superview,
 			  let indexOfForeground = foregroundContainer.layer.sublayers?.firstIndex(of: foregroundWrapper.layer) else {
