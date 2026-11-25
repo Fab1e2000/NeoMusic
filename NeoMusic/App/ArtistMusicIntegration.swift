@@ -630,20 +630,21 @@ import Observation
             else { self.playlistLibrary.pendingAddition = .init(songs: songs) }
         }
     }
-    private func openSong(_ songID: String, artist: String?, album: Bool, open: @escaping (LibraryRoute) -> Void) {
-        guard let song = container.songLibrary.song(id: songID) else { return }
-        let downloadedID = container.catalog.downloadedOnlineSongID?(songID)
+    private func openSong(_ song: LibrarySongItem, artist: String?, album: Bool, open: @escaping (LibraryRoute) -> Void) {
+        let downloadedID = container.catalog.downloadedOnlineSongID?(song.id)
         guard song.onlineOwnerID == owner.map(String.init) || downloadedID != nil else { return }
         if album, let id = song.onlineAlbumID { open(.album("catalog:album:\(id)")); return }
         if !album, let ref = song.artistReferences.first(where: { artist == nil || $0.name == artist }) { open(.artist(ref.id)); return }
         guard let id = song.onlineSongID ?? downloadedID, let store else { return }
         let captured = owner
+        let revision = store.sessionRevision
         Task {
             do {
                 let value = try await store.song(id: id)
-                guard captured == owner else { return }
-                if album, let albumID = value.albumID { open(.album("catalog:album:\(albumID)")) }
-                else if let ref = value.artists?.first(where: { artist == nil || $0.name == artist || artist == song.artist }) { open(.artist("catalog:artist:\(ref.id)")) }
+                guard captured == owner, revision == store.sessionRevision, !account.isLoggingOut else { return }
+                if album {
+                    if let albumID = value.albumID { open(.album("catalog:album:\(albumID)")) }
+                } else if let ref = value.artists?.first(where: { artist == nil || $0.name == artist || artist == song.artist }) { open(.artist("catalog:artist:\(ref.id)")) }
             } catch is CancellationError { } catch { container.toasts.show(.error(error.localizedDescription)) }
         }
     }

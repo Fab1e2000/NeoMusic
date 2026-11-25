@@ -99,6 +99,41 @@ import SwiftUI
         await model.flushQueuePersistence()
     }
 
+    func testRestoredCurrentSongOpensArtistAndAlbumBeforeCatalogPublication() throws {
+        let container = AppContainer()
+        let player = container.player
+        let queueURL = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer {
+            player.shutdownPlayback()
+            try? FileManager.default.removeItem(at: queueURL)
+        }
+        let artistID = "catalog:artist:56"
+        let song = LibrarySongItem(id: "netease:12:34", title: "Saved online song", artist: "Artist",
+            album: "Album", albumArtist: "Artist", trackNumber: 1, artwork: .missing, duration: 10,
+            onlineAlbumID: 78, artistReferences: [.init(id: artistID, name: "Artist")])
+        let saved = NowPlayingModel.SavedQueue(ids: [song.id], index: 0, elapsed: 4,
+            repeatMode: .off, shuffled: false, songs: [PlaybackSongSnapshot(song)])
+        player.configurePlayback(resolveURL: { _ in nil }, persistenceURL: queueURL)
+        XCTAssertTrue(player.restoreQueue(songs: [], restoredState: .success(saved)))
+        player.restoreOnlineIdentity(ownerID: "12")
+        container.playbackAccountID = "12"
+        XCTAssertNil(container.songLibrary.song(id: song.id))
+
+        var routes: [LibraryRoute] = []
+        let actions = container.playerActions(navigate: { route, _ in routes.append(route) },
+                                              openAudioQualitySettings: nil)
+        let track = try XCTUnwrap(container.referencePlayer.currentTrack)
+        XCTAssertEqual(actions.artistNames(for: track), ["Artist"])
+        actions.openArtist("Artist", track: track)
+        actions.openAlbum(track)
+        XCTAssertEqual(routes, [.artist(artistID), .album("catalog:album:78")])
+
+        container.playbackAccountID = "99"
+        actions.openArtist("Artist", track: track)
+        actions.openAlbum(track)
+        XCTAssertEqual(routes, [.artist(artistID), .album("catalog:album:78")])
+    }
+
     func testMissingFileFailsFirstPlayWithoutCreatingTransportOrLosingQueue() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: url) }

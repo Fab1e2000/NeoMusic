@@ -12,8 +12,8 @@ import Observation
     @ObservationIgnored var activeArtistOwner: (() -> String?)?
     @ObservationIgnored var activeArtistSession: (() -> UUID?)?
     @ObservationIgnored var actions = CollectionMenuActions()
-    @ObservationIgnored var openSongAlbum: ((String, @escaping (LibraryRoute) -> Void) -> Void)?
-    @ObservationIgnored var openSongArtist: ((String, String?, @escaping (LibraryRoute) -> Void) -> Void)?
+    @ObservationIgnored var openSongAlbum: ((LibrarySongItem, @escaping (LibraryRoute) -> Void) -> Void)?
+    @ObservationIgnored var openSongArtist: ((LibrarySongItem, String?, @escaping (LibraryRoute) -> Void) -> Void)?
     @ObservationIgnored var downloadedOnlineSongID: ((String) -> Int64?)?
     func handles(_ route: LibraryRoute) -> Bool {
         switch route {

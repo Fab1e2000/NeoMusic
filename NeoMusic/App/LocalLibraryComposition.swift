@@ -320,8 +320,17 @@ extension AppContainer {
         return preview
     }
 
-    private func playerActions(navigate: @escaping (LibraryRoute, LibraryNavigationPreview?) -> Void,
-                                      openAudioQualitySettings: (() -> Void)?) -> PlayerActions {
+    private func playerNavigationSong(id: String) -> LibrarySongItem? {
+        if let indexed = song(id: id) { return indexed }
+        // An authenticated queue snapshot can restore the current song before any catalog source publishes it.
+        let current = player.current
+        guard player.hasCurrent, current.id == id, current.unavailabilityReason == nil,
+              let owner = current.onlineOwnerID, owner == playbackAccountID else { return nil }
+        return current
+    }
+
+    func playerActions(navigate: @escaping (LibraryRoute, LibraryNavigationPreview?) -> Void,
+                       openAudioQualitySettings: (() -> Void)?) -> PlayerActions {
         let openRoute: (LibraryRoute) -> Void = { navigate($0, nil) }
         return PlayerActions(
             isFavorite: { id in self.song(id: id)?.isFavorite == true },
@@ -334,15 +343,15 @@ extension AppContainer {
                 } else { self.playlistLibrary.pendingAddition = .init(songs: [song]) }
             },
             openAlbum: { id in
-                guard let song = self.song(id: id) else { return }
+                guard let song = self.playerNavigationSong(id: id) else { return }
                 self.songActions.openAlbum(song) { route in navigate(route, self.songAlbumPreview(song, route: route)) }
             },
             openArtist: { id in
-                guard let song = self.song(id: id) else { return }
+                guard let song = self.playerNavigationSong(id: id) else { return }
                 if let ref = song.artistReferences.first { openRoute(.artist(ref.id)) }
-                else if song.isNeteaseCatalogSong || self.catalog.downloadedOnlineSongID?(id) != nil { self.catalog.openSongArtist?(id, nil, openRoute) }
+                else if song.isNeteaseCatalogSong || self.catalog.downloadedOnlineSongID?(id) != nil { self.catalog.openSongArtist?(song, nil, openRoute) }
             }, artistNames: { id in
-                guard let song = self.song(id: id) else { return [] }
+                guard let song = self.playerNavigationSong(id: id) else { return [] }
                 let refs = song.artistReferences.map(\.name)
                 if !refs.isEmpty { return refs }
                 if song.isNeteaseCatalogSong || self.catalog.downloadedOnlineSongID?(id) != nil {
@@ -350,9 +359,9 @@ extension AppContainer {
                 }
                 return []
             }, openNamedArtist: { id, name in
-                guard let song = self.song(id: id) else { return }
+                guard let song = self.playerNavigationSong(id: id) else { return }
                 if let ref = song.artistReferences.first(where: { $0.name == name }) { openRoute(.artist(ref.id)) }
-                else if song.isNeteaseCatalogSong || self.catalog.downloadedOnlineSongID?(id) != nil { self.catalog.openSongArtist?(id, name, openRoute) }
+                else if song.isNeteaseCatalogSong || self.catalog.downloadedOnlineSongID?(id) != nil { self.catalog.openSongArtist?(song, name, openRoute) }
             }, feedback: { LibraryHaptics.success() }, notify: { self.toasts.show(LibraryToast($0)) }, completesFavoriteSynchronously: { id in
                 guard let song = self.song(id: id) else { return false }
                 return !song.isNeteaseCatalogSong && !self.downloads.canRemove(song)
@@ -544,12 +553,12 @@ extension AppContainer {
             albumPreview: songAlbumPreview,
             openAlbum: { song, open in
                 if song.onlineAlbumID != nil { open(.album(song.albumID)) }
-                else if song.isNeteaseCatalogSong || self.catalog.downloadedOnlineSongID?(song.id) != nil { self.catalog.openSongAlbum?(song.id, open) }
+                else if song.isNeteaseCatalogSong || self.catalog.downloadedOnlineSongID?(song.id) != nil { self.catalog.openSongAlbum?(song, open) }
                 else { open(.album(song.albumID)) }
             },
             openArtist: { song, open in
                 if let ref = song.artistReferences.first { open(.artist(ref.id)) }
-                else if song.isNeteaseCatalogSong || self.catalog.downloadedOnlineSongID?(song.id) != nil { self.catalog.openSongArtist?(song.id, nil, open) }
+                else if song.isNeteaseCatalogSong || self.catalog.downloadedOnlineSongID?(song.id) != nil { self.catalog.openSongArtist?(song, nil, open) }
             },
             notify: { self.toasts.show($0) },
             isAsynchronousFavorite: { $0.isNeteaseCatalogSong || self.downloads.canRemove($0) }
