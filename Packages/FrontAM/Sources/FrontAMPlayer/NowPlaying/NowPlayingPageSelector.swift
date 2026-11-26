@@ -14,14 +14,14 @@ struct NowPlayingPageSelector: View {
     var body: some View {
         GeometryReader { proxy in
             ZStack {
-                pageButton(page: .lyrics, systemImage: "quote.bubble", accessibilityLabel: "歌词")
+                pageButton(page: .lyrics, systemImage: "quote.bubble", accessibilityLabel: playerText("歌词"))
                     .disabled(!hasLyrics && page != .lyrics)
                     .opacity(hasLyrics || page == .lyrics ? 1 : 0.32)
                     .position(x: layout.x(87), y: 25)
                 ReferenceAirPlayButton(opacity: NowPlayingVisualHierarchy.airPlayOpacity)
                     .frame(width: 44, height: 44)
                     .position(x: proxy.size.width / 2, y: 25)
-                pageButton(page: .queue, systemImage: "list.bullet", accessibilityLabel: "继续播放",
+                pageButton(page: .queue, systemImage: "list.bullet", accessibilityLabel: playerText("继续播放"),
                            badgeSystemImage: page == .queue ? nil : player.queueModeBadgeSystemImage)
                     .position(x: layout.x(315), y: 25)
             }

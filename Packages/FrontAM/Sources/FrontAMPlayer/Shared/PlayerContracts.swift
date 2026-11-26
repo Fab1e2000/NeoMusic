@@ -28,7 +28,7 @@ public enum PlayerRepeatMode: Sendable {
     case off, all, one
     var systemImage: String { self == .one ? "repeat.1" : "repeat" }
     var accessibilityTitle: String {
-        switch self { case .off: "循环关闭"; case .all: "列表循环"; case .one: "单曲循环" }
+        switch self { case .off: playerText("循环关闭"); case .all: playerText("列表循环"); case .one: playerText("单曲循环") }
     }
 }
 

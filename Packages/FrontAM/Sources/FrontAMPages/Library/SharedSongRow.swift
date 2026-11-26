@@ -29,7 +29,7 @@ public struct TrackMoreButton: View {
     public let song: LibrarySongItem
     public var color: Color = .primary
     public var font: Font = .body.weight(.semibold)
-    public var accessibilityLabel: String = "更多"
+    public var accessibilityLabel: String = pageText("更多")
     public var trailingPadding: CGFloat = -7
     public var onRemoveFromPlaylist: (() -> Void)? = nil
 
@@ -55,7 +55,7 @@ public struct SharedSongRow<Leading: View>: View {
     public let song: LibrarySongItem
     public var subtitle: String? = nil
     public var appearance = SongRowAppearance()
-    public var moreAccessibilityLabel: String = "更多"
+    public var moreAccessibilityLabel: String = pageText("更多")
     public var playButtonAccessibilityIdentifier: String? = nil
     public var onRemoveFromPlaylist: (() -> Void)? = nil
     public let play: () -> Void
@@ -177,13 +177,13 @@ private struct SongListRowModifier: ViewModifier {
         let base = content
             .songContextMenu(song, onRemoveFromPlaylist: removeFromPlaylistAction)
             .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                Button("插播", systemImage: "text.line.first.and.arrowtriangle.forward") {
+                Button(pageText("插播"), systemImage: "text.line.first.and.arrowtriangle.forward") {
                     songActions.playNext(song)
                     if !songActions.defersQueueNotice { songActions.notify(.playingNext) }
                 }
                 .labelStyle(.iconOnly)
                 .tint(.indigo)
-                Button("添加到队列", systemImage: "text.line.last.and.arrowtriangle.forward") {
+                Button(pageText("添加到队列"), systemImage: "text.line.last.and.arrowtriangle.forward") {
                     songActions.playLater(song)
                     if !songActions.defersQueueNotice { songActions.notify(.addedToQueue) }
                 }
@@ -212,27 +212,27 @@ private struct SongListRowModifier: ViewModifier {
         case .standard(let animateRemoval):
             OnlineSongTrailingSwipeButtons(song: song, items: items, animateRemoval: animateRemoval)
         case .editablePlaylist(let remove):
-            Button("移除", systemImage: "minus.circle.fill") {
+            Button(pageText("移除"), systemImage: "minus.circle.fill") {
                 CenteredActionSheet.confirmRemoveFromPlaylist(remove)
             }
             .labelStyle(.iconOnly)
             .tint(.red)
         case .libraryDownloads:
             if downloads?.state(of: song.id)?.isActive == true {
-                Button("停止下载", systemImage: "stop.fill") {
+                Button(pageText("停止下载"), systemImage: "stop.fill") {
                     LibraryHaptics.impact()
                     downloads?.stop([song])
                 }
                 .labelStyle(.iconOnly)
                 .tint(.blue)
             } else if downloads?.canRemove(song) == true {
-                Button("移除下载", systemImage: "xmark.circle") {
+                Button(pageText("移除下载"), systemImage: "xmark.circle") {
                     downloads?.requestRemoval([song])
                 }
                 .labelStyle(.iconOnly)
                 .tint(.red)
             } else if downloads?.isDownloadable(song) == true {
-                Button("下载", systemImage: "arrow.down") {
+                Button(pageText("下载"), systemImage: "arrow.down") {
                     LibraryHaptics.impact()
                     downloads?.download([song])
                 }

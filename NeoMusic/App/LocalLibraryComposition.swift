@@ -485,6 +485,10 @@ extension AppContainer {
             },
             playbackSource: { self.player.isPlaying ? self.player.sourceTitle : nil },
             requestMove: { self.playlistLibrary.pendingMove = self.playlistLibrary.playlist($0) },
+            showsPlaylistEditingActions: { id in
+                if case .account = PlaylistRouteIdentity(id) { return false }
+                return true
+            },
             canDelete: { route in
                 if self.catalog.handles(route) { return false }
                 return switch route {

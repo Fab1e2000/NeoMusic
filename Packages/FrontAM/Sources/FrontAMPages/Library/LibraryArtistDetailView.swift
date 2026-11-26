@@ -38,7 +38,7 @@ public struct LibraryArtistDetailView: View {
                 .listRowInsets(.init(top: 20, leading: margin, bottom: 24, trailing: margin))
                 .listRowSeparator(.hidden)
             if albums.isEmpty {
-                ContentUnavailableView("暂无专辑", systemImage: "square.stack")
+                ContentUnavailableView(pageText("暂无专辑"), systemImage: "square.stack")
                     .listRowSeparator(.hidden)
             } else if layout == .grid {
                 LibraryCollectionGrid(rowSpacing: 16, alignment: .center) {
@@ -76,14 +76,14 @@ public struct LibraryArtistDetailView: View {
         .libraryTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
-                Button(artist.isFavorite ? "取消喜爱" : "喜爱", systemImage: artist.isFavorite ? "star.fill" : "star") {
+                Button(artist.isFavorite ? pageText("取消喜爱") : pageText("喜爱"), systemImage: artist.isFavorite ? "star.fill" : "star") {
                     actions.toggleFavorite(route)
                 }
                 .tint(artist.isFavorite ? .yellow : .primary)
                 LibrarySortMenu(layout: $layout, sort: $sort, options: [
-                    .init(sort: .name, title: "名称", subtitle: "A-Z"),
-                    .init(sort: .addedDate, title: "添加日期"),
-                    .init(sort: .year, title: "年份")
+                    .init(sort: .name, title: pageText("名称"), subtitle: "A-Z"),
+                    .init(sort: .addedDate, title: pageText("添加日期")),
+                    .init(sort: .year, title: pageText("年份"))
                 ], leading: menuActions)
                 .menuOrder(.fixed)
             }
@@ -108,7 +108,7 @@ public struct LibraryArtistDetailView: View {
                         }
                     }
                     .buttonStyle(.plain)
-                    .accessibilityHint("前往在线艺人主页")
+                    .accessibilityHint(pageText("前往在线艺人主页"))
                 } else {
                     Text(artist.name)
                 }
@@ -124,15 +124,15 @@ public struct LibraryArtistDetailView: View {
 
     private var menuActions: LibraryMenuSections {
         var groups: LibraryMenuSections = [
-            [.init(title: artist.isFavorite ? "取消喜爱" : "喜爱", systemImage: artist.isFavorite ? "star.slash" : "star") {
+            [.init(title: artist.isFavorite ? pageText("取消喜爱") : pageText("喜爱"), systemImage: artist.isFavorite ? "star.slash" : "star") {
                 actions.toggleFavorite(route)
             }],
-            [.init(title: artist.isPinned ? "取消置顶" : "置顶艺人", systemImage: artist.isPinned ? "pin.slash" : "pin") {
+            [.init(title: artist.isPinned ? pageText("取消置顶") : pageText("置顶艺人"), systemImage: artist.isPinned ? "pin.slash" : "pin") {
                 actions.togglePin(route)
             }]
         ]
         if let online = artist.catalogRoute {
-            groups.append([.init(title: "前往艺人", systemImage: "music.microphone") { openRoute(online) }])
+            groups.append([.init(title: pageText("前往艺人"), systemImage: "music.microphone") { openRoute(online) }])
         }
         return groups
     }
@@ -148,7 +148,7 @@ public struct LibraryArtistDetailView: View {
         return item
     }
 
-    private func yearLabel(_ year: Int) -> String { "\(year.formatted(.number.grouping(.never)))年" }
+    private func yearLabel(_ year: Int) -> String { pageText("\(year.formatted(.number.grouping(.never)))年") }
 
     private func albumPreview(_ album: LibraryShelfItem) -> LibraryNavigationPreview {
         let offline = album.sourceOwnerID == nil && isCatalogAlbum(album.id)

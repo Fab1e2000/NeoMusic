@@ -17,6 +17,10 @@ targets:
     dependencies:
       - package: FrontAM
         product: FrontAM
+    info:
+      path: Info.plist
+      properties:
+        CFBundleLocalizations: [en, zh-Hans]
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES

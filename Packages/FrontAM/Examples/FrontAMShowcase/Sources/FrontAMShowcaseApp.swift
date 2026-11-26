@@ -13,7 +13,7 @@ private enum ShowcaseTab: String, CaseIterable, Sendable {
     case home, library, search
 
     var title: String {
-        switch self { case .home: "主页"; case .library: "资料库"; case .search: "搜索" }
+        switch self { case .home: FrontAMTabTitle.home; case .library: FrontAMTabTitle.library; case .search: FrontAMTabTitle.search }
     }
 
     var symbol: String {

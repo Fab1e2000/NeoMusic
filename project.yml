@@ -35,6 +35,10 @@ targets:
         product: FrontAMPlayer
       - package: FrontAM
         product: FrontAMCore
+      - package: FrontAM
+        product: FrontAMPopup
+      - package: FrontAM
+        product: FrontAMNavigation
       - package: AudioStreaming
       - package: AudioTags
         product: AudioTagBridge
@@ -76,6 +80,7 @@ targets:
     platform: iOS
     sources:
       - path: FullScreenPlayerTests
+      - path: Packages/FrontAM/Tests/FrontAMPlayerTests
     dependencies:
       - package: FrontAM
         product: FrontAMPlayer
@@ -130,6 +135,7 @@ schemes:
       targets:
         NeoMusic: all
     test:
+      language: zh-Hans
       targets:
         - NeoMusicFunctionalParityTests
     run:
@@ -139,6 +145,7 @@ schemes:
       targets:
         NeoMusic: all
     test:
+      language: zh-Hans
       targets:
         - NeoMusicTests
         - FullScreenPlayerTests

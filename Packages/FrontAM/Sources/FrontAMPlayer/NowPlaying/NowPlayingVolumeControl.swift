@@ -127,7 +127,7 @@ struct NowPlayingVolumeControl: View {
                 SystemVolumeSlider(volumeState: volumeState)
                     .frame(width: trackWidth, height: 43)
                     .position(x: layout.x(196.5), y: 21)
-                    .accessibilityLabel("系统音量")
+                    .accessibilityLabel(playerText("系统音量"))
             }
         }
         .frame(height: 42)

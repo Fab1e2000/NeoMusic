@@ -12,7 +12,7 @@ public struct FrontAMPageToolbarAccessory {
 }
 
 extension EnvironmentValues {
-    @Entry public var frontAMLinkedPlaylistProvider = "在线"
+    @Entry public var frontAMLinkedPlaylistProvider = pageText("在线")
     @Entry public var frontAMPageToolbarAccessory: FrontAMPageToolbarAccessory? = nil
 }
 

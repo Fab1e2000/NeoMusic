@@ -12,15 +12,15 @@ public enum LibraryToast {
     public var title: String {
         switch self {
         case .error(let message): message
-        case .favorited: "已喜爱"
-        case .unfavorited: "已取消喜爱"
-        case .pinned: "已置顶"
-        case .unpinned: "已取消置顶"
-        case .playingNext: "下个播放"
-        case .addedToQueue: "已添加到队列"
-        case .addedToPlaylist(let count, _, _, _): "已添加\(count)首歌曲"
-        case .addedToPlaylists(let count, let playlists): "已将\(count)首歌曲添加到\(playlists)个播放列表"
-        case .movedToFolder(let name, _): "已移至\(name)"
+        case .favorited: coreText("已喜爱")
+        case .unfavorited: coreText("已取消喜爱")
+        case .pinned: coreText("已置顶")
+        case .unpinned: coreText("已取消置顶")
+        case .playingNext: coreText("下个播放")
+        case .addedToQueue: coreText("已添加到队列")
+        case .addedToPlaylist(let count, _, _, _): coreText("已添加\(count)首歌曲")
+        case .addedToPlaylists(let count, let playlists): coreText("已将\(count)首歌曲添加到\(playlists)个播放列表")
+        case .movedToFolder(let name, _): coreText("已移至\(name)")
         }
     }
 
@@ -59,7 +59,7 @@ public enum LibraryToast {
     public var accessibilityAnnouncement: AttributedString {
         let message: String
         if case .addedToPlaylist(_, let playlistTitle, _, _) = self {
-            message = "\(title)，\(playlistTitle)"
+            message = coreText("\(title)，\(playlistTitle)")
         } else {
             message = title
         }
@@ -275,7 +275,7 @@ public struct LibraryToastView: View {
                     .accessibilityElement(children: .combine)
             }
         }
-        .accessibilityAction(named: "关闭提示", dismiss)
+        .accessibilityAction(named: coreText("关闭提示"), dismiss)
     }
 
     public func openFolder(_ folderID: String) {
@@ -288,7 +288,7 @@ public struct LibraryToastView: View {
             HStack(spacing: 10) {
                 Image(systemName: toast.systemImage).font(.system(size: 17))
                 VStack(alignment: .leading, spacing: 0) {
-                    Text("已移至").font(.caption).foregroundStyle(.secondary)
+                    Text(coreText("已移至")).font(.caption).foregroundStyle(.secondary)
                     HStack(spacing: 2) {
                         Text(name).font(.subheadline.weight(.semibold)).lineLimit(1)
                         Image(systemName: "chevron.right").font(.caption.weight(.semibold))
@@ -303,7 +303,7 @@ public struct LibraryToastView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(toast.title)
-        .accessibilityHint("打开文件夹")
+        .accessibilityHint(coreText("打开文件夹"))
     }
 
     public func openPlaylist(_ playlistID: String) {

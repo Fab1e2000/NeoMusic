@@ -7,7 +7,7 @@ import SwiftUI
 }
 
 public enum ArtistSection: String, Hashable, Sendable { case songs, albums, singles, similar
-    public var title: String { switch self { case .songs: "歌曲排行"; case .albums: "专辑"; case .singles: "单曲与 EP"; case .similar: "类似艺人" } }
+    public var title: String { switch self { case .songs: pageText("歌曲排行"); case .albums: pageText("专辑"); case .singles: pageText("单曲与 EP"); case .similar: pageText("类似艺人") } }
 }
 public struct ArtistDetail {
     public let name: String
@@ -77,7 +77,7 @@ public struct ArtistDetailView: View {
                     Text(detail.name).font(.system(size: nameSize, weight: .bold))
                         .multilineTextAlignment(.center).padding(.horizontal, 20).padding(.top, -43)
                     HStack(spacing: 24) {
-                        Button { biography = true } label: { Image(systemName: "info").font(.system(size: 22, weight: .semibold)).frame(width: 48, height: 48).background(.white.opacity(0.1), in: Circle()) }.disabled(detail.biography.isEmpty).accessibilityLabel("艺人简介")
+                        Button { biography = true } label: { Image(systemName: "info").font(.system(size: 22, weight: .semibold)).frame(width: 48, height: 48).background(.white.opacity(0.1), in: Circle()) }.disabled(detail.biography.isEmpty).accessibilityLabel(pageText("艺人简介"))
                         Button { if let first = detail.songs.first, let playSong { playSong(first) } else { actions.play(.artist(identity), false) } } label: {
                             Circle()
                                 .fill(.white)
@@ -89,8 +89,8 @@ public struct ArtistDetailView: View {
                                 .compositingGroup()
                                 .frame(width: 72, height: 72)
                                 .contentShape(Circle())
-                        }.accessibilityLabel("播放")
-                        Button(action: favorite) { Image(systemName: detail.isFavorite ? "star.fill" : "star").font(.system(size: 20)).frame(width: 48, height: 48).background(.white.opacity(0.1), in: Circle()) }.accessibilityLabel(detail.isFavorite ? "取消喜爱" : "喜爱")
+                        }.accessibilityLabel(pageText("播放"))
+                        Button(action: favorite) { Image(systemName: detail.isFavorite ? "star.fill" : "star").font(.system(size: 20)).frame(width: 48, height: 48).background(.white.opacity(0.1), in: Circle()) }.accessibilityLabel(detail.isFavorite ? pageText("取消喜爱") : pageText("喜爱"))
                     }.buttonStyle(.plain).padding(.top, 34.0 / 3)
                 }
                 if let latest = detail.latest {
@@ -123,7 +123,7 @@ public struct ArtistDetailView: View {
                                     .frame(width: 44, height: 44)
                                     .contentShape(.rect)
                             }
-                            .accessibilityLabel("将\(latest.title)加入资料库")
+                            .accessibilityLabel(pageText("将\(latest.title)加入资料库"))
                         }
                     }.padding(12).padding(.trailing, 8).background(.white.opacity(0.13), in: .rect(cornerRadius: 26)).overlay(RoundedRectangle(cornerRadius: 26).strokeBorder(.white.opacity(0.17), lineWidth: 0.7)).padding(.horizontal, 20).padding(.top, 24)
                 }
@@ -140,7 +140,7 @@ public struct ArtistDetailView: View {
                 ForEach(detail.errors.keys.sorted(), id: \.self) { key in
                     VStack(spacing: 8) {
                         Text(detail.errors[key] ?? "").font(.footnote)
-                        if let retry { Button("重试") { retry(key) } }
+                        if let retry { Button(pageText("重试")) { retry(key) } }
                     }.padding(.horizontal, 20).padding(.top, 16)
                 }
                 shelf(.albums, items: detail.albums)
@@ -180,11 +180,11 @@ public struct ArtistDetailView: View {
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 if let url = detail.shareURL { ShareLink(item: url) { Image(systemName: "square.and.arrow.up").foregroundStyle(.white) } }
-                Menu { Button(detail.isFavorite ? "取消喜爱" : "喜爱", systemImage: detail.isFavorite ? "star.fill" : "star", action: favorite) } label: { Image(systemName: "ellipsis").foregroundStyle(.white) }
+                Menu { Button(detail.isFavorite ? pageText("取消喜爱") : pageText("喜爱"), systemImage: detail.isFavorite ? "star.fill" : "star", action: favorite) } label: { Image(systemName: "ellipsis").foregroundStyle(.white) }
             }
         }
         .sheet(isPresented: $biography) {
-            NavigationStack { ScrollView { Text(detail.biography).frame(maxWidth: .infinity, alignment: .leading).padding(20) }.navigationTitle(detail.name).toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { biography = false } } } }.presentationDetents([.large])
+            NavigationStack { ScrollView { Text(detail.biography).frame(maxWidth: .infinity, alignment: .leading).padding(20) }.navigationTitle(detail.name).toolbar { ToolbarItem(placement: .confirmationAction) { Button(pageText("完成")) { biography = false } } } }.presentationDetents([.large])
         }
     }
     private var pageBackground: ArtistPageBackground {

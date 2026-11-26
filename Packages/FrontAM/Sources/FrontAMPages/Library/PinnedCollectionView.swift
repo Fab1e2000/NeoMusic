@@ -511,7 +511,7 @@ private struct PinnedCellContent: View {
                         .contentShape(.circle)
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("取消置顶")
+                .accessibilityLabel(pageText("取消置顶"))
                 .offset(x: -16, y: -16)
             }
         }

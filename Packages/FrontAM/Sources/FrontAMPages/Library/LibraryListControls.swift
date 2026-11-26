@@ -126,14 +126,14 @@ public struct LibraryFilterMenu: View {
         Menu {
             option(.all) { Label(allTitle, systemImage: allImage) }
             Section {
-                option(.favorites) { Label("喜爱", systemImage: "star") }
-                option(.downloaded) { Label("下载", systemImage: "arrow.down.circle") }
+                option(.favorites) { Label(pageText("喜爱"), systemImage: "star") }
+                option(.downloaded) { Label(pageText("下载"), systemImage: "arrow.down.circle") }
                     .disabled(!supportsDownloads)
             }
         } label: {
-            Label("筛选", systemImage: "line.3.horizontal.decrease")
+            Label(pageText("筛选"), systemImage: "line.3.horizontal.decrease")
         }
-        .accessibilityValue(filter == .all ? allTitle : filter == .favorites ? "喜爱" : "下载")
+        .accessibilityValue(filter == .all ? allTitle : filter == .favorites ? pageText("喜爱") : pageText("下载"))
         .menuActionDismissBehavior(.enabled)
     }
 
@@ -168,10 +168,10 @@ public struct LibrarySortMenu<Sort: Hashable & Sendable>: View {
             if let layout {
                 Section {
                     toggle(isOn: layout.wrappedValue == .grid, set: { layout.wrappedValue = .grid }) {
-                        Label("网格", systemImage: "square.grid.2x2")
+                        Label(pageText("网格"), systemImage: "square.grid.2x2")
                     }
                     toggle(isOn: layout.wrappedValue == .list, set: { layout.wrappedValue = .list }) {
-                        Label("列表", systemImage: "list.bullet")
+                        Label(pageText("列表"), systemImage: "list.bullet")
                     }
                 }
             }
@@ -185,9 +185,9 @@ public struct LibrarySortMenu<Sort: Hashable & Sendable>: View {
             }
             LibraryMenuContents(sections: trailing, firstSectionIsRow: false)
         } label: {
-            Label("更多", systemImage: "ellipsis")
+            Label(pageText("更多"), systemImage: "ellipsis")
         }
-        .accessibilityHint("调整排序或打开其他选项")
+        .accessibilityHint(pageText("调整排序或打开其他选项"))
         .accessibilityValue(options.first { $0.sort == sort }?.title ?? "")
         .menuActionDismissBehavior(.enabled)
     }

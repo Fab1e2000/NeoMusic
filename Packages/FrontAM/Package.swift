@@ -3,6 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "FrontAM",
+    defaultLocalization: "zh-Hans",
     platforms: [.iOS("27.0")],
     products: [
         .library(name: "FrontAMCore", targets: ["FrontAMCore"]),
@@ -14,7 +15,7 @@ let package = Package(
     ],
     dependencies: [.package(path: "Vendor/LNPopupUI")],
     targets: [
-        .target(name: "FrontAMCore"),
+        .target(name: "FrontAMCore", resources: [.process("Resources")]),
         .target(
             name: "FrontAMPlayer",
             dependencies: ["FrontAMCore"],
@@ -26,11 +27,16 @@ let package = Package(
                 "FrontAMCore",
                 "FrontAMPlayer",
                 .product(name: "LNPopupUI-Static", package: "LNPopupUI"),
-            ]
+            ],
+            resources: [.process("Resources")]
         ),
-        .target(name: "FrontAMNavigation", dependencies: ["FrontAMCore", "FrontAMPopup"]),
-        .target(name: "FrontAMPages", dependencies: ["FrontAMCore", "FrontAMNavigation"]),
+        .target(name: "FrontAMNavigation", dependencies: ["FrontAMCore"], resources: [.process("Resources")]),
+        .target(name: "FrontAMPages", dependencies: ["FrontAMCore", "FrontAMNavigation"], resources: [.process("Resources")]),
         .target(name: "FrontAM", dependencies: ["FrontAMCore", "FrontAMPlayer", "FrontAMPopup", "FrontAMNavigation", "FrontAMPages"]),
+        .testTarget(name: "FrontAMCoreTests", dependencies: ["FrontAMCore"]),
+        .testTarget(name: "FrontAMNavigationTests", dependencies: ["FrontAMNavigation"]),
+        .testTarget(name: "FrontAMPagesTests", dependencies: ["FrontAMPages"]),
+        .testTarget(name: "FrontAMPlayerTests", dependencies: ["FrontAMPlayer"]),
     ],
     swiftLanguageModes: [.v6]
 )

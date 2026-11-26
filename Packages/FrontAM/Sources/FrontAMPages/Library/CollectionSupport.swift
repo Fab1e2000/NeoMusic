@@ -4,6 +4,7 @@ import SwiftUI
 public enum DetailSort: String, CaseIterable, Identifiable, Sendable {
     case order = "播放列表顺序", title = "标题", artist = "艺人", album = "专辑"
     public var id: Self { self }
+    public var title: String { pageText(.init(stringLiteral: rawValue)) }
 }
 
 public struct TrackFilterProjectionInput: Equatable {

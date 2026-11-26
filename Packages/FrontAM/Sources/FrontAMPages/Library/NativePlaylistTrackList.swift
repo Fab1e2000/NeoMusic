@@ -46,7 +46,7 @@ public enum CollectionTrackUI {
         if let reason = song.unavailabilityReason, !reason.isEmpty {
             components.append(reason)
         }
-        if song.isFavorite { components.append("已喜爱") }
+        if song.isFavorite { components.append(pageText("已喜爱")) }
         return components.joined(separator: ", ")
     }
 
@@ -60,8 +60,8 @@ public enum CollectionTrackUI {
         }
         next.image = UIImage(systemName: "text.line.first.and.arrowtriangle.forward")
         next.backgroundColor = .systemIndigo
-        next.accessibilityLabel = "插播"
-        next.image?.accessibilityLabel = "插播"
+        next.accessibilityLabel = pageText("插播")
+        next.image?.accessibilityLabel = pageText("插播")
 
         let later = UIContextualAction(style: .normal, title: nil) { _, _, done in
             songActions.playLater(song)
@@ -70,8 +70,8 @@ public enum CollectionTrackUI {
         }
         later.image = UIImage(systemName: "text.line.last.and.arrowtriangle.forward")
         later.backgroundColor = .systemOrange
-        later.accessibilityLabel = "添加到队列"
-        later.image?.accessibilityLabel = "添加到队列"
+        later.accessibilityLabel = pageText("添加到队列")
+        later.image?.accessibilityLabel = pageText("添加到队列")
 
         return UISwipeActionsConfiguration(actions: [next, later])
     }
@@ -89,8 +89,8 @@ public enum CollectionTrackUI {
             }
             removeAction.image = UIImage(systemName: "minus.circle.fill")
             removeAction.backgroundColor = .systemRed
-            removeAction.accessibilityLabel = "移除"
-            removeAction.image?.accessibilityLabel = "移除"
+            removeAction.accessibilityLabel = pageText("移除")
+            removeAction.image?.accessibilityLabel = pageText("移除")
             let configuration = UISwipeActionsConfiguration(actions: [removeAction])
             configuration.performsFirstActionWithFullSwipe = true
             return configuration
@@ -129,8 +129,8 @@ public enum CollectionTrackUI {
             }
             like.image = UIImage(systemName: "heart.fill")
             like.backgroundColor = .systemPink
-            like.accessibilityLabel = "喜欢"
-            like.image?.accessibilityLabel = "喜欢"
+            like.accessibilityLabel = pageText("喜欢")
+            like.image?.accessibilityLabel = pageText("喜欢")
             return like
         case .download, .stopDownload:
             let active = action == .stopDownload
@@ -141,8 +141,8 @@ public enum CollectionTrackUI {
             }
             download.image = UIImage(systemName: active ? "stop.fill" : "arrow.down")
             download.backgroundColor = .systemBlue
-            download.accessibilityLabel = active ? "停止下载" : "下载"
-            download.image?.accessibilityLabel = active ? "停止下载" : "下载"
+            download.accessibilityLabel = active ? pageText("停止下载") : pageText("下载")
+            download.image?.accessibilityLabel = active ? pageText("停止下载") : pageText("下载")
             return download
         case .removeFromLiked:
             let remove = UIContextualAction(style: .normal, title: nil) { _, _, done in
@@ -159,8 +159,8 @@ public enum CollectionTrackUI {
             }
             remove.image = UIImage(systemName: "trash")
             remove.backgroundColor = .systemRed
-            remove.accessibilityLabel = "从喜欢歌曲移除"
-            remove.image?.accessibilityLabel = "从喜欢歌曲移除"
+            remove.accessibilityLabel = pageText("从喜欢歌曲移除")
+            remove.image?.accessibilityLabel = pageText("从喜欢歌曲移除")
             return remove
         }
     }
@@ -992,7 +992,7 @@ private final class PlaylistTrackCell: UICollectionViewListCell {
         let moreConfig = UIImage.SymbolConfiguration(pointSize: 16, weight: .semibold)
         moreButton.setImage(UIImage(systemName: "ellipsis", withConfiguration: moreConfig), for: .normal)
         moreButton.showsMenuAsPrimaryAction = true
-        moreButton.accessibilityLabel = "更多"
+        moreButton.accessibilityLabel = pageText("更多")
         moreButton.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(moreButton)
 
@@ -1135,7 +1135,7 @@ private final class PlaylistTrackCell: UICollectionViewListCell {
     func setPreparingPlayback(_ preparing: Bool) {
         guard isPreparingPlayback != preparing else { return }
         isPreparingPlayback = preparing
-        titleLabel.accessibilityValue = preparing ? "正在准备播放" : nil
+        titleLabel.accessibilityValue = preparing ? pageText("正在准备播放") : nil
         if preparing { playbackPreparationIndicator.startAnimating() }
         else { playbackPreparationIndicator.stopAnimating() }
     }
@@ -1446,7 +1446,7 @@ private final class PlaylistDownloadBadgeView: UIView {
             imageView.tintColor = secondaryColor
             imageView.isHidden = false
             isAccessibilityElement = true
-            accessibilityLabel = "已下载"
+            accessibilityLabel = pageText("已下载")
         case .failed:
             widthConstraint.constant = usesAccessibilityLayout ? 44 : 28
             imageView.image = UIImage(systemName: "exclamationmark.circle",
@@ -1454,7 +1454,7 @@ private final class PlaylistDownloadBadgeView: UIView {
             imageView.tintColor = .label
             imageView.isHidden = false
             button.isUserInteractionEnabled = true
-            button.accessibilityLabel = "下载失败，轻点重试"
+            button.accessibilityLabel = pageText("下载失败，轻点重试")
         case .queued, .waiting, .downloading:
             widthConstraint.constant = usesAccessibilityLayout ? 44 : 28
             let progress: CGFloat = if case .downloading(let value) = state { CGFloat(min(1, max(0, value))) } else { 0 }
@@ -1462,7 +1462,7 @@ private final class PlaylistDownloadBadgeView: UIView {
             progressLayer.isHidden = false
             progressLayer.strokeEnd = progress
             button.isUserInteractionEnabled = true
-            button.accessibilityLabel = state == .waiting ? "等待 Wi-Fi，轻点停止下载" : "停止下载"
+            button.accessibilityLabel = state == .waiting ? pageText("等待 Wi-Fi，轻点停止下载") : pageText("停止下载")
             button.accessibilityValue = state.accessibilityStatus
         case .finishing:
             widthConstraint.constant = usesAccessibilityLayout ? 44 : 28
@@ -1470,7 +1470,7 @@ private final class PlaylistDownloadBadgeView: UIView {
             spinner.startAnimating()
             spinner.accessibilityElementsHidden = true
             button.isUserInteractionEnabled = true
-            button.accessibilityLabel = "停止下载"
+            button.accessibilityLabel = pageText("停止下载")
             button.accessibilityValue = state.accessibilityStatus
         }
     }
@@ -1496,7 +1496,7 @@ private final class PlaylistAddMusicCell: UICollectionViewListCell {
         iconBox.addSubview(plusIcon)
 
         let label = UILabel()
-        label.text = "添加音乐"
+        label.text = pageText("添加音乐")
         label.font = .systemFont(ofSize: 16)
         label.textColor = .label
         label.translatesAutoresizingMaskIntoConstraints = false
@@ -1542,7 +1542,7 @@ private struct NativeAlbumRowContent: View {
                 .lineLimit(textSize.isAccessibilitySize ? nil : 1)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityAction { play() }
-                .accessibilityValue(song.isFavorite ? "已喜爱" : "")
+                .accessibilityValue(song.isFavorite ? pageText("已喜爱") : "")
             SongDownloadStatus(song: song, secondaryStyle: AnyShapeStyle(secondary))
         }
         .frame(minHeight: 52 + 1.0 / 3)
@@ -1562,7 +1562,7 @@ public final class AlbumSelectionCell: UICollectionViewListCell {
         more.setImage(UIImage(systemName: "ellipsis", withConfiguration: UIImage.SymbolConfiguration(pointSize: 16, weight: .semibold)), for: .normal)
         more.tintColor = .label
         more.showsMenuAsPrimaryAction = true
-        more.accessibilityLabel = "更多"
+        more.accessibilityLabel = pageText("更多")
         accessories = [.customView(configuration: .init(customView: more, placement: .trailing(),
             reservedLayoutWidth: .custom(44), maintainsFixedSize: true))]
     }

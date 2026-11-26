@@ -98,7 +98,7 @@ public struct PlaylistDetailView: View {
                     .libraryTitleDisplayMode(.inline)
                     .toolbarColorScheme(preparedBackdrop?.colorScheme, for: .navigationBar)
             } else {
-                ContentUnavailableView("播放列表已删除", systemImage: "music.note.list")
+                ContentUnavailableView(pageText("播放列表已删除"), systemImage: "music.note.list")
             }
         }
         .task(id: backgroundArtwork) {
@@ -169,7 +169,7 @@ public struct PlaylistDetailView: View {
         let errorBanner: AnyView? = library.onlineErrors[playlistID].map { error in
             AnyView(VStack(alignment: .leading, spacing: 8) {
                 Text(error).font(.subheadline).foregroundStyle(.secondary)
-                Button("重试") { Task { await library.loadOnlinePlaylist?(playlistID) } }
+                Button(pageText("重试")) { Task { await library.loadOnlinePlaylist?(playlistID) } }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 20)
@@ -177,8 +177,8 @@ public struct PlaylistDetailView: View {
         }
         let summaryFooter: AnyView? = (query.isEmpty && !tracks.isEmpty) ? AnyView(
             Text(hasMore
-                 ? "\(library.onlineTrackCounts[playlistID] ?? tracks.count)首歌"
-                 : "\(tracks.count)首歌，\(totalDuration(of: tracks) / 60)分钟")
+                 ? pageText("\(library.onlineTrackCounts[playlistID] ?? tracks.count)首歌")
+                 : pageText("\(tracks.count)首歌，\(totalDuration(of: tracks) / 60)分钟"))
                 .font(.subheadline)
                 .foregroundStyle(resolvedSecondaryColor)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -224,15 +224,15 @@ public struct PlaylistDetailView: View {
         .toolbar {
             if !awaitingDetail {
                 ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button("开始协作", systemImage: "person.fill.badge.plus") {}.disabled(true)
-                    Button("共享", systemImage: "square.and.arrow.up") {}.disabled(true)
+                    Button(pageText("开始协作"), systemImage: "person.fill.badge.plus") {}.disabled(true)
+                    Button(pageText("共享"), systemImage: "square.and.arrow.up") {}.disabled(true)
                 }
                 ToolbarSpacer(.fixed, placement: .topBarTrailing)
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         detailMenu(playlist)
                     } label: {
-                        Label("更多", systemImage: "ellipsis")
+                        Label(pageText("更多"), systemImage: "ellipsis")
                     }
                     .menuOrder(.fixed)
                 }
@@ -257,7 +257,7 @@ public struct PlaylistDetailView: View {
             if chrome?.isRoot != true {
                 Text(playlist.title).font(.title2.bold()).multilineTextAlignment(.center).accessibilityAddTraits(.isHeader)
             }
-            Text(playlist.subtitle ?? "我").font(.title3).padding(.top, 4)
+            Text(playlist.subtitle ?? pageText("我")).font(.title3).padding(.top, 4)
             if externalActions == nil, let updatedAt = playlist.updatedAt {
                 Text("更新于 \(updatedAt, format: .relative(presentation: .named))")
                     .font(.caption2.weight(.semibold))
@@ -275,7 +275,7 @@ public struct PlaylistDetailView: View {
                         actionFeedback &+= 1
                         collectionActions.play(.playlist(playlistID), true)
                     } label: {
-                        Label("随机播放", systemImage: "shuffle")
+                        Label(pageText("随机播放"), systemImage: "shuffle")
                             .labelStyle(.iconOnly)
                     }
                     .buttonStyle(CollectionCircleButtonStyle())
@@ -288,7 +288,7 @@ public struct PlaylistDetailView: View {
                     } label: {
                         HStack(spacing: 5) {
                             Image(systemName: "play.fill").font(.system(size: 18, weight: .semibold))
-                            Text("播放")
+                            Text(pageText("播放"))
                         }
                             .font(.headline)
                             .foregroundStyle(palette.playForeground)
@@ -308,7 +308,7 @@ public struct PlaylistDetailView: View {
                             Image(systemName: "plus")
                         }
                         .buttonStyle(CollectionCircleButtonStyle())
-                        .accessibilityLabel("收藏歌单")
+                        .accessibilityLabel(pageText("收藏歌单"))
                     } else {
                         CollectionDownloadButton(route: .playlist(playlistID), songs: tracks)
                     }
@@ -356,7 +356,7 @@ public struct PlaylistDetailView: View {
             finishPlayback(selection.outcome(in: ordered))
         } else {
             pendingPlayback = selection
-            AccessibilityNotification.Announcement("正在准备播放").post()
+            AccessibilityNotification.Announcement(pageText("正在准备播放")).post()
         }
     }
 
@@ -380,7 +380,7 @@ public struct PlaylistDetailView: View {
         }
         if collectionActions.canRemoveDownload(.playlist(playlistID)) {
             Section {
-                Button("移除下载", systemImage: "xmark.circle") { collectionActions.removeDownload(.playlist(playlistID)) }
+                Button(pageText("移除下载"), systemImage: "xmark.circle") { collectionActions.removeDownload(.playlist(playlistID)) }
             }
         }
     }
@@ -389,14 +389,14 @@ public struct PlaylistDetailView: View {
         let route = LibraryRoute.playlist(playlistID)
         let state = downloads?.collectionState(of: route)
         if state?.isActive == true {
-            Button("停止下载", systemImage: "stop.circle.fill") {
+            Button(pageText("停止下载"), systemImage: "stop.circle.fill") {
                 LibraryHaptics.impact()
                 collectionActions.stopDownload(route)
             }
         } else if state?.isComplete == true {
-            Button("已下载", systemImage: "checkmark.circle.fill") {}.disabled(true)
+            Button(pageText("已下载"), systemImage: "checkmark.circle.fill") {}.disabled(true)
         } else {
-            Button((state?.failedCount ?? 0) > 0 ? "重试下载" : "下载", systemImage: "arrow.down.circle.fill") {
+            Button((state?.failedCount ?? 0) > 0 ? pageText("重试下载") : pageText("下载"), systemImage: "arrow.down.circle.fill") {
                 LibraryHaptics.impact()
                 collectionActions.download(route)
             }
@@ -407,22 +407,22 @@ public struct PlaylistDetailView: View {
     @ViewBuilder private func externalMenu(_ playlist: LibraryPlaylistItem, actions: ExternalPlaylistActions) -> some View {
         collectionDownloadMenuAction()
         if let toggleFavorite = actions.toggleFavorite {
-            Button(playlist.isFavorite ? "撤销喜爱" : "喜爱", systemImage: playlist.isFavorite ? "star.slash.fill" : "star.fill") {
+            Button(playlist.isFavorite ? pageText("撤销喜爱") : pageText("喜爱"), systemImage: playlist.isFavorite ? "star.slash.fill" : "star.fill") {
                 toggleFavorite()
             }
         }
         if let togglePin = actions.togglePin {
-            Button(playlist.isPinned ? "取消置顶播放列表" : "置顶播放列表", systemImage: playlist.isPinned ? "pin.slash" : "pin") {
+            Button(playlist.isPinned ? pageText("取消置顶播放列表") : pageText("置顶播放列表"), systemImage: playlist.isPinned ? "pin.slash" : "pin") {
                 togglePin()
             }
         }
-        Button("添加到播放列表", systemImage: "text.badge.plus", action: actions.addSongs).disabled(tracks.isEmpty)
+        Button(pageText("添加到播放列表"), systemImage: "text.badge.plus", action: actions.addSongs).disabled(tracks.isEmpty)
         if let moveToFolder = actions.moveToFolder {
-            Button("移到文件夹", systemImage: "folder", action: moveToFolder)
+            Button(pageText("移到文件夹"), systemImage: "folder", action: moveToFolder)
         }
-        Menu("排序方式", systemImage: "arrow.up.arrow.down") {
-            Picker("排序方式", selection: $sort) {
-                ForEach(DetailSort.allCases) { value in Text(value.rawValue).tag(value) }
+        Menu(pageText("排序方式"), systemImage: "arrow.up.arrow.down") {
+            Picker(pageText("排序方式"), selection: $sort) {
+                ForEach(DetailSort.allCases) { value in Text(value.title).tag(value) }
             }
         }
         LibraryMenuContents(sections: [
@@ -434,41 +434,41 @@ public struct PlaylistDetailView: View {
                 notify: collectionActions.defersQueueNotice ? { _ in } : collectionActions.notify)
         ], firstSectionIsRow: false)
         if playlist.isSubscribed { Section {
-            Button("从资料库删除", systemImage: "trash", role: .destructive) { library.pendingDeletion = playlist }
+            Button(pageText("从资料库删除"), systemImage: "trash", role: .destructive) { library.pendingDeletion = playlist }
         } }
     }
 
     @ViewBuilder private func libraryMenu(_ playlist: LibraryPlaylistItem) -> some View {
         ControlGroup {
             collectionDownloadMenuAction()
-            Button(playlist.isFavorite ? "撤销" : "喜爱", systemImage: playlist.isFavorite ? "star.slash.fill" : "star.fill") {
+            Button(playlist.isFavorite ? pageText("撤销") : pageText("喜爱"), systemImage: playlist.isFavorite ? "star.slash.fill" : "star.fill") {
                 LibraryHaptics.success()
                 let removing = playlist.isFavorite
                 library.toggleFavorite(playlistID)
                 collectionActions.notify(removing ? .unfavorited : .favorited)
             }
-            Button("共享", systemImage: "square.and.arrow.up.fill") {}.disabled(true)
+            Button(pageText("共享"), systemImage: "square.and.arrow.up.fill") {}.disabled(true)
         }
         Section {
-            Button(playlist.isPinned ? "取消置顶播放列表" : "置顶播放列表", systemImage: playlist.isPinned ? "pin.slash" : "pin") {
+            Button(playlist.isPinned ? pageText("取消置顶播放列表") : pageText("置顶播放列表"), systemImage: playlist.isPinned ? "pin.slash" : "pin") {
                 LibraryHaptics.success()
                 let removing = playlist.isPinned
                 library.togglePin(playlistID)
                 collectionActions.notify(removing ? .unpinned : .pinned)
             }
-            Button("添加到播放列表", systemImage: "text.badge.plus") { showsDestinations = true }.disabled(tracks.isEmpty)
+            Button(pageText("添加到播放列表"), systemImage: "text.badge.plus") { showsDestinations = true }.disabled(tracks.isEmpty)
         }
         Section {
-            if !playlist.isReadOnly { Button("编辑", systemImage: "pencil") { showsEditor = true } }
-            Button("开始协作", systemImage: "person.badge.plus") {}.disabled(true)
-            Menu("排序方式", systemImage: "arrow.up.arrow.down") {
-                Picker("排序方式", selection: $sort) {
-                    ForEach(DetailSort.allCases) { value in Text(value.rawValue).tag(value) }
+            if !playlist.isReadOnly { Button(pageText("编辑"), systemImage: "pencil") { showsEditor = true } }
+            Button(pageText("开始协作"), systemImage: "person.badge.plus") {}.disabled(true)
+            Menu(pageText("排序方式"), systemImage: "arrow.up.arrow.down") {
+                Picker(pageText("排序方式"), selection: $sort) {
+                    ForEach(DetailSort.allCases) { value in Text(value.title).tag(value) }
                 }
             }
-            Menu("移到文件夹", systemImage: "folder") {
+            Menu(pageText("移到文件夹"), systemImage: "folder") {
                 Button { library.move(playlistID: playlistID, to: nil) } label: {
-                    Label("播放列表", systemImage: library.folderID(of: playlistID) == nil ? "checkmark" : "music.note.list")
+                    Label(pageText("播放列表"), systemImage: library.folderID(of: playlistID) == nil ? "checkmark" : "music.note.list")
                 }
                 ForEach(library.folders) { folder in
                     Button { library.move(playlistID: playlistID, to: folder.id) } label: {
@@ -487,7 +487,7 @@ public struct PlaylistDetailView: View {
                 notify: collectionActions.notify)
         ], firstSectionIsRow: false)
         if !playlist.isReadOnly || playlist.isSubscribed { Section {
-            Button("从资料库删除", systemImage: "trash", role: .destructive) { library.pendingDeletion = playlist }
+            Button(pageText("从资料库删除"), systemImage: "trash", role: .destructive) { library.pendingDeletion = playlist }
         } }
     }
 
@@ -531,7 +531,7 @@ public struct PlaylistTrackSelection: Equatable {
         let complete = await library.prepareCompleteCollection(playlistID)
         guard isCurrent(in: library) else { return .cancelled }
         guard complete else {
-            return .failed(library.onlineErrors[playlistID] ?? "播放列表尚未完整加载，请重试")
+            return .failed(library.onlineErrors[playlistID] ?? pageText("播放列表尚未完整加载，请重试"))
         }
 
         let input = TrackFilterProjectionInput(tracks: library.songs(in: playlistID), query: query, sort: sort)
@@ -560,7 +560,7 @@ public struct PlaylistTrackSelection: Equatable {
 
     public func outcome(in tracks: [LibrarySongItem]) -> Outcome {
         guard let index = tracks.firstIndex(where: { $0.id == songID }) else {
-            return .failed("歌曲已不在当前播放列表，请重试")
+            return .failed(pageText("歌曲已不在当前播放列表，请重试"))
         }
         return .ready(tracks, index: index)
     }
@@ -582,7 +582,7 @@ private struct PlaylistDetailSearch: ViewModifier {
     @Binding var query: String
     let enabled: Bool
     func body(content: Content) -> some View {
-        content.librarySearchable(text: $query, prompt: "搜索", enabled: enabled)
+        content.librarySearchable(text: $query, prompt: pageText("搜索"), enabled: enabled)
     }
 }
 
@@ -621,7 +621,7 @@ private struct PlaylistAddMusicContent: View {
 
     var body: some View {
         AddPlaylistMusicView(
-            title: library.playlist(playlistID)?.title ?? "播放列表",
+            title: library.playlist(playlistID)?.title ?? pageText("播放列表"),
             songs: songs(),
             playlists: library.playlists,
             existingIDs: Set(library.songs(in: playlistID).map(\.id)),

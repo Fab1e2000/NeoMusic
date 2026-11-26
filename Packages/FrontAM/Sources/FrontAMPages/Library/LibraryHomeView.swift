@@ -115,23 +115,23 @@ public struct LibraryHomeView: View {
             $0.animation = nil
             $0.disablesAnimations = true
         }
-        .libraryHomeNavigation(title: "资料库")
+        .libraryHomeNavigation(title: pageText("资料库"))
         .toolbar {
             if isEditingPinned {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("完成", systemImage: "checkmark", role: .confirm) {
+                    Button(pageText("完成"), systemImage: "checkmark", role: .confirm) {
                         isEditingPinned = false
                     }
                 }
             } else {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("新建播放列表", systemImage: "text.badge.plus") { isCreatingPlaylist = true }
+                    Button(pageText("新建播放列表"), systemImage: "text.badge.plus") { isCreatingPlaylist = true }
                         .disabled(!isContentReady)
                 }
                 .matchedTransitionSource(id: "newPlaylist", in: playlistCreationTransition)
                 ToolbarItem(placement: .topBarTrailing) {
-                    Menu("更多", systemImage: "ellipsis") {
-                        Button("编辑置顶", systemImage: "pin") { isEditingPinned = true }
+                    Menu(pageText("更多"), systemImage: "ellipsis") {
+                        Button(pageText("编辑置顶"), systemImage: "pin") { isEditingPinned = true }
                             .disabled(pinned.isEmpty)
                     }
                 }
@@ -200,7 +200,7 @@ private struct LibraryCategoryRows: View {
                         .font(.title2)
                         .frame(width: iconWidth)
                         .accessibilityHidden(true)
-                    Text(category.title).font(.body)
+                    Text(category.title, bundle: .module).font(.body)
                 }
                 .frame(minHeight: 44)
                 .alignmentGuide(.listRowSeparatorLeading) { dimensions in
@@ -221,7 +221,7 @@ private struct RecentlyAddedGrid: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 13) {
-            Text("最近添加")
+            Text(pageText("最近添加"))
                 .font(.title2.weight(.semibold))
                 .accessibilityAddTraits(.isHeader)
             if textSize.isAccessibilitySize {
@@ -450,7 +450,7 @@ public struct DownloadedLibraryView: View {
                     LibraryRouteLink(value: LibraryRoute.downloadedCategory(category)) {
                         HStack(spacing: 17) {
                             Image(systemName: category.systemImage).foregroundStyle(.primary).font(.title2).frame(width: 24)
-                            Text(category.title).font(.body)
+                            Text(category.title, bundle: .module).font(.body)
                         }
                         .frame(minHeight: 44)
                         .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] + 41 }
@@ -462,7 +462,7 @@ public struct DownloadedLibraryView: View {
             if !albums.isEmpty {
             Section {
                 VStack(alignment: .leading, spacing: 13) {
-                    Text("最近下载").font(.title2.weight(.semibold)).accessibilityAddTraits(.isHeader)
+                    Text(pageText("最近下载")).font(.title2.weight(.semibold)).accessibilityAddTraits(.isHeader)
                     LazyVGrid(columns: columns, alignment: .leading, spacing: 20) {
                         ForEach(albums) { item in CollectionCardLink(item: item) { AlbumCard(item: item) } }
                     }
@@ -475,7 +475,7 @@ public struct DownloadedLibraryView: View {
             }
         }
         .listStyle(.plain)
-        .libraryNavigationTitle("已下载")
+        .libraryNavigationTitle(pageText("已下载"))
         .libraryTitleDisplayMode(.inline)
     }
 

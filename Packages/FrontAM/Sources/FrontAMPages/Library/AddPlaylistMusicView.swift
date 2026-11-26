@@ -33,7 +33,7 @@ public struct AddPlaylistMusicView: View {
     }
 
     private var statusHeading: String {
-        selectedSongs.isEmpty ? "添加到“\(title)”" : "已将\(selectedSongs.count)首歌曲添加到“\(title)”"
+        selectedSongs.isEmpty ? pageText("添加到“\(title)”") : pageText("已将\(selectedSongs.count)首歌曲添加到“\(title)”")
     }
 
     public var body: some View {
@@ -43,7 +43,7 @@ public struct AddPlaylistMusicView: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .navigationBarBehavior(prompt: nil, hidesNavBarOnSearch: false)
                 .toolbar { rootControls }
-                .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "艺人、歌曲或专辑")
+                .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: pageText("艺人、歌曲或专辑"))
                 .navigationDestination(for: MusicPickerRoute.self) { route in
                     destination(route)
                         .navigationTitle(route.navigationTitle)
@@ -58,10 +58,10 @@ public struct AddPlaylistMusicView: View {
         .interactiveDismissDisabled(!selectedSongs.isEmpty)
         .onSheetDismissAttempt { confirmsDiscard = true }
         .alert("", isPresented: $confirmsDiscard) {
-            Button("放弃所选内容", role: .destructive) { dismiss() }
-            Button("保留所选内容", role: .cancel) {}
+            Button(pageText("放弃所选内容"), role: .destructive) { dismiss() }
+            Button(pageText("保留所选内容"), role: .cancel) {}
         } message: {
-            Text("确定要放弃所选内容吗？")
+            Text(pageText("确定要放弃所选内容吗？"))
         }
         .onAppear {
             session.prepareIfNeeded(using: source)
@@ -70,7 +70,7 @@ public struct AddPlaylistMusicView: View {
 
     @ToolbarContentBuilder private var rootControls: some ToolbarContent {
         ToolbarItem(placement: .cancellationAction) {
-            Button("关闭", systemImage: "xmark") {
+            Button(pageText("关闭"), systemImage: "xmark") {
                 if selectedSongs.isEmpty { dismiss() } else { confirmsDiscard = true }
             }
             .tint(.primary)
@@ -80,7 +80,7 @@ public struct AddPlaylistMusicView: View {
 
     @ToolbarContentBuilder private var confirmControl: some ToolbarContent {
         ToolbarItem(placement: .confirmationAction) {
-            Button(selectedSongs.isEmpty ? "完成" : "添加\(selectedSongs.count)首", systemImage: "checkmark") {
+            Button(selectedSongs.isEmpty ? pageText("完成") : pageText("添加\(selectedSongs.count)首"), systemImage: "checkmark") {
                 onCommit(selectedSongs)
                 dismiss()
             }
@@ -129,7 +129,7 @@ public struct AddPlaylistMusicView: View {
         return List {
             if trimmed.isEmpty {
                 Section {
-                    Text("资料库")
+                    Text(pageText("资料库"))
                         .font(.headline.weight(.bold))
                         .foregroundStyle(.primary)
                         .listRowInsets(EdgeInsets(top: 12, leading: 20, bottom: 4, trailing: 20))
@@ -158,10 +158,10 @@ public struct AddPlaylistMusicView: View {
                 .listSectionSeparator(.hidden)
 
                 if !session.recentFavorites.isEmpty {
-                    carouselSection("最近喜爱", songs: session.recentFavorites)
+                    carouselSection(pageText("最近喜爱"), songs: session.recentFavorites)
                 }
                 if !session.recentlyPlayed.isEmpty {
-                    carouselSection("最近播放", songs: session.recentlyPlayed)
+                    carouselSection(pageText("最近播放"), songs: session.recentlyPlayed)
                 }
             } else {
                 let matches = matching(session.sortedSongs, term: trimmed)
@@ -224,10 +224,10 @@ public struct AddPlaylistMusicView: View {
             PickerArtistsListView(artists: session.sortedArtists)
 
         case .albums:
-            PickerAlbumsListView(albums: session.sortedAlbums, emptyNoun: "专辑")
+            PickerAlbumsListView(albums: session.sortedAlbums, emptyNoun: pageText("专辑"))
 
         case .downloaded:
-            PickerAlbumsListView(albums: session.sortedDownloadedAlbums, emptyNoun: "已下载专辑")
+            PickerAlbumsListView(albums: session.sortedDownloadedAlbums, emptyNoun: pageText("已下载专辑"))
 
         case .songs:
             PickerSongsListView(

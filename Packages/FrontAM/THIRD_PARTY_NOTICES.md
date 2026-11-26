@@ -2,6 +2,13 @@
 
 The [FrontAM MIT license](LICENSE) covers original FrontAM work, including the Showcase source and its fictional fixtures. Showcase covers are rendered by the app from original geometric designs. The upstream portions below retain their respective licenses.
 
+## Product licensing
+
+- **Browsing and navigation**. `FrontAMCore`, `FrontAMNavigation` and `FrontAMPages` form the MIT browsing line. Their target dependencies consist of these modules and Apple frameworks.
+- **Player and popup**. The upstream-derived portions of `FrontAMPlayer` retain GPL-3.0. The original `FrontAMPopup` integration and the vendored LNPopup packages use MIT. `FrontAMPopup` also links `FrontAMPlayer`. The `FrontAM` umbrella and Showcase therefore include the upstream GPL-3.0 portions alongside MIT code.
+
+## Provenance
+
 The standalone Showcase links the local FrontAM umbrella product. LNPopup resolves the two public SwiftPM dependencies below. The revisions in the table identify the dependency versions used for development.
 
 | Component | Upstream and license | Local changes |

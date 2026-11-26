@@ -16,8 +16,8 @@ public struct SearchPageView: View {
         }
         .background(Color(.systemBackground))
         .librarySearchPage(model)
-        .libraryNavigationTitle("搜索")
-        .libraryHomeNavigation(title: "搜索")
+        .libraryNavigationTitle(pageText("搜索"))
+        .libraryHomeNavigation(title: pageText("搜索"))
         .toolbarTitleDisplayMode(.inlineLarge)
     }
 
@@ -27,7 +27,7 @@ public struct SearchPageView: View {
                 if !model.history.isEmpty {
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
-                            Text("最近搜索").font(.title3.bold()).accessibilityAddTraits(.isHeader)
+                            Text(pageText("最近搜索")).font(.title3.bold()).accessibilityAddTraits(.isHeader)
                             Spacer()
                             Button {
                                 model.onRemoveHistory?(nil)
@@ -37,7 +37,7 @@ public struct SearchPageView: View {
                                     .foregroundStyle(.secondary)
                             }
                             .buttonStyle(.plain)
-                            .accessibilityLabel("清除最近搜索")
+                            .accessibilityLabel(pageText("清除最近搜索"))
                         }
                         SearchFlowLayout(horizontalSpacing: 10, verticalSpacing: 10,
                                          wrapsOversizedItems: dynamicTypeSize.isAccessibilitySize) {
@@ -58,7 +58,7 @@ public struct SearchPageView: View {
         }
         .overlay {
             if model.history.isEmpty {
-                ContentUnavailableView { Text("无最近搜索") } description: { Text("最近搜索内容将在此处显示。") }
+                ContentUnavailableView { Text(pageText("无最近搜索")) } description: { Text(pageText("最近搜索内容将在此处显示。")) }
             }
         }
     }
@@ -66,7 +66,7 @@ public struct SearchPageView: View {
     private var recent: some View {
         Group {
             if model.history.isEmpty {
-                ContentUnavailableView { Text("无最近搜索") } description: { Text("最近搜索内容将在此处显示。") }
+                ContentUnavailableView { Text(pageText("无最近搜索")) } description: { Text(pageText("最近搜索内容将在此处显示。")) }
             } else {
                 List {
                     Section {
@@ -86,15 +86,15 @@ public struct SearchPageView: View {
                                 .buttonStyle(.plain)
                                 .padding(.vertical, -8)
                                 .padding(.trailing, -12)
-                                .accessibilityLabel("移除\(value)")
+                                .accessibilityLabel(pageText("移除\(value)"))
                             }.padding(.vertical, 6)
                         }
                     } header: {
                         HStack {
-                            Text("最近搜索").font(.title3.bold())
+                            Text(pageText("最近搜索")).font(.title3.bold())
                             Spacer()
                             Button { model.onRemoveHistory?(nil) } label: {
-                                Text("清除")
+                                Text(pageText("清除"))
                                     .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
                                     .contentShape(.rect)
                             }
@@ -178,8 +178,8 @@ public struct SearchPageView: View {
     @ViewBuilder private var availability: some View {
         if model.isLoading { ProgressView() }
         else if let error = model.error {
-            ContentUnavailableView { Label("暂时无法加载", systemImage: "wifi.exclamationmark") }
-                description: { Text(error) } actions: { Button("重试") { model.onRetry?() } }
+            ContentUnavailableView { Label(pageText("暂时无法加载"), systemImage: "wifi.exclamationmark") }
+                description: { Text(error) } actions: { Button(pageText("重试")) { model.onRetry?() } }
         } else if model.submitted { ContentUnavailableView.search(text: model.query) }
     }
 
@@ -212,13 +212,13 @@ private struct SearchResultList: View {
                             Spacer()
                             if group.hasMore || group.items.count > 3 {
                                 Button { model.select(group.kind) } label: {
-                                    Text("查看全部")
+                                    Text(pageText("查看全部"))
                                         .font(.subheadline)
                                         .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
                                         .contentShape(.rect)
                                 }
                                 .padding(.vertical, -10)
-                                .accessibilityLabel("查看全部\(group.kind.title)")
+                                .accessibilityLabel(pageText("查看全部\(group.kind.title)"))
                             }
                         }.textCase(nil).padding(.top, 8)
                     }
@@ -251,8 +251,8 @@ private struct SearchResultList: View {
     @ViewBuilder private var availability: some View {
         if isLoading { ProgressView() }
         else if let error {
-            ContentUnavailableView { Label("暂时无法加载", systemImage: "wifi.exclamationmark") }
-                description: { Text(error) } actions: { Button("重试") { model.onRetry?() } }
+            ContentUnavailableView { Label(pageText("暂时无法加载"), systemImage: "wifi.exclamationmark") }
+                description: { Text(error) } actions: { Button(pageText("重试")) { model.onRetry?() } }
         } else if submitted { ContentUnavailableView.search(text: query) }
     }
 }
@@ -353,7 +353,7 @@ public struct SearchResultRow: View {
                     minHeight: 60,
                     usesPlainButtonStyle: true
                 ),
-                moreAccessibilityLabel: "\(item.title)，更多",
+                moreAccessibilityLabel: pageText("\(item.title)，更多"),
                 playButtonAccessibilityIdentifier: "search.result.\(item.id)",
                 play: open
             ) {
@@ -452,9 +452,9 @@ public struct SearchCategoryContent: View {
             if model.categoryItems.isEmpty {
                 if model.categoryLoading { ProgressView() }
                 else if let error = model.categoryError {
-                    ContentUnavailableView { Label("暂时无法加载", systemImage: "wifi.exclamationmark") }
-                        description: { Text(error) } actions: { Button("重试") { Task { await model.onCategoryRefresh?() } } }
-                } else { ContentUnavailableView("暂无歌单", systemImage: "music.note.list") }
+                    ContentUnavailableView { Label(pageText("暂时无法加载"), systemImage: "wifi.exclamationmark") }
+                        description: { Text(error) } actions: { Button(pageText("重试")) { Task { await model.onCategoryRefresh?() } } }
+                } else { ContentUnavailableView(pageText("暂无歌单"), systemImage: "music.note.list") }
             }
         }
         .refreshable { await model.onCategoryRefresh?() }
@@ -470,7 +470,7 @@ private struct SearchInlineError: View {
             Text(message).font(.footnote).foregroundStyle(.secondary)
             Spacer()
             Button(action: retry) {
-                Text("重试")
+                Text(pageText("重试"))
                     .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
                     .contentShape(.rect)
             }

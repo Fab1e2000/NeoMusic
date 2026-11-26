@@ -17,7 +17,7 @@ public struct AlbumSongPosition: View {
                 SongPlaybackIndicator(analyzer: playback.playbackSpectrum, active: indicatorsActive && playback.isPlaying && !playback.isLoading && scenePhase == .active && !reduceMotion,
                                       samples: { [weak playback] in playback?.spectrumLevels() ?? [] })
                     .frame(width: 16, height: 20)
-                    .accessibilityLabel(playback.isPlaying ? "正在播放" : "已暂停")
+                    .accessibilityLabel(playback.isPlaying ? pageText("正在播放") : pageText("已暂停"))
             } else {
                 Text("\(song.trackNumber)")
                     .font(.callout)
@@ -76,7 +76,7 @@ private struct SongPlaybackOverlay: ViewModifier {
                             )
                             .frame(width: 16, height: 20)
                         }
-                        .accessibilityLabel(playback.isPlaying ? "正在播放" : "已暂停")
+                        .accessibilityLabel(playback.isPlaying ? pageText("正在播放") : pageText("已暂停"))
                         .accessibilityIdentifier("playlist.playback.\(songID)")
                         .allowsHitTesting(false)
                 }

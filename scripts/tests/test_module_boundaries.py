@@ -63,8 +63,8 @@ class ModuleBoundaryTests(unittest.TestCase):
 
     def test_navigation_consumes_routes_and_chrome_from_its_host(self):
         nav = boundaries.FRONTAM_NAVIGATION / "FrontAMShell.swift"
-        self.assertEqual(boundaries.check_source(nav, "import SwiftUI\nimport UIKit\nimport FrontAMPopup"), [])
-        for source in ("import LNPopupUI", "import Nuke", "let route: LibraryRoute", "let preview: LibraryNavigationPreview",
+        self.assertEqual(boundaries.check_source(nav, "import SwiftUI\nimport UIKit\nimport FrontAMCore"), [])
+        for source in ("import FrontAMPopup", "import FrontAMPlayer", "import LNPopupUI", "import Nuke", "let route: LibraryRoute", "let preview: LibraryNavigationPreview",
                        "let account: NeteaseAccount", "AccountPage()", "MusicQualitySettingsPage()",
                        "let home: HomeMusicIntegration", "let artist: ArtistMusicIntegration",
                        "let search: SearchMusicIntegration", "let model: SearchPageModel", "let player: NowPlayingModel",
@@ -82,7 +82,7 @@ class ModuleBoundaryTests(unittest.TestCase):
                        "let account: NeteaseAccount", "let player: NowPlayingModel",
                        "let library: PlaylistLibrary", "let queue: LibraryDownloads",
                        "LocalLibrary.playlistLibrary", "LocalArtworkImages.cached(url, pixels: 0)",
-                       "let identity: CatalogRouteIdentity", '"netease:1"', '"catalog:album:1"',
+                       "let identity: CatalogRouteIdentity", '"netease:1"', '"netease-playlist:1"', '"catalog:album:1"',
                        '"home:playlist:1"', "HomeMusicIntegration()", "AccountPage()"):
             self.assertTrue(boundaries.check_source(path, source), source)
 

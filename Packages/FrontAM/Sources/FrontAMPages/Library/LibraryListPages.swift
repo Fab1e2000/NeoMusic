@@ -169,9 +169,9 @@ public enum SongSort: Hashable, Sendable {
     case name, addedDate, artist
 
     public static let options = [
-        LibrarySortOption(sort: SongSort.name, title: "名称"),
-        LibrarySortOption(sort: SongSort.addedDate, title: "添加日期", subtitle: "最新的排最前"),
-        LibrarySortOption(sort: SongSort.artist, title: "艺人"),
+        LibrarySortOption(sort: SongSort.name, title: pageText("名称")),
+        LibrarySortOption(sort: SongSort.addedDate, title: pageText("添加日期"), subtitle: pageText("最新的排最前")),
+        LibrarySortOption(sort: SongSort.artist, title: pageText("艺人")),
     ]
 }
 
@@ -279,7 +279,7 @@ public struct SongsListView: View {
         let result = projection.currentValue(for: input, fastPath: Self.fastPath,
                                              placeholder: { _ in Projection(sections: [], ordered: []) })
         let ordered = result.ordered
-        NativePlaylistTrackList(songs: ordered, title: "歌曲",
+        NativePlaylistTrackList(songs: ordered, title: pageText("歌曲"),
             header: ordered.isEmpty ? nil : AnyView(
                 PlayShuffleButtons(play: { playAll(ordered, false) }, shuffle: { playAll(ordered, true) })
                     .padding(.horizontal, DesignTokens.Spacing.pageMargin)
@@ -290,22 +290,22 @@ public struct SongsListView: View {
             pageColor: UIColor(Color(.systemBackground)), scheme: colorScheme,
             indexedSections: result.indexedSections, usesLibrarySongAppearance: true,
             rowCornerRadius: DesignTokens.Radius.songRowCover, lastSongSeparatorLeading: 80,
-            onPlaySong: { _, index in actions.play(ordered, index, "歌曲") }
+            onPlaySong: { _, index in actions.play(ordered, index, pageText("歌曲")) }
         )
         .ignoresSafeArea(.container, edges: .vertical)
         .overlay {
             if ordered.isEmpty, input.songs.count <= 120 || projection.resolvedValue(for: input) != nil {
-                LibraryListEmptyState(noun: "歌曲", symbol: "music.note", query: $query, filter: $filter)
+                LibraryListEmptyState(noun: pageText("歌曲"), symbol: "music.note", query: $query, filter: $filter)
             }
         }
-        .libraryNavigationTitle("歌曲")
+        .libraryNavigationTitle(pageText("歌曲"))
         .libraryTitleDisplayMode(.large)
-        .librarySearchable(text: $query, prompt: "搜索歌曲", usesStackedPlacement: true)
+        .librarySearchable(text: $query, prompt: pageText("搜索歌曲"), usesStackedPlacement: true)
         .libraryRootAccountButton()
         .task(id: input) { await input.project(using: projection) }
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
-                LibraryFilterMenu(filter: $filter, allTitle: "所有歌曲", allImage: "music.note")
+                LibraryFilterMenu(filter: $filter, allTitle: pageText("所有歌曲"), allImage: "music.note")
                 LibrarySortMenu(sort: $sort, options: SongSort.options).menuOrder(.fixed)
             }
         }
@@ -355,10 +355,10 @@ public enum AlbumSort: Hashable, Sendable {
     case name, addedDate, artist, year
 
     public static let options = [
-        LibrarySortOption(sort: AlbumSort.name, title: "名称"),
-        LibrarySortOption(sort: AlbumSort.addedDate, title: "添加日期"),
-        LibrarySortOption(sort: AlbumSort.artist, title: "艺人", subtitle: "A-Z"),
-        LibrarySortOption(sort: AlbumSort.year, title: "年份"),
+        LibrarySortOption(sort: AlbumSort.name, title: pageText("名称")),
+        LibrarySortOption(sort: AlbumSort.addedDate, title: pageText("添加日期")),
+        LibrarySortOption(sort: AlbumSort.artist, title: pageText("艺人"), subtitle: "A-Z"),
+        LibrarySortOption(sort: AlbumSort.year, title: pageText("年份")),
     ]
 }
 
@@ -434,13 +434,13 @@ public struct AlbumsGridView: View {
         content(shown)
         .overlay {
             if shown.isEmpty, projection.isResolved(for: input, fastPath: Self.fastPath) {
-                LibraryListEmptyState(noun: "专辑", symbol: "square.stack", query: $query, filter: $filter)
+                LibraryListEmptyState(noun: pageText("专辑"), symbol: "square.stack", query: $query, filter: $filter)
             }
         }
-        .libraryNavigationTitle("专辑")
+        .libraryNavigationTitle(pageText("专辑"))
         .libraryTitleDisplayMode(.large)
         .libraryRootAccountButton()
-        .librarySearchable(text: $query, prompt: "搜索专辑")
+        .librarySearchable(text: $query, prompt: pageText("搜索专辑"))
         .task(id: input) {
             let entries = input.entries
             let currentQuery = input.query
@@ -457,7 +457,7 @@ public struct AlbumsGridView: View {
         }
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
-                LibraryFilterMenu(filter: $filter, allTitle: "所有专辑", allImage: "square.stack")
+                LibraryFilterMenu(filter: $filter, allTitle: pageText("所有专辑"), allImage: "square.stack")
                 LibrarySortMenu(layout: $layout, sort: $sort, options: AlbumSort.options)
             }
         }
@@ -508,23 +508,23 @@ public struct LibraryListEmptyState: View {
 
     public var body: some View {
         ContentUnavailableView {
-            Label(query.isEmpty ? (filter == .favorites ? "暂无喜爱的\(noun)" : "暂无\(noun)") : "没有找到结果",
+            Label(query.isEmpty ? (filter == .favorites ? pageText("暂无喜爱的\(noun)") : pageText("暂无\(noun)")) : pageText("没有找到结果"),
                   systemImage: query.isEmpty ? symbol : "magnifyingglass")
         } description: {
             if !query.isEmpty {
-                Text("没有符合“\(query)”的\(noun)。")
+                Text(pageText("没有符合“\(query)”的\(noun)。"))
             } else if filter == .favorites {
-                Text("将\(noun)加入喜爱后，会显示在这里。")
+                Text(pageText("将\(noun)加入喜爱后，会显示在这里。"))
             } else {
-                Text("添加到资料库的\(noun)会显示在这里。")
+                Text(pageText("添加到资料库的\(noun)会显示在这里。"))
             }
         } actions: {
             if !query.isEmpty {
-                Button("清除搜索") { query = "" }
+                Button(pageText("清除搜索")) { query = "" }
                     .accessibilityIdentifier("library.empty.clear-search")
             }
             if filter == .favorites {
-                Button("显示全部") {
+                Button(pageText("显示全部")) {
                     query = ""
                     filter = .all
                 }
@@ -565,20 +565,20 @@ public struct ArtistsListView: View {
                     ContentUnavailableView.search(text: term)
                 } else {
                     switch filter {
-                    case .all: ContentUnavailableView("暂无艺人", systemImage: "music.microphone")
-                    case .favorites: ContentUnavailableView("暂无喜爱的艺人", systemImage: "star")
-                    case .downloaded: ContentUnavailableView("暂无已下载的艺人", systemImage: "arrow.down.circle")
+                    case .all: ContentUnavailableView(pageText("暂无艺人"), systemImage: "music.microphone")
+                    case .favorites: ContentUnavailableView(pageText("暂无喜爱的艺人"), systemImage: "star")
+                    case .downloaded: ContentUnavailableView(pageText("暂无已下载的艺人"), systemImage: "arrow.down.circle")
                     }
                 }
             }
         }
-        .libraryNavigationTitle("艺人")
+        .libraryNavigationTitle(pageText("艺人"))
         .libraryTitleDisplayMode(.large)
-        .librarySearchable(text: $query, prompt: "搜索艺人")
+        .librarySearchable(text: $query, prompt: pageText("搜索艺人"))
         .libraryRootAccountButton()
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                LibraryFilterMenu(filter: $filter, allTitle: "所有艺人", allImage: "music.microphone", supportsDownloads: true)
+                LibraryFilterMenu(filter: $filter, allTitle: pageText("所有艺人"), allImage: "music.microphone", supportsDownloads: true)
                     .menuOrder(.fixed)
             }
         }
@@ -691,7 +691,7 @@ public struct ArtistFavoriteGutter: ViewModifier {
                     .font(.system(size: 9))
                     .foregroundStyle(.yellow)
                     .offset(x: -14)
-                    .accessibilityLabel("已喜爱")
+                    .accessibilityLabel(pageText("已喜爱"))
                     .allowsHitTesting(false)
             }
         }

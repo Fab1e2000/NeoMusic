@@ -50,7 +50,7 @@ def frontam_imports(relative: Path) -> set[str]:
     if relative.is_relative_to(FRONTAM_POPUP):
         return {"Foundation", "SwiftUI", "UIKit", "FrontAMCore", "FrontAMPlayer", "LNPopupUI"}
     if relative.is_relative_to(FRONTAM_NAVIGATION):
-        return {"Foundation", "SwiftUI", "UIKit", "FrontAMCore", "FrontAMPopup"}
+        return {"Foundation", "SwiftUI", "UIKit", "FrontAMCore"}
     if relative.is_relative_to(FRONTAM_PAGES):
         return {"Foundation", "SwiftUI", "UIKit", "Observation", "CoreImage", "CoreGraphics",
                 "PhotosUI", "UniformTypeIdentifiers", "FrontAMCore", "FrontAMNavigation"}
@@ -128,7 +128,7 @@ def check_source(relative: Path, text: str) -> list[str]:
             errors.append("FrontAMNavigation must use host-supplied routes, chrome and content")
         if not relative.is_relative_to(FRONTAM_POPUP) and re.search(r"\bLNPopup\w*\b", text):
             errors.append("LNPopup integration belongs in FrontAMPopup")
-        if re.search(r'\bBundle\s*\.\s*main\b|\[\s*NSBundle\s+mainBundle\b|\bUIImage\s*\(\s*named\s*:|"(?:netease:|catalog:|catalog-guest:|home:playlist:|preview\.appearance)', text):
+        if re.search(r'\bBundle\s*\.\s*main\b|\[\s*NSBundle\s+mainBundle\b|\bUIImage\s*\(\s*named\s*:|"(?:netease[-:]|catalog:|catalog-guest:|home:playlist:|preview\.appearance)', text):
             errors.append("FrontAM resources and identities must be independent of the app bundle and account format")
     # Literal paths from the shared storage registry should not count as type references.
     type_text = re.sub(r'"[A-Za-z_][\w./-]*"', '""', text)

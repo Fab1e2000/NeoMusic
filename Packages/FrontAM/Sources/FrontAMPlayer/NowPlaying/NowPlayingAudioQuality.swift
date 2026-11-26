@@ -46,7 +46,7 @@ struct NowPlayingAudioQualityControl: View {
         .accessibilityHidden(quality == nil)
         .accessibilityLabel("音频质量，\(quality?.title ?? displayedQuality?.title ?? "")")
         .accessibilityValue(quality?.detail ?? "")
-        .accessibilityHint("显示当前播放资源的音频质量")
+        .accessibilityHint(playerText("显示当前播放资源的音频质量"))
         .background { NowPlayingQualityPresentation(controller: presenter) }
         .onChange(of: quality) { _, newQuality in
             updateDisplayedQuality(with: newQuality)
@@ -153,7 +153,7 @@ private final class QualityCardPresentation: UIPresentationController {
         dimming.backgroundColor = UIColor.black.withAlphaComponent(0.18)
         dimming.alpha = 0
         dimming.addTarget(self, action: #selector(close), for: .touchUpInside)
-        dimming.accessibilityLabel = "关闭音频信息"
+        dimming.accessibilityLabel = playerText("关闭音频信息")
         containerView.insertSubview(dimming, at: 0)
         presentedViewController.transitionCoordinator?.animate(alongsideTransition: { _ in
             self.dimming.alpha = 1
@@ -281,17 +281,17 @@ private struct PlayerQualityInformation: View {
     }
 
     private var settingsButton: some View {
-        PlayerQualityDialogButton(title: "音频质量设置", fontSize: titleSize,
+        PlayerQualityDialogButton(title: playerText("音频质量设置"), fontSize: titleSize,
                                   isPrimary: false, isEnabled: canOpenSettings,
                                   allowsWrapping: usesVerticalButtons, action: openSettings)
-            .frame(height: buttonHeight(for: "音频质量设置"))
+            .frame(height: buttonHeight(for: playerText("音频质量设置")))
     }
 
     private var doneButton: some View {
-        PlayerQualityDialogButton(title: "好", fontSize: titleSize,
+        PlayerQualityDialogButton(title: playerText("好"), fontSize: titleSize,
                                   isPrimary: true, isEnabled: true,
                                   allowsWrapping: usesVerticalButtons, action: done)
-            .frame(height: buttonHeight(for: "好"))
+            .frame(height: buttonHeight(for: playerText("好")))
     }
 }
 

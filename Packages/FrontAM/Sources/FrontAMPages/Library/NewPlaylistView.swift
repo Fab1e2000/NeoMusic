@@ -23,9 +23,9 @@ public struct NewPlaylistView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 0) {
-                    PlaylistFormCover(selection: coverSelection, accessibilityLabel: "添加播放列表封面", bottomSpacing: 64)
+                    PlaylistFormCover(selection: coverSelection, accessibilityLabel: pageText("添加播放列表封面"), bottomSpacing: 64)
 
-                    TextField("播放列表标题", text: $title)
+                    TextField(pageText("播放列表标题"), text: $title)
                         .font(.body.weight(.semibold))
                         .multilineTextAlignment(.center)
                         .focused($isTitleFocused)
@@ -33,21 +33,21 @@ public struct NewPlaylistView: View {
                         .onSubmit { isTitleFocused = false }
                         .frame(minHeight: 44)
                     Divider()
-                    Toggle("在个人资料页和搜索中显示", isOn: .constant(false))
+                    Toggle(pageText("在个人资料页和搜索中显示"), isOn: .constant(false))
                         .font(.subheadline)
                         .tint(.green)
                         .frame(minHeight: 40)
                         .disabled(true)
-                        .accessibilityHint("本地播放列表暂不支持公开显示")
+                        .accessibilityHint(pageText("本地播放列表暂不支持公开显示"))
                 }
                 .padding(.horizontal, 20)
             }
             .background(Color(.systemBackground))
-            .navigationTitle("新建播放列表")
+            .navigationTitle(pageText("新建播放列表"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("取消", systemImage: "xmark", action: requestDismiss)
+                    Button(pageText("取消"), systemImage: "xmark", action: requestDismiss)
                         .tint(.primary)
                 }
                 ToolbarItem(placement: .confirmationAction) {
@@ -59,7 +59,7 @@ public struct NewPlaylistView: View {
                         Image(systemName: "checkmark")
                             .foregroundStyle(canCreate ? Color(.systemBackground) : Color(.secondaryLabel))
                     }
-                    .accessibilityLabel("创建")
+                    .accessibilityLabel(pageText("创建"))
                     .buttonStyle(.glassProminent)
                     .tint(canCreate ? Color.primary : Color(.systemGray4))
                     .disabled(!canCreate)
@@ -70,10 +70,10 @@ public struct NewPlaylistView: View {
             .interactiveDismissDisabled(hasChanges)
             .onSheetDismissAttempt(requestDismiss)
             .alert("", isPresented: $showsDiscard) {
-                Button("放弃更改", role: .destructive, action: close)
-                Button("取消", role: .cancel) {}
+                Button(pageText("放弃更改"), role: .destructive, action: close)
+                Button(pageText("取消"), role: .cancel) {}
             } message: {
-                Text("确定要放弃更改吗？")
+                Text(pageText("确定要放弃更改吗？"))
             }
         }
     }

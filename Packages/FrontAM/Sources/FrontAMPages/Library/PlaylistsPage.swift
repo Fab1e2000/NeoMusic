@@ -75,11 +75,11 @@ public enum PlaylistSort: Hashable, Sendable {
     case name, addedDate, lastPlayed, updated, type
 
     public static let options = [
-        LibrarySortOption(sort: PlaylistSort.name, title: "名称"),
-        LibrarySortOption(sort: PlaylistSort.addedDate, title: "添加日期"),
-        LibrarySortOption(sort: PlaylistSort.lastPlayed, title: "上次播放日期"),
-        LibrarySortOption(sort: PlaylistSort.updated, title: "更新日期"),
-        LibrarySortOption(sort: PlaylistSort.type, title: "播放列表类型"),
+        LibrarySortOption(sort: PlaylistSort.name, title: pageText("名称")),
+        LibrarySortOption(sort: PlaylistSort.addedDate, title: pageText("添加日期")),
+        LibrarySortOption(sort: PlaylistSort.lastPlayed, title: pageText("上次播放日期")),
+        LibrarySortOption(sort: PlaylistSort.updated, title: pageText("更新日期")),
+        LibrarySortOption(sort: PlaylistSort.type, title: pageText("播放列表类型")),
     ]
 }
 
@@ -122,7 +122,7 @@ public enum PlaylistEntry: Identifiable, Equatable {
     public var shelfItem: LibraryShelfItem {
         switch self {
         case .folder(let folder, let playlists):
-            LibraryShelfItem(id: id, title: folder.name, subtitle: "\(playlists.count)个播放列表",
+            LibraryShelfItem(id: id, title: folder.name, subtitle: pageText("\(playlists.count)个播放列表"),
                              artwork: .folder(Array(playlists.prefix(4).map(\.artwork))),
                              route: .playlistFolder(folder.id))
         case .playlist(let playlist):
@@ -192,7 +192,7 @@ public struct PlaylistsListView: View {
     @Environment(\.closeLibraryDetail) private var closeLibraryDetail
     @State private var renameText = ""
 
-    private var title: String { folderID.flatMap { library.folder($0)?.name } ?? "播放列表" }
+    private var title: String { folderID.flatMap { library.folder($0)?.name } ?? pageText("播放列表") }
 
     private struct ProjectionInput: Equatable {
         let playlists: [LibraryPlaylistItem]
@@ -369,7 +369,7 @@ public struct PlaylistsListView: View {
                         Text(status).font(.caption).foregroundStyle(.secondary)
                         Spacer(minLength: 0)
                         if !library.isRefreshingOnline, library.retryOnline != nil {
-                            Button("重试") { Task { await library.retryOnline?() } }.font(.caption)
+                            Button(pageText("重试")) { Task { await library.retryOnline?() } }.font(.caption)
                         }
                     }.padding(.horizontal, DesignTokens.Spacing.pageMargin).padding(.vertical, 8)
                         .background(Color(.systemBackground))
@@ -381,14 +381,14 @@ public struct PlaylistsListView: View {
                         VStack(spacing: 11) {
                             Image(systemName: "music.note.list")
                                 .font(.system(size: 50))
-                            Text("添加到此文件夹的播放列表将在这里显示。")
+                            Text(pageText("添加到此文件夹的播放列表将在这里显示。"))
                                 .font(.body)
                         }
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                         .padding(.horizontal, DesignTokens.Spacing.pageMargin)
                     } else if entries.isEmpty {
-                        LibraryListEmptyState(noun: "播放列表", symbol: "music.note.list", query: $query, filter: $filter)
+                        LibraryListEmptyState(noun: pageText("播放列表"), symbol: "music.note.list", query: $query, filter: $filter)
                     }
                 }
             }
@@ -419,18 +419,18 @@ public struct PlaylistsListView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
-                        Button("新建播放列表", systemImage: "text.badge.plus") { isCreatingPlaylist = true }
-                        Button("创建新文件夹", systemImage: "folder.badge.plus") {
+                        Button(pageText("新建播放列表"), systemImage: "text.badge.plus") { isCreatingPlaylist = true }
+                        Button(pageText("创建新文件夹"), systemImage: "folder.badge.plus") {
                             folderName = ""
                             isNamingFolder = true
                         }
                     } label: {
-                        Label("新建", systemImage: "plus")
+                        Label(pageText("新建"), systemImage: "plus")
                     }
                 }
                 .matchedTransitionSource(id: "newPlaylist", in: playlistCreationTransition)
                 ToolbarItem(placement: .topBarTrailing) {
-                    LibraryFilterMenu(filter: $filter, allTitle: "所有播放列表", allImage: "music.note.list")
+                    LibraryFilterMenu(filter: $filter, allTitle: pageText("所有播放列表"), allImage: "music.note.list")
                 }
                 ToolbarSpacer(.fixed, placement: .topBarTrailing)
                 ToolbarItem(placement: .topBarTrailing) {
@@ -439,18 +439,18 @@ public struct PlaylistsListView: View {
                                     leading: Array(folderActions.dropLast()), trailing: Array(folderActions.suffix(1)))
                 }
             }
-            .alert("新建文件夹", isPresented: $isNamingFolder) {
-                TextField("文件夹名称", text: $folderName)
+            .alert(pageText("新建文件夹"), isPresented: $isNamingFolder) {
+                TextField(pageText("文件夹名称"), text: $folderName)
                     .submitLabel(.done)
-                Button("取消", role: .cancel) {}
-                Button("创建") {
+                Button(pageText("取消"), role: .cancel) {}
+                Button(pageText("创建")) {
                     let name = folderName.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !name.isEmpty else { return }
                     withAnimation(reducesMotion ? nil : .default) { _ = library.createFolder(named: name, in: folderID) }
                 }
                 .disabled(folderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             } message: {
-                Text("请为此文件夹输入名称。")
+                Text(pageText("请为此文件夹输入名称。"))
             }
             .sheet(isPresented: $isCreatingPlaylist) {
                 NewPlaylistView(library: library, folderID: folderID)
@@ -459,20 +459,20 @@ public struct PlaylistsListView: View {
             .playlistDeletionConfirmation(library)
             .alert("", isPresented: Binding(get: { deletingFolder != nil }, set: { if !$0 { deletingFolder = nil } }),
                    presenting: deletingFolder) { folder in
-                Button("删除文件夹和播放列表", role: .destructive) {
+                Button(pageText("删除文件夹和播放列表"), role: .destructive) {
                     if folder.id == folderID {
                         if let close = closeLibraryDetail.handler { close() } else { dismiss() }
                     }
                     withAnimation(reducesMotion ? nil : .default) { library.deleteFolder(folder.id) }
                 }
-                Button("取消", role: .cancel) {}
+                Button(pageText("取消"), role: .cancel) {}
             } message: { _ in
-                Text("确定要删除此文件夹吗？这会删除其中的本地播放列表，\(linkedProvider)播放列表将移回最外层。")
+                Text(pageText("确定要删除此文件夹吗？这会删除其中的本地播放列表，\(linkedProvider)播放列表将移回最外层。"))
             }
-            .alert("重新命名", isPresented: Binding(get: { renamingFolder != nil }, set: { if !$0 { renamingFolder = nil } })) {
-                TextField("文件夹名称", text: $renameText)
-                Button("取消", role: .cancel) {}
-                Button("存储") {
+            .alert(pageText("重新命名"), isPresented: Binding(get: { renamingFolder != nil }, set: { if !$0 { renamingFolder = nil } })) {
+                TextField(pageText("文件夹名称"), text: $renameText)
+                Button(pageText("取消"), role: .cancel) {}
+                Button(pageText("存储")) {
                     let name = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
                     if let folder = renamingFolder, !name.isEmpty { withAnimation(reducesMotion ? nil : .default) { library.renameFolder(folder.id, to: name) } }
                 }
@@ -490,11 +490,11 @@ public struct PlaylistsListView: View {
         let targets = library.folders.filter { !library.isDescendant($0.id, of: folder.id) }
         let move: LibraryMenuItem
         if targets.isEmpty && folder.parentID == nil {
-            move = LibraryMenuItem(title: "移到文件夹", systemImage: "folder", isDisabled: true)
+            move = LibraryMenuItem(title: pageText("移到文件夹"), systemImage: "folder", isDisabled: true)
         } else {
-            let options: [(id: String?, name: String, image: String)] = [(nil, "播放列表", "music.note.list")]
+            let options: [(id: String?, name: String, image: String)] = [(nil, pageText("播放列表"), "music.note.list")]
                 + targets.map { ($0.id, $0.name, "folder") }
-            move = LibraryMenuItem(title: "移到文件夹", systemImage: "folder", children: options.map { option in
+            move = LibraryMenuItem(title: pageText("移到文件夹"), systemImage: "folder", children: options.map { option in
                 LibraryMenuItem(identity: option.id.map { "folder:" + $0 } ?? "playlist-root",
                                 title: option.name, systemImage: option.image, isSelected: option.id == folder.parentID) {
                     withAnimation(reducesMotion ? nil : .default) { library.move(folderID: folder.id, to: option.id) }
@@ -502,13 +502,13 @@ public struct PlaylistsListView: View {
             })
         }
         return [[
-            LibraryMenuItem(title: "重新命名", systemImage: "pencil") {
+            LibraryMenuItem(title: pageText("重新命名"), systemImage: "pencil") {
                 renameText = folder.name
                 renamingFolder = folder
             },
             move,
         ], [
-            LibraryMenuItem(title: "从资料库删除", systemImage: "trash", isDestructive: true) { deletingFolder = folder },
+            LibraryMenuItem(title: pageText("从资料库删除"), systemImage: "trash", isDestructive: true) { deletingFolder = folder },
         ]]
     }
 
@@ -561,7 +561,7 @@ private struct PlaylistSearch: ViewModifier {
     let isEnabled: Bool
 
     func body(content: Content) -> some View {
-        content.librarySearchable(text: $query, prompt: "搜索播放列表", enabled: isEnabled)
+        content.librarySearchable(text: $query, prompt: pageText("搜索播放列表"), enabled: isEnabled)
     }
 }
 
@@ -588,13 +588,13 @@ private struct PlaylistDeletionConfirmation: ViewModifier {
             isPresented: Binding(get: { isActive && library.pendingDeletion != nil }, set: { if !$0 && isActive { library.pendingDeletion = nil } }),
             presenting: library.pendingDeletion
         ) { playlist in
-            Button("删除播放列表", role: .destructive) {
+            Button(pageText("删除播放列表"), role: .destructive) {
                 LibraryHaptics.mediumImpact()
                 withAnimation(reducesMotion ? nil : .default) { library.deletePlaylist(playlist.id) }
             }
-            Button("取消", role: .cancel) {}
+            Button(pageText("取消"), role: .cancel) {}
         } message: { _ in
-            Text("确定要删除此播放列表吗？这会将播放列表从资料库删除。")
+            Text(pageText("确定要删除此播放列表吗？这会将播放列表从资料库删除。"))
         }
     }
 }

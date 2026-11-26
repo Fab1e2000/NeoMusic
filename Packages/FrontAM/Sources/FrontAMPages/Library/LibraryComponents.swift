@@ -27,12 +27,12 @@ public struct PlayShuffleButtons: View {
             ? AnyLayout(VStackLayout(spacing: 12))
             : AnyLayout(HStackLayout(spacing: 16))
         layout {
-            button("播放", systemImage: "play.fill", action: play)
-            button("随机播放", systemImage: "shuffle", action: shuffle)
+            button(pageText("播放"), systemImage: "play.fill", action: play)
+            button(pageText("随机播放"), systemImage: "shuffle", action: shuffle)
         }
     }
 
-    private func button(_ title: LocalizedStringKey, systemImage: String, action: @escaping () -> Void) -> some View {
+    private func button(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 6) {
                 Image(systemName: systemImage).accessibilityHidden(true)
@@ -69,7 +69,7 @@ public struct AlbumCard: View {
                         Image(systemName: "star.fill")
                             .imageScale(.small)
                             .foregroundStyle(.yellow)
-                            .accessibilityLabel("已喜爱")
+                            .accessibilityLabel(pageText("已喜爱"))
                     }
                 }
                 .font(.footnote.weight(.medium))

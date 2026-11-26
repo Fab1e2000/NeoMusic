@@ -45,10 +45,10 @@ public struct PickerArtistsListView: View {
         .background(Color(.systemBackground))
         .overlay {
             if filtered.isEmpty {
-                ContentUnavailableView(query.isEmpty ? "暂无艺人" : "没有找到结果", systemImage: query.isEmpty ? "music.microphone" : "magnifyingglass")
+                ContentUnavailableView(query.isEmpty ? pageText("暂无艺人") : pageText("没有找到结果"), systemImage: query.isEmpty ? "music.microphone" : "magnifyingglass")
             }
         }
-        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "查找")
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .automatic), prompt: pageText("查找"))
         .scrollDismissesKeyboard(.interactively)
     }
 }
@@ -88,10 +88,10 @@ public struct PickerAlbumsListView: View {
         .background(Color(.systemBackground))
         .overlay {
             if filtered.isEmpty {
-                ContentUnavailableView(query.isEmpty ? "暂无\(emptyNoun)" : "没有找到结果", systemImage: query.isEmpty ? "square.stack" : "magnifyingglass")
+                ContentUnavailableView(query.isEmpty ? pageText("暂无\(emptyNoun)") : pageText("没有找到结果"), systemImage: query.isEmpty ? "square.stack" : "magnifyingglass")
             }
         }
-        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "查找")
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .automatic), prompt: pageText("查找"))
         .scrollDismissesKeyboard(.interactively)
     }
 }
@@ -133,10 +133,10 @@ public struct PickerSongsListView: View {
         .background(Color(.systemBackground))
         .overlay {
             if filtered.isEmpty {
-                ContentUnavailableView(query.isEmpty ? "暂无歌曲" : "没有找到结果", systemImage: query.isEmpty ? "music.note" : "magnifyingglass")
+                ContentUnavailableView(query.isEmpty ? pageText("暂无歌曲") : pageText("没有找到结果"), systemImage: query.isEmpty ? "music.note" : "magnifyingglass")
             }
         }
-        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "查找")
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .automatic), prompt: pageText("查找"))
         .scrollDismissesKeyboard(.interactively)
     }
 }
@@ -211,10 +211,10 @@ public struct PickerPlaylistsListView: View {
         .background(Color(.systemBackground))
         .overlay {
             if entries.isEmpty {
-                ContentUnavailableView(query.isEmpty ? "暂无播放列表" : "没有找到结果", systemImage: query.isEmpty ? "music.note.list" : "magnifyingglass")
+                ContentUnavailableView(query.isEmpty ? pageText("暂无播放列表") : pageText("没有找到结果"), systemImage: query.isEmpty ? "music.note.list" : "magnifyingglass")
             }
         }
-        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "查找")
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .automatic), prompt: pageText("查找"))
         .scrollDismissesKeyboard(.interactively)
     }
 }
@@ -279,10 +279,10 @@ public struct PickerRecentlyAddedListView: View {
         .background(Color(.systemBackground))
         .overlay {
             if filtered.isEmpty {
-                ContentUnavailableView(query.isEmpty ? "暂无最近添加" : "没有找到结果", systemImage: query.isEmpty ? "clock" : "magnifyingglass")
+                ContentUnavailableView(query.isEmpty ? pageText("暂无最近添加") : pageText("没有找到结果"), systemImage: query.isEmpty ? "clock" : "magnifyingglass")
             }
         }
-        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "查找")
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .automatic), prompt: pageText("查找"))
         .scrollDismissesKeyboard(.interactively)
     }
 }
@@ -331,7 +331,7 @@ public struct PickerArtistLibraryView: View {
 
                 if !albums.isEmpty {
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("专辑")
+                        Text(pageText("专辑"))
                             .font(.title3.weight(.bold))
                         LazyVGrid(columns: columns, alignment: .leading, spacing: 20) {
                             ForEach(albums) { album in
@@ -344,7 +344,7 @@ public struct PickerArtistLibraryView: View {
                     }
                 } else if !fallbackSongs.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("歌曲")
+                        Text(pageText("歌曲"))
                             .font(.title3.weight(.bold))
                         LazyVStack(spacing: 0) {
                             ForEach(fallbackSongs) { song in
@@ -362,7 +362,7 @@ public struct PickerArtistLibraryView: View {
                         }
                     }
                 } else {
-                    ContentUnavailableView("暂无资料库内容", systemImage: "music.note")
+                    ContentUnavailableView(pageText("暂无资料库内容"), systemImage: "music.note")
                         .padding(.top, 24)
                 }
             }
@@ -391,14 +391,14 @@ public struct PickerArtistCatalogView: View {
                 catalogContent(detail)
             } else if let errorMessage {
                 ContentUnavailableView {
-                    Label("暂时无法读取", systemImage: "exclamationmark.circle")
+                    Label(pageText("暂时无法读取"), systemImage: "exclamationmark.circle")
                 } description: {
                     Text(errorMessage)
                 } actions: {
-                    Button("重试") { Task { await load() } }
+                    Button(pageText("重试")) { Task { await load() } }
                 }
             } else {
-                ProgressView("正在载入艺人")
+                ProgressView(pageText("正在载入艺人"))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
@@ -413,7 +413,7 @@ public struct PickerArtistCatalogView: View {
 
     private func load() async {
         guard let loader = source.loadArtistDetail else {
-            errorMessage = "当前无法加载在线艺人目录"
+            errorMessage = pageText("当前无法加载在线艺人目录")
             return
         }
         isLoading = true
@@ -423,7 +423,7 @@ public struct PickerArtistCatalogView: View {
                 session.storeCatalogArtist(loaded, for: artistID)
                 detail = loaded
             } else {
-                errorMessage = "未找到艺人信息"
+                errorMessage = pageText("未找到艺人信息")
             }
         } catch is CancellationError {
         } catch {
@@ -437,7 +437,7 @@ public struct PickerArtistCatalogView: View {
             LazyVStack(alignment: .leading, spacing: 26) {
                 if let latest = detail.latest {
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("最新发行")
+                        Text(pageText("最新发行"))
                             .font(.title3.weight(.bold))
                             .padding(.horizontal, 20)
                         NavigationLink(value: MusicPickerRoute.album(id: latest.id, title: latest.title, subtitle: latest.subtitle ?? detail.name)) {
@@ -475,7 +475,7 @@ public struct PickerArtistCatalogView: View {
 
                 if !detail.songs.isEmpty {
                     VStack(alignment: .leading, spacing: 6) {
-                        sectionHeader("歌曲排行", route: .artistCatalogSection(id: artistID, name: artistName, section: .songs))
+                        sectionHeader(pageText("歌曲排行"), route: .artistCatalogSection(id: artistID, name: artistName, section: .songs))
                         MusicPickerSongCarousel(
                             songs: detail.songs,
                             isSelected: isSelected,
@@ -486,11 +486,11 @@ public struct PickerArtistCatalogView: View {
                 }
 
                 if !detail.albums.isEmpty {
-                    releaseShelf("专辑", items: detail.albums, section: .albums, fallbackArtist: detail.name)
+                    releaseShelf(pageText("专辑"), items: detail.albums, section: .albums, fallbackArtist: detail.name)
                 }
 
                 if !detail.singles.isEmpty {
-                    releaseShelf("单曲与 EP", items: detail.singles, section: .singles, fallbackArtist: detail.name)
+                    releaseShelf(pageText("单曲与 EP"), items: detail.singles, section: .singles, fallbackArtist: detail.name)
                 }
             }
             .padding(.top, 12)
@@ -551,14 +551,14 @@ public struct PickerArtistCatalogSectionView: View {
                     onToggle: onToggle
                 )
             case .albums:
-                PickerAlbumsListView(albums: detail.albums, emptyNoun: "专辑")
+                PickerAlbumsListView(albums: detail.albums, emptyNoun: pageText("专辑"))
             case .singles:
-                PickerAlbumsListView(albums: detail.singles, emptyNoun: "单曲与 EP")
+                PickerAlbumsListView(albums: detail.singles, emptyNoun: pageText("单曲与 EP"))
             case .similar:
                 PickerArtistsListView(artists: detail.similar)
             }
         } else {
-            ContentUnavailableView("暂无内容", systemImage: "music.note")
+            ContentUnavailableView(pageText("暂无内容"), systemImage: "music.note")
         }
     }
 }
@@ -613,11 +613,11 @@ public struct PickerAlbumDetailView: View {
                     .listRowSeparator(.hidden)
                 } else if let errorMessage, tracks.isEmpty {
                     ContentUnavailableView {
-                        Label("暂时无法读取", systemImage: "exclamationmark.circle")
+                        Label(pageText("暂时无法读取"), systemImage: "exclamationmark.circle")
                     } description: {
                         Text(errorMessage)
                     } actions: {
-                        Button("重试") { Task { await load() } }
+                        Button(pageText("重试")) { Task { await load() } }
                     }
                     .listRowSeparator(.hidden)
                 } else {
@@ -709,7 +709,7 @@ public struct PickerPlaylistDetailView: View {
                 .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
 
                 if tracks.isEmpty {
-                    ContentUnavailableView("没有歌曲", systemImage: "music.note")
+                    ContentUnavailableView(pageText("没有歌曲"), systemImage: "music.note")
                         .listRowSeparator(.hidden)
                 } else {
                     ForEach(Array(tracks.enumerated()), id: \.element.id) { index, song in
@@ -768,7 +768,7 @@ public struct PickerCollectionDetailHeader: View {
                         .foregroundStyle(.blue)
                         .lineLimit(1)
                 }
-                Text("\(songCount)首歌曲")
+                Text(pageText("\(songCount)首歌曲"))
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -782,7 +782,7 @@ public struct PickerCollectionDetailHeader: View {
             }
             .buttonStyle(.plain)
             .disabled(isAllDisabled)
-            .accessibilityLabel(isAllSelected ? "已添加全部歌曲" : "添加全部歌曲")
+            .accessibilityLabel(isAllSelected ? pageText("已添加全部歌曲") : pageText("添加全部歌曲"))
         }
     }
 }
@@ -827,7 +827,7 @@ public struct PickerAlbumTrackRow: View {
         .buttonStyle(.plain)
         .disabled(alreadyAdded)
         .accessibilityLabel("\(song.title)")
-        .accessibilityValue(alreadyAdded ? "已在播放列表中" : selected ? "已选择" : "未选择")
+        .accessibilityValue(alreadyAdded ? pageText("已在播放列表中") : selected ? pageText("已选择") : pageText("未选择"))
     }
 }
 
@@ -951,8 +951,8 @@ public struct MusicPickerSongRow: View {
         .buttonStyle(.plain)
         .disabled(alreadyAdded)
         .accessibilityLabel("\(song.title)，\(song.artist)")
-        .accessibilityValue(alreadyAdded ? "已在播放列表中" : selected ? "已选择" : "未选择")
-        .accessibilityHint(alreadyAdded ? "" : selected ? "轻点取消选择" : "轻点添加")
+        .accessibilityValue(alreadyAdded ? pageText("已在播放列表中") : selected ? pageText("已选择") : pageText("未选择"))
+        .accessibilityHint(alreadyAdded ? "" : selected ? pageText("轻点取消选择") : pageText("轻点添加"))
     }
 
     public init(song: LibrarySongItem,

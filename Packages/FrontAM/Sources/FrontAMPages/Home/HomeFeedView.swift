@@ -26,9 +26,9 @@ public struct HomeFeedView: View {
             LazyVStack(alignment: .leading, spacing: HomeMetrics.sectionSpacing) {
                 if model.isGuest {
                     HStack(spacing: 16) {
-                        Text("登录，发现为你推荐的音乐").font(.subheadline).foregroundStyle(.secondary)
+                        Text(pageText("登录，发现为你推荐的音乐")).font(.subheadline).foregroundStyle(.secondary)
                         Spacer(minLength: 0)
-                        Button("登录", action: model.login).font(.subheadline.weight(.semibold))
+                        Button(pageText("登录"), action: model.login).font(.subheadline.weight(.semibold))
                     }.padding(.horizontal, HomeMetrics.margin)
                 }
                 if !model.quickActions.isEmpty {
@@ -84,8 +84,8 @@ public struct HomeFeedView: View {
         }
         .accessibilityIdentifier("home.feed")
         .background(Color(.systemBackground))
-        .libraryNavigationTitle("主页")
-        .libraryHomeNavigation(title: "主页")
+        .libraryNavigationTitle(pageText("主页"))
+        .libraryHomeNavigation(title: pageText("主页"))
         .toolbar { FrontAMPageToolbar() }
     }
 
@@ -112,11 +112,11 @@ public struct HomeQuickActionCard: View {
         switch state {
         case .idle: item.subtitle
         case .loading: item.action.loadingMessage
-        case .failed(let error): "\(error)，轻点重试"
+        case .failed(let error): pageText("\(error)，轻点重试")
         }
     }
     private var accessibilityHint: String {
-        if case .failed = state { return "重新尝试\(item.action.title)" }
+        if case .failed = state { return pageText("重新尝试\(item.action.title)") }
         return item.action.accessibilityHint
     }
 
@@ -238,7 +238,7 @@ public struct HomeQuickActionCardContent: View {
                     .lineLimit(textSize.isAccessibilitySize ? nil : 2)
             case .failed(let error):
                 Text(error).font(.system(size: subtitleSize)).lineLimit(textSize.isAccessibilitySize ? nil : 3)
-                Text("轻点重试").font(.system(size: subtitleSize, weight: .semibold))
+                Text(pageText("轻点重试")).font(.system(size: subtitleSize, weight: .semibold))
             }
         }
         .foregroundStyle(textColor)
@@ -255,14 +255,14 @@ public struct HomeFeedIssueRow: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(issue.isRetrying ? "正在重新载入\(issue.title)" : issue.message)
+            Text(issue.isRetrying ? pageText("正在重新载入\(issue.title)") : issue.message)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Button(issue.isRetrying ? "正在重试" : "重试") { Task { await retry() } }
+            Button(issue.isRetrying ? pageText("正在重试") : pageText("重试")) { Task { await retry() } }
                 .font(.subheadline.weight(.semibold))
                 .disabled(issue.isRetrying)
-                .accessibilityLabel("重试\(issue.title)")
+                .accessibilityLabel(pageText("重试\(issue.title)"))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)

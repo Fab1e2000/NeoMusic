@@ -71,84 +71,84 @@ private struct AddToPlaylistList: View {
     }
 
     private var title: String {
-        guard let selection else { return folderID.flatMap { library.folder($0)?.name } ?? "添加到播放列表" }
-        return selection.isEmpty ? "添加到…" : "添加到\(selection.count)个播放列表"
+        guard let selection else { return folderID.flatMap { library.folder($0)?.name } ?? pageText("添加到播放列表") }
+        return selection.isEmpty ? pageText("添加到…") : pageText("添加到\(selection.count)个播放列表")
     }
 
     var body: some View {
         List {
             if folderID == nil, query.isEmpty, !recent.isEmpty {
-                header("最近播放")
+                header(pageText("最近播放"))
                 ForEach(recent) { row(.playlist($0)) }
             }
-            if query.isEmpty { header("所有播放列表") }
+            if query.isEmpty { header(pageText("所有播放列表")) }
             ForEach(entries) { row($0) }
         }
         .listStyle(.plain)
         .environment(\.defaultMinListRowHeight, 0)
         .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
-                    prompt: folderID == nil ? "在播放列表中查找" : "在文件夹中查找")
+                    prompt: folderID == nil ? pageText("在播放列表中查找") : pageText("在文件夹中查找"))
         .searchDictationBehavior(.inline(activation: .onLook))
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if folderID == nil {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("关闭", systemImage: "xmark", role: .close) { dismiss() }
+                    Button(pageText("关闭"), systemImage: "xmark", role: .close) { dismiss() }
                 }
             }
             ToolbarItem(placement: .topBarTrailing) {
                 if let selection {
-                    Button("添加", systemImage: "checkmark", role: .confirm) { addToSelection(selection) }
+                    Button(pageText("添加"), systemImage: "checkmark", role: .confirm) { addToSelection(selection) }
                         .disabled(selection.isEmpty)
                 } else {
                     Menu {
-                        Picker("排序方式", selection: $sort) {
+                        Picker(pageText("排序方式"), selection: $sort) {
                             ForEach(PlaylistSort.options) { Text($0.title).tag($0.sort) }
                         }
                     } label: {
-                        Label("排序方式", systemImage: "arrow.up.arrow.down")
+                        Label(pageText("排序方式"), systemImage: "arrow.up.arrow.down")
                     }
                 }
             }
             if selection == nil {
                 ToolbarItem(placement: .bottomBar) {
-                    Menu("新建", systemImage: "plus") {
-                        Button("新建文件夹", systemImage: "folder.badge.plus") {
+                    Menu(pageText("新建"), systemImage: "plus") {
+                        Button(pageText("新建文件夹"), systemImage: "folder.badge.plus") {
                             folderName = ""
                             isNamingFolder = true
                         }
-                        Button("新建播放列表", systemImage: "text.badge.plus") { isCreatingPlaylist = true }
+                        Button(pageText("新建播放列表"), systemImage: "text.badge.plus") { isCreatingPlaylist = true }
                     }
                 }
             }
             ToolbarSpacer(.flexible, placement: .bottomBar)
             ToolbarItem(placement: .bottomBar) {
                 if selection == nil {
-                    Button("选择", systemImage: "checklist") { withAnimation { selection = [] } }
+                    Button(pageText("选择"), systemImage: "checklist") { withAnimation { selection = [] } }
                 } else {
-                    Button("取消选择", systemImage: "xmark") { withAnimation { selection = nil } }
+                    Button(pageText("取消选择"), systemImage: "xmark") { withAnimation { selection = nil } }
                 }
             }
         }
         .sheet(isPresented: $isCreatingPlaylist) {
             NewPlaylistView(library: library, folderID: folderID)
         }
-        .alert("新建文件夹", isPresented: $isNamingFolder) {
-            TextField("文件夹名称", text: $folderName)
-            Button("取消", role: .cancel) {}
-            Button("创建") {
+        .alert(pageText("新建文件夹"), isPresented: $isNamingFolder) {
+            TextField(pageText("文件夹名称"), text: $folderName)
+            Button(pageText("取消"), role: .cancel) {}
+            Button(pageText("创建")) {
                 let name = folderName.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !name.isEmpty else { return }
                 library.createFolder(named: name, in: folderID)
             }
             .disabled(folderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         } message: {
-            Text("请为此文件夹输入名称。")
+            Text(pageText("请为此文件夹输入名称。"))
         }
     }
 
-    private func header(_ title: LocalizedStringKey) -> some View {
+    private func header(_ title: String) -> some View {
         Text(title)
             .font(.subheadline.weight(.bold))
             .accessibilityAddTraits(.isHeader)
@@ -218,7 +218,7 @@ private struct AddToPlaylistList: View {
         let existing = Set(library.songs(in: playlist.id).map(\.id))
         let count = songs.filter { existing.contains($0.id) }.count
         if count == 0 { return nil }
-        return count == songs.count ? "歌曲已在播放列表中" : "\(count)首歌曲已在播放列表中"
+        return count == songs.count ? pageText("歌曲已在播放列表中") : pageText("\(count)首歌曲已在播放列表中")
     }
 
     private func addToSelection(_ ids: Set<String>) {
@@ -239,7 +239,7 @@ private struct SelectionMark: View {
             .foregroundStyle(isSelected ? AnyShapeStyle(.white) : AnyShapeStyle(.tertiary),
                              isSelected ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
             .frame(width: 30)
-            .accessibilityLabel(isSelected ? "已选择" : "未选择")
+            .accessibilityLabel(isSelected ? pageText("已选择") : pageText("未选择"))
     }
 }
 

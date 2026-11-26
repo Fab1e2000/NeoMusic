@@ -4,7 +4,7 @@ import SwiftUI
 public enum MusicSearchKind: Int, CaseIterable, Identifiable {
     case combined = 1018, song = 1, artist = 100, album = 10, playlist = 1000
     public var id: Self { self }
-    public var title: String { switch self { case .combined: "综合"; case .song: "歌曲"; case .artist: "艺人"; case .album: "专辑"; case .playlist: "歌单" } }
+    public var title: String { switch self { case .combined: pageText("综合"); case .song: pageText("歌曲"); case .artist: pageText("艺人"); case .album: pageText("专辑"); case .playlist: pageText("歌单") } }
 }
 public struct MusicSearchItem: Identifiable, Equatable {
     public let id: String
@@ -76,8 +76,8 @@ public struct MusicSearchCategorySection: Identifiable, Equatable {
         }
         var sections: [Self] = []
         let hot = categories.filter(\.isHot)
-        if !hot.isEmpty { sections.append(.init(id: "hot", title: "热门", items: hot)) }
-        let titles = ["语种", "风格", "场景", "情感", "主题"]
+        if !hot.isEmpty { sections.append(.init(id: "hot", title: pageText("热门"), items: hot)) }
+        let titles = [pageText("语种"), pageText("风格"), pageText("场景"), pageText("情感"), pageText("主题")]
         for (group, title) in titles.enumerated() {
             let items = categories.filter { $0.group == group }
             if !items.isEmpty { sections.append(.init(id: "group:\(group)", title: title, items: items)) }
@@ -86,7 +86,7 @@ public struct MusicSearchCategorySection: Identifiable, Equatable {
             guard let group = item.group else { return true }
             return !titles.indices.contains(group)
         }
-        if !others.isEmpty { sections.append(.init(id: "other", title: "其他", items: others)) }
+        if !others.isEmpty { sections.append(.init(id: "other", title: pageText("其他"), items: others)) }
         return sections
     }
 
@@ -141,7 +141,7 @@ public struct SearchCategoryColor: Sendable {
 public final class SearchPageModel {
     public let searchPrompt: String
 
-    public init(searchPrompt: String = "歌曲、艺人、专辑及歌单") {
+    public init(searchPrompt: String = pageText("歌曲、艺人、专辑及歌单")) {
         self.searchPrompt = searchPrompt
     }
 

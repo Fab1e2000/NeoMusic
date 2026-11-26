@@ -209,12 +209,12 @@ public enum MusicPickerRoute: Hashable, Sendable {
 
     public var navigationTitle: String {
         switch self {
-        case .artists: "艺人"
-        case .albums: "专辑"
-        case .songs: "歌曲"
-        case .playlists: "播放列表"
-        case .downloaded: "已下载"
-        case .recent: "最近添加"
+        case .artists: pageText("艺人")
+        case .albums: pageText("专辑")
+        case .songs: pageText("歌曲")
+        case .playlists: pageText("播放列表")
+        case .downloaded: pageText("已下载")
+        case .recent: pageText("最近添加")
         case .artist(_, let name), .artistCatalog(_, let name): name
         case .artistCatalogSection(_, _, let section): section.title
         case .playlistFolder(_, let title): title
@@ -224,12 +224,12 @@ public enum MusicPickerRoute: Hashable, Sendable {
 
     public var categoryTitle: String {
         switch self {
-        case .artists: "艺人"
-        case .albums: "专辑"
-        case .songs: "歌曲"
-        case .playlists: "播放列表"
-        case .downloaded: "已下载"
-        case .recent: "最近添加"
+        case .artists: pageText("艺人")
+        case .albums: pageText("专辑")
+        case .songs: pageText("歌曲")
+        case .playlists: pageText("播放列表")
+        case .downloaded: pageText("已下载")
+        case .recent: pageText("最近添加")
         default: navigationTitle
         }
     }

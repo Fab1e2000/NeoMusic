@@ -257,7 +257,7 @@ private struct LyricsInterludeDots: View {
             }
         }
         .frame(height: rowHeight, alignment: .center)
-        .accessibilityLabel("间奏")
+        .accessibilityLabel(playerText("间奏"))
     }
 
     private func dotsRow(frame: LyricsInterludeFrame, dotSize: CGFloat, dotSpacing: CGFloat) -> some View {

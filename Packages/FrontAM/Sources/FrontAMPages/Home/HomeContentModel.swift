@@ -10,22 +10,22 @@ public enum HomeQuickAction: String, CaseIterable, Identifiable {
     public var id: String { rawValue }
     public var title: String {
         switch self {
-        case .dailySongs: "每日推荐"
-        case .hotSongs: "热歌"
-        case .heartMode: "心动模式"
-        case .privateRadar: "私人雷达"
-        case .privateRoaming: "私人漫游"
-        case .similarSongs: "相似歌曲"
+        case .dailySongs: pageText("每日推荐")
+        case .hotSongs: pageText("热歌")
+        case .heartMode: pageText("心动模式")
+        case .privateRadar: pageText("私人雷达")
+        case .privateRoaming: pageText("私人漫游")
+        case .similarSongs: pageText("相似歌曲")
         }
     }
     public var eyebrow: String {
         switch self {
-        case .dailySongs: "为你推荐"
-        case .hotSongs: "榜单精选"
-        case .heartMode: "从喜欢出发"
-        case .privateRadar: "你的音乐雷达"
-        case .privateRoaming: "探索更多音乐"
-        case .similarSongs: "从当前歌曲出发"
+        case .dailySongs: pageText("为你推荐")
+        case .hotSongs: pageText("榜单精选")
+        case .heartMode: pageText("从喜欢出发")
+        case .privateRadar: pageText("你的音乐雷达")
+        case .privateRoaming: pageText("探索更多音乐")
+        case .similarSongs: pageText("从当前歌曲出发")
         }
     }
     public var opensDetail: Bool {
@@ -34,8 +34,8 @@ public enum HomeQuickAction: String, CaseIterable, Identifiable {
         case .heartMode, .privateRoaming, .similarSongs: false
         }
     }
-    public var loadingMessage: String { opensDetail ? "正在载入内容" : "正在准备播放" }
-    public var accessibilityHint: String { opensDetail ? "打开歌曲列表" : "开始播放音乐" }
+    public var loadingMessage: String { opensDetail ? pageText("正在载入内容") : pageText("正在准备播放") }
+    public var accessibilityHint: String { opensDetail ? pageText("打开歌曲列表") : pageText("开始播放音乐") }
 }
 
 public struct HomeQuickActionItem: Identifiable, Equatable {

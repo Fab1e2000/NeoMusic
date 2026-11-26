@@ -24,7 +24,7 @@ private struct MoveToFolderView: View {
 
     var body: some View {
         VStack(spacing: -6) {
-            Text("将“\(playlist.title)”移到")
+            Text(pageText("将“\(playlist.title)”移到"))
                 .font(.footnote)
                 .lineLimit(1)
                 .padding(.top, 24)
@@ -60,7 +60,7 @@ private struct MoveToFolderList: View {
 
     var body: some View {
         List {
-            Text("所有播放列表")
+            Text(pageText("所有播放列表"))
                 .font(.subheadline.weight(.bold))
                 .accessibilityAddTraits(.isHeader)
                 .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 8, trailing: 16))
@@ -70,52 +70,52 @@ private struct MoveToFolderList: View {
         .listStyle(.plain)
         .environment(\.defaultMinListRowHeight, 0)
         .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
-                    prompt: folderID == nil ? "在播放列表中查找" : "在文件夹中查找")
+                    prompt: folderID == nil ? pageText("在播放列表中查找") : pageText("在文件夹中查找"))
         .searchDictationBehavior(.inline(activation: .onLook))
-        .navigationTitle(folderID.flatMap { library.folder($0)?.name } ?? "所有播放列表")
+        .navigationTitle(folderID.flatMap { library.folder($0)?.name } ?? pageText("所有播放列表"))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if folderID == nil {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("关闭", systemImage: "xmark", role: .close) { dismiss() }
+                    Button(pageText("关闭"), systemImage: "xmark", role: .close) { dismiss() }
                 }
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
-                    Picker("排序方式", selection: $sort) {
+                    Picker(pageText("排序方式"), selection: $sort) {
                         ForEach(PlaylistSort.options) { Text($0.title).tag($0.sort) }
                     }
                 } label: {
-                    Label("排序方式", systemImage: "arrow.up.arrow.down")
+                    Label(pageText("排序方式"), systemImage: "arrow.up.arrow.down")
                 }
             }
             ToolbarSpacer(.fixed, placement: .topBarTrailing)
             ToolbarItem(placement: .topBarTrailing) {
-                Button("移到这里", systemImage: "checkmark", role: .confirm) {
+                Button(pageText("移到这里"), systemImage: "checkmark", role: .confirm) {
                     library.pendingMove = nil
                     withAnimation { library.move(playlistID: playlist.id, to: folderID) }
                 }
                 .disabled(isCurrentLocation)
             }
             ToolbarItem(placement: .bottomBar) {
-                Button("新建文件夹", systemImage: "plus") {
+                Button(pageText("新建文件夹"), systemImage: "plus") {
                     folderName = ""
                     isNamingFolder = true
                 }
             }
             ToolbarSpacer(.flexible, placement: .bottomBar)
         }
-        .alert("新建文件夹", isPresented: $isNamingFolder) {
-            TextField("文件夹名称", text: $folderName)
-            Button("取消", role: .cancel) {}
-            Button("创建") {
+        .alert(pageText("新建文件夹"), isPresented: $isNamingFolder) {
+            TextField(pageText("文件夹名称"), text: $folderName)
+            Button(pageText("取消"), role: .cancel) {}
+            Button(pageText("创建")) {
                 let name = folderName.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !name.isEmpty else { return }
                 library.createFolder(named: name, in: folderID)
             }
             .disabled(folderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         } message: {
-            Text("请为此文件夹输入名称。")
+            Text(pageText("请为此文件夹输入名称。"))
         }
     }
 

@@ -270,6 +270,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "FrontAM Showcase";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Take a photo to use as a demo playlist cover.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Choose an image to use as a demo playlist cover.";
@@ -290,6 +291,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "FrontAM Showcase";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Take a photo to use as a demo playlist cover.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Choose an image to use as a demo playlist cover.";

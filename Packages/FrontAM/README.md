@@ -11,20 +11,21 @@ The package manifest requires SwiftPM tools 6.2 or newer. Use Xcode with an iOS 
 | `FrontAMCore` | Design tokens, artwork and color extraction, ImageIO thumbnail caching, shared controls and read-only track playback state | — |
 | `FrontAMPlayer` | Full-screen artwork, Metal backdrop, timed lyrics and editable playback queue | Core |
 | `FrontAMPopup` | Persistent mini-player, controls and matched artwork transition | Player, Core |
-| `FrontAMNavigation` | Tab ordering, independent navigation stacks, interactive Zoom and player handoff | Popup, Core |
+| `FrontAMNavigation` | Tab ordering, independent navigation stacks, interactive Zoom and player handoff | Core |
 | `FrontAMPages` | Home, search, library, collection details, track lists and playlist editing | Navigation, Core |
 | `FrontAM` | Umbrella product that reexports all five modules | All five |
 
-`FrontAMPopup` uses the vendored LNPopup packages. Add the umbrella product once to the app target when using the complete shell.
+- **Browsing and navigation** uses `FrontAMCore`, `FrontAMNavigation` and `FrontAMPages`. Link `FrontAMPages` for the complete MIT line. Its target graph contains Apple frameworks and the other two browsing modules.
+- **Playback** uses `FrontAMPlayer` for the full-screen player and `FrontAMPopup` for the mini-player. The popup depends on the player and the vendored LNPopup packages. Link the umbrella product once to the app target when using both lines.
 
 ## Add FrontAM to an app
 
-In Xcode, add the local directory containing this `Package.swift`, then link the `FrontAM` product to your app target. In a Swift package manifest, declare `.package(path: "<relative-path-to-FrontAM>")` and add `.product(name: "FrontAM", package: "FrontAM")` to your target dependencies.
+In Xcode, add the local directory containing this `Package.swift`, then choose the product that matches your app. In a Swift package manifest, declare `.package(path: "<relative-path-to-FrontAM>")` and add `.product(name: "FrontAMPages", package: "FrontAM")` for the browsing line.
 
-This SwiftUI view uses the default ImageIO artwork provider. Pass a URL to a local image file.
+This SwiftUI view links `FrontAMCore` and uses the default ImageIO artwork provider. Pass a URL to a local image file.
 
 ```swift
-import FrontAM
+import FrontAMCore
 import SwiftUI
 
 struct CoverTile: View {
@@ -37,7 +38,7 @@ struct CoverTile: View {
 }
 ```
 
-For the player, wrap your `PlayerPlaybackSource` in `PlayerState` and supply a `PlayerServices` with playback actions, lyrics and artwork. Inject the state into `FrontAMPlayerPopup` and use the same state and services in its `FullScreenPlayerView`. For browsing, `HomeContentModel` and `SearchPageModel` carry display items and action callbacks. Implement `FrontAMPlaylistSource` to connect your playlist store to the library and editing pages.
+For the player, wrap your `PlayerPlaybackSource` in `PlayerState` and supply a `PlayerServices` with playback actions, lyrics and artwork. Inject the state into `FrontAMPlayerPopup` and use the same state and services in its `FullScreenPlayerView`. For browsing, use `FrontAMHomeFeedView`, `FrontAMSearchPageView` and `FrontAMLibraryHomeView`. The home and search models carry display items and callbacks. Use `FrontAMTrackItem`, `FrontAMShelfItem` and `FrontAMRoute` for tracks, collections and navigation. Implement `FrontAMPlaylistSource` to connect your playlist store to the library and editing pages. Existing public spellings remain source-compatible.
 
 ## Run FrontAMShowcase
 
@@ -56,10 +57,16 @@ Select the `FrontAMShowcase` scheme and an iPhone simulator, then run the app. I
 - **Search** searches the local demo catalog. Try **月背** or **折纸**.
 - The mini-player starts at **未在播放**. Once a song is selected, expand it and switch between artwork, the time-synchronized lyrics and the queue. The queue supports insertion, reordering and removal. The **演示选项** menu on Home and Library can clear the queue and reorder the two movable tabs. Search uses the system-pinned search tab.
 
+## Localization and testing
+
+The five modules ship English and Simplified Chinese resource tables with a Simplified Chinese development fallback. Built-in browsing copy and the mini-player use the selected bundle language. The full-screen player uses these resources for the package-owned controls, such as lyrics, Up Next, repeat mode, volume and audio quality. Attributed upstream player views retain their existing copy. Host-supplied labels and catalog content are supplied in the host’s language.
+
+Open `Package.swift` in Xcode and select an iOS simulator to run the package tests. They cover artwork color math and ImageIO caching, tab ordering and independent storage keys, playlist menu capabilities, and player contracts and volume inertia. NeoMusic’s `FullScreenPlayerTests` target shares the player contract and inertia source files.
+
 ## Licenses
 
-- [MIT](LICENSE) covers original FrontAM work and the original Showcase code and fixtures.
-- The vendored LNPopupUI and LNPopupController code and their two transitive LN dependencies retain their MIT licenses.
-- The upstream-derived player portions retain [GPL-3.0](Sources/FrontAMPlayer/Resources/GPL-3.0.txt). [Player source notices](Sources/FrontAMPlayer/Resources/PlayerSourceNotices.txt) and the [source manifest](Sources/FrontAMPlayer/Resources/PlayerSourceManifest.json) identify their provenance. The umbrella product includes those portions. Distributions that include them must comply with the applicable GPL terms.
+- **Browsing and navigation**. [MIT](LICENSE) covers `FrontAMCore`, `FrontAMNavigation` and `FrontAMPages`.
+- **Player and popup**. `FrontAMPlayer` includes upstream-derived [GPL-3.0](Sources/FrontAMPlayer/Resources/GPL-3.0.txt) portions. The original popup integration and vendored LNPopup code retain their MIT terms. Linking `FrontAMPopup` or the `FrontAM` umbrella also includes the player and its GPL-3.0 portions.
+- The original Showcase code and fixtures are MIT. The Showcase uses the umbrella product.
 
-See [third-party notices](THIRD_PARTY_NOTICES.md) for the upstream revisions, notices and local changes.
+See the [third-party notices](THIRD_PARTY_NOTICES.md), [player notices](Sources/FrontAMPlayer/Resources/PlayerSourceNotices.txt) and [source manifest](Sources/FrontAMPlayer/Resources/PlayerSourceManifest.json) for provenance and applicable license texts.

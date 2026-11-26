@@ -38,12 +38,12 @@ public typealias LibraryMenuSections = [[LibraryMenuItem]]
 public func libraryQueueMenuItems(playbackSource: String?, isDisabled: Bool = false,
                            playNext: @escaping () -> Void, playLater: @escaping () -> Void,
                            notify: @escaping (LibraryToast) -> Void = { _ in }) -> [LibraryMenuItem] {
-    [LibraryMenuItem(title: "插播", systemImage: "text.line.first.and.arrowtriangle.forward", isDisabled: isDisabled) {
+    [LibraryMenuItem(title: pageText("插播"), systemImage: "text.line.first.and.arrowtriangle.forward", isDisabled: isDisabled) {
         guard !isDisabled else { return }
         playNext()
         notify(.playingNext)
      },
-     LibraryMenuItem(title: playbackSource == nil ? "添加到队列" : "随后播放", subtitle: playbackSource,
+     LibraryMenuItem(title: playbackSource == nil ? pageText("添加到队列") : pageText("随后播放"), subtitle: playbackSource,
                      systemImage: "text.line.last.and.arrowtriangle.forward", isDisabled: isDisabled) {
         guard !isDisabled else { return }
         playLater()
@@ -132,13 +132,13 @@ public struct LibraryMenuContents: View {
 
 private func favoriteItem(isFavorite: Bool, filled: Bool = true, perform: @escaping () -> Void) -> LibraryMenuItem {
     let image = isFavorite ? "star.slash" : "star"
-    let undo = filled ? "撤销" : "撤销喜爱"
-    return LibraryMenuItem(title: isFavorite ? undo : "喜爱", systemImage: filled ? image + ".fill" : image,
+    let undo = filled ? pageText("撤销") : pageText("撤销喜爱")
+    return LibraryMenuItem(title: isFavorite ? undo : pageText("喜爱"), systemImage: filled ? image + ".fill" : image,
                            perform: perform)
 }
 
 private var unavailableDownload: LibraryMenuItem {
-    LibraryMenuItem(title: "下载", systemImage: "arrow.down.circle.fill", isDisabled: true)
+    LibraryMenuItem(title: pageText("下载"), systemImage: "arrow.down.circle.fill", isDisabled: true)
 }
 
 
@@ -152,6 +152,7 @@ public struct CollectionMenuActions {
     public var addToPlaylist: (LibraryRoute) -> Void = { _ in }
     public var playbackSource: () -> String? = { nil }
     public var requestMove: (_ playlistID: String) -> Void = { _ in }
+    public var showsPlaylistEditingActions: (_ playlistID: String) -> Bool = { _ in true }
     public var canDelete: (LibraryRoute) -> Bool = { _ in false }
     public var isDownloaded: (LibraryRoute) -> Bool = { _ in false }
     public var edit: (LibraryRoute) -> Void = { _ in }
@@ -169,16 +170,16 @@ public struct CollectionMenuActions {
     @MainActor private func downloadItem(_ route: LibraryRoute) -> LibraryMenuItem {
         let summary = downloads?.collectionState(of: route)
         if summary?.isActive == true {
-            return LibraryMenuItem(title: "停止下载", systemImage: "stop.circle.fill") {
+            return LibraryMenuItem(title: pageText("停止下载"), systemImage: "stop.circle.fill") {
                 LibraryHaptics.impact()
                 stopDownload(route)
             }
         }
         if summary?.isComplete == true {
-            return LibraryMenuItem(title: "已下载", systemImage: "checkmark.circle.fill", isDisabled: true)
+            return LibraryMenuItem(title: pageText("已下载"), systemImage: "checkmark.circle.fill", isDisabled: true)
         }
         let failed = (summary?.failedCount ?? 0) > 0
-        return LibraryMenuItem(title: failed ? "重试下载" : "下载", systemImage: failed ? "arrow.clockwise" : "arrow.down.circle.fill", isDisabled: !canDownload(route)) {
+        return LibraryMenuItem(title: failed ? pageText("重试下载") : pageText("下载"), systemImage: failed ? "arrow.clockwise" : "arrow.down.circle.fill", isDisabled: !canDownload(route)) {
             LibraryHaptics.impact()
             download(route)
         }
@@ -192,7 +193,7 @@ public struct CollectionMenuActions {
     }
 
     private func moveItem(playlistID: String) -> LibraryMenuItem {
-        LibraryMenuItem(title: "移到文件夹", systemImage: "folder") { requestMove(playlistID) }
+        LibraryMenuItem(title: pageText("移到文件夹"), systemImage: "folder") { requestMove(playlistID) }
     }
 
     @MainActor public func toolbarSections(for item: LibraryShelfItem, route: LibraryRoute) -> LibraryMenuSections {
@@ -204,7 +205,7 @@ public struct CollectionMenuActions {
         var sections: LibraryMenuSections = [
             [favoriteItem(isFavorite: item.isFavorite, filled: false) { toggleFavoriteAndNotify(item, route) }],
             [pinItem(item, route: route),
-             LibraryMenuItem(title: "添加到播放列表", systemImage: "text.badge.plus") { addToPlaylist(route) }],
+             LibraryMenuItem(title: pageText("添加到播放列表"), systemImage: "text.badge.plus") { addToPlaylist(route) }],
         ]
         if case .playlist(let id) = route { sections.append([moveItem(playlistID: id)]) }
         sections.append(queueItems(route))
@@ -213,8 +214,8 @@ public struct CollectionMenuActions {
 
     private func pinItem(_ item: LibraryShelfItem, route: LibraryRoute) -> LibraryMenuItem {
         let isPlaylist = if case .playlist = route { true } else { false }
-        let kind = isPlaylist ? "播放列表" : "专辑"
-        return LibraryMenuItem(title: (item.isPinned ? "取消置顶" : "置顶") + kind,
+        let kind = isPlaylist ? pageText("播放列表") : pageText("专辑")
+        return LibraryMenuItem(title: (item.isPinned ? pageText("取消置顶") : pageText("置顶")) + kind,
                                systemImage: item.isPinned ? "pin.slash" : "pin") {
             LibraryHaptics.success()
             withAnimation(.smooth(duration: 0.35)) { togglePin(route) }
@@ -229,14 +230,14 @@ public struct CollectionMenuActions {
     }
 
     private func playItems(_ route: LibraryRoute) -> [LibraryMenuItem] {
-        [LibraryMenuItem(title: "播放", systemImage: "play") { play(route, false) },
-         LibraryMenuItem(title: "随机播放", systemImage: "shuffle") { play(route, true) }]
+        [LibraryMenuItem(title: pageText("播放"), systemImage: "play") { play(route, false) },
+         LibraryMenuItem(title: pageText("随机播放"), systemImage: "shuffle") { play(route, true) }]
     }
 
     public func pinnedSections(for item: LibraryShelfItem, route: LibraryRoute, tapAction: PinnedTapAction,
                         setTapAction: @escaping (PinnedTapAction) -> Void) -> LibraryMenuSections {
         if case .libraryArtist = route {
-            return [[LibraryMenuItem(title: "取消置顶", systemImage: "pin.slash") { togglePin(route) }]]
+            return [[LibraryMenuItem(title: pageText("取消置顶"), systemImage: "pin.slash") { togglePin(route) }]]
         }
         let options = PinnedTapAction.allCases.map { option in
             LibraryMenuItem(title: option.title(for: route), systemImage: "",
@@ -245,7 +246,7 @@ public struct CollectionMenuActions {
         return [
             playItems(route),
             queueItems(route),
-            [LibraryMenuItem(title: "轻点操作", subtitle: tapAction.title(for: route), systemImage: "hand.tap",
+            [LibraryMenuItem(title: pageText("轻点操作"), subtitle: tapAction.title(for: route), systemImage: "hand.tap",
                              children: options)],
             [pinItem(item, route: route)],
         ]
@@ -254,10 +255,10 @@ public struct CollectionMenuActions {
     private func removalItems(_ route: LibraryRoute) -> [LibraryMenuItem] {
         var items: [LibraryMenuItem] = []
         if canRemoveDownload(route) {
-            items.append(LibraryMenuItem(title: "移除下载", systemImage: "xmark.circle") { removeDownload(route) })
+            items.append(LibraryMenuItem(title: pageText("移除下载"), systemImage: "xmark.circle") { removeDownload(route) })
         }
         if canDelete(route) {
-            items.append(LibraryMenuItem(title: "从资料库删除", systemImage: "trash", isDestructive: true) {
+            items.append(LibraryMenuItem(title: pageText("从资料库删除"), systemImage: "trash", isDestructive: true) {
                 requestDelete(route)
             })
         }
@@ -269,7 +270,7 @@ public struct CollectionMenuActions {
         var quick: [LibraryMenuItem]
         if isPlaylist {
             quick = [downloadItem(route), favoriteItem(isFavorite: item.isFavorite) { toggleFavoriteAndNotify(item, route) },
-                     LibraryMenuItem(title: "共享", systemImage: "square.and.arrow.up.fill", isDisabled: true)]
+                     LibraryMenuItem(title: pageText("共享"), systemImage: "square.and.arrow.up.fill", isDisabled: true)]
         } else if isDownloaded(route) {
             quick = [favoriteItem(isFavorite: item.isFavorite, filled: false) { toggleFavoriteAndNotify(item, route) }]
         } else {
@@ -280,16 +281,18 @@ public struct CollectionMenuActions {
             quick,
             playItems(route),
             [pinItem(item, route: route),
-             LibraryMenuItem(title: "添加到播放列表", systemImage: "text.badge.plus") { addToPlaylist(route) }],
+             LibraryMenuItem(title: pageText("添加到播放列表"), systemImage: "text.badge.plus") { addToPlaylist(route) }],
         ]
         if case .playlist(let id) = route {
-            if id.hasPrefix("netease-playlist:") {
+            if showsPlaylistEditingActions(id) {
+                sections.append([
+                    LibraryMenuItem(title: pageText("编辑"), systemImage: "pencil", isDisabled: !canDelete(route)) { edit(route) },
+                    LibraryMenuItem(title: pageText("开始协作"), systemImage: "person.badge.plus", isDisabled: true),
+                    moveItem(playlistID: id),
+                ])
+            } else {
                 sections.append([moveItem(playlistID: id)])
-            } else { sections.append([
-                LibraryMenuItem(title: "编辑", systemImage: "pencil", isDisabled: !canDelete(route)) { edit(route) },
-                LibraryMenuItem(title: "开始协作", systemImage: "person.badge.plus", isDisabled: true),
-                moveItem(playlistID: id),
-            ]) }
+            }
         }
         sections.append(queueItems(route))
         sections.append(removalItems(route))
@@ -305,6 +308,7 @@ public struct CollectionMenuActions {
                 addToPlaylist: @escaping (LibraryRoute) -> Void = { _ in },
                 playbackSource: @escaping () -> String? = { nil },
                 requestMove: @escaping (_ playlistID: String) -> Void = { _ in },
+                showsPlaylistEditingActions: @escaping (_ playlistID: String) -> Bool = { _ in true },
                 canDelete: @escaping (LibraryRoute) -> Bool = { _ in false },
                 isDownloaded: @escaping (LibraryRoute) -> Bool = { _ in false },
                 edit: @escaping (LibraryRoute) -> Void = { _ in },
@@ -327,6 +331,7 @@ public struct CollectionMenuActions {
         self.addToPlaylist = addToPlaylist
         self.playbackSource = playbackSource
         self.requestMove = requestMove
+        self.showsPlaylistEditingActions = showsPlaylistEditingActions
         self.canDelete = canDelete
         self.isDownloaded = isDownloaded
         self.edit = edit
@@ -348,9 +353,9 @@ public enum PinnedTapAction: CaseIterable {
 
     public func title(for route: LibraryRoute) -> String {
         switch self {
-        case .open: if case .playlist = route { "前往播放列表" } else { "前往专辑" }
-        case .play: "播放"
-        case .shuffle: "随机播放"
+        case .open: if case .playlist = route { pageText("前往播放列表") } else { pageText("前往专辑") }
+        case .play: pageText("播放")
+        case .shuffle: pageText("随机播放")
         }
     }
 }
@@ -397,11 +402,11 @@ public struct CollectionCardLink<Label: View>: View {
                                    drag: drag, drop: drop)
                 .padding(-8)
                 .alert("", isPresented: $isConfirmingDeletion) {
-                    Button("从资料库删除", role: .destructive) {
+                    Button(pageText("从资料库删除"), role: .destructive) {
                         LibraryHaptics.mediumImpact()
                         withAnimation(reducesMotion ? nil : .default) { actions.delete(route) }
                     }
-                    Button("取消", role: .cancel) {}
+                    Button(pageText("取消"), role: .cancel) {}
                 } message: {
                     Text(route.deletionMessage)
                 }
@@ -431,8 +436,8 @@ public struct CollectionCardLink<Label: View>: View {
 extension LibraryRoute {
     public var deletionMessage: String {
         switch self {
-        case .album: "确定要从资料库删除这张专辑吗？这也会将歌曲从你喜爱的项目和制作的所有播放列表移除。"
-        default: "确定要删除此播放列表吗？这会将播放列表从资料库删除。"
+        case .album: pageText("确定要从资料库删除这张专辑吗？这也会将歌曲从你喜爱的项目和制作的所有播放列表移除。")
+        default: pageText("确定要删除此播放列表吗？这会将播放列表从资料库删除。")
         }
     }
 }
@@ -475,20 +480,20 @@ public struct SongMenuActions {
         let state = downloads.state(of: song.id)
         if state == .downloaded { return nil }
         if state?.isActive == true {
-            return LibraryMenuItem(title: "停止下载", systemImage: "stop.circle.fill") {
+            return LibraryMenuItem(title: pageText("停止下载"), systemImage: "stop.circle.fill") {
                 LibraryHaptics.impact()
                 downloads.stop([song])
             }
         }
         if case .failed(let message) = state {
             guard downloads.isDownloadable(song) else { return nil }
-            return LibraryMenuItem(title: "重试下载", subtitle: message, systemImage: "arrow.clockwise") {
+            return LibraryMenuItem(title: pageText("重试下载"), subtitle: message, systemImage: "arrow.clockwise") {
                 LibraryHaptics.impact()
                 downloads.download([song])
             }
         }
         guard downloads.isDownloadable(song) else { return nil }
-        return LibraryMenuItem(title: "下载", systemImage: "arrow.down.circle.fill") {
+        return LibraryMenuItem(title: pageText("下载"), systemImage: "arrow.down.circle.fill") {
             LibraryHaptics.impact()
             downloads.download([song])
         }
@@ -512,16 +517,16 @@ public struct SongMenuActions {
             }
         }]
         if let item = downloadItem(for: song) { quick.insert(item, at: 0) }
-        var additions = [LibraryMenuItem(title: "添加到播放列表", systemImage: "text.badge.plus") { addToPlaylist(song) }]
+        var additions = [LibraryMenuItem(title: pageText("添加到播放列表"), systemImage: "text.badge.plus") { addToPlaylist(song) }]
         if let removeFromPlaylist {
-            additions.append(LibraryMenuItem(title: "从歌单移除", systemImage: "minus.circle", isDestructive: true) {
+            additions.append(LibraryMenuItem(title: pageText("从歌单移除"), systemImage: "minus.circle", isDestructive: true) {
                 CenteredActionSheet.confirmRemoveFromPlaylist(removeFromPlaylist)
             })
         }
         var groups: LibraryMenuSections = [quick, additions,
             libraryQueueMenuItems(playbackSource: playbackSource(), playNext: { playNext(song) }, playLater: { playLater(song) }, notify: defersQueueNotice ? { _ in } : notify)]
         if let downloads, downloads.canRemove(song) {
-            groups.append([LibraryMenuItem(title: "移除下载", systemImage: "xmark.circle") { downloads.requestRemoval([song]) }])
+            groups.append([LibraryMenuItem(title: pageText("移除下载"), systemImage: "xmark.circle") { downloads.requestRemoval([song]) }])
         }
         return groups
     }
@@ -536,11 +541,11 @@ public struct SongMenuActions {
         if !inAlbum {
             if usesCatalog {
                 if song.onlineAlbumID != nil || downloads?.canRemove(song) == true {
-                    links.append(LibraryMenuItem(title: "前往专辑", subtitle: song.album.isEmpty ? nil : song.album,
+                    links.append(LibraryMenuItem(title: pageText("前往专辑"), subtitle: song.album.isEmpty ? nil : song.album,
                                                  systemImage: "music.note.square.stack") { openAlbum(song, open) })
                 }
             } else {
-                links.append(LibraryMenuItem(title: "前往专辑", subtitle: song.album.isEmpty ? nil : song.album,
+                links.append(LibraryMenuItem(title: pageText("前往专辑"), subtitle: song.album.isEmpty ? nil : song.album,
                                              systemImage: "square", customImage: MenuIcons.album) { open(.album(song.albumID)) })
             }
         }
@@ -549,7 +554,7 @@ public struct SongMenuActions {
                 LibraryMenuItem(identity: "artist:" + artist.id, title: artist.name, systemImage: "music.microphone") { open(.artist(artist.id)) }
             }
         } else if usesCatalog {
-            links.append(LibraryMenuItem(title: "前往艺人", subtitle: song.artist, systemImage: "music.microphone") {
+            links.append(LibraryMenuItem(title: pageText("前往艺人"), subtitle: song.artist, systemImage: "music.microphone") {
                 openArtist(song, open)
             })
         }
@@ -628,7 +633,7 @@ public struct OnlineSongTrailingSwipeButtons: View {
         if let edge = items.first, edge != .removeFromLiked {
             switch edge {
             case .like:
-                Button("喜欢", systemImage: "heart.fill") {
+                Button(pageText("喜欢"), systemImage: "heart.fill") {
                     let asyncFavorite = songActions.isAsynchronousFavorite(song)
                     if !asyncFavorite { LibraryHaptics.success() }
                     songActions.toggleFavorite(song)
@@ -637,14 +642,14 @@ public struct OnlineSongTrailingSwipeButtons: View {
                 .labelStyle(.iconOnly)
                 .tint(.pink)
             case .download:
-                Button("下载", systemImage: "arrow.down") {
+                Button(pageText("下载"), systemImage: "arrow.down") {
                     LibraryHaptics.impact()
                     downloads?.download([song])
                 }
                 .labelStyle(.iconOnly)
                 .tint(.blue)
             case .stopDownload:
-                Button("停止下载", systemImage: "stop.fill") {
+                Button(pageText("停止下载"), systemImage: "stop.fill") {
                     LibraryHaptics.impact()
                     downloads?.stop([song])
                 }
@@ -655,7 +660,7 @@ public struct OnlineSongTrailingSwipeButtons: View {
             }
         }
         if items.contains(.removeFromLiked) {
-            Button("从喜欢歌曲移除", systemImage: "trash") {
+            Button(pageText("从喜欢歌曲移除"), systemImage: "trash") {
                 let asyncFavorite = songActions.isAsynchronousFavorite(song)
                 CenteredActionSheet.confirmRemoveFromLiked {
                     if animateRemoval {

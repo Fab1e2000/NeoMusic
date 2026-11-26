@@ -8,13 +8,13 @@ public enum FrontAMDownloadState: Equatable {
     }
     public var accessibilityStatus: String {
         switch self {
-        case .queued: "等待下载"
-        case .waiting: "等待 Wi-Fi"
+        case .queued: pageText("等待下载")
+        case .waiting: pageText("等待 Wi-Fi")
         case .downloading(let progress):
-            "正在下载，\(Int((progress.isFinite ? min(1, max(0, progress)) : 0) * 100))%"
-        case .finishing: "正在处理"
-        case .downloaded: "已下载"
-        case .failed: "下载失败"
+            pageText("正在下载，\(Int((progress.isFinite ? min(1, max(0, progress)) : 0) * 100))%")
+        case .finishing: pageText("正在处理")
+        case .downloaded: pageText("已下载")
+        case .failed: pageText("下载失败")
         }
     }
 }
@@ -28,14 +28,14 @@ public struct FrontAMCollectionDownloadState: Equatable {
     public var isComplete: Bool { totalCount > 0 && completedCount == totalCount && !isResolving }
     public var isActive: Bool { activeCount > 0 || isResolving }
     public var failureSummary: String? {
-        failedCount > 0 ? "\(completedCount) / \(totalCount) 首已完成 · \(failedCount) 首失败" : nil
+        failedCount > 0 ? pageText("\(completedCount) / \(totalCount) 首已完成 · \(failedCount) 首失败") : nil
     }
     public var accessibilityValue: String {
-        if isResolving { return "正在读取完整曲目列表" }
-        if isComplete { return "\(totalCount) 首已下载" }
-        var result = "\(completedCount) / \(totalCount) 首已完成"
-        if isActive { result += "，进度 \(Int(min(1, max(0, progress)) * 100))%" }
-        if failedCount > 0 { result += "，\(failedCount) 首失败" }
+        if isResolving { return pageText("正在读取完整曲目列表") }
+        if isComplete { return pageText("\(totalCount) 首已下载") }
+        var result = pageText("\(completedCount) / \(totalCount) 首已完成")
+        if isActive { result += pageText("，进度 \(Int(min(1, max(0, progress)) * 100))%") }
+        if failedCount > 0 { result += pageText("，\(failedCount) 首失败") }
         return result
     }
 
@@ -104,7 +104,7 @@ public struct CollectionDownloadButton: View {
         Group {
             if completed && !active && !actions.canRemoveDownload(route) {
                 label.accessibilityElement(children: .ignore)
-                    .accessibilityLabel("已下载")
+                    .accessibilityLabel(pageText("已下载"))
             } else {
                 Button {
                     guard active || actions.canDownload(route) || (completed && actions.canRemoveDownload(route)) else { return }
@@ -121,7 +121,7 @@ public struct CollectionDownloadButton: View {
                 } label: { label }
                 .buttonStyle(.plain)
                 .disabled(!active && !(completed ? actions.canRemoveDownload(route) : actions.canDownload(route)))
-                .accessibilityLabel(completed ? "已下载，移除下载" : active ? "停止下载" : failed ? "重试未完成的下载" : "下载")
+                .accessibilityLabel(completed ? pageText("已下载，移除下载") : active ? pageText("停止下载") : failed ? pageText("重试未完成的下载") : pageText("下载"))
             }
         }
         .accessibilityValue(summary?.accessibilityValue ?? "")
@@ -147,7 +147,7 @@ public struct CollectionDownloadSummary: View {
                 Text(text).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                 if !summary.isActive {
-                    Button("重试未完成的\(summary.totalCount - summary.completedCount)首", systemImage: "arrow.clockwise") {
+                    Button(pageText("重试未完成的\(summary.totalCount - summary.completedCount)首"), systemImage: "arrow.clockwise") {
                         LibraryHaptics.impact()
                         actions.download(route)
                     }
@@ -174,15 +174,15 @@ public struct SongDownloadIndicator: View {
             case .downloading(let value):
                 ring(progress: value)
             case .finishing:
-                ProgressView().controlSize(.mini).accessibilityLabel("正在处理")
+                ProgressView().controlSize(.mini).accessibilityLabel(pageText("正在处理"))
             case .downloaded:
                 Image(systemName: "arrow.down.circle.fill")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(secondaryStyle)
-                    .accessibilityLabel("已下载")
+                    .accessibilityLabel(pageText("已下载"))
             case .failed:
                 Image(systemName: "exclamationmark.circle")
-                    .font(.system(size: 14)).accessibilityLabel("下载失败，可重试")
+                    .font(.system(size: 14)).accessibilityLabel(pageText("下载失败，可重试"))
             case nil:
                 EmptyView()
             }
@@ -231,7 +231,7 @@ public struct SongDownloadStatus: View {
                         .contentShape(.rect)
                 }
                 .padding(.leading, -12)
-                .accessibilityLabel("下载失败，轻点重试")
+                .accessibilityLabel(pageText("下载失败，轻点重试"))
             } else if state?.isActive == true {
                 Button { feedback &+= 1; downloads?.stop([song]) } label: {
                     SongDownloadIndicator(state: state, secondaryStyle: secondaryStyle)
@@ -239,7 +239,7 @@ public struct SongDownloadStatus: View {
                         .contentShape(.rect)
                 }
                 .padding(.leading, -12)
-                .accessibilityLabel(state == .waiting ? "等待 Wi-Fi，轻点停止下载" : "停止下载")
+                .accessibilityLabel(state == .waiting ? pageText("等待 Wi-Fi，轻点停止下载") : pageText("停止下载"))
                 .accessibilityValue(state?.accessibilityStatus ?? "")
             } else { SongDownloadIndicator(state: state, secondaryStyle: secondaryStyle) }
             }

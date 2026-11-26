@@ -16,13 +16,13 @@ public enum CenteredActionSheet {
                 action.handler()
             })
         }
-        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
+        alert.addAction(UIAlertAction(title: coreText("取消"), style: .cancel))
         DispatchQueue.main.async { topController?.present(alert, animated: true) }
     }
 
     public static func confirmRemoveFromLiked(_ perform: @escaping () -> Void) {
-        present(message: "确定要从喜欢歌曲中移除这首歌吗？", actions: [
-            .init(title: "从喜欢歌曲移除", isDestructive: true) {
+        present(message: coreText("确定要从喜欢歌曲中移除这首歌吗？"), actions: [
+            .init(title: coreText("从喜欢歌曲移除"), isDestructive: true) {
                 LibraryHaptics.lightImpact()
                 perform()
             }
@@ -30,8 +30,8 @@ public enum CenteredActionSheet {
     }
 
     public static func confirmRemoveFromPlaylist(_ perform: @escaping () -> Void) {
-        present(message: "确定要从该播放列表中移除这首歌吗？", actions: [
-            .init(title: "移除", isDestructive: true) {
+        present(message: coreText("确定要从该播放列表中移除这首歌吗？"), actions: [
+            .init(title: coreText("移除"), isDestructive: true) {
                 LibraryHaptics.lightImpact()
                 perform()
             }

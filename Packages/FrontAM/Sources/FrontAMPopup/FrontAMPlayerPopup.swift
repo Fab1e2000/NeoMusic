@@ -88,7 +88,7 @@ public struct FrontAMPlayerPopup<MissingArtwork: View, ExpandedContent: View>: V
                 bar.popupOpenGestureRecognizer.isEnabled = !empty
                 bar.barHighlightGestureRecognizer.isEnabled = !empty
                 bar.isAccessibilityElement = empty
-                bar.accessibilityLabel = empty ? "未在播放，迷你播放器" : nil
+                bar.accessibilityLabel = empty ? popupText("未在播放，迷你播放器") : nil
                 bar.accessibilityTraits = empty ? [.staticText, .notEnabled] : []
             }
             .popupCloseButtonStyle(.none)
@@ -174,16 +174,16 @@ private struct PlayerPopupContent<ExpandedContent: View>: View {
         .environment(\.playerTrackSwipeGestureRole, interactionDelegate.trackSwipeRole(for:))
         .popupItem {
             PopupItem(id: track?.id, image: barImage,
-                      accessibilityLabel: [track?.title ?? "未在播放", track?.artists ?? "", "迷你播放器"]
+                      accessibilityLabel: [track?.title ?? popupText("未在播放"), track?.artists ?? "", popupText("迷你播放器")]
                         .filter { !$0.isEmpty }.joined(separator: "，"),
-                      accessibilityHint: track == nil ? "" : "打开正在播放", title: {
+                      accessibilityHint: track == nil ? "" : popupText("打开正在播放"), title: {
                 Group {
                     if let track {
                         MiniPlayerTitle(fallbackTrack: track, isActive: isBarActive)
                             .environment(player)
                             .environment(\.playerTrackSwipeGestureRole, interactionDelegate.trackSwipeRole(for:))
                     } else {
-                        Text("未在播放")
+                        Text(popupText("未在播放"))
                             .font(.footnote.weight(.medium))
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.leading, 8)
@@ -305,7 +305,7 @@ private struct MiniPlayerControls: View {
             }
             .buttonStyle(NowPlayingTransportButtonStyle(reducesMotion: reducesMotion,
                                                         springsBack: true, diameter: 44, showsHighlight: false))
-            .accessibilityLabel(isPlaying ? "暂停" : "播放")
+            .accessibilityLabel(isPlaying ? popupText("暂停") : popupText("播放"))
             .accessibilityIdentifier("mini.playPause")
             Button {
                 nextTrigger += 1
@@ -319,7 +319,7 @@ private struct MiniPlayerControls: View {
             }
             .buttonStyle(NowPlayingTransportButtonStyle(reducesMotion: reducesMotion, diameter: 44, showsHighlight: false))
             .disabled(!canPlayNext)
-            .accessibilityLabel("下一首")
+            .accessibilityLabel(popupText("下一首"))
             .accessibilityIdentifier("mini.next")
             .frame(width: compact ? 0 : 44)
             .opacity(compact ? 0 : 1)

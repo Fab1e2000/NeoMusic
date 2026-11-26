@@ -3,7 +3,7 @@ import SwiftUI
 
 public struct LibraryStatusMessage: View {
     public let message: String
-    public var title = "资料库状态"
+    public var title = pageText("资料库状态")
     public var isError = false
     @State private var showsDetails = false
 
@@ -16,9 +16,9 @@ public struct LibraryStatusMessage: View {
                 .foregroundStyle(.primary)
                 .lineLimit(2)
                 .accessibilityLabel(message)
-            Button("查看详情", systemImage: "chevron.right") { showsDetails = true }
+            Button(pageText("查看详情"), systemImage: "chevron.right") { showsDetails = true }
                 .font(.footnote)
-                .accessibilityLabel("查看\(title)详情")
+                .accessibilityLabel(pageText("查看\(title)详情"))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
@@ -35,7 +35,7 @@ public struct LibraryStatusMessage: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
-                        Button("关闭", systemImage: "xmark", role: .close) { showsDetails = false }
+                        Button(pageText("关闭"), systemImage: "xmark", role: .close) { showsDetails = false }
                     }
                 }
             }
@@ -43,7 +43,7 @@ public struct LibraryStatusMessage: View {
     }
 
     public init(message: String,
-                title: String = "资料库状态",
+                title: String = pageText("资料库状态"),
                 isError: Bool = false) {
         self.message = message
         self.title = title

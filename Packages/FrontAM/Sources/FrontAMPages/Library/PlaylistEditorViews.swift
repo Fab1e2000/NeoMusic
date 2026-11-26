@@ -86,10 +86,10 @@ public struct PlaylistEditor: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("取消", systemImage: "xmark", action: requestDismiss).tint(.primary)
+                    Button(pageText("取消"), systemImage: "xmark", action: requestDismiss).tint(.primary)
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("完成", systemImage: "checkmark") {
+                    Button(pageText("完成"), systemImage: "checkmark") {
                         let result = coverSelection.image.map { Artwork.image(Image(uiImage: $0)) } ?? artwork
                         library.savePlaylist(playlistID, title: title, description: description,
                                              showsOnProfile: showsOnProfile, artwork: result, songs: tracks)
@@ -99,14 +99,14 @@ public struct PlaylistEditor: View {
                     .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || coverSelection.isLoading)
                 }
                 ToolbarItem(placement: .bottomBar) {
-                    Button("移除所选歌曲", systemImage: "trash") {
+                    Button(pageText("移除所选歌曲"), systemImage: "trash") {
                         tracks.removeAll { selectedTracks.contains($0.id) }
                         selectedTracks.removeAll()
                     }.disabled(selectedTracks.isEmpty)
                 }
                 ToolbarSpacer(.flexible, placement: .bottomBar)
                 ToolbarItem(placement: .bottomBar) {
-                    Button("添加音乐", systemImage: "plus") { showsMusic = true }
+                    Button(pageText("添加音乐"), systemImage: "plus") { showsMusic = true }
                 }
             }
             .sheet(isPresented: $showsMusic) {
@@ -122,10 +122,10 @@ public struct PlaylistEditor: View {
             .interactiveDismissDisabled(hasChanges)
             .onSheetDismissAttempt(requestDismiss)
             .alert("", isPresented: $showsDiscard) {
-                Button("放弃更改", role: .destructive, action: close)
-                Button("取消", role: .cancel) {}
+                Button(pageText("放弃更改"), role: .destructive, action: close)
+                Button(pageText("取消"), role: .cancel) {}
             } message: {
-                Text("确定要放弃更改吗？")
+                Text(pageText("确定要放弃更改吗？"))
             }
             .onAppear {
                 guard initialDraft == nil, let playlist = library.playlist(playlistID) else { return }
@@ -185,24 +185,24 @@ private struct PlaylistEditorFields: View {
     var body: some View {
         VStack(spacing: 0) {
             PlaylistFormCover(selection: coverSelection, artwork: artwork,
-                              accessibilityLabel: "编辑播放列表封面", bottomSpacing: 58 + 2.0 / 3)
-            TextField("播放列表标题", text: $title)
+                              accessibilityLabel: pageText("编辑播放列表封面"), bottomSpacing: 58 + 2.0 / 3)
+            TextField(pageText("播放列表标题"), text: $title)
                 .font(.system(size: titleSize, weight: .semibold)).multilineTextAlignment(.center).submitLabel(.done)
                 .frame(minHeight: 44)
             Divider()
             ZStack(alignment: .topLeading) {
                 if description.isEmpty {
-                    Text("描述").font(.system(size: descriptionSize)).foregroundStyle(Color(.placeholderText))
+                    Text(pageText("描述")).font(.system(size: descriptionSize)).foregroundStyle(Color(.placeholderText))
                         .padding(.top, 10).allowsHitTesting(false)
                 }
                 PlaylistDescriptionTextView(text: $description)
             }
             .frame(height: descriptionHeight)
             Divider()
-            Toggle("在个人资料页和搜索中显示", isOn: .constant(false))
+            Toggle(pageText("在个人资料页和搜索中显示"), isOn: .constant(false))
                 .font(.subheadline).tint(.green).frame(minHeight: 40)
                 .disabled(true)
-                .accessibilityHint("本地播放列表暂不支持公开显示")
+                .accessibilityHint(pageText("本地播放列表暂不支持公开显示"))
             Divider()
         }
         .frame(maxWidth: .infinity)
@@ -220,7 +220,7 @@ public struct PlaylistDescriptionTextView: UIViewRepresentable {
         view.textContainer.lineFragmentPadding = 0
         view.isScrollEnabled = true
         view.delegate = context.coordinator
-        view.accessibilityLabel = "描述"
+        view.accessibilityLabel = pageText("描述")
         updateTextAndStyle(view)
         return view
     }
@@ -335,16 +335,16 @@ public struct PlaylistCoverMenu: View {
 
     public var body: some View {
         Menu {
-            Button("拍照", systemImage: "camera") {
+            Button(pageText("拍照"), systemImage: "camera") {
                 selection.prepareForSelection()
                 selection.showsCamera = true
             }
             .disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
-            Button("选取照片", systemImage: "photo.on.rectangle") {
+            Button(pageText("选取照片"), systemImage: "photo.on.rectangle") {
                 selection.prepareForSelection()
                 selection.showsPhotoPicker = true
             }
-            Button("选取文件", systemImage: "folder") {
+            Button(pageText("选取文件"), systemImage: "folder") {
                 selection.prepareForSelection()
                 selection.showsFilePicker = true
             }
@@ -361,7 +361,7 @@ public struct PlaylistCoverMenu: View {
             .contentShape(.circle)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(selection.isLoading ? "正在读取照片" : accessibilityLabel)
+        .accessibilityLabel(selection.isLoading ? pageText("正在读取照片") : accessibilityLabel)
     }
 }
 
@@ -382,10 +382,10 @@ public struct PlaylistCoverPicker: ViewModifier {
                 await selection.loadPhoto { try await photo.loadTransferable(type: Data.self) }
             }
             .onDisappear { selection.cancelPendingLoad() }
-            .alert("无法读取图片", isPresented: $selection.photoError) {
-                Button("好", role: .cancel) {}
+            .alert(pageText("无法读取图片"), isPresented: $selection.photoError) {
+                Button(pageText("好"), role: .cancel) {}
             } message: {
-                Text("请选择其他图片重试。")
+                Text(pageText("请选择其他图片重试。"))
             }
     }
 }
@@ -412,11 +412,11 @@ public struct PlaylistDestinationPicker: View {
                 }
             }
             .overlay {
-                if destinations.isEmpty { ContentUnavailableView("没有其他播放列表", systemImage: "music.note.list") }
+                if destinations.isEmpty { ContentUnavailableView(pageText("没有其他播放列表"), systemImage: "music.note.list") }
             }
-            .navigationTitle("添加到播放列表")
+            .navigationTitle(pageText("添加到播放列表"))
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消", systemImage: "xmark") { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button(pageText("取消"), systemImage: "xmark") { dismiss() } } }
         }
     }
 }

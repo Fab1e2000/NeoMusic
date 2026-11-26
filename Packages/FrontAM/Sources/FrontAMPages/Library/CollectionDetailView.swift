@@ -128,11 +128,11 @@ public struct CollectionDetailView: View {
                     onPrepareCompleteCollection: onPrepareCompleteCollection)
             } else if let loadError {
                 ContentUnavailableView {
-                    Label("暂时无法读取", systemImage: "exclamationmark.circle")
+                    Label(pageText("暂时无法读取"), systemImage: "exclamationmark.circle")
                 } description: {
                     Text(loadError)
                 } actions: {
-                    if let retry { Button("重试", action: retry) }
+                    if let retry { Button(pageText("重试"), action: retry) }
                 }
             } else {
                 Color.clear.ignoresSafeArea(.container, edges: .vertical)
@@ -156,7 +156,7 @@ public struct CollectionDetailView: View {
                 HStack {
                     Text(loadError).font(.subheadline).foregroundStyle(.secondary)
                     Spacer(minLength: 12)
-                    if let retry { Button("重试", action: retry) }
+                    if let retry { Button(pageText("重试"), action: retry) }
                 }.padding().background(.regularMaterial)
             }
         }
@@ -236,14 +236,14 @@ private struct CollectionDetailContent: View {
         .environment(\.collectionPagePalette, palette)
         .libraryTitleDisplayMode(.inline)
         .modifier(FavoritesTitleHidden(isHidden: isFavorites))
-        .librarySearchable(text: $query, prompt: "搜索", enabled: detail.kind != .album)
+        .librarySearchable(text: $query, prompt: pageText("搜索"), enabled: detail.kind != .album)
         .toolbar { if !awaitingDetail && !detail.isOfflineArtistAlbum { detailToolbar } }
         .libraryRootAccountButton()
     }
 
     @ToolbarContentBuilder private var detailToolbar: some ToolbarContent {
         ToolbarItem(placement: .topBarTrailing) {
-            Menu("更多", systemImage: "ellipsis") {
+            Menu(pageText("更多"), systemImage: "ellipsis") {
                 if let route = detail.route {
                     let item = LibraryShelfItem(id: detail.title, title: detail.title, artwork: detail.artwork, route: route,
                         isFavorite: detail.isFavorite, isPinned: detail.isPinned)
@@ -252,12 +252,12 @@ private struct CollectionDetailContent: View {
             }
             .menuOrder(.fixed)
             .alert("", isPresented: $isConfirmingAlbumDeletion) {
-                Button("从资料库删除", role: .destructive) {
+                Button(pageText("从资料库删除"), role: .destructive) {
                     guard let route = detail.route else { return }
                     closeDetail()
                     withAnimation(reducesMotion ? nil : .default) { collectionActions.delete(route) }
                 }
-                Button("取消", role: .cancel) {}
+                Button(pageText("取消"), role: .cancel) {}
             } message: {
                 Text(detail.route?.deletionMessage ?? "")
             }
@@ -287,7 +287,7 @@ private struct CollectionDetailContent: View {
     private var legacyList: some View {
         let shownSongs = displayedSongs
         let footerText = (query.isEmpty && hasMoreSongs)
-            ? "\(totalSongCount ?? shownSongs.count)首歌"
+            ? pageText("\(totalSongCount ?? shownSongs.count)首歌")
             : summary(for: shownSongs)
         return NativePlaylistTrackList(
             songs: shownSongs,
@@ -353,7 +353,7 @@ private struct CollectionDetailContent: View {
                             .font(.footnote)
                             .baselineOffset(2)
                             .foregroundStyle(.secondary)
-                            .accessibilityLabel("已喜爱")
+                            .accessibilityLabel(pageText("已喜爱"))
                     }
                 }
                 .multilineTextAlignment(.center)
@@ -391,7 +391,7 @@ private struct CollectionDetailContent: View {
 
     private func summary(for songs: [LibrarySongItem]) -> String {
         let minutes = songs.reduce(0) { $0 + $1.duration } / 60
-        return "\(songs.count)首歌，\(minutes)分钟"
+        return pageText("\(songs.count)首歌，\(minutes)分钟")
     }
 }
 
@@ -427,7 +427,7 @@ private struct FavoritesHeaderStar: View {
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("喜爱歌曲")
+        .accessibilityLabel(pageText("喜爱歌曲"))
         .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, distance in
             if playlistScrollDistance == nil { scrollDistance = min(distance, 500) }
         }
@@ -451,7 +451,7 @@ private struct CollectionActions: View {
             : AnyLayout(HStackLayout(spacing: 14))
         VStack(spacing: 0) {
             layout {
-                circleButton("随机播放", systemImage: "shuffle") {
+                circleButton(pageText("随机播放"), systemImage: "shuffle") {
                     guard canPlay, let route = detail.route else { return }
                     actionFeedback &+= 1
                     actions.play(route, true)
@@ -464,7 +464,7 @@ private struct CollectionActions: View {
                 } label: {
                     HStack(spacing: 5.5) {
                         Image(systemName: "play.fill").font(.system(size: 18, weight: .semibold))
-                        Text("播放")
+                        Text(pageText("播放"))
                     }
                     .font(.headline)
                     .foregroundStyle(palette?.playForeground ?? albumBackground ?? Color(.systemBackground))
@@ -504,11 +504,11 @@ private struct CollectionActions: View {
                 .contentTransition(.symbolEffect(.replace))
         }
         .buttonStyle(CollectionCircleButtonStyle())
-        .accessibilityLabel("收藏专辑")
+        .accessibilityLabel(pageText("收藏专辑"))
         .accessibilityIdentifier("album-collection-action")
     }
 
-    private func circleButton(_ title: LocalizedStringKey, systemImage: String,
+    private func circleButton(_ title: String, systemImage: String,
                               action: @escaping () -> Void) -> some View {
         Button(title, systemImage: systemImage, action: action)
             .labelStyle(.iconOnly)
