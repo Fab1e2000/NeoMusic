@@ -14,9 +14,9 @@
 
 | Target | 类型 | 源码路径 | 依赖 |
 | --- | --- | --- | --- |
-| `NeoMusic` | Application | `NeoMusic/` | `FrontAMCore`、`FrontAMPlayer`、`AudioStreaming`、`AudioTags` (`AudioTagBridge`)、`LNPopupUI` (`LNPopupUI-Static`)、`Nuke`、`NukeUI` |
+| `NeoMusic` | Application | `NeoMusic/` | `FrontAMCore`、`FrontAMPlayer`、`FrontAMPages`、`AudioStreaming`、`AudioTags` (`AudioTagBridge`)、`Nuke`、`NukeUI` |
 | `FullScreenPlayerTests` | Unit Test | `FullScreenPlayerTests/` | `FrontAMPlayer` |
-| `NeoMusicTests` | Unit Test | `NeoMusicTests/` | `NeoMusic`、`FrontAMPlayer` |
+| `NeoMusicTests` | Hosted Unit Test | `NeoMusicTests/` | `NeoMusic`、`FrontAMPlayer` |
 | `NeoMusicNavigationUITests` | UI Test | `NeoMusicNavigationUITests/` | `NeoMusic` |
 | `NeoMusicFunctionalParityTests` | UI Test | `NeoMusicFunctionalParityTests/` | `NeoMusic` |
 
@@ -34,8 +34,8 @@
 | `FrontAM` | 本地包，Swift tools 6.2、Swift 6 语言模式、iOS 27.0+ | `Packages/FrontAM` |
 | `AudioStreaming` | 本地包 | `Packages/AudioStreaming` |
 | `AudioTags`（TagLib 封装） | 本地包 | `Packages/AudioTags` |
-| `LNPopupUI` | 本地包 | `Packages/LNPopupUI` |
-| `LNPopupController` | 本地包 | `Packages/LNPopupController` |
+| `LNPopupUI` | FrontAM 本地依赖（`LNPopupUI-Static`） | `Packages/FrontAM/Vendor/LNPopupUI` |
+| `LNPopupController` | LNPopupUI 本地依赖 | `Packages/FrontAM/Vendor/LNPopupController` |
 | `Nuke` | SPM `13.2.0` | 远程包 |
 | `LNSwiftUIUtils` | SPM `1.1.5` | 远程包 |
 | `LNSystemMarqueeLabel` | SPM `0.1.2` | 远程包 |
@@ -55,12 +55,12 @@ NeoMusic/
 │   ├── Netease/                      # 网易云网络、凭据、账号、缓存、搜索与下载存储
 │   └── PerformanceDiagnostics.swift  # AppLogger 与 os.signpost 性能打点
 ├── Features/
-│   ├── Home/                         # 主页视图与内容模型
-│   ├── Library/                      # 资料库、歌单/专辑/艺人详情、编辑器与共用组件
-│   ├── Search/                       # 搜索页面
+│   ├── Home/                         # 主页评审 Preview
+│   ├── Library/                      # 资料库评审 Preview 与宿主扩展
+│   ├── Search/                       # 搜索评审 Preview
 │   ├── Account/                      # 账户页面、音质设置与 WebKit 登录页
 │   └── Player/
-│       ├── Integration/              # 宿主适配层（连接播放器模型、歌词、封面与 LNPopup）
+│       ├── Integration/              # 宿主适配层（注入播放器模型、歌词、封面和页面插槽）
 │       ├── NowPlayingModel.swift     # 宿主播放状态与队列模型
 │       ├── NowPlayingHistory.swift   # 播放历史与账号过滤
 │       ├── NowPlayingContinuation.swift # 推荐续播与队列衔接
@@ -68,9 +68,12 @@ NeoMusic/
 └── Resources/                        # App 图标、资产与来源声明
 
 Packages/FrontAM/Sources/
-├── FrontAMCore/                       # 宿主与全屏播放器共用的封面色空间转换
+├── FrontAMCore/                       # 封面读取、取色、视觉组件与曲目播放状态接口
 ├── FrontAMPlayer/                     # 全屏播放器、Metal 着色器与来源声明
-└── FrontAM/                           # 统一导出 FrontAMCore 和 FrontAMPlayer
+├── FrontAMPopup/                      # 迷你播放器与共享封面转场
+├── FrontAMNavigation/                 # 原生 Tab、独立导航栈、Chrome 与 Zoom
+├── FrontAMPages/                      # 首页、搜索、资料库与原生曲目列表
+└── FrontAM/                           # 统一导出五个模块
 ```
 
 ---
@@ -82,11 +85,12 @@ Packages/FrontAM/Sources/
 ```mermaid
 flowchart TD
     App["NeoMusic/App<br/>入口与装配"]
-    Home["Features/Home"]
-    LibUI["Features/Library"]
-    SearchUI["Features/Search"]
     AccountUI["Features/Account<br/>含 WebKit"]
-    PlayerInt["Features/Player/Integration<br/>含 LNPopupUI / Nuke"]
+    PlayerInt["Features/Player/Integration<br/>封面使用 Nuke"]
+    Pages["FrontAMPages<br/>首页、搜索、资料库与编辑器"]
+    Navigation["FrontAMNavigation"]
+    Popup["FrontAMPopup"]
+    LN["LNPopupUI-Static"]
     FSP["FrontAMPlayer"]
     FrontCore["FrontAMCore"]
 
@@ -94,24 +98,26 @@ flowchart TD
     CorePlay["Core/Playback<br/>AVFoundation + AudioStreaming"]
     CoreNet["Core/Netease<br/>网络 / Keychain / SQLite / Nuke"]
 
-    App --> Home
-    App --> LibUI
-    App --> SearchUI
     App --> AccountUI
     App --> PlayerInt
+    App --> Pages
+    Pages --> Navigation
+    Pages --> FrontCore
+    Navigation --> Popup
+    Navigation --> FrontCore
     App --> CoreLib
     App --> CorePlay
     App --> CoreNet
 
     PlayerInt --> FSP
+    PlayerInt --> Popup
+    Popup --> FSP
+    Popup --> FrontCore
+    Popup --> LN
     FSP --> FrontCore
-    LibUI --> FrontCore
     PlayerInt --> CorePlay
     PlayerInt --> CoreLib
     AccountUI --> CoreNet
-    Home --> CoreLib
-    LibUI --> CoreLib
-    SearchUI --> CoreLib
 ```
 
 核心隔离规则如下：
@@ -122,12 +128,11 @@ flowchart TD
    - `URLRequest`、`HTTPCookie`、`WKWebView`、`WKWebsiteDataStore`、`WebPage`、`music.163.com`、`netease.session` 仅允许出现在 `Core/Netease` 与 `Features/Account`。
    - `Core/Netease` 不得引用 `LocalLibrary*`、`LocalMusic*`、`PlaylistLibrary`、`NowPlayingModel`、`ReferencePlayer*`、`PlayerState`、`PlayerPlaybackSource`、`PlayerServices`。
 2. **`FrontAM` 包隔离**
-   - `FrontAMPlayer` 依赖 `FrontAMCore` 和 Apple 系统框架。宿主在 `App` 和 `Features/Player` 中接入 FrontAM，`AlbumArtworkBackdrop.swift` 直接导入 `FrontAMCore`。
-   - `FrontAMCore` 目前只导入 `Foundation`，伞形模块只导出两个包内模块。
-   - 不得引用宿主实现类型（`NowPlayingModel`、`LibrarySongItem`、`LyricsReader`、`LocalLibrary*`、`ArtworkImagePipeline` 等）、`Bundle.main`、`UIImage(named:)` 或账号格式前缀。
+   - `FrontAMCore` 使用 Apple 系统框架。`FrontAMPlayer` 依赖 `FrontAMCore`。`FrontAMPopup` 依赖 `FrontAMCore`、`FrontAMPlayer` 及 `LNPopupUI-Static`。`FrontAMNavigation` 依赖 `FrontAMCore` 和 `FrontAMPopup`。`FrontAMPages` 直接依赖 `FrontAMCore`、`FrontAMNavigation` 和 Apple 系统框架。伞形模块导出五个模块。
+   - FrontAM 源码禁止引用宿主实现类型（`NowPlayingModel`、`PlaylistLibrary`、`LibraryDownloads`、`Netease*`、`LocalLibrary*`、`ArtworkImagePipeline` 等）、`Bundle.main`、`UIImage(named:)` 或账号格式前缀。
    - `.metal` 着色器限于 `FrontAMPlayer` 和宿主的 `Features/Player`。
 3. **定向第三方框架导入**
-   - 宿主的 `Features/Player` 可导入 `LNPopupUI`、`Nuke`、`NukeUI`、`MetalKit`。`NeteaseArtworkCache.swift` 可导入 `Nuke`。
+   - 包源码中只有 `FrontAMPopup` 可导入 `LNPopupUI`。宿主的 `Features/Player` 可导入 `Nuke`、`NukeUI`、`MetalKit`。`NeteaseArtworkCache.swift` 可导入 `Nuke`。
    - `AudioStreaming` 仅允许在 `Core/Playback/StreamingPlaybackDeck.swift` 导入。
    - `AudioTagBridge` 仅允许在 `Core/LocalMusic/DownloadedAudioTags.swift` 导入。
    - `SQLite3` 仅允许在 `Core/Netease/NeteasePageCache.swift` 导入；`Network` 仅允许在 `Core/Netease/NeteaseMusicStore.swift` 导入；`ImageIO` 额外允许在 `Core/Netease/NeteaseAvatarSnapshot.swift` 导入。
@@ -143,7 +148,7 @@ flowchart TD
   - `NeteaseAccount`（注入 `NeteaseAccountClient`、`NeteaseCredentialStore`、`NeteaseAvatarClient`）
   - `OnlineLibraryIntegration`、`HomeMusicIntegration`、`ArtistMusicIntegration`、`SearchMusicIntegration`、`DownloadMusicIntegration`
 - 视图树通过 `LocalLibrary.app` 挂载，并经 SwiftUI `Environment` 向下注入 `account`、`libraryDownloads`、`homeMusicIntegration`、`artistMusicIntegration`、`searchMusicIntegration` 及 `artworkLoadAction`。
-- `AppShell`、`LibraryAppTabs`、`LibraryDetailNavigation` 管理底部标签栏（`AppTab` 及其可排序配置）与各标签独立的导航实例（`AppTabNavigationRegistry`）。
+- `AppShell`、`LibraryAppTabs` 与 `LibraryDetailNavigation` 为 `FrontAMNavigation` 提供标签配置、各页内容、路由、预览和业务环境。
 
 ### 启动阶段并发流（`AppRuntime.start()`）
 
@@ -171,7 +176,7 @@ flowchart TD
 ### 本地资料库与扫描（`Core/Library`、`Core/LocalMusic`）
 
 - `LocalLibrary` 与 `LocalLibraryRuntime` 管理本地曲目索引、专辑聚合、最近添加（`LibraryRecentAdditions`）、播放集合历史与歌单及文件夹（`PlaylistLibrary`）。
-- `LocalMusicScanner` 扫描应用 Documents 下的音乐目录；`LocalAudioMetadataReader` 读取音频元数据与封面；`LocalArtworkImages` 负责封面派生与缓存；`DownloadedAudioTags` 通过 `AudioTagBridge`（TagLib）为下载音频写入标签。
+- `LocalMusicScanner` 扫描应用 Documents 下的音乐目录；`LocalAudioMetadataReader` 读取音频元数据与封面；`LocalArtworkImages` 负责首屏封面预热并接入 Core 的内存缓存，`AlbumArtworkBackdropPreparer` 管理磁盘派生缓存；`DownloadedAudioTags` 通过 `AudioTagBridge`（TagLib）为下载音频写入标签。
 - 资料库艺人由本机曲目、当前账号的喜爱歌曲与已载入的歌单曲目、收藏专辑及艺人订阅投影。`LibraryArtistPreferences` 保存本地艺人的 UUID、离线喜爱和按账号区分的艺人置顶，在线喜爱沿用账号的艺人订阅。`PinnedOrderStore` 保存艺人、专辑与播放列表的混合顺序。
 - `LibraryRoute.libraryArtist` 打开资料库艺人详情，`LibraryRoute.artist` 打开在线艺人主页。已下载专辑可以从资料库艺人详情进入基于本机曲目的专辑页。本地专辑沿用目录分组和文件中的年份标签。
 - 资料库艺人头像由列表、详情和置顶卡片按需读取。`NeteaseArtistStore` 按账号缓存头像元数据，复用订阅、艺人详情和图片缓存，并限制同时进行的资料库头像请求数。头像文件就绪后通过 Observation 更新对应视图。
@@ -236,15 +241,35 @@ FullScreenPlayerView(
 | `PlayerArtworkProvider` | 按 `PlayerArtworkRequest` 分别提供满足目标尺寸的缓存查询与即时显示用的备用位图，并支持异步加载和可取消的队列封面预取 |
 | `PlayerServices` | 聚合 `actions`、`lyrics`、`artwork` 与可选 `diagnostics`（`PlayerDiagnostics`） |
 
-宿主在 `Features/Player/Integration/` 中通过 `ReferenceNowPlayingView`、`NeoMusicPlayerServices`、`ReferencePlayerState`、`ReferencePlayerActions`、`ArtworkImagePipeline`、`PlayerPopup` 将上述接口连接到 `NowPlayingModel`、`LyricsReader`、Nuke 与 `LNPopupUI`。
-
-标题横滑通过 UIKit 手势代理与外层手势协调。宿主通过 `PlayerPopup` 传入展开、点按和高亮手势的角色。
-
-迷你播放器展开或收起时，LNPopupUI 只在全屏端有已布局且可见的当前歌曲封面时匹配封面位置。队列封面滚出视口时，面板使用 LN 原有的无封面匹配转场。
+宿主在 `Features/Player/Integration/` 中通过 `ReferenceNowPlayingView`、`NeoMusicPlayerServices`、`ReferencePlayerState`、`ReferencePlayerActions`、`ArtworkImagePipeline`、`PlayerPopup` 将上述接口连接到 `NowPlayingModel`、`LyricsReader` 和宿主封面管线。
 
 Xcode 将 `NowPlayingStitchableShaders.metal` 编译为包资源 bundle 中的 `default.metallib`。模块通过 `ShaderLibrary.bundle(Bundle.module)` 使用着色器。播放器的 GPL-3.0 文本及来源清单随同 bundle 打包，FrontAM 原创部分采用 MIT 许可。
 
 `NeoMusic` scheme 保留独立的 `FullScreenPlayerTests` 测试 target。资源用例从播放器的实际 bundle 检查 `default.metallib` 和来源声明，并在运行环境提供 Metal 设备时加载库、检查两个着色器入口。
+### 迷你播放器模块（`FrontAMPopup`）
+
+`FrontAMPlayerPopup` 从 SwiftUI 环境读取 `PlayerState`。调用者传入展开状态 binding、可选的暂时隐藏曲目状态、迷你栏配色和关闭回调，并通过 `PlayerArtworkProvider` 提供同步缓存、即时备用位图、异步读取和预取。缺失封面及展开内容由 ViewBuilder 接入，展开内容收到当前活动状态与关闭动作。活动状态回调可用于诊断日志。
+
+NeoMusic 的 `PlayerPopup` 适配层保留资料库播放指示器，并注入原有封面占位、预取路由、全屏播放器、Toast 与日志。迷你栏与全屏的封面通过同一套宿主图片管线处理，尺寸策略分别保留。
+
+`FrontAMPopup` 负责「未在播放」占位、播放控制、VoiceOver 元数据和原有 UIKit 手势协调。标题横滑使用展开、点按和高亮手势的角色。包内的 `FrontAMPopupArtworkTransition` 为全屏封面接入共享转场。
+
+`NeoMusic` 通过 `FrontAMPages` → `FrontAMNavigation` → `FrontAMPopup` 链接 LNPopup 静态依赖。`NeoMusicTests` 通过 `BUNDLE_LOADER` 从宿主解析这条依赖链的符号。
+
+迷你播放器展开或收起时，LNPopupUI 只在全屏端有已布局且可见的当前歌曲封面时匹配封面位置。队列封面滚出视口时，面板使用 LN 原有的无封面匹配转场。
+
+### 导航与 Tab 壳层（`FrontAMNavigation`）
+
+- `FrontAMTabs` 将宿主提供的 `FrontAMTabItem` 交给 `UITabBarController`。搜索使用固定的 `UISearchTab`。标签排序沿用原生列表编辑，应用顺序由 `FrontAMTabOrder` 计算，`FrontAMTabStorage` 接收可配置的 `UserDefaults` 键。NeoMusic 沿用 `appTabOrder.v1` 与 `appTabHidden.v1`。
+- `FrontAMTabNavigations` 按标签保存各自的 `FrontAMNavigationStack`。栈使用 `UINavigationController` 执行 push、pop 及交互式 Zoom。`FrontAMNavigationChrome` 管理导航标题、搜索控制器和当前页面配色，标签栏与迷你播放器读取所选栈的配色。
+- `FrontAMNavigationContainer` 可独立承载一条栈。宿主按路由提供页面、预览、标题初值、Zoom 源或对齐区域，以及通过 `FrontAMSearchPresentation` 提供的搜索状态与动作。账号匹配、封面预览和各页的业务环境由宿主提供。
+- `FrontAMShell` 提供播放器路由与关闭回调。播放器发起路由时立即更新当前导航栈，然后关闭弹层，关闭期间的相同请求合并。账户和音质设置、清除队列确认与 Toast 由 NeoMusic 的 `AppShell` 装配。
+
+### 页面与视觉模块（`FrontAMPages`、`FrontAMCore`）
+
+- `SearchPageModel` 和 `HomeContentModel` 接收宿主提供的展示数据与动作。搜索结果、Feed、资料库、详情、歌单和歌曲选择器由 `FrontAMPages` 渲染。宿主继续构建在线与本地数据投影，并经环境提供工具栏账户按钮、导航动作和 Toast 目标。
+- `FrontAMPlaylistSource` 提供歌单快照、编辑命令与分页回调，`FrontAMDownloadSource` 提供下载状态与操作。宿主的 `PlaylistLibrary`、`LibraryDownloads` 实现这些接口并持有数据、会话和任务。曲目行通过 SwiftUI 环境读取 `FrontAMTrackPlayback`，播控动作仍由宿主提供。
+- `FrontAMArtworkProvider` 提供同步封面查询、异步解码及取色。`FrontAMLocalArtworkProvider` 采用 `NSCache` 和 ImageIO 读取本地文件，宿主用 `ArtworkLoadAction` 注入延迟封面和头像的解析并接入磁盘取色缓存。Core 持有设计令牌、封面与背景、菜单、Toast 和 Sheet 通用组件。
 
 ---
 

@@ -65,7 +65,8 @@ final class AppRuntime {
             handler: requestArtwork,
             resolve: { [self] in await resolveArtworkFile(for: $0) },
             queueHandler: requestQueueArtwork,
-            artistPortraits: artists.libraryPortraits
+            artistPortraits: artists.libraryPortraits,
+            artworkProvider: LocalArtworkImages.provider
         )
     }
 

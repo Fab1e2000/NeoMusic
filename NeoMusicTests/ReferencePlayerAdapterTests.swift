@@ -5,6 +5,7 @@ import Nuke
 import AVFoundation
 @testable import NeoMusic
 @testable import FrontAMPlayer
+@testable import FrontAMPopup
 
 @MainActor final class NowPlayingProgressScrubTests: XCTestCase {
     func testNativeProgressUpdatesDoNotSeekAndControlEditsUseTheSamePlayer() async throws {
@@ -762,7 +763,7 @@ private struct ArtistHitRegionContent: View {
         await ArtworkImagePipeline.prefetch(thumbnails, usesTargetBounds: true)
         let first = try XCTUnwrap(ArtworkImagePipeline.cached(thumbnails[0], usesTargetBounds: true))
         XCTAssertEqual(first.size, CGSize(width: 320, height: 160))
-        XCTAssertTrue(PlayerPopup.cachedArtwork(for: url) === first)
+        XCTAssertTrue(PlayerPopupArtwork.cached(for: url, using: NeoMusicPlayerServices.artwork(usesTargetBounds: true)) === first)
         let provider = NeoMusicPlayerServices.artwork()
         await provider.prefetch([full, fit])
         XCTAssertEqual(provider.cached(fit)?.size, CGSize(width: 160, height: 80))

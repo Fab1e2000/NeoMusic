@@ -1,5 +1,6 @@
 import XCTest
 import SwiftUI
+@testable import FrontAMPages
 @testable import NeoMusic
 
 @MainActor
@@ -139,9 +140,9 @@ final class LibraryToastTests: XCTestCase {
         let presentation = try XCTUnwrap(center.current)
         var opened: LibraryRoute?
         let view = LibraryToastView(toast: presentation.toast, dismiss: { center.dismiss(presentation) },
-                                    openRoute: OpenLibraryRouteAction { route in
+                                    openRoute: { destination in
             XCTAssertNil(center.current)
-            opened = route
+            opened = destination.libraryRoute
         })
         view.openPlaylist("night")
         XCTAssertEqual(opened, .playlist("night"))
@@ -160,9 +161,9 @@ final class LibraryToastTests: XCTestCase {
         let presentation = try XCTUnwrap(center.current)
         var opened: LibraryRoute?
         let view = LibraryToastView(toast: toast, dismiss: { center.dismiss(presentation) },
-                                    openRoute: OpenLibraryRouteAction { route in
+                                    openRoute: { destination in
             XCTAssertNil(center.current)
-            opened = route
+            opened = destination.libraryRoute
         })
         view.openFolder("folder")
         XCTAssertEqual(opened, .playlistFolder("folder"))

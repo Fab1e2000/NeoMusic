@@ -1,3 +1,4 @@
+import FrontAMNavigation
 #if DEBUG
 import FrontAMPlayer
 import SwiftUI
@@ -66,7 +67,7 @@ private final class SearchPreviewPresentation {
             case .results: "综合结果"; case .songs: "歌曲结果"; case .category: "分类歌单" }
         }
     }
-    let model = SearchPageModel()
+    let model = SearchPageModel(searchPrompt: SearchMusicIntegration.searchPrompt)
     let isDisplayFixture: Bool
     private let client = NeteaseSearchClient()
     private var resources: [String: NeteaseSearchResource] = [:]

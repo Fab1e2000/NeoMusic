@@ -9,8 +9,8 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 NOTICES = (
-    "LNPopupController/NEOMUSIC-PATCHES.md",
-    "LNPopupUI/NEOMUSIC-PATCHES.md",
+    "FrontAM/Vendor/LNPopupController/NEOMUSIC-PATCHES.md",
+    "FrontAM/Vendor/LNPopupUI/NEOMUSIC-PATCHES.md",
     "AudioStreaming/NOTICE.md",
     "AudioTags/PROVENANCE.md",
 )

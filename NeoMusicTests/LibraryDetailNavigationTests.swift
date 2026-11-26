@@ -1,8 +1,10 @@
 import XCTest
+import FrontAMNavigation
 import SwiftUI
 import UIKit.UIGestureRecognizerSubclass
 import LNPopupController
 import Synchronization
+@testable import FrontAMPages
 @testable import NeoMusic
 @testable import FrontAMPlayer
 
@@ -1219,10 +1221,11 @@ final class LibraryDetailNavigationTests: XCTestCase {
     }
 
     func testSearchUsesOnlinePromptWithoutScopeBar() throws {
+        XCTAssertEqual(SearchPageModel().navigationPresentation.prompt, "歌曲、艺人、专辑及歌单")
         let page = UIViewController()
         let chrome = LibraryNavigationChrome(isRoot: true)
         chrome.attach(page)
-        let model = SearchPageModel()
+        let model = SearchMusicIntegration(account: account, container: AppContainer()).model
         model.query = "Song"
         model.isSearching = true
         model.submitted = true
@@ -1849,7 +1852,7 @@ final class LibraryDetailNavigationTests: XCTestCase {
     }
 
     func testPlayerNavigationHandoffCollapsesRepeatsWithoutWaitingForClose() {
-        var handoff = PlayerNavigationHandoff()
+        var handoff = FrontAMPlayerNavigationHandoff<LibraryRoute>()
         XCTAssertTrue(handoff.begin(.album("first")))
         XCTAssertFalse(handoff.begin(.album("first")), "The same request during closing must not push twice")
         XCTAssertTrue(handoff.begin(.artist("other")), "A different destination is a new request")

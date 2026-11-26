@@ -1,6 +1,7 @@
 import XCTest
 import UIKit
 import SwiftUI
+@testable import FrontAMPages
 @testable import NeoMusic
 
 @MainActor

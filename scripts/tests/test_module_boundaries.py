@@ -37,13 +37,61 @@ class ModuleBoundaryTests(unittest.TestCase):
         core = boundaries.FRONTAM_CORE / "ArtworkColorSpace.swift"
         umbrella = boundaries.FRONTAM_UMBRELLA / "FrontAM.swift"
         self.assertEqual(boundaries.check_source(core, "import Foundation"), [])
-        self.assertEqual(boundaries.check_source(umbrella, "@_exported import FrontAMCore\n@_exported import FrontAMPlayer"), [])
+        exports = ("@_exported import FrontAMCore\n@_exported import FrontAMPlayer\n"
+                   "@_exported import FrontAMPopup\n@_exported import FrontAMNavigation\n@_exported import FrontAMPages")
+        self.assertEqual(boundaries.check_source(umbrella, exports), [])
         for path in (core, umbrella):
             for source in ("import Nuke", "import LNPopupUI", "let bundle = Bundle.main",
                            "let store: NeteaseMusicStore", "let model: NowPlayingModel"):
                 self.assertTrue(boundaries.check_source(path, source), (path, source))
         self.assertTrue(boundaries.check_source(core, "import FrontAMPlayer"))
         self.assertTrue(boundaries.check_source(core, "import FrontAM"))
+        self.assertTrue(boundaries.check_source(boundaries.FRONTAM_PLAYER / "Player.swift", "import FrontAMPopup"))
+
+    def test_popup_owns_ln_integration_and_consumes_host_interfaces(self):
+        popup = boundaries.FRONTAM_POPUP / "PlayerPopup.swift"
+        allowed = "import SwiftUI; import UIKit\nimport FrontAMPlayer\nimport LNPopupUI\nlet bar: LNPopupBar"
+        self.assertEqual(boundaries.check_source(popup, allowed), [])
+        for source in ("import Nuke", "import NukeUI", "import LNPopupController",
+                       "let account: NeteaseAccount", "NowPlayingModel()", "ArtworkImagePipeline.prefetch([])",
+                       "ArtworkView(artwork: .missing)", "LibraryToastCenter()", "AppLogger.ui", "Bundle.main"):
+            self.assertTrue(boundaries.check_source(popup, source), source)
+        adapter = Path("NeoMusic/Features/Player/Integration/PlayerPopup.swift")
+        self.assertEqual(boundaries.check_source(adapter, "import FrontAMPopup"), [])
+        self.assertTrue(boundaries.check_source(adapter, "import LNPopupUI"))
+        self.assertTrue(boundaries.check_source(Path("NeoMusic/Core/Playback/Engine.swift"), "import FrontAMPopup"))
+
+    def test_navigation_consumes_routes_and_chrome_from_its_host(self):
+        nav = boundaries.FRONTAM_NAVIGATION / "FrontAMShell.swift"
+        self.assertEqual(boundaries.check_source(nav, "import SwiftUI\nimport UIKit\nimport FrontAMPopup"), [])
+        for source in ("import LNPopupUI", "import Nuke", "let route: LibraryRoute", "let preview: LibraryNavigationPreview",
+                       "let account: NeteaseAccount", "AccountPage()", "MusicQualitySettingsPage()",
+                       "let home: HomeMusicIntegration", "let artist: ArtistMusicIntegration",
+                       "let search: SearchMusicIntegration", "let model: SearchPageModel", "let player: NowPlayingModel",
+                       "PlaylistLibrary()", "LibraryToastCenter()", "AppDefaultsKey.appTabOrder",
+                       "AppLogger.ui", "NavigationDiagnostics.event()"):
+            self.assertTrue(boundaries.check_source(nav, source), source)
+        self.assertEqual(boundaries.check_source(Path("NeoMusic/Features/Library/CollectionMenu.swift"), "import FrontAMNavigation"), [])
+        self.assertTrue(boundaries.check_source(Path("NeoMusic/Core/Playback/Engine.swift"), "import FrontAMNavigation"))
+
+    def test_pages_only_consume_presentation_dependencies(self):
+        path = boundaries.FRONTAM_PAGES / "Library/TrackList.swift"
+        self.assertEqual(boundaries.check_source(path,
+            "import UIKit\nimport FrontAMCore\nimport FrontAMNavigation\nlet item: LibrarySongItem"), [])
+        for source in ("import Nuke", "import LNPopupUI", "import FrontAMPopup", "import FrontAMPlayer",
+                       "let account: NeteaseAccount", "let player: NowPlayingModel",
+                       "let library: PlaylistLibrary", "let queue: LibraryDownloads",
+                       "LocalLibrary.playlistLibrary", "LocalArtworkImages.cached(url, pixels: 0)",
+                       "let identity: CatalogRouteIdentity", '"netease:1"', '"catalog:album:1"',
+                       '"home:playlist:1"', "HomeMusicIntegration()", "AccountPage()"):
+            self.assertTrue(boundaries.check_source(path, source), source)
+
+    def test_showcase_uses_only_frontam_and_native_frameworks(self):
+        path = boundaries.FRONTAM_SHOWCASE / "Showcase.swift"
+        self.assertEqual(boundaries.check_source(path, "import SwiftUI\nimport FrontAM\nlet song: LibrarySongItem"), [])
+        for source in ("import Nuke", "import LNPopupUI", "import FrontAMPopup", "import NeoMusic",
+                       "let player: NowPlayingModel", "let store: NeteaseMusicStore", '"网易云音乐"', "URLSession.shared"):
+            self.assertTrue(boundaries.check_source(path, source), source)
 
     def test_component_adapter_is_owned_by_app_or_player_integration(self):
         for path in ("NeoMusic/App/Composition.swift", "NeoMusic/Features/Player/Integration/Adapter.swift"):
@@ -91,22 +139,22 @@ class ModuleBoundaryTests(unittest.TestCase):
         self.assertTrue(boundaries.check_source(path, "import SwiftUI"))
 
     def test_netease_uses_the_shared_imageio_decoder(self):
-        self.assertEqual(boundaries.check_source(Path("NeoMusic/Core/ImageSourceThumbnail.swift"),
+        self.assertEqual(boundaries.check_source(boundaries.FRONTAM_CORE / "ImageSourceThumbnail.swift",
                                                 "import Foundation\nimport ImageIO"), [])
         for filename in ["NeteaseAvatarSnapshot.swift", "Account.swift"]:
             self.assertTrue(boundaries.check_source(Path("NeoMusic/Core/Netease") / filename, "import ImageIO"))
 
     def test_artist_image_filter_keeps_transport_in_netease(self):
-        path = Path("NeoMusic/Features/Library/ArtistDetailBackdrop.swift")
+        path = boundaries.FRONTAM_CORE / "ArtistDetailBackdrop.swift"
         self.assertEqual(boundaries.check_source(path, "import CoreImage.CIFilterBuiltins"), [])
         self.assertTrue(boundaries.check_source(path, "URLSession.shared"))
         self.assertTrue(boundaries.check_source(path, "let account: NeteaseAccount"))
         self.assertTrue(boundaries.check_source(Path("NeoMusic/Core/Netease/Client.swift"), "import CoreImage"))
 
     def test_album_color_processing_stays_in_its_renderer(self):
-        path = Path("NeoMusic/Features/Library/AlbumArtworkBackdrop.swift")
+        path = boundaries.FRONTAM_CORE / "AlbumArtworkBackdrop.swift"
         self.assertEqual(boundaries.check_source(path, "import CoreImage.CIFilterBuiltins"), [])
-        self.assertEqual(boundaries.check_source(path, "import FrontAMCore"), [])
+        self.assertTrue(boundaries.check_source(path, "import FrontAMCore"))
         self.assertTrue(boundaries.check_source(path, "import FrontAMPlayer"))
         self.assertTrue(boundaries.check_source(path, "URLSession.shared"))
         self.assertTrue(boundaries.check_source(path, "let account: NeteaseAccount"))
@@ -160,7 +208,11 @@ class ModuleBoundaryTests(unittest.TestCase):
             boundaries.FRONTAM_CORE / "Nested/Artwork.swift": "let store: AppStoragePaths",
             boundaries.FRONTAM_PLAYER / "Nested/Shader.metal": '#include "../Nuke/Image.h"',
             boundaries.FRONTAM_PLAYER / "Nested/Bridge.hpp": '#include <LNPopupUI/Popup.h>',
+            boundaries.FRONTAM_POPUP / "Nested/Bar.swift": "import Nuke",
+            boundaries.FRONTAM_NAVIGATION / "Nested/Shell.swift": "AccountPage()",
+            boundaries.FRONTAM_PAGES / "Nested/Detail.swift": "let library: PlaylistLibrary",
             boundaries.FRONTAM_SOURCES / "Unassigned/Extra.h": "@import LNPopupController;",
+            boundaries.FRONTAM_SHOWCASE / "Nested/Examples.swift": "let app = AppContainer()",
         }
         with TemporaryDirectory() as directory:
             root = Path(directory)

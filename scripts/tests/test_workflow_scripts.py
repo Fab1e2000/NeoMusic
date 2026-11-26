@@ -423,16 +423,17 @@ class VendorBaselineTests(unittest.TestCase):
     def test_baseline_lists_documented_scopes_and_file_fingerprints(self):
         output = subprocess.check_output(
             [sys.executable, str(ROOT / "scripts/check-vendor-notices.py"), "--baseline"], text=True)
-        for package, revision, file in [
-            ("LNPopupController", "fe0d1b8ce3c6464a63f0dc5e82d4c1b641adb8cc", "Package.swift"),
-            ("LNPopupUI", "60853564423524c9ed15cc74c5969d3e1ca666f1", "Sources/LNPopupUI/LNPopupUI.swift"),
+        for package_path, revision, file in [
+            ("FrontAM/Vendor/LNPopupController", "fe0d1b8ce3c6464a63f0dc5e82d4c1b641adb8cc", "Package.swift"),
+            ("FrontAM/Vendor/LNPopupUI", "60853564423524c9ed15cc74c5969d3e1ca666f1", "Sources/LNPopupUI/LNPopupUI.swift"),
             ("AudioStreaming", "3b937b3682f6274ef6157aef156cd59d32ba3dc5", None),
             ("AudioTags", "deadc2990767dfbda0701e0ab35fdeea653db08f", "Sources/AudioTagBridge/AudioTagBridge.mm"),
         ]:
-            self.assertIn(f"\n{package} (", output)
+            package = ROOT / "Packages" / package_path
+            self.assertIn(f"\n{package.name} (", output)
             self.assertIn(revision, output)
             if file:
-                digest = hashlib.sha256((ROOT / "Packages" / package / file).read_bytes()).hexdigest()
+                digest = hashlib.sha256((package / file).read_bytes()).hexdigest()
                 self.assertIn(f"{digest}  {file}", output)
         self.assertRegex(output, r"[a-f0-9]{64}  Sources/AudioStreaming/Streaming/.+\.swift")
 

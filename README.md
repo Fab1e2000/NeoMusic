@@ -25,7 +25,7 @@ NeoMusic/
   Core/                         # 本地资料库、扫描、歌词、播放引擎与网易云业务
   Features/                     # 主页、资料库、搜索、账户与播放器宿主
   Resources/                    # 图标、资源与来源声明
-Packages/                       # FrontAM、AudioStreaming、AudioTags、LNPopupUI、LNPopupController
+Packages/                       # FrontAM（含 LNPopup）、AudioStreaming、AudioTags
 FullScreenPlayerTests/          # FrontAMPlayer 单元测试
 NeoMusicTests/                  # 应用单元测试
 NeoMusicNavigationUITests/      # 导航与交互 UI 测试
@@ -49,4 +49,5 @@ scripts/                        # 边界检查、本机 CI、推送门禁与打�
   - [网易云协议来源声明](NeoMusic/Resources/NeteaseSourceNotices.txt)
   - [第三方许可](NeoMusic/Features/Player/ThirdPartyLicenses.txt)、[GPL-3.0](NeoMusic/Features/Player/Resources/GPL-3.0.txt)、[Nuke 许可](NeoMusic/Features/Player/Resources/Nuke-LICENSE.txt)
   - [AudioStreaming 声明](Packages/AudioStreaming/NOTICE.md)、[AudioTags 来源](Packages/AudioTags/PROVENANCE.md)
-  - [LNPopupUI 修改说明](Packages/LNPopupUI/NEOMUSIC-PATCHES.md)、[LNPopupController 修改说明](Packages/LNPopupController/NEOMUSIC-PATCHES.md)
+  - [FrontAM 第三方许可与来源](Packages/FrontAM/THIRD_PARTY_NOTICES.md)
+  - [LNPopupUI 修改说明](Packages/FrontAM/Vendor/LNPopupUI/NEOMUSIC-PATCHES.md)、[LNPopupController 修改说明](Packages/FrontAM/Vendor/LNPopupController/NEOMUSIC-PATCHES.md)

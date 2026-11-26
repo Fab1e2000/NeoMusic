@@ -1,0 +1,28 @@
+# LNPopupUI source baseline
+
+Upstream: https://github.com/LeoNatan/LNPopupUI.git
+Revision: `60853564423524c9ed15cc74c5969d3e1ca666f1`.
+
+Only `Sources`, `Package.swift`, and `LICENSE` are vendored from the upstream revision, not a wholesale copy of NeoDizzy's fork.
+
+Local modification: remove the second identical declarations of
+`popupOpensOverSplitView` and `popupBarAvoidsSplitViewPrimaryColumn` in
+`Sources/LNPopupUI/LNPopupUI.swift`. The original declarations remain unchanged.
+Swift rejects the unmodified revision with “invalid redeclaration”. Runtime patches extracted from NeoDizzy: `PopupItemViewImage` and its image-host adapter retain custom mini artwork; `pendingNativeOpenState` synchronizes interactive native open/close with SwiftUI binding updates.
+
+The container forwards SwiftUI's `Transaction.disablesAnimations` to native popup
+presentation and dismissal. Restoring a paused queue can present the bar without
+an entrance animation while user-driven popup transitions retain native animation.
+The local LNPopupController owns the synchronous presentation layout and floating
+bar ordering for this immediate path.
+
+The local LNPopupController package uses upstream 4.6.3, LNSwiftUIUtils 1.1.5, and
+LNSystemMarqueeLabel 0.1.2; the checked-in
+`../../../../NeoMusic.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved`
+records their revisions.
+
+Custom-title `PopupItem` values accept optional accessibility labels and hints.
+Type erasure preserves these values and each native update assigns them through
+`LNPopupItem.accessibilityLabel` and `accessibilityHint`, including clearing prior
+metadata when the new item supplies `nil`. Existing initializers default to `nil`.
+NeoMusic uses this public metadata path for Chinese mini-player announcements.

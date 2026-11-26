@@ -128,17 +128,6 @@ struct AccountButton: View {
     }
 }
 
-extension View {
-    func libraryRootAccountButton() -> some View { modifier(LibraryRootAccountButton()) }
-}
-
-private struct LibraryRootAccountButton: ViewModifier {
-    @Environment(\.libraryNavigationChrome) private var chrome
-    func body(content: Content) -> some View {
-        content.toolbar { if chrome?.isRoot == true { AccountToolbar() } }
-    }
-}
-
 struct AccountToolbar: ToolbarContent {
     var body: some ToolbarContent {
         ToolbarSpacer(.fixed, placement: .topBarTrailing)

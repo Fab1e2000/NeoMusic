@@ -1,5 +1,6 @@
 import XCTest
 import SwiftUI
+@testable import FrontAMPages
 @testable import NeoMusic
 
 @MainActor
@@ -70,7 +71,6 @@ final class FrontendMaintainabilityTests: XCTestCase {
                 songs: songs,
                 playlists: [],
                 playlistLibrary: nil,
-                playlistSongs: [:],
                 recentlyPlayed: []
             )
         }

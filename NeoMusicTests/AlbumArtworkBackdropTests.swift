@@ -2,6 +2,7 @@ import SwiftUI
 import XCTest
 import MetalKit
 import Synchronization
+@testable import FrontAMCore
 @testable import NeoMusic
 @testable import FrontAMPlayer
 

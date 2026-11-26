@@ -1,0 +1,105 @@
+import FrontAMCore
+import SwiftUI
+import UIKit
+import CoreImage
+
+public struct HomePlaylistArtwork: View {
+    public let artwork: Artwork
+    public var onVisibleArtworkChange: (Bool) -> Void = { _ in }
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.displayScale) private var displayScale
+    @Environment(\.artworkLoadAction) private var artworkLoader
+    @State private var rendered: HomePlaylistArtworkRenderer.Images?
+    @Environment(\.artworkLoadAction) private var loadArtwork
+    @State private var resolvedURL: URL?
+    private var url: URL? { if case .file(let url) = artwork { url } else { resolvedURL } }
+    private var hasVisibleArtwork: Bool {
+        if rendered != nil { return true }
+        if case .image = artwork { return true }
+        return false
+    }
+    private static let fade = Gradient(stops: (0...64).map { index in
+        let t = Double(index) / 64
+        let value = pow(t, 2.8)
+        return .init(color: .white.opacity(1 - value * value * (3 - 2 * value)), location: 0.5 + 0.5 * t)
+    })
+
+    public var body: some View {
+        ZStack(alignment: .top) {
+            if let rendered {
+                ZStack(alignment: .top) {
+                    Image(uiImage: rendered.background).resizable()
+                    Color.black.opacity(0.2)
+                    Image(uiImage: rendered.cover).resizable()
+                        .frame(width: HomeMetrics.heroWidth, height: HomeMetrics.heroWidth)
+                        .mask(LinearGradient(gradient: Self.fade, startPoint: .top, endPoint: .bottom))
+                }
+                .transition(.opacity)
+            } else {
+                Color(.secondarySystemFill)
+                if case .image = artwork {
+                    ArtworkView(artwork: artwork, cornerRadius: 0)
+                        .environment(\.nativeArtworkSurfaceEnabled, false)
+                        .frame(width: HomeMetrics.heroWidth, height: HomeMetrics.heroWidth)
+                }
+            }
+        }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: hasVisibleArtwork)
+        .frame(width: HomeMetrics.heroWidth, height: HomeMetrics.heroHeight)
+        .clipped()
+        .onChange(of: hasVisibleArtwork, initial: true) { _, visible in
+            onVisibleArtworkChange(visible)
+        }
+        .task(id: artwork.loadID) {
+            await loadArtwork.resolveDeferred(artwork.loadID, reuseRegisteredURL: false) {
+                resolvedURL = $0
+            }
+        }
+        .task(id: url) {
+            guard let url else { return }
+            let pixels = FrontAMArtworkSize.pixelSize(HomeMetrics.heroWidth * displayScale)
+            guard let image = await artworkLoader.provider.load(url, pixels: pixels), !Task.isCancelled else { return }
+            guard let result = await HomePlaylistArtworkRenderer.shared.render(image, key: url.absoluteString, scale: displayScale),
+                  !Task.isCancelled else { return }
+            rendered = result
+        }
+    }
+}
+
+actor HomePlaylistArtworkRenderer {
+    public struct Images: Sendable { public let cover: UIImage; public let background: UIImage }
+    static let shared = HomePlaylistArtworkRenderer()
+    private let context = CIContext()
+    private let cache = NSCache<NSString, UIImage>()
+
+    init() { cache.totalCostLimit = 24 * 1_024 * 1_024 }
+
+    func render(_ image: UIImage, key: String, scale: CGFloat) -> Images? {
+        let cacheKey = "\(key):\(scale)" as NSString
+        if let background = cache.object(forKey: cacheKey) { return Images(cover: image, background: background) }
+        guard !Task.isCancelled, let source = image.cgImage,
+              let band = source.cropping(to: CGRect(x: 0, y: CGFloat(source.height) * 0.91,
+                                                    width: CGFloat(source.width), height: CGFloat(source.height) * 0.09)) else { return nil }
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = scale
+        format.opaque = true
+        let extended = UIGraphicsImageRenderer(size: CGSize(width: 248, height: 330), format: format).image { renderer in
+            image.draw(in: CGRect(x: 0, y: 0, width: 248, height: 248))
+            let graphics = renderer.cgContext
+            graphics.saveGState()
+            graphics.translateBy(x: 0, y: 330)
+            graphics.scaleBy(x: 1, y: -1)
+            UIImage(cgImage: band).draw(in: CGRect(x: 0, y: 0, width: 248, height: 82))
+            graphics.restoreGState()
+        }
+        guard let cgImage = extended.cgImage else { return nil }
+        let input = CIImage(cgImage: cgImage)
+        let blurred = input.clampedToExtent()
+            .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 7 * scale])
+            .cropped(to: input.extent)
+        guard !Task.isCancelled, let output = context.createCGImage(blurred, from: input.extent) else { return nil }
+        let background = UIImage(cgImage: output, scale: scale, orientation: .up)
+        cache.setObject(background, forKey: cacheKey, cost: output.bytesPerRow * output.height)
+        return Images(cover: image, background: background)
+    }
+}

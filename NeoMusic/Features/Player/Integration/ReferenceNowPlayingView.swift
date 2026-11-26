@@ -1,5 +1,6 @@
 import SwiftUI
 import FrontAMPlayer
+import FrontAMPopup
 
 @MainActor private final class ArtworkPrepareRelay {
     var action = ArtworkLoadAction()
@@ -40,7 +41,7 @@ struct PlayerNowPlayingHostView: View {
         FullScreenPlayerView(player: player,
             services: services,
             initialPage: initialPage, isActive: isActive, onDismiss: onDismiss,
-            artworkTransition: NeoMusicArtworkTransition())
+            artworkTransition: FrontAMPopupArtworkTransition())
             .onAppear {
                 if cachedServices !== services { cachedServices = services }
             }

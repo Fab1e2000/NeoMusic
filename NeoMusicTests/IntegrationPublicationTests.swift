@@ -1,6 +1,7 @@
 import Observation
 import Synchronization
 import XCTest
+@testable import FrontAMPages
 @testable import NeoMusic
 
 @MainActor final class IntegrationPublicationTests: XCTestCase {

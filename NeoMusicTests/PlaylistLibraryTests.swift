@@ -1,4 +1,5 @@
 import XCTest
+@testable import FrontAMPages
 @testable import NeoMusic
 
 @MainActor

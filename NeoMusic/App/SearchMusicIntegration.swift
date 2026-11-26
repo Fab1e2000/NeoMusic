@@ -3,7 +3,8 @@ import Observation
 
 @MainActor @Observable
 final class SearchMusicIntegration {
-    let model = SearchPageModel()
+    static let searchPrompt = "网易云音乐中的歌曲、艺人、专辑及歌单"
+    let model = SearchPageModel(searchPrompt: SearchMusicIntegration.searchPrompt)
     var showsLogin = false
     @ObservationIgnored private let account: NeteaseAccount
     private let container: AppContainer

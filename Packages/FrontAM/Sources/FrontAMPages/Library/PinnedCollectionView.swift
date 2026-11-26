@@ -1,0 +1,526 @@
+import FrontAMCore
+import SwiftUI
+import UIKit
+
+public struct PinnedCollectionView: UIViewRepresentable {
+    public let items: [LibraryShelfItem]
+    public let isEditing: Bool
+    @Binding public var tapActions: [String: PinnedTapAction]
+    public let reorder: ([LibraryRoute]) -> Bool
+    public let remove: (LibraryShelfItem) -> Void
+
+    public func makeCoordinator() -> Coordinator { Coordinator() }
+
+    public func makeUIView(context: Context) -> UICollectionView {
+        let layout = UICollectionViewFlowLayout()
+        layout.minimumInteritemSpacing = Metrics.spacing
+        layout.minimumLineSpacing = Metrics.rowSpacing
+        let view = UICollectionView(frame: .zero, collectionViewLayout: layout)
+        view.backgroundColor = .clear
+        view.isScrollEnabled = false
+        view.allowsMultipleSelection = false
+        view.contentInsetAdjustmentBehavior = .never
+        view.clipsToBounds = false
+        view.delegate = context.coordinator
+        view.dragDelegate = context.coordinator
+        view.dropDelegate = context.coordinator
+        view.dragInteractionEnabled = true
+        context.coordinator.attach(to: view, initial: self, environment: context.environment)
+        return view
+    }
+
+    public func updateUIView(_ view: UICollectionView, context: Context) {
+        let animated = context.transaction.animation != nil && !context.transaction.disablesAnimations
+            && !context.environment.accessibilityReduceMotion
+        let animationsWereEnabled = UIView.areAnimationsEnabled
+        UIView.setAnimationsEnabled(animated)
+        defer { UIView.setAnimationsEnabled(animationsWereEnabled) }
+        context.animate {
+            context.coordinator.update(with: self, environment: context.environment,
+                                       animated: animated)
+        }
+    }
+
+    public func sizeThatFits(_ proposal: ProposedViewSize, uiView: UICollectionView, context: Context) -> CGSize? {
+        guard let width = proposal.width, width.isFinite, width > 0 else { return nil }
+        let rows = (items.count + Metrics.columns - 1) / Metrics.columns
+        guard rows > 0 else { return CGSize(width: width, height: 0) }
+        let height = Metrics.itemHeight(width: width, traits: uiView.traitCollection)
+        return CGSize(width: width, height: CGFloat(rows) * height + CGFloat(rows - 1) * Metrics.rowSpacing)
+    }
+
+    private enum Metrics {
+        static let columns = 3
+        static let spacing: CGFloat = 12
+        static let rowSpacing: CGFloat = 16
+        static let titleSpacing: CGFloat = 6
+
+        static func itemWidth(_ width: CGFloat) -> CGFloat {
+            max(0, (width - spacing * CGFloat(columns - 1)) / CGFloat(columns))
+        }
+
+        static func itemHeight(width: CGFloat, traits: UITraitCollection) -> CGFloat {
+            let font = UIFont.preferredFont(forTextStyle: .caption1, compatibleWith: traits)
+            return itemWidth(width) + titleSpacing + ceil(font.lineHeight)
+        }
+    }
+
+    private static func identity(_ item: LibraryShelfItem) -> String {
+        switch item.route {
+        case .album(let id): "album:" + id
+        case .playlist(let id): "playlist:" + id
+        case .libraryArtist(.local(let id)): "artist:local:" + id.uuidString
+        case .libraryArtist(.catalog(let id, let owner)): "artist:\(owner ?? "offline"):\(id)"
+        default: "other:" + item.id
+        }
+    }
+
+    @MainActor
+    public final class Coordinator: NSObject, UICollectionViewDelegate, UICollectionViewDelegateFlowLayout,
+                             UICollectionViewDragDelegate, UICollectionViewDropDelegate {
+        private weak var collectionView: UICollectionView?
+        private var dataSource: UICollectionViewDiffableDataSource<Int, String>?
+        private var latest: PinnedCollectionView?
+        private var environment = EnvironmentValues()
+        private var itemsByID: [String: LibraryShelfItem] = [:]
+        private var pendingCommittedOrder: [String]?
+        private var hasApplied = false
+        private var configuredEditing: Bool?
+        private var configuredColorScheme: ColorScheme?
+        private var configuredDynamicTypeSize: DynamicTypeSize?
+        private var configuredLocale: Locale?
+
+        public func attach(to view: UICollectionView, initial: PinnedCollectionView, environment: EnvironmentValues) {
+            collectionView = view
+            let registration = UICollectionView.CellRegistration<PinnedCollectionCell, String> { [weak self] cell, indexPath, id in
+                self?.configure(cell, indexPath: indexPath, id: id)
+            }
+            let source = UICollectionViewDiffableDataSource<Int, String>(collectionView: view) { view, indexPath, id in
+                view.dequeueConfiguredReusableCell(using: registration, for: indexPath, item: id)
+            }
+            dataSource = source
+            update(with: initial, environment: environment)
+        }
+
+        public func update(with view: PinnedCollectionView, environment: EnvironmentValues, animated: Bool = false) {
+            latest = view
+            self.environment = environment
+            for case let cell as PinnedCollectionCell in collectionView?.visibleCells ?? [] {
+                cell.setEditing(view.isEditing, phase: collectionView?.indexPath(for: cell)?.item ?? 0,
+                                reduceMotion: environment.accessibilityReduceMotion)
+            }
+            applyLatestSnapshot(animated: animated)
+        }
+
+        private func applyLatestSnapshot(animated: Bool) {
+            guard let view = latest else { return }
+            let identifiers = view.items.map(PinnedCollectionView.identity)
+            guard Set(identifiers).count == identifiers.count else { return }
+            let previousItems = itemsByID
+            let updatedItems = Dictionary(uniqueKeysWithValues: zip(identifiers, view.items))
+            guard let source = dataSource else { return }
+            collectionView?.dragInteractionEnabled = !view.isEditing
+            if collectionView?.hasActiveDrag == true { return }
+            if let pending = pendingCommittedOrder {
+                if Set(pending) != Set(identifiers) || pending == identifiers {
+                    pendingCommittedOrder = nil
+                } else {
+                    return
+                }
+            }
+            let previousIdentifiers = source.snapshot().itemIdentifiers
+            let appearanceChanged = configuredColorScheme != environment.colorScheme
+                || configuredDynamicTypeSize != environment.dynamicTypeSize || configuredLocale != environment.locale
+            let editingChanged = configuredEditing != view.isEditing
+            let existing = Set(previousIdentifiers)
+            let changed = identifiers.filter {
+                existing.contains($0) && (previousItems[$0] != updatedItems[$0] || appearanceChanged || editingChanged)
+            }
+            guard !hasApplied || previousIdentifiers != identifiers || !changed.isEmpty else { return }
+            let needsLayout = previousIdentifiers.count != identifiers.count
+                || configuredDynamicTypeSize != environment.dynamicTypeSize
+            configuredEditing = view.isEditing
+            itemsByID = updatedItems
+            configuredColorScheme = environment.colorScheme
+            configuredDynamicTypeSize = environment.dynamicTypeSize
+            configuredLocale = environment.locale
+            var snapshot = NSDiffableDataSourceSnapshot<Int, String>()
+            snapshot.appendSections([0])
+            snapshot.appendItems(identifiers)
+            snapshot.reconfigureItems(changed)
+            source.apply(snapshot, animatingDifferences: hasApplied && animated && !environment.accessibilityReduceMotion) { [weak self] in
+                if needsLayout { self?.collectionView?.collectionViewLayout.invalidateLayout() }
+            }
+            hasApplied = true
+        }
+
+        private func commitOrder(from original: [String], to final: [String]) -> Bool {
+            guard let latest else { return false }
+            let current = latest.items.map(PinnedCollectionView.identity)
+            let originalSet = Set(original)
+            guard original.count == originalSet.count, final.count == original.count,
+                  Set(final) == originalSet, current == original else { return false }
+            let routes = final.compactMap { itemsByID[$0]?.route }
+            guard routes.count == final.count else { return false }
+            if final == original { return true }
+            pendingCommittedOrder = final
+            guard latest.reorder(routes) else {
+                pendingCommittedOrder = nil
+                return false
+            }
+            return true
+        }
+
+        private func restoreLatestSnapshot() {
+            guard let latest else { return }
+            update(with: latest, environment: environment)
+        }
+
+        private func canReorder(_ id: String) -> Bool {
+            guard let latest, !latest.isEditing, latest.items.count > 1,
+                  let item = itemsByID[id] else { return false }
+            switch item.route {
+            case .album, .playlist, .libraryArtist: return true
+            default: return false
+            }
+        }
+
+        public func collectionView(_ collectionView: UICollectionView, itemsForBeginning session: any UIDragSession,
+                            at indexPath: IndexPath) -> [UIDragItem] {
+            guard let id = dataSource?.itemIdentifier(for: indexPath), canReorder(id) else { return [] }
+            let item = UIDragItem(itemProvider: NSItemProvider(object: id as NSString))
+            item.localObject = id
+            session.localContext = self
+            #if DEBUG
+            environment.frontAMViewEvent("Pinned.dragBegin", "library")
+            #endif
+            return [item]
+        }
+
+        private func artworkPreviewParameters(in collectionView: UICollectionView, at indexPath: IndexPath) -> UIDragPreviewParameters? {
+            guard let cell = collectionView.cellForItem(at: indexPath) else { return nil }
+            cell.layoutIfNeeded()
+            guard let artwork = cell.contentView.libraryArtworkSource() else { return nil }
+            let rect = artwork.convert(artwork.bounds, to: cell)
+            guard !rect.isEmpty else { return nil }
+            let parameters = UIDragPreviewParameters()
+            parameters.backgroundColor = .clear
+            if let id = dataSource?.itemIdentifier(for: indexPath), itemsByID[id]?.artistAvatar != nil {
+                parameters.visiblePath = UIBezierPath(ovalIn: rect)
+            } else {
+                parameters.visiblePath = UIBezierPath(roundedRect: rect, cornerRadius: artwork.layer.cornerRadius)
+            }
+            return parameters
+        }
+
+        public func collectionView(_ collectionView: UICollectionView, dragPreviewParametersForItemAt indexPath: IndexPath) -> UIDragPreviewParameters? {
+            artworkPreviewParameters(in: collectionView, at: indexPath)
+        }
+
+        public func collectionView(_ collectionView: UICollectionView, dropPreviewParametersForItemAt indexPath: IndexPath) -> UIDragPreviewParameters? {
+            artworkPreviewParameters(in: collectionView, at: indexPath)
+        }
+
+        public func collectionView(_ collectionView: UICollectionView, dragSessionIsRestrictedToDraggingApplication session: any UIDragSession) -> Bool {
+            true
+        }
+
+        public func collectionView(_ collectionView: UICollectionView, dragSessionDidEnd session: any UIDragSession) {
+            restoreLatestSnapshot()
+        }
+
+        private func draggedID(in session: any UIDropSession) -> String? {
+            guard session.localDragSession?.localContext as? Coordinator === self,
+                  session.items.count == 1,
+                  let id = session.items.first?.localObject as? String, canReorder(id) else { return nil }
+            return id
+        }
+
+        public func collectionView(_ collectionView: UICollectionView, canHandle session: any UIDropSession) -> Bool {
+            draggedID(in: session) != nil
+        }
+
+        public func collectionView(_ collectionView: UICollectionView, dropSessionDidUpdate session: any UIDropSession,
+                            withDestinationIndexPath destinationIndexPath: IndexPath?) -> UICollectionViewDropProposal {
+            guard draggedID(in: session) != nil else { return UICollectionViewDropProposal(operation: .cancel) }
+            return UICollectionViewDropProposal(operation: .move, intent: .insertAtDestinationIndexPath)
+        }
+
+        public func collectionView(_ collectionView: UICollectionView, performDropWith coordinator: any UICollectionViewDropCoordinator) {
+            guard let id = draggedID(in: coordinator.session), let source = dataSource,
+                  coordinator.items.count == 1, let item = coordinator.items.first,
+                  let origin = item.sourceIndexPath, source.itemIdentifier(for: origin) == id else { return }
+            let original = source.snapshot().itemIdentifiers
+            guard let from = original.firstIndex(of: id) else { return }
+            let proposed = coordinator.destinationIndexPath ?? IndexPath(item: original.count - 1, section: 0)
+            guard proposed.section == 0 else { return }
+            let target = min(max(0, proposed.item), original.count - 1)
+            var order = original
+            order.remove(at: from)
+            order.insert(id, at: target)
+            guard commitOrder(from: original, to: order) else { return }
+            #if DEBUG
+            environment.frontAMViewEvent("Pinned.dropCommit", "library")
+            #endif
+            if order != original {
+                var snapshot = NSDiffableDataSourceSnapshot<Int, String>()
+                snapshot.appendSections([0])
+                snapshot.appendItems(order)
+                source.apply(snapshot, animatingDifferences: !environment.accessibilityReduceMotion)
+            }
+            coordinator.drop(item.dragItem, toItemAt: IndexPath(item: target, section: 0))
+        }
+
+        private func configure(_ cell: PinnedCollectionCell, indexPath: IndexPath, id: String) {
+            guard let item = itemsByID[id], let latest else { return }
+            let environment = environment
+            let remove = latest.remove
+            cell.setEditing(latest.isEditing, phase: indexPath.item, reduceMotion: environment.accessibilityReduceMotion)
+            cell.backgroundColor = .clear
+            cell.contentConfiguration = UIHostingConfiguration {
+                PinnedCellContent(item: item, isEditing: latest.isEditing) {
+                    withAnimation { remove(item) }
+                }
+                .libraryHostedAppearance(environment)
+                .environment(\.nativeArtworkSurfaceEnabled, false)
+            }
+            .margins(.all, 0)
+        }
+
+        public func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
+            (cell as? PinnedCollectionCell)?.setDisplayed(true)
+        }
+
+        public func collectionView(_ collectionView: UICollectionView, didEndDisplaying cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
+            (cell as? PinnedCollectionCell)?.setDisplayed(false)
+        }
+
+        public func collectionView(_ collectionView: UICollectionView, layout collectionViewLayout: UICollectionViewLayout,
+                            sizeForItemAt indexPath: IndexPath) -> CGSize {
+            let width = collectionView.bounds.width
+            return CGSize(width: Metrics.itemWidth(width), height: Metrics.itemHeight(width: width, traits: collectionView.traitCollection))
+        }
+
+        public func collectionView(_ collectionView: UICollectionView, layout collectionViewLayout: UICollectionViewLayout,
+                            insetForSectionAt section: Int) -> UIEdgeInsets {
+            let count = dataSource?.snapshot().numberOfItems ?? 0
+            guard count > 0, count < Metrics.columns else { return .zero }
+            let rowWidth = Metrics.itemWidth(collectionView.bounds.width) * CGFloat(count) + Metrics.spacing * CGFloat(count - 1)
+            let side = max(0, (collectionView.bounds.width - rowWidth) / 2)
+            return UIEdgeInsets(top: 0, left: side, bottom: 0, right: side)
+        }
+
+        public func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
+            collectionView.deselectItem(at: indexPath, animated: true)
+            guard let id = dataSource?.itemIdentifier(for: indexPath), let item = itemsByID[id],
+                  let route = item.route, let latest, !latest.isEditing else { return }
+            switch latest.tapActions[id] ?? .open {
+            case .open:
+                open(item, id: id)
+            case .play: environment.collectionMenuActions.play(route, false)
+            case .shuffle: environment.collectionMenuActions.play(route, true)
+            }
+        }
+
+        public func collectionView(_ collectionView: UICollectionView,
+                            contextMenuConfigurationForItemsAt indexPaths: [IndexPath], point: CGPoint) -> UIContextMenuConfiguration? {
+            guard indexPaths.count == 1, let indexPath = indexPaths.first,
+                  let id = dataSource?.itemIdentifier(for: indexPath), let item = itemsByID[id],
+                  let route = item.route, let latest, !latest.isEditing else { return nil }
+            let environment = environment
+            let tapAction = latest.tapActions[id] ?? .open
+            let traits = collectionView.traitCollection.modifyingTraits {
+                $0.preferredContentSizeCategory = UIContentSizeCategory(environment.dynamicTypeSize)
+            }
+            let configuration = UIContextMenuConfiguration(identifier: id as NSString) {
+                let size = MenuPreviewCard.size(for: item.previewLines, compatibleWith: traits)
+                let content = MenuPreviewCard(artwork: item.artwork, lines: item.previewLines,
+                                             artistAvatar: item.artistAvatar, artistIdentity: item.pinnedArtistIdentity)
+                    .libraryHostedAppearance(environment)
+                    .frame(width: size.width, height: size.height)
+                let preview = UIHostingController(rootView: content)
+                preview.traitOverrides.preferredContentSizeCategory = traits.preferredContentSizeCategory
+                preview.safeAreaRegions = []
+                preview.preferredContentSize = size
+                preview.view.backgroundColor = .clear
+                return preview
+            } actionProvider: { [weak self] _ in
+                environment.collectionMenuActions.pinnedSections(for: item, route: route, tapAction: tapAction) { [weak self] action in
+                    self?.setTapAction(action, for: id)
+                }.nativeMenu(firstSectionIsRow: false)
+            }
+            configuration.preferredMenuElementOrder = .fixed
+            return configuration
+        }
+
+        private func open(_ item: LibraryShelfItem, id: String) {
+            guard let route = item.route else { return }
+            environment.openLibraryRoute(item, sourceProvider: { [weak self] in
+                guard let self, self.itemsByID[id]?.route == route,
+                      let indexPath = self.dataSource?.indexPath(for: id) else { return nil }
+                return self.collectionView?.cellForItem(at: indexPath)?.contentView.libraryArtworkSource()
+            })
+        }
+
+        private func menuPreview(for configuration: UIContextMenuConfiguration) -> UITargetedPreview? {
+            guard let id = configuration.identifier as? String,
+                  let indexPath = dataSource?.indexPath(for: id),
+                  let view = collectionView?.cellForItem(at: indexPath)?.contentView,
+                  let window = view.window else { return nil }
+            let parameters = UIPreviewParameters()
+            parameters.backgroundColor = .clear
+            parameters.visiblePath = UIBezierPath(roundedRect: view.bounds, cornerRadius: 8)
+            let center = view.convert(CGPoint(x: view.bounds.midX, y: view.bounds.midY), to: window)
+            let target = UIPreviewTarget(container: window, center: center)
+            return UITargetedPreview(view: view, parameters: parameters, target: target)
+        }
+
+        public func collectionView(_ collectionView: UICollectionView, contextMenuConfiguration configuration: UIContextMenuConfiguration,
+                            highlightPreviewForItemAt indexPath: IndexPath) -> UITargetedPreview? {
+            menuPreview(for: configuration)
+        }
+
+        public func collectionView(_ collectionView: UICollectionView, contextMenuConfiguration configuration: UIContextMenuConfiguration,
+                            dismissalPreviewForItemAt indexPath: IndexPath) -> UITargetedPreview? {
+            menuPreview(for: configuration)
+        }
+
+        private func setTapAction(_ action: PinnedTapAction, for id: String) {
+            guard let latest, itemsByID[id] != nil else { return }
+            latest.tapActions[id] = action
+        }
+
+        public func collectionView(_ collectionView: UICollectionView,
+                            willPerformPreviewActionForMenuWith configuration: UIContextMenuConfiguration,
+                            animator: any UIContextMenuInteractionCommitAnimating) {
+            guard let id = configuration.identifier as? String, let route = itemsByID[id]?.route else { return }
+            animator.preferredCommitStyle = .dismiss
+            animator.addCompletion { [weak self] in
+                guard let self, let item = self.itemsByID[id], item.route == route else { return }
+                self.open(item, id: id)
+            }
+        }
+    }
+
+    public init(items: [LibraryShelfItem],
+                isEditing: Bool,
+                tapActions: Binding<[String: PinnedTapAction]>,
+                reorder: @escaping ([LibraryRoute]) -> Bool,
+                remove: @escaping (LibraryShelfItem) -> Void) {
+        self.items = items
+        self.isEditing = isEditing
+        self._tapActions = tapActions
+        self.reorder = reorder
+        self.remove = remove
+    }
+}
+
+public final class PinnedCollectionCell: UICollectionViewCell {
+    private static let wobbleKey = "pinnedEditingWobble"
+    private var editing = false
+    private var reduceMotion = false
+    private var displayed = false
+    private var phase = 0
+
+    public func setEditing(_ editing: Bool, phase: Int, reduceMotion: Bool) {
+        self.editing = editing
+        self.phase = phase
+        self.reduceMotion = reduceMotion
+        updateWobble()
+    }
+
+    public func setDisplayed(_ displayed: Bool) {
+        self.displayed = displayed
+        updateWobble()
+    }
+
+    public override func didMoveToWindow() {
+        super.didMoveToWindow()
+        updateWobble()
+    }
+
+    public override func prepareForReuse() {
+        super.prepareForReuse()
+        editing = false
+        displayed = false
+        updateWobble()
+    }
+
+    public override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        if editing {
+            let expanded = bounds.inset(by: UIEdgeInsets(top: -16, left: -16, bottom: 0, right: 0))
+            return expanded.contains(point)
+        }
+        return super.point(inside: point, with: event)
+    }
+
+    private func updateWobble() {
+        guard editing, !reduceMotion, displayed, window != nil else {
+            contentView.layer.removeAnimation(forKey: Self.wobbleKey)
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            contentView.layer.transform = CATransform3DIdentity
+            CATransaction.commit()
+            return
+        }
+        guard contentView.layer.animation(forKey: Self.wobbleKey) == nil else { return }
+        let angle = 1.5 * Double.pi / 180
+        let animation = CAKeyframeAnimation(keyPath: "transform.rotation.z")
+        animation.values = [-angle, angle, -angle]
+        animation.keyTimes = [0, 0.5, 1]
+        animation.timingFunctions = [CAMediaTimingFunction(name: .easeInEaseOut), CAMediaTimingFunction(name: .easeInEaseOut)]
+        animation.duration = 2 * (0.13 + Double(phase % 3) * 0.015)
+        animation.timeOffset = Double(phase) * 0.05
+        animation.repeatCount = .infinity
+        contentView.layer.add(animation, forKey: Self.wobbleKey)
+    }
+}
+
+private struct PinnedCellContent: View {
+    let item: LibraryShelfItem
+    let isEditing: Bool
+    let remove: () -> Void
+
+    private var artwork: some View {
+        Group {
+            if let avatar = item.artistAvatar { ArtistAvatar(source: avatar, identity: item.pinnedArtistIdentity) }
+            else { ArtworkView(artwork: item.artwork, contentID: item.id) }
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 6) {
+            LibraryArtworkSurface(content: artwork, cornerRadius: item.artistAvatar == nil ? DesignTokens.Radius.card : 0,
+                                  isUserInteractionEnabled: false)
+                .aspectRatio(1, contentMode: .fit)
+            Text(item.title)
+                .font(.caption.weight(.medium))
+                .lineLimit(1)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(isEditing ? [] : .isButton)
+        .overlay(alignment: .topLeading) {
+            if isEditing {
+                Button(action: remove) {
+                    Image(systemName: "minus")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 28, height: 28)
+                        .background(Color(.systemGray), in: .circle)
+                        .frame(width: 44, height: 44)
+                        .contentShape(.circle)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("取消置顶")
+                .offset(x: -16, y: -16)
+            }
+        }
+    }
+}
+
+private extension LibraryShelfItem {
+    var pinnedArtistIdentity: LibraryArtistIdentity? {
+        if case .libraryArtist(let id) = route { return id }
+        return nil
+    }
+}

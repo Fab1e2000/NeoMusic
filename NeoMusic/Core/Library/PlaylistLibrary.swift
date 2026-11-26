@@ -1,12 +1,5 @@
 import SwiftUI
 
-struct PlaylistFolder: Identifiable, Codable, Sendable, Equatable {
-    let id: String
-    var name: String
-    var parentID: String?
-    var addedOrder = 0
-}
-
 @MainActor @Observable
 final class PlaylistLibrary {
     var playlists: [LibraryPlaylistItem]
@@ -561,4 +554,12 @@ final class PlaylistLibrary {
         }
         return false
     }
+}
+
+extension PlaylistLibrary: FrontAMPlaylistSource {
+    func canCollectPreview(_ item: LibraryPlaylistItem) -> Bool { item.offersCollection }
+}
+
+extension LibraryPlaylistItem {
+    var offersCollection: Bool { id.hasPrefix("home:playlist:") && sourceOwnerID != nil && !isSubscribed }
 }

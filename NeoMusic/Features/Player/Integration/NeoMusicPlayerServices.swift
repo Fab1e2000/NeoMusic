@@ -1,5 +1,4 @@
 import SwiftUI
-import LNPopupUI
 import FrontAMPlayer
 
 @MainActor enum NeoMusicPlayerServices {
@@ -10,12 +9,13 @@ import FrontAMPlayer
                        artwork: artwork(prepare: prepareArtwork, prepareQueue: prepareQueueArtwork), diagnostics: diagnostics)
     }
 
-    static func artwork(prepare: @escaping (String) -> Void = { _ in },
+    static func artwork(usesTargetBounds: Bool = false,
+                        prepare: @escaping (String) -> Void = { _ in },
                         prepareQueue: ((String, Bool) -> Task<Void, Never>?)? = nil) -> PlayerArtworkProvider {
-        PlayerArtworkProvider(cached: { ArtworkImagePipeline.cached($0) },
-                              displayFallback: { ArtworkImagePipeline.displayFallback($0) },
-                              load: { try await ArtworkImagePipeline.load($0) },
-                              prefetch: { await ArtworkImagePipeline.prefetch($0) },
+        PlayerArtworkProvider(cached: { ArtworkImagePipeline.cached($0, usesTargetBounds: usesTargetBounds) },
+                              displayFallback: { ArtworkImagePipeline.displayFallback($0, usesTargetBounds: usesTargetBounds) },
+                              load: { try await ArtworkImagePipeline.load($0, usesTargetBounds: usesTargetBounds) },
+                              prefetch: { await ArtworkImagePipeline.prefetch($0, usesTargetBounds: usesTargetBounds) },
                               prepare: prepare, prepareQueue: prepareQueue)
     }
 
@@ -23,12 +23,4 @@ import FrontAMPlayer
         let interval = animation ? PerformanceDiagnostics.beginAnimation(name) : PerformanceDiagnostics.begin(name)
         return { PerformanceDiagnostics.end(name, interval) }
     }, event: { PerformanceDiagnostics.event($0) }, queueScroll: PerformanceDiagnostics.queueScroll)
-}
-
-struct NeoMusicArtworkTransition: ViewModifier {
-    @Environment(\.playerArtworkTransitionTargetVisible) private var targetVisible
-
-    func body(content: Content) -> some View {
-        content.popupTransitionTarget(isEnabled: targetVisible)
-    }
 }

@@ -152,7 +152,7 @@ final class LibraryListAccessibilityTests: XCTestCase {
         let stop = try XCTUnwrap(buttons.first { $0.accessibilityLabel == "停止下载" })
         XCTAssertEqual(stop.accessibilityValue, "正在下载，42%")
         for button in [stop, try XCTUnwrap(buttons.first { $0.accessibilityLabel == "更多" })] {
-            XCTAssertTrue(button.isAccessibilityElement)
+            XCTAssertTrue(button.isAccessibilityElement, button.accessibilityLabel ?? "")
             XCTAssertGreaterThanOrEqual(button.bounds.width, 44)
             XCTAssertGreaterThanOrEqual(button.bounds.height, 44)
         }

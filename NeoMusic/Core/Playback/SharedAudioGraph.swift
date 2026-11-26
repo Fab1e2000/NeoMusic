@@ -104,3 +104,7 @@ final class ThreadSafeSpectrumAnalyzer: @unchecked Sendable {
         raw.level(at: index)
     }
 }
+
+extension ThreadSafeSpectrumAnalyzer: FrontAMSpectrumSource {
+    func subscribeSpectrum() -> AnyObject { subscribe() }
+}

@@ -59,7 +59,7 @@ struct SearchCategoryReadabilityPreview: View {
     }
 
     private static func makeModel() -> SearchPageModel {
-        let model = SearchPageModel()
+        let model = SearchPageModel(searchPrompt: SearchMusicIntegration.searchPrompt)
         model.categoryItems = [
             .init(id: "search-readability:1", kind: .playlist,
                   title: "华语流行：把温柔留给每一个普通的日子", subtitle: "云音乐华语编辑组",

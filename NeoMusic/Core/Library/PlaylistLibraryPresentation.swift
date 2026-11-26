@@ -11,13 +11,6 @@ final class PlaylistLibraryPresentation {
 }
 
 extension PlaylistLibrary {
-    struct PendingAddition: Identifiable {
-        let songs: [LibrarySongItem]
-        let id = UUID()
-    }
-
-    struct RecentMove: Equatable {
-        let folderID: String
-        let id = UUID()
-    }
+    typealias PendingAddition = FrontAMPendingPlaylistAddition
+    typealias RecentMove = FrontAMRecentPlaylistMove
 }

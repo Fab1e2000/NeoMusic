@@ -2,6 +2,7 @@ import XCTest
 import SwiftUI
 @testable import NeoMusic
 @testable import FrontAMPlayer
+@testable import FrontAMPopup
 
 @MainActor
 final class NowPlayingQueueListUpdateTests: XCTestCase {

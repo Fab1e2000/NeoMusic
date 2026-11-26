@@ -1,17 +1,7 @@
 import Foundation
 import Observation
 
-enum LibraryArtistIdentity: Hashable, Codable {
-    case local(UUID)
-    case catalog(id: String, ownerID: String?)
-
-    var itemID: String {
-        switch self {
-        case .local(let id): id.uuidString
-        case .catalog(let id, _): id
-        }
-    }
-
+extension LibraryArtistIdentity {
     var onlineRoute: LibraryRoute? {
         guard case .catalog(let id, _) = self, let number = CatalogRouteIdentity.parseArtistID(id), number > 0 else { return nil }
         return .artist(id)
@@ -98,57 +88,6 @@ final class LibraryArtistPreferences {
     }
 }
 
-struct LibraryArtistEntry: Identifiable {
-    let id: LibraryArtistIdentity
-    var name: String
-    var portrait: Artwork?
-    var isFavorite = false
-    var isPinned = false
-    var isDownloaded = false
-    var songs: [LibrarySongItem] = []
-    var albums: [LibraryShelfItem] = []
-
-    var avatar: ArtistAvatarArtwork {
-        if let portrait, portrait != .missing { return .portrait(portrait) }
-        return albumAvatar
-    }
-
-    var libraryAvatar: ArtistAvatarArtwork {
-        guard id.onlineRoute != nil else { return avatar }
-        if case .portrait(.image) = avatar { return avatar }
-        return albumAvatar
-    }
-
-    private var albumAvatar: ArtistAvatarArtwork {
-        if let cover = albums.first(where: { $0.artwork != .missing }) {
-            return .album(cover.artwork, cover.albumBackdrop)
-        }
-        return .missing
-    }
-
-    var shelfItem: LibraryShelfItem {
-        LibraryShelfItem(id: id.itemID, title: name, artwork: .missing,
-                         route: .libraryArtist(id), isFavorite: isFavorite, isPinned: isPinned,
-                         artistAvatar: libraryAvatar)
-    }
-
-    static func visible(_ artists: [Self], filter: LibraryFilter, query: String) -> [Self] {
-        let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        return artists.filter { artist in
-            switch filter {
-            case .all: break
-            case .favorites: guard artist.isFavorite else { return false }
-            case .downloaded: guard artist.isDownloaded else { return false }
-            }
-            guard !term.isEmpty else { return true }
-            if artist.name.localizedStandardContains(term) { return true }
-            let key = TitleSection<Self>.sortKey(artist.name)
-            return key.localizedStandardContains(term)
-                || key.filter { !$0.isWhitespace }.localizedStandardContains(term.filter { !$0.isWhitespace })
-        }.sorted(byName: \.name)
-    }
-}
-
 @MainActor
 enum LibraryArtistCatalog {
     static func make(local: [LibrarySongItem], online: [LibrarySongItem], subscribed: [LibraryArtistItem],
@@ -203,6 +142,7 @@ enum LibraryArtistCatalog {
         }
         return entries.values.map { entry in
             var result = entry
+            result.catalogRoute = entry.id.onlineRoute
             result.isFavorite = entry.isFavorite || preferences.isFavorite(entry.id, owner: owner)
             let groups = Dictionary(grouping: entry.songs, by: \.albumID)
             var seenAlbums = Set<String>()

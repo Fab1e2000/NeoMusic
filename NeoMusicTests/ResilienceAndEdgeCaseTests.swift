@@ -2,6 +2,7 @@ import AVFoundation
 import Foundation
 import Synchronization
 import XCTest
+@testable import FrontAMPages
 @testable import NeoMusic
 
 @MainActor

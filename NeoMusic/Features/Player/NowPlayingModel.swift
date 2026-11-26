@@ -1037,3 +1037,9 @@ final class NowPlayingModel {
         )
     }
 }
+
+extension NowPlayingModel: FrontAMTrackPlayback {
+    var currentSongID: String? { hasCurrent ? current.id : nil }
+    var playbackSourceTitle: String? { sourceTitle }
+    var playbackSpectrum: (any FrontAMSpectrumSource)? { spectrumAnalyzer }
+}

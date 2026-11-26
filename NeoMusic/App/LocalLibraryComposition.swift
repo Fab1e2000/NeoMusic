@@ -1,3 +1,4 @@
+import FrontAMNavigation
 import FrontAMPlayer
 import SwiftUI
 
@@ -125,6 +126,7 @@ extension AppContainer {
                 }
                 return nil
             },
+            canOpenCatalogArtist: CatalogRouteIdentity.isCatalogID,
             songByID: { self.songForMenu($0) }
         )
     }
@@ -464,6 +466,7 @@ extension AppContainer {
                 default: break
                 }
             },
+            usesManagedCollectionActions: CatalogRouteIdentity.isCatalogID,
             togglePin: { route in
                 switch route {
                 case .playlist(let id): self.playlistLibrary.togglePin(id)
@@ -582,12 +585,23 @@ extension AppContainer {
            referencePlayer: referencePlayer, referenceLibrary: referenceLibrary, makePlayerActions: playerActions,
            isInitialContentReady: showRestoredTrack, libraryPath: launchPath, isPlayerPresented: ["nowplaying", "paused", "queue"].contains(launchPage))
         .playlistEditSheet(playlistLibrary, songs: { self.allSongs })
+        .environment(\.frontAMPlaylistEditorInitialText, playlistEditorInitialText)
         .downloadRemovalConfirmation()
         .environment(\.libraryDownloads, downloads)
         .environment(\.collectionMenuActions, menuActions)
         .environment(\.songMenuActions, songActions)
         .environment(\.songRowPlayback, player)
         .environment(\.musicPickerSource, musicPickerSource)
+    }
+
+    private var playlistEditorInitialText: (title: String, description: String)? {
+        #if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        if let index = arguments.firstIndex(of: "-mockDescription"), index + 1 < arguments.count {
+            return ("2", arguments[index + 1])
+        }
+        #endif
+        return nil
     }
 
     func playSongs(_ songs: [LibrarySongItem], shuffled: Bool) {
@@ -629,7 +643,8 @@ extension AppContainer {
         case .album(let id): albumDetail(id).map { CollectionDetailView(detail: $0) }
         case .libraryArtist(let id):
             if let artist = libraryArtist(id) {
-                LibraryArtistDetailView(artist: artist, play: { await self.playLibraryArtist(id, shuffled: $0) })
+                LibraryArtistDetailView(artist: artist, play: { await self.playLibraryArtist(id, shuffled: $0) },
+                    isCatalogAlbum: { CatalogRouteIdentity.parseAlbumID($0) != nil })
             } else {
                 ContentUnavailableView("艺人已不可用", systemImage: "music.microphone")
             }
@@ -684,6 +699,9 @@ struct LocalLibraryHome: View {
                         reorderPinned: container.reorderPinned,
                         playSong: container.playLibrarySong,
                         songForMenu: container.songForMenu)
+            #if DEBUG
+            .navigationDiagnostics("library")
+            #endif
             .safeAreaInset(edge: .bottom) {
                 if ready, let status = container.runtime.status { LibraryStatusMessage(message: status) }
                 if ready, let error = container.playlistLibrary.persistenceError {

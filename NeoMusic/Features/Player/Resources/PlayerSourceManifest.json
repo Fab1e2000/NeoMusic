@@ -186,7 +186,7 @@
     {
       "source": "NeoDizzy/Features/Player/PlayerPopup.swift",
       "sha256": "93e8886b4ba0cc2b2cdc58d05d88e0b9a2808f3ecb879d678a0e2cb5f894e19a",
-      "destination": "NeoMusic/Features/Player/Integration/PlayerPopup.swift"
+      "destination": "Packages/FrontAM/Sources/FrontAMPopup/FrontAMPlayerPopup.swift"
     },
     {
       "source": "NeoDizzy/Features/Player/MiniPlayerTitlePager.swift",

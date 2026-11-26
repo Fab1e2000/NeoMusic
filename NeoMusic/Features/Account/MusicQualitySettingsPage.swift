@@ -31,7 +31,7 @@ struct MusicQualitySettingsPage: View {
     }
 
     private var actualQuality: String {
-        guard let value = playback?.actualQuality else { return "未在播放在线歌曲" }
+        guard let value = (playback as? NowPlayingModel)?.actualQuality else { return "未在播放在线歌曲" }
         return NeteaseMusicQuality(rawValue: value)?.title ?? value
     }
 

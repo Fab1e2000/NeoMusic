@@ -15,10 +15,6 @@ packages:
     path: Packages/AudioStreaming
   AudioTags:
     path: Packages/AudioTags
-  LNPopupUI:
-    path: Packages/LNPopupUI
-  LNPopupController:
-    path: Packages/LNPopupController
   Nuke:
     url: https://github.com/kean/Nuke
     exactVersion: 13.2.0
@@ -42,8 +38,8 @@ targets:
       - package: AudioStreaming
       - package: AudioTags
         product: AudioTagBridge
-      - package: LNPopupUI
-        product: LNPopupUI-Static
+      - package: FrontAM
+        product: FrontAMPages
       - package: Nuke
         product: Nuke
       - package: Nuke
@@ -96,6 +92,7 @@ targets:
       - target: NeoMusic
       - package: FrontAM
         product: FrontAMPlayer
+      # The hosted bundle resolves FrontAMPages, FrontAMNavigation, FrontAMPopup and LNPopup symbols through NeoMusic.
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES

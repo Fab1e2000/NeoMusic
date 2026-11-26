@@ -1,3 +1,4 @@
+import FrontAMNavigation
 #if DEBUG
 import SwiftUI
 import UIKit
@@ -7,7 +8,7 @@ struct SmokeJourneyPreview: View {
     @State private var fixture = LibraryAuditFixture()
     @State private var selectedTab = AppTab.library
     @State private var navigation = AppTabNavigationRegistry()
-    @State private var search = SearchPageModel()
+    @State private var search = SearchPageModel(searchPrompt: SearchMusicIntegration.searchPrompt)
 
     var body: some View {
         LibraryAppTabs(selection: $selectedTab, storesOrder: false,
@@ -217,7 +218,7 @@ private struct LibraryAuditDestination: View {
             SongsListView(songs: fixture.songs, playAll: { songs, _ in fixture.recordPlay(songs.first) })
         case .category(.artists), .downloadedCategory(.artists):
             ArtistsListView(artists: fixture.artists.map {
-                .init(id: .catalog(id: $0.id, ownerID: nil), name: $0.name, portrait: $0.artwork)
+                .init(id: .catalog(id: $0.id, ownerID: nil), name: $0.name, catalogRoute: LibraryArtistIdentity.catalog(id: $0.id, ownerID: nil).onlineRoute, portrait: $0.artwork)
             })
         case .category(.downloaded), .downloadedCategory(.downloaded):
             DownloadedLibraryView(albums: fixture.albums)
@@ -606,7 +607,7 @@ private final class LibraryAuditFixture {
     }
 
     var collectionActions: CollectionMenuActions {
-        var actions = CollectionMenuActions()
+        var actions = CollectionMenuActions(usesManagedCollectionActions: CatalogRouteIdentity.isCatalogID)
         actions.play = { [weak self] route, _ in self?.recordPlay(self?.songs(for: route).first) }
         actions.playNext = { [weak self] _ in self?.lastAction = "已记录插播集合" }
         actions.playLater = { [weak self] _ in self?.lastAction = "已记录集合加入队列" }
