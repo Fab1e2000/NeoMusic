@@ -103,7 +103,8 @@ final class TrackSwipeController {
 
     @ObservationIgnored var feedbackHandler: () -> Void = { ReferenceTrackSwipeFeedback.selection() }
     @ObservationIgnored var prepareFeedbackHandler: () -> Void = { ReferenceTrackSwipeFeedback.prepare() }
-    @ObservationIgnored var nowProvider: () -> Date = { .now }
+    // A supplied clock is advanced by the caller through stepSpringFrame(at:).
+    @ObservationIgnored var nowProvider: (() -> Date)?
 
     var dragOffset: CGFloat {
         get { rawDragOffset }
@@ -162,7 +163,7 @@ final class TrackSwipeController {
         previous: PlayerAdjacentTrack?,
         next: PlayerAdjacentTrack?
     ) {
-        let now = nowProvider()
+        let now = nowProvider?() ?? .now
         let live = currentOffset(at: now)
         stopSpringDrivers()
         isSettling = false
@@ -368,16 +369,17 @@ final class TrackSwipeController {
         let clampedVelocity = max(-Self.maxSpringVelocity, min(Self.maxSpringVelocity, velocity))
         springStartOffset = offset
         springVelocity = clampedVelocity
-        let startDate = nowProvider()
-        springStartDate = startDate
+        springStartDate = nowProvider?() ?? .now
         springSettlingDuration = max(
             Self.spring.settlingDuration(target: -offset, initialVelocity: clampedVelocity, epsilon: 0.1),
             0.05
         )
         isSettling = true
         updateMotionOutput(offset: offset)
-        startDisplayLink()
-        scheduleSettleTask(after: springSettlingDuration + 0.05)
+        if nowProvider == nil {
+            startDisplayLink()
+            scheduleSettleTask(after: springSettlingDuration + 0.05)
+        }
     }
 
     private func scheduleSettleTask(after delay: TimeInterval) {
@@ -425,7 +427,7 @@ final class TrackSwipeController {
             return
         }
         let lookahead = min(max(displayLink.targetTimestamp - CACurrentMediaTime(), 0), 0.05)
-        let sampleDate = nowProvider().addingTimeInterval(lookahead)
+        let sampleDate = Date.now.addingTimeInterval(lookahead)
         stepSpringFrame(at: sampleDate)
     }
 
@@ -549,6 +551,7 @@ struct NowPlayingTrackSwipe<Title: View, Artist: View>: View {
             .modifier(TrackSwipeGestureModifier(
                 usesUIKitTouchSurface: usesUIKitTouchSurface,
                 pan: NowPlayingHorizontalPan(
+                    controller: controller,
                     gestureRole: gestureRole,
                     onStart: { translation in
                         controller.panBegan(
@@ -758,6 +761,7 @@ struct NowPlayingTrackSwipe<Title: View, Artist: View>: View {
 }
 
 private struct NowPlayingHorizontalPan: UIGestureRecognizerRepresentable {
+    let controller: TrackSwipeController
     let gestureRole: @MainActor (UIGestureRecognizer) -> PlayerTrackSwipeGestureRole?
     let onStart: (CGFloat) -> Void
     let onChange: (CGFloat) -> Void
@@ -899,6 +903,7 @@ struct TrackSwipeTouchSurface: UIViewRepresentable {
     func updateUIView(_ view: UIView, context: Context) { context.coordinator.pan = pan }
 
     @MainActor final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var controller: TrackSwipeController { pan.controller }
         fileprivate var pan: NowPlayingHorizontalPan {
             didSet { directionDelegate.gestureRole = pan.gestureRole }
         }

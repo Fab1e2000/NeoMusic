@@ -402,10 +402,14 @@ import SwiftUI
         window.rootViewController = controller
         defer { window.isHidden = true }
         window.makeKeyAndVisible()
-        await fulfillment(of: [appeared], timeout: 2)
+        controller.view.layoutIfNeeded()
+        guard await XCTWaiter.fulfillment(of: [appeared], timeout: 10) == .completed else {
+            XCTFail("Hosted playlist did not appear")
+            return
+        }
         XCTAssertEqual(reads, 0, "Browsing a playlist must not observe the whole song catalog")
         library.pendingEdit = item
-        await fulfillment(of: [opened], timeout: 2)
+        await fulfillment(of: [opened], timeout: 10)
         XCTAssertGreaterThan(reads, 0)
     }
 

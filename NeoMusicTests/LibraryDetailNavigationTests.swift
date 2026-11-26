@@ -1943,11 +1943,34 @@ final class LibraryDetailNavigationTests: XCTestCase {
             .environment(\.scenePhase, .active)
             .dynamicTypeSize(.large))
         window.makeKeyAndVisible()
-        try await settle()
 
         func findTabs(in controller: UIViewController) -> UITabBarController? {
             if let tabs = controller as? UITabBarController { return tabs }
             return controller.children.lazy.compactMap { findTabs(in: $0) }.first
+        }
+        func swipeGesture(in bar: UIView) -> UIPanGestureRecognizer? {
+            descendants(of: UIView.self, in: bar).lazy
+                .filter { $0.window === window && $0.bounds.width > 0 }
+                .compactMap { view in
+                    view.gestureRecognizers?.first { $0.name == PlayerInteraction.trackSwipeGestureName }
+                        as? UIPanGestureRecognizer
+                }.first
+        }
+        func waitForPopup(_ description: String, matching condition: @escaping () -> Bool) async -> Bool {
+            let ready = expectation(description: description)
+            var fulfilled = false
+            let sampler = NativeDisplayFrameSampler { _ in
+                guard !fulfilled, condition() else { return }
+                fulfilled = true
+                ready.fulfill()
+            }
+            sampler.start()
+            defer { sampler.stop() }
+            guard await XCTWaiter.fulfillment(of: [ready], timeout: 10) == .completed else {
+                XCTFail("Timed out waiting for \(description)")
+                return false
+            }
+            return true
         }
         func renderView(_ view: UIView) -> UIImage {
             let format = UIGraphicsImageRendererFormat()
@@ -1981,13 +2004,20 @@ final class LibraryDetailNavigationTests: XCTestCase {
             }
         }
 
-        let tabs = try XCTUnwrap(findTabs(in: window.rootViewController!))
-        let popupBar = tabs.popupBar
-        let pager = try XCTUnwrap(descendants(of: UIView.self, in: popupBar).first {
-            $0.gestureRecognizers?.contains(where: { $0.name == PlayerInteraction.trackSwipeGestureName }) == true
-        })
-        let pan = try XCTUnwrap(pager.gestureRecognizers?.first { $0.name == PlayerInteraction.trackSwipeGestureName } as? UIPanGestureRecognizer)
+        let host = try XCTUnwrap(window.rootViewController)
+        guard await waitForPopup("the initial popup item and track pager", matching: {
+            guard let bar = findTabs(in: host)?.popupBar,
+                  bar.popupItem?.accessibilityLabel?.hasPrefix(tracks[0].title) == true else { return false }
+            return swipeGesture(in: bar) != nil
+        }) else { return }
+        let popupBar = try XCTUnwrap(findTabs(in: host)).popupBar
+        let pan = try XCTUnwrap(swipeGesture(in: popupBar))
+        let pager = try XCTUnwrap(pan.view)
         let coordinator = try XCTUnwrap(pan.delegate as? TrackSwipeTouchSurface.Coordinator)
+        let spring = coordinator.controller
+        let releaseDate = Date(timeIntervalSinceReferenceDate: 1_000)
+        spring.nowProvider = { releaseDate }
+        defer { spring.cancelMotion(); spring.nowProvider = nil }
 
         let settledInitial = renderView(popupBar)
 
@@ -1997,14 +2027,24 @@ final class LibraryDetailNavigationTests: XCTestCase {
         XCTAssertEqual(player.currentTrack?.id, "mini-0")
 
         coordinator.handle(.ended, translation: swipeX, velocity: -150, from: pager)
-        try await Task.sleep(for: .milliseconds(25))
         XCTAssertEqual(player.currentTrack?.id, "mini-1")
+        XCTAssertTrue(spring.isSettling)
+        guard await waitForPopup("the committed track to reach the popup item", matching: {
+            popupBar.popupItem?.accessibilityLabel?.hasPrefix(tracks[1].title) == true
+        }) else { return }
+
+        let updatedCoordinator = try XCTUnwrap(
+            swipeGesture(in: popupBar)?.delegate as? TrackSwipeTouchSurface.Coordinator
+        )
+        XCTAssertTrue(updatedCoordinator.controller === spring, "The popup update must preserve the pager's motion controller")
+        XCTAssertTrue(spring.isSettling, "Delivering the popup item must preserve the committed spring")
         let frame1 = renderView(popupBar)
 
-        try await Task.sleep(for: .milliseconds(45))
+        spring.stepSpringFrame(at: releaseDate.addingTimeInterval(0.04))
         let frame2 = renderView(popupBar)
 
-        try await Task.sleep(for: .milliseconds(650))
+        spring.stepSpringFrame(at: releaseDate.addingTimeInterval(1))
+        XCTAssertFalse(spring.isSettling)
         let settledFinal = renderView(popupBar)
 
         XCTAssertGreaterThan(try diffPixels(settledInitial, settledFinal), 40,

@@ -132,6 +132,9 @@ final class ResilienceAndEdgeCaseTests: XCTestCase {
             validateCredential: { _ in previous.profile }, cachedAvatar: { _ in nil }, loadAvatar: { _ in Data() },
             clearAvatarCache: {}, home: home, downloads: downloads)
         await account.restoreCachedContent()
+        XCTAssertNil(downloads.userID)
+        XCTAssertEqual(downloads.states[song.id], .queued)
+        await account.resumeRestoredDownloads()
         await account.restoreHomeCachedContent()
         XCTAssertEqual(home.userID, 1)
         XCTAssertEqual(downloads.userID, 1)
