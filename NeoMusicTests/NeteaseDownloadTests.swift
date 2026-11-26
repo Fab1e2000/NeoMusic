@@ -313,6 +313,7 @@ final class NeteaseDownloadTests: XCTestCase, @unchecked Sendable {
         await store.restore()
         let account = account(downloads: store) { throw NeteaseAccountError.keychain(-25308) }
         await account.restoreCachedContent()
+        await account.resumeRestoredDownloads()
         XCTAssertEqual(account.restoredPlaybackIdentity, .pending)
         XCTAssertEqual(store.states[12], .queued)
         XCTAssertEqual(store.records[99], record); XCTAssertEqual(store.resource(songID: 99), file)
@@ -336,7 +337,12 @@ final class NeteaseDownloadTests: XCTestCase, @unchecked Sendable {
         }
         let session = try saved()
         let account = account(downloads: store) { session }
-        await account.restoreCachedContent(); await gate.waitUntilStarted()
+        await account.restoreCachedContent()
+        XCTAssertEqual(store.states[12], .queued)
+        XCTAssertNil(store.userID)
+        XCTAssertTrue(DownloadFixtureProtocol.state.withLock { $0.paths.isEmpty })
+        await account.resumeRestoredDownloads()
+        await gate.waitUntilStarted()
         let logout = Task { try await account.logout() }
         while store.userID != nil { await Task.yield() }
         await gate.open(); try await logout.value

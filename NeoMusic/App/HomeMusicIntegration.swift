@@ -279,7 +279,7 @@ import Observation
               let url = DeferredArtworkRoute.remote(id, session: home.sessionRevision, domain: .home) else { pending?.cancel(); return nil }
         return home.requestQueueArtwork(url, foreground: foreground, after: pending)
     }
-    func resolveArtworkFile(for id: String) async -> URL? {
+    func resolveArtworkFile(for id: String, cachedOnly: Bool = false) async -> URL? {
         guard let home = account.home else { return nil }
         let revision = home.sessionRevision, owner = home.userID
         return await DeferredArtworkRoute.cachedFile(id, session: revision,
@@ -290,6 +290,11 @@ import Observation
                     return await home.cachedArtworkFile(remote)
                 case .homePlaylist:
                     guard let number = key.playlistID else { return nil }
+                    if cachedOnly {
+                        guard let detail = try? await home.restoreCachedDetail(id: number, publish: false),
+                              let remote = detail.displayArtworkURL(ownerID: owner) else { return nil }
+                        return await home.cachedArtworkFile(remote)
+                    }
                     return try? await home.playlistArtworkFile(id: number)
                 default:
                     return nil

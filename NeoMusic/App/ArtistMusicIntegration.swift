@@ -117,6 +117,19 @@ import Observation
         })
     }
 
+    func prepareCachedLibraryPortraits(_ identities: [LibraryArtistIdentity]) async {
+        await withTaskGroup(of: Void.self) { group in
+            for identity in identities {
+                guard let (store, id) = portraitContext(identity) else { continue }
+                let revision = store.sessionRevision
+                group.addTask {
+                    guard let file = await store.restoreCachedLibraryPortrait(id, session: revision) else { return }
+                    _ = await LocalArtworkImages.load(file, pixels: 512)
+                }
+            }
+        }
+    }
+
     private func portraitContext(_ identity: LibraryArtistIdentity) -> (NeteaseArtistStore, Int64)? {
         guard let store, store.isReady, store.userID == owner, !account.isLoggingOut,
               identity.belongs(to: owner.map(String.init)), identity.onlineRoute != nil,

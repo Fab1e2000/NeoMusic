@@ -307,6 +307,51 @@ import SwiftUI
         XCTAssertNil(LocalArtworkImages.cached(later, pixels: 512))
     }
 
+    func testFirstShelfPreparesDiskBackedDeferredArtworkAndLocalArtworkTogether() async throws {
+        let local = try artworkFile(), remoteFile = try artworkFile()
+        defer { [local, remoteFile].forEach { try? FileManager.default.removeItem(at: $0) } }
+        let key = UUID().uuidString, miss = UUID().uuidString
+        let cached = Artwork.deferred(id: key, placeholder: .missing)
+        await LocalArtworkImages.prepareFirstShelf([
+            .file(local), .folder([cached, cached]), .deferred(id: miss, placeholder: .playlist)
+        ], timeout: .seconds(5)) { $0 == key ? remoteFile : nil }
+        XCTAssertNotNil(LocalArtworkImages.cached(local, pixels: 512))
+        XCTAssertEqual(LocalArtworkImages.cachedResolved(key, pixels: 192)?.size.width, 192)
+        XCTAssertNil(LocalArtworkImages.resolvedURL(for: miss))
+        func firstFrame(_ artwork: Artwork) throws -> Data {
+            let view = ArtworkView(artwork: artwork).frame(width: 64, height: 64)
+                .environment(\.nativeArtworkSurfaceEnabled, false)
+            return try XCTUnwrap(ImageRenderer(content: view).uiImage?.pngData())
+        }
+        let frame = try firstFrame(cached)
+        XCTAssertEqual(frame, try firstFrame(.file(remoteFile)))
+        XCTAssertNotEqual(frame, try firstFrame(.missing))
+    }
+
+    func testFirstShelfTimeoutLeavesSlowDiskWorkRunning() async throws {
+        let file = try artworkFile(), key = UUID().uuidString
+        defer { try? FileManager.default.removeItem(at: file) }
+        let (release, gate) = AsyncStream<Void>.makeStream()
+        let returned = expectation(description: "First presentation passed the artwork deadline")
+        let task = Task {
+            await LocalArtworkImages.prepareFirstShelf([.deferred(id: key, placeholder: .missing)],
+                                                      timeout: .milliseconds(10)) { _ in
+                for await _ in release {}
+                return file
+            }
+            returned.fulfill()
+        }
+        await fulfillment(of: [returned], timeout: 2)
+        XCTAssertNil(LocalArtworkImages.cachedResolved(key, pixels: 512))
+        gate.finish()
+        await task.value
+        let deadline = ContinuousClock.now + .seconds(2)
+        while LocalArtworkImages.cachedResolved(key, pixels: 512) == nil && ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        XCTAssertNotNil(LocalArtworkImages.cachedResolved(key, pixels: 512))
+    }
+
     func testCancelledFirstShelfPreparationDoesNotDecodeNewFiles() async throws {
         let url = try artworkFile()
         defer { try? FileManager.default.removeItem(at: url) }

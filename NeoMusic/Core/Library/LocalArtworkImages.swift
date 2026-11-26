@@ -68,25 +68,70 @@ import UIKit
         return backdrop
     }
 
-    static func prepare(_ artworks: [Artwork], pixels: Int = 512, limit: Int = 10) async {
+    /// Wait for the visible covers or the deadline. A slow disk read can still warm the
+    /// same image cache the visible views use after the deadline.
+    static func prepareFirstShelf(_ artworks: [Artwork], timeout: Duration = .milliseconds(275),
+                                  preparePortraits: @escaping @MainActor () async -> Void = {},
+                                  resolveCached: @escaping @MainActor (String) async -> URL?) async {
+        guard !Task.isCancelled else { return }
+        let (finished, completion) = AsyncStream<Void>.makeStream()
+        let work = Task {
+            async let portraits: Void = preparePortraits()
+            await prepare(artworks, resolveCached: resolveCached)
+            await portraits
+            completion.finish()
+        }
+        let deadline = Task {
+            try await Task.sleep(for: timeout)
+            completion.finish()
+        }
+        for await _ in finished {}
+        deadline.cancel()
+        if Task.isCancelled { work.cancel() }
+    }
+
+    private enum Source: Hashable {
+        case file(URL)
+        case deferred(String)
+    }
+
+    static func prepare(_ artworks: [Artwork], pixels: Int = 512, limit: Int = .max,
+                        resolveCached: @escaping @MainActor (String) async -> URL? = { _ in nil }) async {
         guard limit > 0, !Task.isCancelled else { return }
-        var requests: [URL: Int] = [:]
+        var requests: [Source: Int] = [:]
         func collect(_ artwork: Artwork, pixels: Int) {
+            let source: Source
             switch artwork {
-            case .file(let url):
-                guard url.isFileURL, requests[url] != nil || requests.count < limit else { return }
-                requests[url] = max(requests[url] ?? 0, pixels)
+            case .file(let url) where url.isFileURL: source = .file(url)
+            case .deferred(let id, _): source = .deferred(id)
             case .folder(let children):
                 for child in children.prefix(4) { collect(child, pixels: pixelSize(CGFloat(pixels) * 0.36)) }
-            default: break
+                return
+            default: return
             }
+            guard requests[source] != nil || requests.count < limit else { return }
+            requests[source] = max(requests[source] ?? 0, pixels)
         }
         for artwork in artworks { collect(artwork, pixels: pixels) }
         await withTaskGroup(of: Void.self) { group in
-            for (url, size) in requests {
-                group.addTask { _ = await load(url, pixels: size) }
+            for (source, size) in requests {
+                group.addTask { await prepare(source, pixels: size, resolveCached: resolveCached) }
             }
         }
+    }
+
+    private static func prepare(_ source: Source, pixels: Int,
+                                resolveCached: @MainActor (String) async -> URL?) async {
+        guard !Task.isCancelled else { return }
+        let url: URL
+        switch source {
+        case .file(let file): url = file
+        case .deferred(let id):
+            guard let file = await resolveCached(id), file.isFileURL, !Task.isCancelled else { return }
+            registerResolvedArtwork(id, url: file)
+            url = file
+        }
+        _ = await load(url, pixels: pixels)
     }
 
     static func load(_ url: URL, pixels: Int) async -> UIImage? {
@@ -110,7 +155,7 @@ import UIKit
         } else {
             task = Task {
                 defer { loading[request] = nil }
-                guard let prepared = await decoder.load(url, size: requestedSize) else { return nil }
+                guard let prepared = await LocalArtworkDecoder.load(url, size: requestedSize) else { return nil }
                 let variants = images.object(forKey: url as NSURL) ?? Variants()
                 variants.images[prepared.pixels] = prepared.image
                 if let sourceSize = prepared.sourceSize { variants.sourceSize = sourceSize }
@@ -140,7 +185,7 @@ private actor LocalArtworkDecoder {
         return colors?[url.absoluteString]
     }
 
-    func load(_ url: URL, size: ImageSourceThumbnail.Size) -> Prepared? {
+    @concurrent static func load(_ url: URL, size: ImageSourceThumbnail.Size) async -> Prepared? {
         guard !Task.isCancelled else { return nil }
         guard let data = try? Data(contentsOf: url) else { return nil }
         return autoreleasepool {

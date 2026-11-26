@@ -731,6 +731,15 @@ import Observation
         return detail
     }
 
+    // The library can restore a subscribed playlist before the home feed is activated.
+    // Read just its owner's persisted detail without changing the home store's session.
+    func cachedPlaylistCoverFile(id: Int64, owner: Int64) async -> URL? {
+        guard !Task.isCancelled else { return nil }
+        let detail = try? await pageCache.load(NeteasePlaylistDetail.self, scope: String(owner), key: "playlist:\(id)")
+        guard let remote = detail?.displayArtworkURL(ownerID: owner), !Task.isCancelled else { return nil }
+        return await artworkCache.cachedFileURL(for: remote, scope: String(owner))
+    }
+
     func playlistArtworkFile(id: Int64) async throws -> URL? {
         let revision = generation
         _ = try await restoreCachedDetail(id: id, publish: false)

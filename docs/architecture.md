@@ -141,12 +141,10 @@ flowchart TD
 ### 启动阶段并发流（`AppRuntime.start()`）
 
 1. 绑定各 Integration 回调（`downloads.connect()`、`search.connect()`、`home.connect()`、`artists.connect()`、`onlineLibrary.connect()`、`onlineLibrary.connectLyrics()`）。
-2. 由单个启动任务并行管理本地和在线恢复。本地资料库恢复缓存并独立完成初始呈现。在线分支先恢复下载记录与元数据，再恢复缓存账号与在线资料库。
-3. 当账号恢复身份与本地播放恢复均就绪时，调用 `completeRestoredPlayback()` 还原队列与暂停位置。
-4. 并行执行后台刷新：
-   - 本地目录扫描（`LocalLibrary.runtime.refresh()`）
-   - 剩余在线内容加载与账号校验（`restoreRemainingOnlineContent()`）
-   - 初始在线封面准备（`prepareInitialOnlineArtwork()`）
+2. 并行恢复本地资料库与在线缓存。在线分支依次恢复下载索引和账号资料库页面。两条分支结束后等待在线资料库与下载元数据发布。
+3. 对前六个置顶和前六个最近添加的磁盘封面并发准备缩略图，最多等待 275 ms。资料库保留导航框架，就绪时一次填入列表。
+4. 迷你播放器在等待队列与身份恢复时显示“未在播放”，恢复后更新同一条播放器栏。账号身份暂不可用时，资料库首现后仍可使用本地或已下载的当前曲目。
+5. 首现后并行扫描本地目录、恢复剩余在线内容。下载续传与账号校验在这一阶段执行。
 
 ### 前后台切换（`AppRuntime.sceneDidChange`）
 
@@ -155,7 +153,7 @@ flowchart TD
 
 ### 封面路由（`AppRuntime.requestArtwork(for:)`）
 
-按 `DeferredArtworkKey` 的 `domain`（`.music`、`.home` / `.homePlaylist`、`.artists`、`.search`）分发到对应 Integration 请求或查询缓存文件。\`DeferredArtworkRoute\` 校验会话和缓存返回结果，Online 与 Home 共用 16 ms 封面发布合批器。五个 Integration 共用引用曲目查找、喜爱反馈或曲目投影中的相应组件。
+按 `DeferredArtworkKey` 的 `domain`（`.music` / `.libraryPlaylist`、`.home` / `.homePlaylist`、`.artists`、`.search`）分发到对应 Integration 请求或查询缓存文件。\`DeferredArtworkRoute\` 校验会话和缓存返回结果，Online 与 Home 共用 16 ms 封面发布合批器。五个 Integration 共用引用曲目查找、喜爱反馈或曲目投影中的相应组件。
 
 首页来源的播放队列封面由当前与下一曲、可见队列项及 UIKit 预取回调触发。`NeteaseHomeStore` 按会话管理请求，`NeteaseArtworkCache` 将前台需求提交为高优先级，并在写入新下载前验证图像可解码。
 

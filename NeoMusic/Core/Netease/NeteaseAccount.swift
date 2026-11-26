@@ -146,6 +146,11 @@ final class NeteaseAccount {
         await validate(restoring: true, refreshContent: false, validateSession: false)
     }
 
+    func resumeRestoredDownloads() async {
+        guard hasRestored, !isAuthenticating, logoutTask == nil, !Task.isCancelled else { return }
+        await downloads?.activate(session)
+    }
+
     func restoreHomeCachedContent() async {
         guard hasRestored, !isAuthenticating, !Task.isCancelled else { return }
         if let logoutTask { _ = await logoutTask.result; return }
@@ -186,7 +191,10 @@ final class NeteaseAccount {
                     session = restored
                     profile = session?.profile
                     if validateSession { await activateContent(session, refresh: false) }
-                    else { await activateLibraryContent(session, refresh: false) }
+                    else {
+                        await downloads?.restore()
+                        await activateLibraryContent(session, refresh: false)
+                    }
                     guard validationID == id, generation == revision, !Task.isCancelled else { return }
                     if let startupAvatar,
                        profile.map({ startupAvatar.belongs(to: $0) && $0.avatarURL != nil }) != true {
@@ -285,13 +293,12 @@ final class NeteaseAccount {
     private func activateContent(_ session: NeteaseSavedSession?, refresh: Bool = true) async {
         guard !Task.isCancelled else { return }
         async let homeContent: Void? = home?.activate(session, refresh: refresh)
+        await downloads?.activate(session)
         await activateLibraryContent(session, refresh: refresh)
         _ = await homeContent
     }
 
     private func activateLibraryContent(_ session: NeteaseSavedSession?, refresh: Bool) async {
-        guard !Task.isCancelled else { return }
-        await downloads?.activate(session)
         guard !Task.isCancelled else { return }
         await search?.activate(session)
         guard !Task.isCancelled else { return }

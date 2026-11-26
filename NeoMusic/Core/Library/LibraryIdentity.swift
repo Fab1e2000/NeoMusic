@@ -162,6 +162,7 @@ enum CatalogRouteIdentity: Equatable, Hashable, Sendable {
 struct DeferredArtworkKey: Equatable, Hashable, Sendable {
     enum Domain: String, Equatable, Hashable, Sendable {
         case music
+        case libraryPlaylist = "library-playlist"
         case home
         case homePlaylist = "home-playlist"
         case artists

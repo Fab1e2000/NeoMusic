@@ -37,53 +37,50 @@ struct LibraryHomeView: View {
     let recentlyAdded: [LibraryShelfItem]
     let playlistLibrary: PlaylistLibrary
     var isContentReady = true
-    var isPinnedReady = true
     var reorderPinned: ([LibraryRoute]) -> Bool = { _ in false }
     var playSong: (String) -> Void = { _ in }
     var songForMenu: (String) -> LibrarySongItem? = { _ in nil }
     @State private var isCreatingPlaylist = false
     @Environment(\.collectionMenuActions) private var actions
     @Environment(\.dynamicTypeSize) private var textSize
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isEditingPinned = false
     @State private var tapActions: [String: PinnedTapAction] = [:]
     @Namespace private var playlistCreationTransition
 
-    private var visiblePinned: [LibraryShelfItem] {
-        isContentReady && isPinnedReady ? pinned : []
-    }
-
     var body: some View {
         List {
-            if !visiblePinned.isEmpty {
-                PinnedCollectionView(items: visiblePinned, isEditing: isEditingPinned, tapActions: $tapActions,
-                            reorder: reorderPinned) { item in
-                    guard let route = item.route else { return }
-                    withAnimation { actions.togglePin(route) }
+            if isContentReady {
+                if !pinned.isEmpty {
+                    PinnedCollectionView(items: pinned, isEditing: isEditingPinned, tapActions: $tapActions,
+                                reorder: reorderPinned) { item in
+                        guard let route = item.route else { return }
+                        withAnimation { actions.togglePin(route) }
+                    }
+                        .frame(maxHeight: .infinity, alignment: .top)
+                        .listRowInsets(EdgeInsets(top: 10, leading: 20, bottom: 22, trailing: 20))
+                        .listRowSeparator(.hidden)
                 }
-                    .frame(maxHeight: .infinity, alignment: .top)
-                    .listRowInsets(EdgeInsets(top: 10, leading: 20, bottom: 22, trailing: 20))
-                    .listRowSeparator(.hidden)
+                Section {
+                    LibraryCategoryRows()
+                }
+                .listSectionSeparator(.hidden, edges: .top)
+                Section {
+                    RecentlyAddedGrid(items: recentlyAdded,
+                                      playSong: playSong, songForMenu: songForMenu)
+                        .padding(.top, 17)
+                        .padding(.bottom, 16)
+                        .frame(maxHeight: textSize.isAccessibilitySize ? nil : .infinity, alignment: .top)
+                        .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
+                        .listRowSeparator(.hidden)
+                }
+                .listSectionSeparator(.hidden)
             }
-            Section {
-                LibraryCategoryRows()
-                    .disabled(!isContentReady)
-                    .animation(reduceMotion ? nil : .default, value: isContentReady)
-            }
-            .listSectionSeparator(.hidden, edges: .top)
-            Section {
-                RecentlyAddedGrid(items: recentlyAdded, animatesItemChanges: isContentReady && isPinnedReady,
-                                  playSong: playSong, songForMenu: songForMenu)
-                    .padding(.top, 17)
-                    .padding(.bottom, 16)
-                    .frame(maxHeight: textSize.isAccessibilitySize ? nil : .infinity, alignment: .top)
-                    .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
-                    .listRowSeparator(.hidden)
-            }
-            .listSectionSeparator(.hidden)
         }
         .listStyle(.plain)
-        .animation(reduceMotion ? nil : .default, value: isContentReady && isPinnedReady)
+        .transaction(value: isContentReady) {
+            $0.animation = nil
+            $0.disablesAnimations = true
+        }
         #if DEBUG
         .navigationDiagnostics("library")
         #endif
@@ -170,7 +167,6 @@ private struct LibraryCategoryRows: View {
 
 private struct RecentlyAddedGrid: View {
     let items: [LibraryShelfItem]
-    let animatesItemChanges: Bool
     var playSong: (String) -> Void = { _ in }
     var songForMenu: (String) -> LibrarySongItem? = { _ in nil }
     @Environment(\.dynamicTypeSize) private var textSize
@@ -189,7 +185,7 @@ private struct RecentlyAddedGrid: View {
                     }
                 }
             } else {
-                RecentlyAddedCollection(items: visibleItems, animatesItemChanges: animatesItemChanges,
+                RecentlyAddedCollection(items: visibleItems,
                                         playSong: playSong, songForMenu: songForMenu)
             }
         }
@@ -216,7 +212,6 @@ private struct RecentlyAddedCard: View {
 
 private struct RecentlyAddedCollection: UIViewRepresentable {
     let items: [LibraryShelfItem]
-    let animatesItemChanges: Bool
     let playSong: (String) -> Void
     let songForMenu: (String) -> LibrarySongItem?
 
@@ -238,7 +233,7 @@ private struct RecentlyAddedCollection: UIViewRepresentable {
     }
 
     func updateUIView(_ view: UICollectionView, context: Context) {
-        let animated = animatesItemChanges && !context.environment.accessibilityReduceMotion
+        let animated = !context.transaction.disablesAnimations && !context.environment.accessibilityReduceMotion
         let animationsWereEnabled = UIView.areAnimationsEnabled
         UIView.setAnimationsEnabled(animated)
         defer { UIView.setAnimationsEnabled(animationsWereEnabled) }

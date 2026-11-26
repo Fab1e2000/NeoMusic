@@ -2,9 +2,64 @@ import XCTest
 import SwiftUI
 import UIKit
 import LNPopupUI
+@testable import NeoMusic
+import FullScreenPlayer
 
 @MainActor
 final class PopupItemAccessibilityTests: XCTestCase {
+    func testPlayerBarStaysMountedAcrossRestorationSignOutAndEmptyQueue() async throws {
+        let window = UIWindow(windowScene: try await applicationWindowScene())
+        defer { window.isHidden = true }
+        let owner = PlayerTestFixtures.owner(tracks: [
+            PlayerTrack(id: "netease:101:42", title: "恢复的曲目", artists: "艺人", albumTitle: "",
+                        coverURL: nil, duration: 120)
+        ])
+        let player = PlayerState(model: owner)
+        let actions = PlayerTestFixtures.actions()
+        let library = PlayerTestFixtures.library()
+        func content(restoring: Bool) -> some View {
+            Color.clear
+                .modifier(PlayerPopup(isPresented: .constant(false), isSuppressed: restoring, onClose: {}))
+                .environment(player).environment(actions).environment(library)
+        }
+        func findBar(in view: UIView) -> LNPopupBar? {
+            if let bar = view as? LNPopupBar { return bar }
+            return view.subviews.lazy.compactMap { findBar(in: $0) }.first
+        }
+
+        let host = UIHostingController(rootView: content(restoring: true))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        try await Task.sleep(for: .milliseconds(1400))
+        let bar = try XCTUnwrap(findBar(in: window))
+        let item = try XCTUnwrap(bar.popupItem)
+        XCTAssertEqual(bar.accessibilityLabel, "未在播放，迷你播放器")
+        XCTAssertTrue(bar.isAccessibilityElement)
+        XCTAssertTrue(bar.accessibilityTraits.contains(.notEnabled))
+        XCTAssertFalse(bar.popupOpenGestureRecognizer.isEnabled)
+
+        host.rootView = content(restoring: false)
+        try await Task.sleep(for: .milliseconds(350))
+        XCTAssertTrue(findBar(in: window) === bar)
+        XCTAssertTrue(bar.popupItem === item)
+        XCTAssertTrue(bar.popupOpenGestureRecognizer.isEnabled)
+        XCTAssertFalse(bar.isAccessibilityElement)
+        XCTAssertEqual(item.accessibilityLabel, "恢复的曲目，艺人，迷你播放器")
+
+        owner.invalidateOnlinePlayback(ownerID: nil)
+        try await Task.sleep(for: .milliseconds(350))
+        XCTAssertEqual(item.accessibilityLabel, "在线歌曲不可用，登录原账号后可用，迷你播放器")
+
+        owner.queue.removeAll()
+        owner.entryIDs.removeAll()
+        try await Task.sleep(for: .milliseconds(350))
+        XCTAssertTrue(findBar(in: window) === bar)
+        XCTAssertTrue(bar.popupItem === item)
+        XCTAssertEqual(item.accessibilityLabel, "未在播放，迷你播放器")
+        XCTAssertTrue(bar.accessibilityTraits.contains(.notEnabled))
+        XCTAssertFalse(bar.popupOpenGestureRecognizer.isEnabled)
+    }
+
     func testPublicPopupItemUpdatesAndClearsAccessibilityMetadata() async throws {
         let scene = try await applicationWindowScene()
         let window = UIWindow(windowScene: scene)

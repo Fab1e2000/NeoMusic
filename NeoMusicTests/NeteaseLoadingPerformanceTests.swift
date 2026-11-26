@@ -1,3 +1,4 @@
+import Observation
 import XCTest
 import Synchronization
 import SwiftUI
@@ -187,6 +188,42 @@ import SwiftUI
         XCTAssertTrue(reused)
         XCTAssertEqual(Array(LoadingProtocol.state.withLock { $0.startedPaths }.dropFirst(requests.count)), ["/eapi/radio/like"])
         await restored.invalidate()
+    }
+
+    func testFirstPresentationIncludesCachedOnlineSongsBeforeRevalidation() async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let network = network(try playlistFixtures(count: 2, favorites: true))
+        defer { network.invalidateAndCancel() }
+        let saved = try session()
+        let original = NeteaseMusicStore(client: client(network), directory: root, artworkSession: network)
+        await original.activate(saved)
+        await original.waitForCacheWrites()
+        await original.invalidate()
+        let priorRequests = LoadingProtocol.state.withLock { $0.startedPaths }
+
+        let container = AppContainer()
+        let music = NeteaseMusicStore(client: client(network), directory: root, artworkSession: network)
+        let account = NeteaseAccount(readSession: { saved }, saveSession: { _ in }, deleteSession: {},
+            validateCredential: { _ in
+                XCTAssertTrue(container.runtime.isInitialPresentationReady)
+                return saved.profile
+            }, cachedAvatar: { _ in nil }, loadAvatar: { _ in Data() }, clearAvatarCache: {}, music: music)
+        let runtime = AppRuntime(account: account, container: container)
+        let presented = expectation(description: "Cached online songs published at the initial reveal")
+        withObservationTracking {
+            _ = container.runtime.isInitialPresentationReady
+        } onChange: {
+            MainActor.assumeIsolated {
+                XCTAssertEqual(Set(container.songLibrary.onlineSongs.map(\.id)), ["netease:42:1", "netease:42:2"])
+                XCTAssertEqual(LoadingProtocol.state.withLock { $0.startedPaths }, priorRequests)
+                presented.fulfill()
+            }
+        }
+        runtime.start()
+        await fulfillment(of: [presented], timeout: 5)
+        await runtime.startupTask?.value
+        await music.invalidate()
     }
 
     func testFavoritesPageLoadsPreviewWhenAccountRestoresAfterPageAppears() async throws {

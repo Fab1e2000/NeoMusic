@@ -284,9 +284,12 @@ final class LocalLibraryRuntime {
         let artworkDirectory = store.appending(path: "tracks.json.startup", directoryHint: .isDirectory)
         songLibrary.replace(tracks.filter { !hidden.contains($0.id) }.map { track in
             let url = track.artworkKey.map { artworkDirectory.appending(path: $0 + ".image") }
+            // Older indices stored the cover inline. Keep it usable until the next scan externalizes it.
+            let artwork = track.artworkData.flatMap { UIImage(data: $0) }.map { Artwork.image(Image(uiImage: $0)) }
+                ?? url.map(Artwork.file) ?? .missing
             return LibrarySongItem(id: track.id, title: track.title, artist: track.artist, album: track.album,
-                albumArtist: track.albumArtist, trackNumber: track.trackNumber, artwork: url.map(Artwork.file) ?? .missing,
-                albumDirectory: track.albumDirectory, discNumber: track.discNumber ?? 1, artworkURL: url,
+                albumArtist: track.albumArtist, trackNumber: track.trackNumber, artwork: artwork,
+                albumDirectory: track.albumDirectory, discNumber: track.discNumber ?? 1, artworkData: track.artworkData, artworkURL: url,
                 artworkBackdrop: track.artworkBackdrop, duration: Int(track.duration), isPinned: pins.contains(track.id),
                 addedOrder: Int(track.addedDate.timeIntervalSince1970), isFavorite: favorites.contains(track.id), year: track.year)
         })
@@ -317,12 +320,12 @@ actor LocalLibraryTrackCache {
         try FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
     }
 
-    func read(from url: URL) async throws -> [LocalTrack]? {
+    func read(from url: URL) throws -> [LocalTrack]? {
         try Task.checkCancellation()
         saved = nil
         guard let tracks = try AtomicJSONStore.read([LocalTrack].self, from: url) else { return nil }
         saved = (url, tracks)
-        return try await externalizeArtwork(tracks, at: url)
+        return tracks
     }
 
     func reusableTracks(_ tracks: [LocalTrack], at url: URL) -> [LocalTrack] {

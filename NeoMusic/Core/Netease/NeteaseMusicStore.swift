@@ -352,6 +352,23 @@ final class NeteaseMusicStore {
         catch { if generation == revision { playlistErrors[id] = error.localizedDescription; failedLoads[id] = mode; onChange?() }; return false }
     }
 
+    func loadedPlaylistCover(id: Int64) -> URL? {
+        details[id]?.displayArtworkURL(ownerID: userID)
+    }
+
+    func cachedPlaylistCoverFile(id: Int64) async -> URL? {
+        guard let owner = userID else { return nil }
+        let revision = sessionRevision
+        let remote: URL?
+        if let detail = details[id] { remote = detail.displayArtworkURL(ownerID: owner) }
+        else {
+            let detail = try? await pages.load(NeteasePlaylistDetail.self, scope: String(owner), key: "playlist:\(id)")
+            remote = detail?.displayArtworkURL(ownerID: owner)
+        }
+        guard revision == sessionRevision, let remote, !Task.isCancelled else { return nil }
+        return await cachedArtworkFile(remote)
+    }
+
     private func restorePlaylist(id: Int64) async throws {
         try Task.checkCancellation()
         guard !restoredPlaylists.contains(id), let userID else { return }

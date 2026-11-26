@@ -110,9 +110,11 @@ final class NeteaseArtistStore {
             }
             isReady = true
             publish(.reset)
-            requestArtwork(subscribedArtists.prefix(6).compactMap(\.artworkURL) + subscribedAlbums.prefix(6).compactMap(\.artworkURL))
         }
-        if refresh { await self.refresh() }
+        if refresh {
+            requestArtwork(subscribedArtists.prefix(6).compactMap(\.artworkURL) + subscribedAlbums.prefix(6).compactMap(\.artworkURL))
+            await self.refresh()
+        }
     }
     func invalidate() async { _ = await resetSession() }
 
@@ -491,6 +493,33 @@ final class NeteaseArtistStore {
         }
     }
 
+    private func savedPortraitMetadata(_ id: Int64, token: UUID) async throws -> PortraitMetadata? {
+        if let saved = portraitMetadata[id] { return saved }
+        let saved = try? await portraitCache.load(PortraitMetadata.self, scope: scope, key: String(id))
+        try check(token)
+        if let saved { return saved }
+        let page = try? await pageCache.load(ArtistPage.self, scope: scope, key: "artist:\(id)")
+        try check(token)
+        guard let artist = page?.detail?.artist, artist.id == id,
+              let url = artist.artworkURL, Self.isArtistPortrait(url) else { return nil }
+        return .init(url: url, checkedAt: Date())
+    }
+
+    func restoreCachedLibraryPortrait(_ id: Int64, session token: UUID) async -> URL? {
+        guard isReady, sessionScope.isCurrent(token) else { return nil }
+        if let existing = libraryPortraitFile(id) { return existing }
+        let known = knownPortraitURL(id)
+        let metadata: PortraitMetadata?
+        if let known { metadata = .init(url: known, checkedAt: Date()) }
+        else { metadata = try? await savedPortraitMetadata(id, token: token) }
+        guard let metadata, let remote = metadata.url, sessionScope.isCurrent(token),
+              let file = await cachedArtworkFile(remote), sessionScope.isCurrent(token),
+              knownPortraitURL(id) == known else { return nil }
+        portraitMetadata[id] = metadata
+        portraitFiles[id] = file
+        return file
+    }
+
     private func resolveLibraryPortrait(_ id: Int64, token: UUID) async {
         let owner = scope, key = String(id)
         do {
@@ -501,19 +530,7 @@ final class NeteaseArtistStore {
             if let url = known {
                 metadata = .init(url: url, checkedAt: Date())
             } else {
-                var saved = portraitMetadata[id]
-                if saved == nil {
-                    saved = try? await portraitCache.load(PortraitMetadata.self, scope: owner, key: key)
-                    try check(token)
-                }
-                if saved == nil {
-                    let page = try? await pageCache.load(ArtistPage.self, scope: owner, key: "artist:\(id)")
-                    try check(token)
-                    if let artist = page?.detail?.artist, artist.id == id,
-                       let url = artist.artworkURL, Self.isArtistPortrait(url) {
-                        saved = .init(url: url, checkedAt: Date())
-                    }
-                }
+                let saved = try await savedPortraitMetadata(id, token: token)
                 let cached: URL?
                 if let remote = saved?.url {
                     cached = await cachedArtworkFile(remote)

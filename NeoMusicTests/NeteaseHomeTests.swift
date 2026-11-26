@@ -1219,6 +1219,51 @@ import Synchronization
         await store.activate(nil, refresh: false)
     }
 
+    func testLibraryPlaylistRestoresItsFirstSongCoverBeforeHomeActivation() async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let network = try paginationNetwork(count: 1)
+        defer { network.invalidateAndCancel() }
+        let remote = URL(string: "https://fixture.test/first-cover")!
+        HomePaginationProtocol.state.withLock { $0.responses[remote.path] = NeteaseArtworkTestFixture.png }
+        let pages = NeteasePageCache(directory: root.appendingPathComponent("home"))
+        let playlist = NeteaseMusicPlaylist(id: 12, title: "List", creator: "Other", creatorID: 99,
+            artworkURL: nil, trackCount: 1, isFavorites: false)
+        let song = NeteaseMusicSong(id: 1, title: "Song", artist: "Artist", album: "Album", artworkURL: remote, duration: 10)
+        try await pages.save(NeteasePlaylistDetail(playlist: playlist, songs: [song], addedTimes: [:]), scope: "42", key: "playlist:12")
+        let artistDirectory = root.appendingPathComponent("artists")
+        let images = NeteaseArtworkCache(directory: artistDirectory.appendingPathComponent("Artwork"), session: network)
+        let store = NeteaseHomeStore(directory: root.appendingPathComponent("home"), artworkCache: images)
+        let music = NeteaseMusicStore(directory: root.appendingPathComponent("music"), artworkCache: images)
+        let saved = try savedSession()
+        let account = NeteaseAccount(readSession: { saved }, saveSession: { _ in }, deleteSession: {},
+            validateCredential: { _ in saved.profile }, cachedAvatar: { _ in nil },
+            loadAvatar: { _ in Data() }, clearAvatarCache: {}, music: music, home: store)
+        await account.restoreCachedContent()
+        let runtime = AppRuntime(account: account)
+        let libraryKey = DeferredArtworkKey(domain: .libraryPlaylist, session: music.sessionRevision, playlistID: 12)
+        XCTAssertNil(store.userID)
+        let missing = await runtime.resolveArtworkFile(for: libraryKey.rawValue, cachedOnly: true)
+        XCTAssertNil(missing)
+        XCTAssertEqual(HomePaginationProtocol.count(remote.path), 0)
+        let seedCache = NeteaseArtworkCache(directory: artistDirectory.appendingPathComponent("Artwork"), session: network)
+        let seeded = try await seedCache.imageURL(for: remote, scope: "42")
+        let cover = Artwork.deferred(id: libraryKey.rawValue, placeholder: .playlist)
+        await LocalArtworkImages.prepareFirstShelf([cover], timeout: .seconds(5)) {
+            await runtime.resolveArtworkFile(for: $0, cachedOnly: true)
+        }
+        XCTAssertEqual(cover.resolvedFileURL, seeded)
+        XCTAssertNotNil(LocalArtworkImages.cachedResolved(libraryKey.rawValue, pixels: 512))
+        XCTAssertNil(store.userID)
+        await account.restoreHomeCachedContent()
+        let active = await runtime.resolveArtworkFile(for: libraryKey.rawValue, cachedOnly: true)
+        XCTAssertEqual(active, seeded)
+        XCTAssertEqual(HomePaginationProtocol.count(remote.path), 1)
+        try await account.logout()
+        let stale = await runtime.resolveArtworkFile(for: libraryKey.rawValue, cachedOnly: true)
+        XCTAssertNil(stale)
+    }
+
     func testRuntimeResolvesHomePlaylistAndCachedArtworkDomains() async throws {
         let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

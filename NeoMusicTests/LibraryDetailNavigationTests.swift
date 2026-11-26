@@ -8,7 +8,6 @@ import Synchronization
 
 @MainActor @Observable
 private final class StartupLibraryProbe {
-    var isContentReady = false
     var isReady = false
     var pinCount = 4
     var recentOrder = ["recent-first", "recent-second"]
@@ -29,10 +28,9 @@ private struct StartupLibraryProbeView: View {
             .init(id: "third", title: "专辑三", artwork: .missing, route: .album("third")),
             .init(id: "favorites", title: "喜爱歌曲", artwork: .favorites, route: .playlist("favorites"))
         ]
-        LibraryHomeView(pinned: probe.isReady ? Array(pins.prefix(probe.pinCount)) : [], recentlyAdded: probe.isContentReady ? probe.recentOrder.map {
+        LibraryHomeView(pinned: Array(pins.prefix(probe.pinCount)), recentlyAdded: probe.recentOrder.map {
             LibraryShelfItem(id: $0, title: $0, artwork: .missing, route: .album($0))
-        } : [],
-                        playlistLibrary: probe.library, isContentReady: probe.isContentReady, isPinnedReady: probe.isReady)
+        }, playlistLibrary: probe.library, isContentReady: probe.isReady)
     }
 }
 
@@ -769,7 +767,7 @@ final class LibraryDetailNavigationTests: XCTestCase {
                     .contains { $0.delegate is PinnedCollectionView.Coordinator }
             }.min { $0.frame.minY < $1.frame.minY }
         }
-        let initialCategoryY = try XCTUnwrap(firstCategoryCell()).frame.minY
+        XCTAssertTrue(list.visibleCells.isEmpty, "Startup shows only the navigation chrome")
         func recentCoverFrame(presentation: Bool, inWindow: Bool = false) -> CGRect? {
             let hostedGrids = descendants(of: UICollectionView.self, in: page.view).filter { grid in
                 grid !== list && !(grid.delegate is PinnedCollectionView.Coordinator)
@@ -791,14 +789,6 @@ final class LibraryDetailNavigationTests: XCTestCase {
         emptyFrame.name = "startup-native-chrome-before-library-content"
         emptyFrame.lifetime = .keepAlways
         add(emptyFrame)
-
-        probe.isContentReady = true
-        try await settle()
-        XCTAssertFalse(descendants(of: UICollectionView.self, in: page.view)
-            .contains { $0.delegate is PinnedCollectionView.Coordinator },
-                       "Categories and recent additions must be shown before the pinned artwork is ready")
-        XCTAssertEqual(try XCTUnwrap(firstCategoryCell()).frame.minY, initialCategoryY, accuracy: 1)
-        let initialRecentY = try XCTUnwrap(recentCoverFrame(presentation: false, inWindow: true)).minY
 
         probe.isReady = true
         var categoryPositions: [CGFloat] = []
@@ -826,13 +816,15 @@ final class LibraryDetailNavigationTests: XCTestCase {
             .first { $0.delegate is PinnedCollectionView.Coordinator })
         XCTAssertEqual(pinned.numberOfItems(inSection: 0), 4)
         let finalCategoryY = try XCTUnwrap(firstCategoryCell()).frame.minY
-        XCTAssertGreaterThan(finalCategoryY - initialCategoryY, 250, "Two rows of pins must push the categories down")
-        XCTAssertTrue(categoryPositions.contains { $0 > initialCategoryY + 1 && $0 < finalCategoryY - 1 },
-                      "Categories must move continuously as the pinned rows expand")
+        XCTAssertFalse(categoryPositions.isEmpty)
+        for y in categoryPositions {
+            XCTAssertEqual(y, finalCategoryY, accuracy: 1, "Category rows must appear below the restored pins on their first frame")
+        }
         let finalRecentY = try XCTUnwrap(recentCoverFrame(presentation: false, inWindow: true)).minY
-        XCTAssertGreaterThan(finalRecentY - initialRecentY, 250)
-        XCTAssertTrue(recentPositions.contains { $0 > initialRecentY + 1 && $0 < finalRecentY - 1 },
-                      "Recent additions must move with the categories through the native list transition")
+        XCTAssertFalse(recentPositions.isEmpty)
+        for y in recentPositions {
+            XCTAssertEqual(y, finalRecentY, accuracy: 1)
+        }
         let finalCoverFrame = try XCTUnwrap(recentCoverFrame(presentation: false))
         XCTAssertGreaterThan(recentCoverFrames.count, 5)
         for frame in recentCoverFrames {
@@ -973,7 +965,11 @@ final class LibraryDetailNavigationTests: XCTestCase {
             }
         }
 
-        probe.isContentReady = true
+        probe.recentOrder = ["recent-third", "recent-first", "recent-second"]
+        probe.pinCount = 1
+        try await settle()
+        XCTAssertNil(recentGrid(), "Cached metadata must stay hidden until first presentation")
+        probe.isReady = true
         var firstFillOffsets: [CGFloat] = []
         for _ in 0..<35 {
             try await Task.sleep(for: .milliseconds(16))
@@ -984,19 +980,6 @@ final class LibraryDetailNavigationTests: XCTestCase {
                                  "Cold-start cards must appear in their final positions")
         try await settle()
 
-        probe.recentOrder = ["recent-third", "recent-first", "recent-second"]
-        var restorationOffsets: [CGFloat] = []
-        for _ in 0..<35 {
-            try await Task.sleep(for: .milliseconds(16))
-            restorationOffsets += sampleCardOffsets()
-        }
-        XCTAssertFalse(restorationOffsets.isEmpty)
-        XCTAssertLessThanOrEqual(restorationOffsets.max() ?? .infinity, 1,
-                                 "Restored metadata must not animate cards between slots")
-
-        probe.pinCount = 1
-        probe.isReady = true
-        try await settle()
         probe.recentOrder = ["recent-first", "recent-second"]
         var editOffsets: [CGFloat] = []
         for _ in 0..<35 {

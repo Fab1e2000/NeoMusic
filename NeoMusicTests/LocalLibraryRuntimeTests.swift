@@ -82,7 +82,7 @@ final class LocalLibraryAlbumProjectionTests: XCTestCase {
 
 @MainActor
 final class LocalLibraryRuntimeTests: XCTestCase {
-    func testWarmExternalizedArtworkRefreshesOldPaletteBeforeFirstPublication() async throws {
+    func testColdRestoreUsesPersistedPaletteAndRefreshUpdatesIt() async throws {
         let documents = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: documents) }
         let store = documents.appendingPathComponent("state")
@@ -126,12 +126,18 @@ final class LocalLibraryRuntimeTests: XCTestCase {
         XCTAssertTrue(runtime.isInitialLibraryReady)
         XCTAssertEqual(publications.count, 1)
         let published = try XCTUnwrap(publications.first?.first)
-        let color = try XCTUnwrap(published.artworkBackdrop)
+        XCTAssertEqual(published.artworkBackdrop, old)
+        XCTAssertEqual(try Data(contentsOf: colorURL), stalePalette)
+        XCTAssertEqual(published.artworkURL, artworkURL)
+        XCTAssertEqual(try Data(contentsOf: artworkURL), data)
+
+        // Retain the cached track through a scan, even when metadata cannot be re-read.
+        try Data("invalid audio".utf8).write(to: runtime.root.appendingPathComponent(track.id))
+        await runtime.refresh()
+        let color = try XCTUnwrap(songs.songs.first?.artworkBackdrop)
         XCTAssertEqual(color.colorScheme, .dark)
         XCTAssertEqual(color.red, 0, accuracy: 0.01)
         XCTAssertEqual(songs.albumIndex.items.first?.albumBackdrop, color)
-        XCTAssertEqual(published.artworkURL, artworkURL)
-        XCTAssertEqual(try Data(contentsOf: artworkURL), data)
         let persisted = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: colorURL)) as? [String: Any])
         XCTAssertEqual(persisted["version"] as? Int, AlbumArtworkBackdropPreparer.cacheVersion)
         XCTAssertEqual(try Data(contentsOf: legacyURL), stalePalette)
@@ -688,6 +694,11 @@ final class LocalLibraryRuntimeTests: XCTestCase {
             pinnedAlbums: LocalLibrary.pinnedAlbums,
             deletedAlbums: LocalLibrary.deletedAlbums,
             onLocalSongsApplied: { LocalLibrary.downloads.setLocalSongs($0) })
+        await runtime.restoreCachedState()
+        let restored = try XCTUnwrap(LocalLibrary.songs.first)
+        XCTAssertEqual(restored.artworkData, artworkData)
+        guard case .image = restored.artwork else { return XCTFail("Inline artwork must be visible on restore") }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: cache.appendingPathExtension("startup").path))
         await runtime.refresh()
         XCTAssertEqual(LocalLibrary.songs.map(\.id), [track.id])
         let song = try XCTUnwrap(LocalLibrary.songs.first)

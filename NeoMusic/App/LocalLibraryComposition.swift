@@ -574,10 +574,13 @@ extension AppContainer {
     }
 
     var app: some View {
-        AppShell(library: { [self] in
+        let playableOffline = player.hasOfflineCurrentSong || (player.hasCurrent && !player.current.isOnline)
+        let showRestoredTrack = runtime.isInitialPresentationReady && (runtime.isInitialPlaybackReady || playableOffline)
+        return AppShell(library: { [self] in
             LocalLibraryHome(container: self)
         }, detailDestination: { AnyView(LocalDestination(container: self, route: $0)) }, nowPlaying: player, playlistLibrary: playlistLibrary, toasts: toasts,
-           referencePlayer: referencePlayer, referenceLibrary: referenceLibrary, makePlayerActions: playerActions, isInitialContentReady: runtime.isInitialPlaybackReady || (player.hasCurrent && !player.current.isOnline) || player.hasOfflineCurrentSong, libraryPath: launchPath, isPlayerPresented: ["nowplaying", "paused", "queue"].contains(launchPage))
+           referencePlayer: referencePlayer, referenceLibrary: referenceLibrary, makePlayerActions: playerActions,
+           isInitialContentReady: showRestoredTrack, libraryPath: launchPath, isPlayerPresented: ["nowplaying", "paused", "queue"].contains(launchPage))
         .playlistEditSheet(playlistLibrary, songs: { self.allSongs })
         .downloadRemovalConfirmation()
         .environment(\.libraryDownloads, downloads)
@@ -674,18 +677,16 @@ extension AppContainer {
 struct LocalLibraryHome: View {
     var container: AppContainer = .shared
     var body: some View {
-        let ready = container.runtime.isInitialLibraryReady
-        let pinnedReady = ready && container.runtime.isInitialPresentationReady
-        LibraryHomeView(pinned: pinnedReady ? container.pinned : [], recentlyAdded: ready ? container.recentlyAdded : [],
+        let ready = container.runtime.isInitialPresentationReady
+        LibraryHomeView(pinned: ready ? container.pinned : [], recentlyAdded: ready ? container.recentlyAdded : [],
                         playlistLibrary: container.playlistLibrary,
                         isContentReady: ready,
-                        isPinnedReady: pinnedReady,
                         reorderPinned: container.reorderPinned,
                         playSong: container.playLibrarySong,
                         songForMenu: container.songForMenu)
             .safeAreaInset(edge: .bottom) {
-                if let status = container.runtime.status { LibraryStatusMessage(message: status) }
-                if let error = container.playlistLibrary.persistenceError {
+                if ready, let status = container.runtime.status { LibraryStatusMessage(message: status) }
+                if ready, let error = container.playlistLibrary.persistenceError {
                     LibraryStatusMessage(message: error, title: "保存状态", isError: true)
                 }
             }

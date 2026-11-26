@@ -16,33 +16,33 @@ struct PlayerPopup: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(PlayerState.self) private var player
     @Environment(\.artworkLoadAction) private var loadArtwork
-    @State private var isBarPresented = false
-    @State private var hasPresentedBar = false
     @State private var artwork: UIImage?
     @State private var artworkTrackID: String?
     @State private var interactionDelegate = PlayerPopupInteractionDelegate()
     @State private var volumeHUDRefreshID = 0
 
-    private var shouldShowBar: Bool { player.currentTrack != nil && !isSuppressed }
-    private var isBarActive: Bool { shouldShowBar && !isPresented && scenePhase == .active }
+    private var displayedTrack: PlayerTrack? { isSuppressed ? nil : player.currentTrack }
+    private var isBarActive: Bool { displayedTrack != nil && !isPresented && scenePhase == .active }
 
     func body(content: Content) -> some View {
         content
             .environment(\.songPlaybackIndicatorsActive, !isPresented)
             .background {
-                PlayerPopupArtworkPrefetcher(
-                    isPresented: isPresented,
-                    scenePhase: scenePhase,
-                    loadArtwork: { loadArtwork($0) }
-                )
+                if displayedTrack != nil {
+                    PlayerPopupArtworkPrefetcher(
+                        isPresented: isPresented,
+                        scenePhase: scenePhase,
+                        loadArtwork: { loadArtwork($0) }
+                    )
+                }
             }
             .transaction { transaction in
                 if reducesMotion { transaction.disablesAnimations = true }
             } body: { content in
-                content.popup(isBarPresented: $isBarPresented, isPopupOpen: $isPresented, onOpen: {
+                content.popup(isBarPresented: .constant(true), isPopupOpen: displayedTrack == nil ? .constant(false) : $isPresented, onOpen: {
                     volumeHUDRefreshID &+= 1
                 }, onClose: onClose) {
-                    PlayerPopupContent(barImage: barImage,
+                    PlayerPopupContent(track: displayedTrack, barImage: barImage,
                                        barColorScheme: barColorScheme ?? colorScheme,
                                        isActive: isPresented,
                                        isBarActive: isBarActive,
@@ -56,27 +56,22 @@ struct PlayerPopup: ViewModifier {
                 view.isTranslucent = false
                 view.popupInteractionGestureRecognizer.delegate = interactionDelegate
             }
-            .popupInteractionStyle(.automatic)
+            .popupInteractionStyle(displayedTrack == nil ? .none : .automatic)
+            .popupBarCustomizer { bar in
+                let empty = displayedTrack == nil
+                bar.popupOpenGestureRecognizer.isEnabled = !empty
+                bar.barHighlightGestureRecognizer.isEnabled = !empty
+                bar.isAccessibilityElement = empty
+                bar.accessibilityLabel = empty ? "未在播放，迷你播放器" : nil
+                bar.accessibilityTraits = empty ? [.staticText, .notEnabled] : []
+            }
             .popupCloseButtonStyle(.none)
             .popupBarMarqueeScrollEnabled(isBarActive)
-            .onChange(of: shouldShowBar, initial: true) { _, visible in
-                AppLogger.ui.notice("popup.visibility visible=\(visible) suppressed=\(isSuppressed) track=\(player.currentTrack != nil) titleEmpty=\(player.currentTrack?.title.isEmpty ?? true)")
-                let restoresPausedBar = visible && !hasPresentedBar && !player.isPlaying && !isPresented
-                if restoresPausedBar {
-                    var transaction = Transaction(animation: nil)
-                    transaction.disablesAnimations = true
-                    withTransaction(transaction) {
-                        isBarPresented = true
-                        hasPresentedBar = true
-                    }
-                } else {
-                    if !visible { isPresented = false }
-                    isBarPresented = visible
-                    if visible { hasPresentedBar = true }
-                }
+            .onChange(of: displayedTrack == nil, initial: true) { _, empty in
+                if empty { isPresented = false }
             }
-            .task(id: player.currentTrack) {
-                let track = player.currentTrack
+            .task(id: displayedTrack) {
+                let track = displayedTrack
                 if artworkTrackID != track?.id {
                     artwork = track?.coverURL.flatMap { Self.cachedArtwork(for: $0) }
                     artworkTrackID = track?.id
@@ -108,12 +103,12 @@ struct PlayerPopup: ViewModifier {
     }
 
     private var displayedArtwork: UIImage? {
-        guard let track = player.currentTrack,
+        guard let track = displayedTrack,
               track.coverURL != nil || track.artworkLoadID != nil else { return nil }
-        if let url = player.currentTrack?.coverURL, let cached = Self.cachedArtwork(for: url) {
+        if let url = track.coverURL, let cached = Self.cachedArtwork(for: url) {
             return cached
         }
-        return artworkTrackID == player.currentTrack?.id ? artwork : nil
+        return artworkTrackID == track.id ? artwork : nil
     }
 
     static func cachedArtwork(for url: URL) -> UIImage? {
@@ -125,6 +120,7 @@ struct PlayerPopup: ViewModifier {
 }
 
 private struct PlayerPopupContent: View {
+    let track: PlayerTrack?
     let barImage: PopupItemViewImage
     let barColorScheme: ColorScheme
     let isActive: Bool
@@ -135,29 +131,41 @@ private struct PlayerPopupContent: View {
 
     var body: some View {
         Group {
-            if let track = player.currentTrack {
+            if let track {
                 PlayerNowPlayingHostView(onDismiss: onDismiss, isActive: isActive)
                     .modifier(OptionalPlayerToastModifier(toasts: isActive ? toasts : nil))
                     .onChange(of: isActive, initial: true) { _, active in
                         AppLogger.ui.notice("popup.content active=\(active) titleEmpty=\(track.title.isEmpty) cover=\(track.coverURL != nil)")
                     }
-                    .popupItem {
-                        PopupItem(id: track.id, image: barImage,
-                                  accessibilityLabel: [track.title, track.artists, "迷你播放器"].filter { !$0.isEmpty }.joined(separator: "，"),
-                                  accessibilityHint: "打开正在播放", title: {
-                            MiniPlayerTitle(fallbackTrack: track, isActive: isBarActive)
-                                .environment(player)
-                                .environment(\.colorScheme, barColorScheme)
-                                .accessibilityIdentifier("mini.trackTitle")
-                        }, buttons: {
-                            ToolbarItem(placement: .popupBar) {
-                                MiniPlayerControlsObserver()
-                                    .environment(player)
-                                    .environment(\.colorScheme, barColorScheme)
-                            }
-                        })
-                    }
+            } else {
+                Color.clear
             }
+        }
+        .popupItem {
+            PopupItem(id: track?.id, image: barImage,
+                      accessibilityLabel: [track?.title ?? "未在播放", track?.artists ?? "", "迷你播放器"]
+                        .filter { !$0.isEmpty }.joined(separator: "，"),
+                      accessibilityHint: track == nil ? "" : "打开正在播放", title: {
+                Group {
+                    if let track {
+                        MiniPlayerTitle(fallbackTrack: track, isActive: isBarActive)
+                            .environment(player)
+                    } else {
+                        Text("未在播放")
+                            .font(.footnote.weight(.medium))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.leading, 8)
+                    }
+                }
+                .environment(\.colorScheme, barColorScheme)
+                .accessibilityIdentifier("mini.trackTitle")
+            }, buttons: {
+                ToolbarItem(placement: .popupBar) {
+                    MiniPlayerControlsObserver(hasTrack: track != nil)
+                        .environment(player)
+                        .environment(\.colorScheme, barColorScheme)
+                }
+            })
         }
     }
 }
@@ -195,15 +203,18 @@ private struct PlayerPopupArtworkPrefetcher: View {
 }
 
 private struct MiniPlayerControlsObserver: View {
+    let hasTrack: Bool
     @Environment(PlayerState.self) private var player
 
     var body: some View {
         MiniPlayerControls(
-            isPlaying: player.isPlaying,
-            canPlayNext: player.canPlayNext,
+            isPlaying: hasTrack && player.isPlaying,
+            canPlayNext: hasTrack && player.canPlayNext,
             togglePlayback: player.togglePlayback,
             next: player.next
         )
+        .disabled(!hasTrack)
+        .opacity(hasTrack ? 1 : 0.3)
     }
 }
 

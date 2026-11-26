@@ -60,6 +60,30 @@ import UIKit
         await store.activate(nil, refresh: false)
         XCTAssertEqual(store.subscribedArtists.map(\.id), [7])
     }
+    func testRestoringSubscribedArtistsDoesNotDownloadMissingArtwork() async throws {
+        let directory = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let remote = try XCTUnwrap(URL(string: "https://artwork.test/subscribed.png"))
+        let cache = NeteasePageCache(directory: directory.appendingPathComponent("Pages"))
+        try await cache.save(ArtistSubscriptionsFixture(artists: [.init(id: 7, name: "Artist", artworkURL: remote)],
+            albums: [], refreshedAt: [:]), scope: "42", key: "subscriptions")
+        let store = try await contentStore(directory: directory)
+        let request = expectation(description: "Cache restoration must not issue an artwork request")
+        request.isInverted = true
+        let data = try portraitPNG()
+        ArtistContentProtocol.state.withLock {
+            $0.artworkData = data
+            $0.onArtworkRequest = { request.fulfill() }
+        }
+        let session = NeteaseSavedSession(profile: .init(userID: 42, nickname: "User", avatarURL: nil),
+                                          credential: try .init(musicU: "test"))
+        await store.activate(session, refresh: false)
+        XCTAssertEqual(store.subscribedArtists.map(\.id), [7])
+        await fulfillment(of: [request], timeout: 0.3)
+        XCTAssertTrue(ArtistContentProtocol.state.withLock { $0.paths.isEmpty })
+        await store.invalidate()
+    }
+
     func testGuestCannotWriteSubscriptions() async {
         let store = NeteaseArtistStore(directory: URL.temporaryDirectory.appendingPathComponent(UUID().uuidString))
         do {
@@ -139,8 +163,12 @@ import UIKit
         await store.activate(.init(profile: .init(userID: 43, nickname: "Other", avatarURL: nil),
                                    credential: credential), refresh: false)
         XCTAssertNil(store.libraryPortraitFile(7))
+        let wrongOwner = await store.restoreCachedLibraryPortrait(7, session: store.sessionRevision)
+        XCTAssertNil(wrongOwner)
         await store.activate(.init(profile: .init(userID: 42, nickname: "Test", avatarURL: nil),
                                    credential: credential), refresh: false)
+        let restored = await store.restoreCachedLibraryPortrait(7, session: store.sessionRevision)
+        XCTAssertEqual(restored, file)
         await store.prepareLibraryPortrait(7)
         XCTAssertEqual(store.libraryPortraitFile(7), file)
         XCTAssertEqual(ArtistContentProtocol.state.withLock { $0.paths.count }, 2)

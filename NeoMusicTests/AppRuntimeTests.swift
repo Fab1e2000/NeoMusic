@@ -1,3 +1,4 @@
+import Observation
 import XCTest
 @testable import NeoMusic
 
@@ -19,7 +20,7 @@ final class AppRuntimeTests: XCTestCase {
             validateCredential: { _ in throw NeteaseAccountError.authenticationRequired },
             cachedAvatar: { _ in nil }, loadAvatar: { _ in throw URLError(.badURL) },
             clearAvatarCache: {}, downloads: downloads)
-        let runtime = AppRuntime(account: account)
+        let runtime = AppRuntime(account: account, container: AppContainer())
         XCTAssertEqual(reads, 0)
         XCTAssertNil(runtime.startupTask)
         runtime.sceneDidChange(from: .background, to: .active)
@@ -30,6 +31,7 @@ final class AppRuntimeTests: XCTestCase {
         await runtime.startupTask?.value
 
         XCTAssertEqual(reads, 1)
+        XCTAssertTrue(runtime.container.runtime.isInitialPresentationReady)
         XCTAssertTrue(account.hasRestored)
         XCTAssertEqual(account.restoredPlaybackIdentity, .signedOut)
     }
@@ -51,14 +53,23 @@ final class AppRuntimeTests: XCTestCase {
             }, saveSession: { _ in }, deleteSession: {},
             validateCredential: { _ in XCTFail("Cancelled startup must not revalidate"); return saved.profile },
             cachedAvatar: { _ in nil }, loadAvatar: { _ in Data() }, clearAvatarCache: {})
-        let runtime = AppRuntime(account: account)
+        let runtime = AppRuntime(account: account, container: AppContainer())
+        let localReady = expectation(description: "Local restore finishes while credentials are pending")
+        withObservationTracking {
+            _ = runtime.container.runtime.isInitialLibraryReady
+        } onChange: {
+            localReady.fulfill()
+        }
         runtime.start()
         let startup = try XCTUnwrap(runtime.startupTask)
-        await fulfillment(of: [entered], timeout: 3)
+        await fulfillment(of: [entered, localReady], timeout: 5)
+        XCTAssertTrue(runtime.container.runtime.isInitialLibraryReady)
+        XCTAssertFalse(runtime.container.runtime.isInitialPresentationReady)
         startup.cancel()
         finishRead?.resume()
         await startup.value
 
+        XCTAssertFalse(runtime.container.runtime.isInitialPresentationReady)
         XCTAssertTrue(readWasCancelled)
         XCTAssertFalse(account.hasRestored)
         XCTAssertNil(account.profile)

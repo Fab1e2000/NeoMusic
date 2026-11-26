@@ -299,6 +299,12 @@ final class OnlineLibraryIntegration {
         }
     }
 
+    func finishPendingPublication() async {
+        while let task = publishTask, !Task.isCancelled {
+            await task.value
+        }
+    }
+
     private func publishAsync() async {
         publishTask?.cancel()
         publishTask = nil
@@ -478,9 +484,15 @@ final class OnlineLibraryIntegration {
 
             let songsChanged = container.songLibrary.replaceOnline(songs)
             let playlists = music.playlists.filter { !$0.isFavorites }.enumerated().map { index, value in
-                let cover = value.creatorID == owner
-                    ? artwork(value.artworkURL, music: music, placeholder: .playlist, cachedCovers: cachedCovers)
-                    : HomeMusicIntegration.playlistArtwork(id: value.id, home: account.home)
+                let cover: Artwork
+                if value.creatorID == owner {
+                    cover = artwork(value.artworkURL, music: music, placeholder: .playlist, cachedCovers: cachedCovers)
+                } else if let remote = music.loadedPlaylistCover(id: value.id) {
+                    cover = artwork(remote, music: music, placeholder: .playlist, cachedCovers: cachedCovers)
+                } else {
+                    let key = DeferredArtworkKey(domain: .libraryPlaylist, session: music.sessionRevision, playlistID: value.id)
+                    cover = .deferred(id: key.rawValue, placeholder: .playlist)
+                }
                 var item = LibraryPlaylistItem(id: PlaylistRouteIdentity.accountID(owner: owner, playlistID: value.id), title: value.title,
                     artwork: cover, addedOrder: music.playlists.count - index,
                     sourceOwnerID: ownerID, subtitle: value.creator)
@@ -573,6 +585,22 @@ final class OnlineLibraryIntegration {
         music.requestArtwork([url])
     }
 
+    func resolvePlaylistArtworkFile(for id: String, cachedOnly: Bool) async -> URL? {
+        guard let music = account.music, let owner = music.userID, let home = account.home else { return nil }
+        let revision = music.sessionRevision
+        let isCurrent = { self.account.sessionOwnerID == owner && music.sessionRevision == revision }
+        return await DeferredArtworkRoute.cachedFile(id, session: revision, domain: .libraryPlaylist,
+            isCurrent: isCurrent) { key in
+                guard let number = key.playlistID else { return nil }
+                if let file = await music.cachedPlaylistCoverFile(id: number) { return file }
+                guard isCurrent() else { return nil }
+                if cachedOnly { return await home.cachedPlaylistCoverFile(id: number, owner: owner) }
+                if home.userID != owner { await account.restoreHomeCachedContent() }
+                guard isCurrent(), home.userID == owner else { return nil }
+                return try? await home.playlistArtworkFile(id: number)
+            }
+    }
+
     func cachedArtworkFile(for id: String) async -> URL? {
         guard let music = account.music, let owner = music.userID else { return nil }
         let revision = music.sessionRevision
@@ -613,8 +641,9 @@ final class OnlineLibraryIntegration {
             }
         }
         var covers: [String: Artwork] = [:]
-        for item in music.playlists where item.creatorID == owner {
-            if let remote = item.artworkURL, urls.contains(remote) {
+        for item in music.playlists {
+            let remote = item.creatorID == owner ? item.artworkURL : music.loadedPlaylistCover(id: item.id)
+            if let remote, urls.contains(remote) {
                 covers[PlaylistRouteIdentity.accountID(owner: owner, playlistID: item.id)] = artwork(remote, music: music, placeholder: .playlist)
             }
         }
