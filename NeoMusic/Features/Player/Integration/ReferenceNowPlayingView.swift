@@ -1,5 +1,5 @@
 import SwiftUI
-import FullScreenPlayer
+import FrontAMPlayer
 
 @MainActor private final class ArtworkPrepareRelay {
     var action = ArtworkLoadAction()

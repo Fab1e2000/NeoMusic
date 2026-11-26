@@ -1,5 +1,5 @@
 #if DEBUG
-import FullScreenPlayer
+import FrontAMPlayer
 import SwiftUI
 
 struct SearchPreviewRoot: View {

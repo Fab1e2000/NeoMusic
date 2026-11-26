@@ -1,6 +1,6 @@
 import XCTest
 @testable import NeoMusic
-@testable import FullScreenPlayer
+@testable import FrontAMPlayer
 
 @MainActor
 final class NowPlayingLyricsLoadingTests: XCTestCase {

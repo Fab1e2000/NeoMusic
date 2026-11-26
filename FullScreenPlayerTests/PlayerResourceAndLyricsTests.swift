@@ -1,12 +1,13 @@
 import XCTest
 import MetalKit
-@testable import FullScreenPlayer
+@testable import FrontAMPlayer
 
 @MainActor final class PlayerResourceAndLyricsTests: XCTestCase {
     func testModuleBundleContainsMetalAndSourceNotices() throws {
         XCTAssertNotEqual(PlayerResources.bundle.bundleURL, Bundle.main.bundleURL)
         XCTAssertNotNil(PlayerResources.bundle.url(forResource: "GPL-3.0", withExtension: "txt"))
         XCTAssertNotNil(PlayerResources.bundle.url(forResource: "PlayerSourceNotices", withExtension: "txt"))
+        _ = try XCTUnwrap(PlayerResources.bundle.url(forResource: "default", withExtension: "metallib"))
         guard let device = MTLCreateSystemDefaultDevice() else { throw XCTSkip("Metal device unavailable") }
         let library = try device.makeDefaultLibrary(bundle: PlayerResources.bundle)
         for name in ["lyricsViewportFade", "trackSwipeHorizontalFade"] {

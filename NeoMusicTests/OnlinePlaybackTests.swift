@@ -2,7 +2,7 @@ import XCTest
 import AVFoundation
 import Synchronization
 @testable import NeoMusic
-@testable import FullScreenPlayer
+@testable import FrontAMPlayer
 
 @MainActor
 final class OnlinePlaybackTests: XCTestCase {

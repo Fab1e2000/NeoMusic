@@ -1,4 +1,4 @@
-import FullScreenPlayer
+import FrontAMPlayer
 import SwiftUI
 
 @MainActor

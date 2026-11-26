@@ -1,7 +1,7 @@
 import XCTest
 import SwiftUI
 import Observation
-import FullScreenPlayer
+import FrontAMPlayer
 
 @MainActor final class PlayerContractTests: XCTestCase {
     func testPlaybackReadsStayLiveWithoutPublishingAnotherQueue() {

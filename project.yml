@@ -9,6 +9,8 @@ settings:
   base:
     SWIFT_VERSION: "6.0"
 packages:
+  FrontAM:
+    path: Packages/FrontAM
   AudioStreaming:
     path: Packages/AudioStreaming
   AudioTags:
@@ -32,10 +34,11 @@ targets:
     platform: iOS
     sources:
       - path: NeoMusic
-        excludes:
-          - Features/Player/FullScreenPlayer
     dependencies:
-      - target: FullScreenPlayer
+      - package: FrontAM
+        product: FrontAMPlayer
+      - package: FrontAM
+        product: FrontAMCore
       - package: AudioStreaming
       - package: AudioTags
         product: AudioTagBridge
@@ -72,25 +75,14 @@ targets:
       configs:
         Release:
           EXCLUDED_SOURCE_FILE_NAMES: HomePreviewAssets.xcassets
-  FullScreenPlayer:
-    type: framework
-    platform: iOS
-    sources:
-      - path: NeoMusic/Features/Player/FullScreenPlayer
-      - path: NeoMusic/Core/ArtworkColorSpace.swift
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.elsterlee.FullScreenPlayer
-        GENERATE_INFOPLIST_FILE: YES
-        TARGETED_DEVICE_FAMILY: "1"
-        SKIP_INSTALL: YES
   FullScreenPlayerTests:
     type: bundle.unit-test
     platform: iOS
     sources:
       - path: FullScreenPlayerTests
     dependencies:
-      - target: FullScreenPlayer
+      - package: FrontAM
+        product: FrontAMPlayer
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
@@ -102,7 +94,8 @@ targets:
       - path: NeoMusicTests
     dependencies:
       - target: NeoMusic
-      - target: FullScreenPlayer
+      - package: FrontAM
+        product: FrontAMPlayer
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
@@ -135,13 +128,6 @@ targets:
         TEST_TARGET_NAME: NeoMusic
 
 schemes:
-  FullScreenPlayer:
-    build:
-      targets:
-        FullScreenPlayer: all
-    test:
-      targets:
-        - FullScreenPlayerTests
   NeoMusicFunctionalParity:
     build:
       targets:

@@ -1,6 +1,6 @@
 import Foundation
 import Observation
-import FullScreenPlayer
+import FrontAMPlayer
 
 @MainActor @Observable final class NeoMusicPlaybackSource: PlayerPlaybackSource {
     private let model: NowPlayingModel

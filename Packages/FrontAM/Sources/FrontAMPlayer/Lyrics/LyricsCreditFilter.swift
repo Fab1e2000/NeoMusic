@@ -1,6 +1,6 @@
 import Foundation
 
-/// Filters music production credits, NetEase JSON metadata rows, and copyright
+/// Filters music production credits, structured metadata rows, and copyright notices.
 nonisolated enum LyricsCreditFilter {
     static func creditLineIndices(in lines: [PlayerLyricLine]) -> Set<Int> {
         let texts = lines.map { $0.text.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -57,7 +57,8 @@ nonisolated enum LyricsCreditFilter {
         guard !text.isEmpty else { return false }
 
         if text.hasPrefix("{"), text.hasSuffix("}"),
-           text.contains("\"tx\"") || text.contains("\"c\"") {
+           let metadata = try? JSONSerialization.jsonObject(with: Data(text.utf8)),
+           metadata is [String: Any] {
             return true
         }
 

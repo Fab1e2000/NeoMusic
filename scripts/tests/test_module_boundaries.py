@@ -1,6 +1,10 @@
+from contextlib import redirect_stderr
 import importlib.util
+from io import StringIO
 from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location("boundaries", Path(__file__).parents[1] / "check-module-boundaries.py")
 boundaries = importlib.util.module_from_spec(spec)
@@ -17,19 +21,38 @@ class ModuleBoundaryTests(unittest.TestCase):
                          "let account: NeteaseAccount"), [])
 
     def test_full_screen_component_has_only_native_dependencies(self):
-        path = Path("NeoMusic/Features/Player/FullScreenPlayer/Surface.swift")
-        for module in ("SwiftUI", "UIKit", "Observation", "MetalKit", "AVFoundation"):
+        path = boundaries.FRONTAM_PLAYER / "Surface.swift"
+        for module in ("SwiftUI", "UIKit", "Observation", "MetalKit", "AVFoundation", "FrontAMCore"):
             self.assertEqual(boundaries.check_source(path, "import " + module), [])
-        for module in ("NeoMusic", "Nuke", "NukeUI", "LNPopupUI", "FullScreenPlayer"):
+        for module in ("NeoMusic", "Nuke", "NukeUI", "LNPopupUI", "LNPopupController", "FrontAM", "FrontAMPlayer"):
             self.assertTrue(boundaries.check_source(path, "import " + module))
-        for expression in ("NowPlayingModel()", "LibrarySongItem", "LyricsDocument", "LibraryToast", "PerformanceDiagnostics", "Bundle.main", 'UIImage(named: "Sample")', '"netease:123"'):
+        for expression in ("NowPlayingModel()", "LibrarySongItem", "LyricsDocument", "AppStoragePaths", "LocalArtworkImages",
+                           "LibraryToast", "PerformanceDiagnostics", "Bundle.main", "Foundation.Bundle . main",
+                           'UIImage(named: "Sample")', '"netease:123"', "NeteaseMusicClient",
+                           "internal import struct Nuke.ImageRequest", '"LNPopupLongPress"',
+                           "@objc(NeoMusicLyricsScrollView)"):
             self.assertTrue(boundaries.check_source(path, expression))
+
+    def test_frontam_dependencies_are_directional(self):
+        core = boundaries.FRONTAM_CORE / "ArtworkColorSpace.swift"
+        umbrella = boundaries.FRONTAM_UMBRELLA / "FrontAM.swift"
+        self.assertEqual(boundaries.check_source(core, "import Foundation"), [])
+        self.assertEqual(boundaries.check_source(umbrella, "@_exported import FrontAMCore\n@_exported import FrontAMPlayer"), [])
+        for path in (core, umbrella):
+            for source in ("import Nuke", "import LNPopupUI", "let bundle = Bundle.main",
+                           "let store: NeteaseMusicStore", "let model: NowPlayingModel"):
+                self.assertTrue(boundaries.check_source(path, source), (path, source))
+        self.assertTrue(boundaries.check_source(core, "import FrontAMPlayer"))
+        self.assertTrue(boundaries.check_source(core, "import FrontAM"))
 
     def test_component_adapter_is_owned_by_app_or_player_integration(self):
         for path in ("NeoMusic/App/Composition.swift", "NeoMusic/Features/Player/Integration/Adapter.swift"):
-            self.assertEqual(boundaries.check_source(Path(path), "import FullScreenPlayer"), [])
-        for path in ("NeoMusic/Core/Netease/Client.swift", "NeoMusic/Core/Playback/Engine.swift"):
-            self.assertTrue(boundaries.check_source(Path(path), "import FullScreenPlayer"))
+            for module in ("FrontAM", "FrontAMPlayer", "FrontAMCore"):
+                self.assertEqual(boundaries.check_source(Path(path), "import " + module), [])
+        for path in ("NeoMusic/Core/Netease/Client.swift", "NeoMusic/Core/Playback/Engine.swift",
+                     "NeoMusic/Features/Library/Other.swift"):
+            for module in ("FrontAM", "FrontAMPlayer", "FrontAMCore"):
+                self.assertTrue(boundaries.check_source(Path(path), "import " + module))
 
     def test_local_and_player_sources_reject_online_business(self):
         for directory in ["Core/Library", "Core/Playback", "Features/Player", "Features/Library"]:
@@ -83,6 +106,8 @@ class ModuleBoundaryTests(unittest.TestCase):
     def test_album_color_processing_stays_in_its_renderer(self):
         path = Path("NeoMusic/Features/Library/AlbumArtworkBackdrop.swift")
         self.assertEqual(boundaries.check_source(path, "import CoreImage.CIFilterBuiltins"), [])
+        self.assertEqual(boundaries.check_source(path, "import FrontAMCore"), [])
+        self.assertTrue(boundaries.check_source(path, "import FrontAMPlayer"))
         self.assertTrue(boundaries.check_source(path, "URLSession.shared"))
         self.assertTrue(boundaries.check_source(path, "let account: NeteaseAccount"))
         self.assertTrue(boundaries.check_source(Path("NeoMusic/App/FrontendReviewPreview.swift"), "import CoreImage"))
@@ -117,13 +142,36 @@ class ModuleBoundaryTests(unittest.TestCase):
         self.assertEqual(boundaries.check_source(deck, "@preconcurrency import AudioStreaming"), [])
         self.assertTrue(boundaries.check_source(deck, "let account: NeteaseAccount"))
         for path in ["NeoMusic/Core/Library/LocalLibrary.swift", "NeoMusic/Core/Netease/Client.swift",
-                     "NeoMusic/Features/Player/FullScreenPlayer/Shared/PlayerContracts.swift"]:
+                     boundaries.FRONTAM_PLAYER / "Shared/PlayerContracts.swift"]:
             self.assertTrue(boundaries.check_source(Path(path), "import AudioStreaming"))
 
     def test_player_shaders_are_scanned_in_their_owner(self):
-        self.assertEqual(boundaries.check_source(Path("NeoMusic/Features/Player/PlayerEDRShaders.metal"), "#include <metal_stdlib>"), [])
+        shader = boundaries.FRONTAM_PLAYER / "NowPlaying/NowPlayingStitchableShaders.metal"
+        self.assertEqual(boundaries.check_source(shader, "#include <metal_stdlib>"), [])
+        self.assertTrue(boundaries.check_source(boundaries.FRONTAM_CORE / shader.name, "#include <metal_stdlib>"))
         self.assertTrue(boundaries.check_source(Path("NeoMusic/Features/Home/PlayerEDRShaders.metal"), "#include <metal_stdlib>"))
-        self.assertTrue(boundaries.check_source(Path("NeoMusic/Features/Player/PlayerEDRShaders.metal"), "URLSession.shared"))
+        self.assertTrue(boundaries.check_source(shader, "URLSession.shared"))
+        self.assertTrue(boundaries.check_source(shader, "#include <NeoMusic/Bridge.h>"))
+
+    def test_command_scans_nested_frontam_sources_and_unknown_modules(self):
+        sources = {
+            Path("NeoMusic/App.swift"): "import SwiftUI",
+            boundaries.FRONTAM_UMBRELLA / "FrontAM.swift": "@_exported import FrontAMPlayer",
+            boundaries.FRONTAM_CORE / "Nested/Artwork.swift": "let store: AppStoragePaths",
+            boundaries.FRONTAM_PLAYER / "Nested/Shader.metal": '#include "../Nuke/Image.h"',
+            boundaries.FRONTAM_PLAYER / "Nested/Bridge.hpp": '#include <LNPopupUI/Popup.h>',
+            boundaries.FRONTAM_SOURCES / "Unassigned/Extra.h": "@import LNPopupController;",
+        }
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            for path, source in sources.items():
+                (root / path).parent.mkdir(parents=True, exist_ok=True)
+                (root / path).write_text(source)
+            errors = StringIO()
+            with patch.object(boundaries, "ROOT", root), redirect_stderr(errors):
+                self.assertEqual(boundaries.main(), 1)
+            for path in list(sources)[2:]:
+                self.assertIn(str(path), errors.getvalue())
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@ import os
 import SwiftUI
 import XCTest
 @testable import NeoMusic
-@testable import FullScreenPlayer
+@testable import FrontAMPlayer
 
 @MainActor final class TrackSwipeTests: XCTestCase {
     private typealias Swipe = NowPlayingTrackSwipe<Text, EmptyView>

@@ -1,5 +1,5 @@
 import XCTest
-@testable import FullScreenPlayer
+@testable import FrontAMPlayer
 
 final class VolumeInertiaPhysicsTests: XCTestCase {
     func testStepDecaysVelocityAndAdvancesValue() {

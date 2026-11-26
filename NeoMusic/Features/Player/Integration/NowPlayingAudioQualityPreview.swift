@@ -1,6 +1,6 @@
 #if DEBUG
 import SwiftUI
-import FullScreenPlayer
+import FrontAMPlayer
 struct PlayerAudioQualityPreview: View {
     let openAudioQualitySettings: () -> Void
     @Environment(\.dismiss) private var dismiss

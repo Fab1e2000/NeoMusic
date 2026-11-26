@@ -2,7 +2,7 @@ import XCTest
 import SwiftUI
 import UIKit
 @testable import NeoMusic
-@testable import FullScreenPlayer
+@testable import FrontAMPlayer
 
 @MainActor
 final class LyricsFocusTests: XCTestCase {

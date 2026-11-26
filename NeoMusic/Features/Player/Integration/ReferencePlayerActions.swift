@@ -1,5 +1,5 @@
 import Foundation
-import FullScreenPlayer
+import FrontAMPlayer
 
 extension PlayerAudioQuality {
     static func localFile(_ url: URL) -> Self? {

@@ -1,4 +1,4 @@
-import FullScreenPlayer
+import FrontAMPlayer
 // Source: NeoDizzy Features/Player/PlayerPopup.swift; see Resources/PlayerSourceNotices.txt.
 import LNPopupUI
 import SwiftUI
@@ -46,6 +46,7 @@ struct PlayerPopup: ViewModifier {
                                        barColorScheme: barColorScheme ?? colorScheme,
                                        isActive: isPresented,
                                        isBarActive: isBarActive,
+                                       interactionDelegate: interactionDelegate,
                                        toasts: toasts) { isPresented = false }
                         .environment(\.playerVolumeHUDRefreshID, volumeHUDRefreshID)
                 }
@@ -55,9 +56,11 @@ struct PlayerPopup: ViewModifier {
                 view.overrideUserInterfaceStyle = .dark
                 view.isTranslucent = false
                 view.popupInteractionGestureRecognizer.delegate = interactionDelegate
+                interactionDelegate.popupContentView = view
             }
             .popupInteractionStyle(displayedTrack == nil ? .none : .automatic)
             .popupBarCustomizer { bar in
+                interactionDelegate.popupBar = bar
                 let empty = displayedTrack == nil
                 bar.popupOpenGestureRecognizer.isEnabled = !empty
                 bar.barHighlightGestureRecognizer.isEnabled = !empty
@@ -125,6 +128,7 @@ private struct PlayerPopupContent: View {
     let barColorScheme: ColorScheme
     let isActive: Bool
     let isBarActive: Bool
+    let interactionDelegate: PlayerPopupInteractionDelegate
     var toasts: LibraryToastCenter? = nil
     let onDismiss: () -> Void
     @Environment(PlayerState.self) private var player
@@ -141,6 +145,7 @@ private struct PlayerPopupContent: View {
                 Color.clear
             }
         }
+        .environment(\.playerTrackSwipeGestureRole, interactionDelegate.trackSwipeRole(for:))
         .popupItem {
             PopupItem(id: track?.id, image: barImage,
                       accessibilityLabel: [track?.title ?? "未在播放", track?.artists ?? "", "迷你播放器"]
@@ -150,6 +155,7 @@ private struct PlayerPopupContent: View {
                     if let track {
                         MiniPlayerTitle(fallbackTrack: track, isActive: isBarActive)
                             .environment(player)
+                            .environment(\.playerTrackSwipeGestureRole, interactionDelegate.trackSwipeRole(for:))
                     } else {
                         Text("未在播放")
                             .font(.footnote.weight(.medium))
@@ -313,7 +319,18 @@ struct MiniPlayerControls: View {
 }
 
 @MainActor final class PlayerPopupInteractionDelegate: NSObject, UIGestureRecognizerDelegate {
+    weak var popupBar: LNPopupBar?
+    weak var popupContentView: LNPopupContentView?
     private weak var queuePanAllowedToDismiss: UIPanGestureRecognizer?
+
+    func trackSwipeRole(for gesture: UIGestureRecognizer) -> PlayerTrackSwipeGestureRole? {
+        if gesture === popupBar?.barHighlightGestureRecognizer { return .highlight }
+        if gesture === popupBar?.popupOpenGestureRecognizer ||
+            gesture === popupContentView?.popupInteractionGestureRecognizer {
+            return .yieldsToTrackSwipe
+        }
+        return nil
+    }
 
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
         shouldReceiveTouch(in: touch.view)

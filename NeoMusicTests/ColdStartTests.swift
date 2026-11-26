@@ -3,7 +3,7 @@ import MediaPlayer
 import UIKit
 import SwiftUI
 @testable import NeoMusic
-@testable import FullScreenPlayer
+@testable import FrontAMPlayer
 
 @MainActor final class ColdStartTests: XCTestCase {
     func testRestoredPlayerStaysLightweightAndFirstPlaySeeksToSavedPosition() async throws {

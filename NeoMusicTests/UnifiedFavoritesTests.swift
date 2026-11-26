@@ -1,5 +1,5 @@
 import XCTest
-import FullScreenPlayer
+import FrontAMPlayer
 @testable import NeoMusic
 
 @MainActor

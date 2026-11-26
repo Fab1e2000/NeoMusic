@@ -1,4 +1,4 @@
-FullScreenPlayer source notices
+FrontAMPlayer source notices
 
 The imported player frontend is adapted directly from NeoDizzy, baseline
 bccecb66d32030ea55a564fe06fe0bda5598202b with its current player worktree changes.
@@ -8,7 +8,8 @@ NeoDizzy identifies the full-screen player, motion/layout helpers, queue and
 related presentation code as derived from MeloX / MeloX_Modified (including
 reference b8bc60f): https://github.com/youshen2/MeloX
 These copied portions retain GPL version 3 licensing. Full license text is
-included in GPL-3.0.txt. Original file attribution comments are retained.
+included in GPL-3.0.txt. The FrontAM MIT license applies to original FrontAM
+work. Original file attribution comments are retained.
 NeoMusic changes adapt source-neutral data, local playback actions and Swift
 concurrency; they do not imply that upstream code is original NeoMusic work.
 Title swipes commit playback selection on gesture release and use SwiftUI's

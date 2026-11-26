@@ -1,7 +1,7 @@
 import XCTest
 import SwiftUI
 @testable import NeoMusic
-@testable import FullScreenPlayer
+@testable import FrontAMPlayer
 
 @MainActor
 final class LibraryListAccessibilityTests: XCTestCase {

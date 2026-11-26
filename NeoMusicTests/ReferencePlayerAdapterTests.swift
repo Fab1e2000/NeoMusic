@@ -4,7 +4,7 @@ import SwiftUI
 import Nuke
 import AVFoundation
 @testable import NeoMusic
-@testable import FullScreenPlayer
+@testable import FrontAMPlayer
 
 @MainActor final class NowPlayingProgressScrubTests: XCTestCase {
     func testNativeProgressUpdatesDoNotSeekAndControlEditsUseTheSamePlayer() async throws {

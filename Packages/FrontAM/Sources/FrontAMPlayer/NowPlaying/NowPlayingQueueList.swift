@@ -136,7 +136,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
         required init?(coder: NSCoder) { super.init(coder: coder) }
     }
 
-    @objc(NeoMusicEdgeFadedListCell)
+    @objc(FrontAMEdgeFadedListCell)
     final class EdgeFadedListCell: UICollectionViewListCell {
         weak var edgeFadeCollectionView: EdgeFadedCollectionView?
         var contentRevision: UInt64?
@@ -169,7 +169,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
         }
     }
 
-    @objc(NeoMusicEdgeFadedCollectionView)
+    @objc(FrontAMEdgeFadedCollectionView)
     final class EdgeFadedCollectionView: UICollectionView {
         var queueHeader: UICollectionViewListCell? { header(in: .queue) }
         var historyHeader: UICollectionViewListCell? { header(in: .history) }

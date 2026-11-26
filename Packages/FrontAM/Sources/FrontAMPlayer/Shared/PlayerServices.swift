@@ -94,8 +94,7 @@ public struct PlayerArtworkRequest: Hashable, Sendable {
 
 public enum PlayerNotice { case favorited, unfavorited, playingNext, addedToQueue }
 
-final class PlayerResourceBundleMarker: NSObject {}
 enum PlayerResources {
-    static let bundle = Bundle(for: PlayerResourceBundleMarker.self)
+    static let bundle = Bundle.module
     static let shaders = ShaderLibrary.bundle(bundle)
 }

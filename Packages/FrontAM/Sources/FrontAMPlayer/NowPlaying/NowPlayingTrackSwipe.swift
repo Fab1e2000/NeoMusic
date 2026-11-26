@@ -1,6 +1,15 @@
 import SwiftUI
 import UIKit
 
+public enum PlayerTrackSwipeGestureRole: Sendable {
+    case highlight
+    case yieldsToTrackSwipe
+}
+
+extension EnvironmentValues {
+    @Entry public var playerTrackSwipeGestureRole: (@MainActor @Sendable (UIGestureRecognizer) -> PlayerTrackSwipeGestureRole?) = { _ in nil }
+}
+
 @Observable @MainActor
 final class TrackSwipeOffsetModel {
     var value: CGFloat = 0
@@ -489,6 +498,7 @@ struct NowPlayingTrackSwipe<Title: View, Artist: View>: View {
 
     @Environment(PlayerState.self) private var player
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+    @Environment(\.playerTrackSwipeGestureRole) private var gestureRole
     @State private var controller = TrackSwipeController()
     @State private var measuredWidth: CGFloat = 0
 
@@ -539,6 +549,7 @@ struct NowPlayingTrackSwipe<Title: View, Artist: View>: View {
             .modifier(TrackSwipeGestureModifier(
                 usesUIKitTouchSurface: usesUIKitTouchSurface,
                 pan: NowPlayingHorizontalPan(
+                    gestureRole: gestureRole,
                     onStart: { translation in
                         controller.panBegan(
                             translation: translation,
@@ -747,12 +758,13 @@ struct NowPlayingTrackSwipe<Title: View, Artist: View>: View {
 }
 
 private struct NowPlayingHorizontalPan: UIGestureRecognizerRepresentable {
+    let gestureRole: @MainActor (UIGestureRecognizer) -> PlayerTrackSwipeGestureRole?
     let onStart: (CGFloat) -> Void
     let onChange: (CGFloat) -> Void
     let onEnd: (_ translation: CGFloat, _ velocity: CGFloat) -> Void
     let onCancel: () -> Void
 
-    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
+    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator(gestureRole: gestureRole) }
 
     func makeUIGestureRecognizer(context: Context) -> UIPanGestureRecognizer {
         let pan = UIPanGestureRecognizer()
@@ -766,6 +778,10 @@ private struct NowPlayingHorizontalPan: UIGestureRecognizerRepresentable {
 
     func handleUIGestureRecognizerAction(_ recognizer: UIPanGestureRecognizer, context: Context) {
         handle(recognizer)
+    }
+
+    func updateUIGestureRecognizer(_ recognizer: UIPanGestureRecognizer, context: Context) {
+        context.coordinator.gestureRole = gestureRole
     }
 
     func handle(_ recognizer: UIPanGestureRecognizer) {
@@ -785,7 +801,7 @@ private struct NowPlayingHorizontalPan: UIGestureRecognizerRepresentable {
     ) {
         switch state {
         case .began:
-            Self.cancelPopupBarHighlight(from: view)
+            cancelHighlight(from: view)
             onStart(translation)
         case .changed:
             onChange(translation)
@@ -798,18 +814,11 @@ private struct NowPlayingHorizontalPan: UIGestureRecognizerRepresentable {
         }
     }
 
-    private enum LNPopupGestureClassName {
-        static let longPress = "LNPopupLongPress"
-        static let interactionPan = "LNPopupInteractionPan"
-        static let openTap = "LNPopupOpenTap"
-    }
-
-    private static func cancelPopupBarHighlight(from view: UIView?) {
+    private func cancelHighlight(from view: UIView?) {
         var cursor = view
         while let current = cursor {
             for recognizer in current.gestureRecognizers ?? []
-            where recognizer is UILongPressGestureRecognizer
-                && NSStringFromClass(type(of: recognizer)).contains(LNPopupGestureClassName.longPress)
+            where gestureRole(recognizer) == .highlight
                 && recognizer.isEnabled {
                 recognizer.isEnabled = false
                 recognizer.isEnabled = true
@@ -819,6 +828,12 @@ private struct NowPlayingHorizontalPan: UIGestureRecognizerRepresentable {
     }
 
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var gestureRole: @MainActor (UIGestureRecognizer) -> PlayerTrackSwipeGestureRole?
+
+        init(gestureRole: @escaping @MainActor (UIGestureRecognizer) -> PlayerTrackSwipeGestureRole?) {
+            self.gestureRole = gestureRole
+        }
+
         func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
             guard let pan = gestureRecognizer as? UIPanGestureRecognizer else { return false }
             let host = pan.view?.window ?? pan.view
@@ -837,16 +852,14 @@ private struct NowPlayingHorizontalPan: UIGestureRecognizerRepresentable {
             shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer
         ) -> Bool {
             guard otherGestureRecognizer !== gestureRecognizer else { return false }
-            let otherClass = NSStringFromClass(type(of: otherGestureRecognizer))
-            return otherClass.contains(LNPopupGestureClassName.interactionPan)
-                || otherClass.contains(LNPopupGestureClassName.openTap)
+            return gestureRole(otherGestureRecognizer) == .yieldsToTrackSwipe
         }
 
         func gestureRecognizer(
             _ gestureRecognizer: UIGestureRecognizer,
             shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
         ) -> Bool {
-            NSStringFromClass(type(of: otherGestureRecognizer)).contains(LNPopupGestureClassName.longPress)
+            gestureRole(otherGestureRecognizer) == .highlight
         }
     }
 }
@@ -886,9 +899,15 @@ struct TrackSwipeTouchSurface: UIViewRepresentable {
     func updateUIView(_ view: UIView, context: Context) { context.coordinator.pan = pan }
 
     @MainActor final class Coordinator: NSObject, UIGestureRecognizerDelegate {
-        fileprivate var pan: NowPlayingHorizontalPan
-        private let directionDelegate = NowPlayingHorizontalPan.Coordinator()
-        fileprivate init(pan: NowPlayingHorizontalPan) { self.pan = pan }
+        fileprivate var pan: NowPlayingHorizontalPan {
+            didSet { directionDelegate.gestureRole = pan.gestureRole }
+        }
+        private let directionDelegate: NowPlayingHorizontalPan.Coordinator
+
+        fileprivate init(pan: NowPlayingHorizontalPan) {
+            self.pan = pan
+            directionDelegate = NowPlayingHorizontalPan.Coordinator(gestureRole: pan.gestureRole)
+        }
         @objc func handle(_ gesture: UIPanGestureRecognizer) { pan.handle(gesture) }
 
         func handle(

@@ -6,177 +6,177 @@
     {
       "source": "NeoDizzy/Shared/Lyrics/AppleMusicLocalLyricsView.swift",
       "sha256": "52e7540e65b5175ffbcb9a961d9951454ea8a3ac845eccfaee97b514968bd826",
-      "destination": "NeoMusic/Features/Player/FullScreenPlayer/Lyrics/AppleMusicLocalLyricsView.swift"
+      "destination": "Packages/FrontAM/Sources/FrontAMPlayer/Lyrics/AppleMusicLocalLyricsView.swift"
     },
     {
       "source": "NeoDizzy/Shared/Lyrics/AppleMusicLyricsMotionProfile.swift",
       "sha256": "b710bd15a451c162a457822bb16ab3940889a2dba3eb8ae51cbff9f6248a88b0",
-      "destination": "NeoMusic/Features/Player/FullScreenPlayer/Lyrics/AppleMusicLyricsMotionProfile.swift"
+      "destination": "Packages/FrontAM/Sources/FrontAMPlayer/Lyrics/AppleMusicLyricsMotionProfile.swift"
     },
     {
       "source": "NeoDizzy/Shared/Lyrics/AppleMusicLyricsTypographyProfile.swift",
       "sha256": "8d94c075b0d7a95c32b65c76fe0a36f2c5f1f68b9351e425d6e9f1f17df18cde",
-      "destination": "NeoMusic/Features/Player/FullScreenPlayer/Lyrics/AppleMusicLyricsTypographyProfile.swift"
+      "destination": "Packages/FrontAM/Sources/FrontAMPlayer/Lyrics/AppleMusicLyricsTypographyProfile.swift"
     },
     {
       "source": "NeoDizzy/Shared/Lyrics/LyricPhysicalSpringParameters.swift",
       "sha256": "096a24b3a538546ec12ab8519477950c13064e906f24b8a210342df75bac5bca",
-      "destination": "NeoMusic/Features/Player/FullScreenPlayer/Lyrics/LyricPhysicalSpringParameters.swift"
+      "destination": "Packages/FrontAM/Sources/FrontAMPlayer/Lyrics/LyricPhysicalSpringParameters.swift"
     },
     {
       "source": "NeoDizzy/Shared/Lyrics/LyricPressInteraction.swift",
       "sha256": "d44959b8e1ec1619c72822c8a71deff03889d19edda165a94f198195ef4df52c",
-      "destination": "NeoMusic/Features/Player/FullScreenPlayer/Lyrics/LyricPressInteraction.swift"
+      "destination": "Packages/FrontAM/Sources/FrontAMPlayer/Lyrics/LyricPressInteraction.swift"
     },
     {
       "source": "NeoDizzy/Shared/Lyrics/LyricsFontMetrics.swift",
       "sha256": "75debb9425841a145dea1a413e3e66dc89e77096f71653fff69e093ab023143b",
-      "destination": "NeoMusic/Features/Player/FullScreenPlayer/Lyrics/LyricsFontMetrics.swift"
+      "destination": "Packages/FrontAM/Sources/FrontAMPlayer/Lyrics/LyricsFontMetrics.swift"
     },
     {
       "source": "NeoDizzy/Shared/Lyrics/LyricsRowGeometry.swift",
       "sha256": "2b52208e2510df9e29afbcb098f01f2b3edeb570e38a7ff23cb774fd9fed3821",
-      "destination": "NeoMusic/Features/Player/FullScreenPlayer/Lyrics/LyricsRowGeometry.swift"
+      "destination": "Packages/FrontAM/Sources/FrontAMPlayer/Lyrics/LyricsRowGeometry.swift"
     },
     {
       "source": "NeoDizzy/Shared/Lyrics/LyricsScrollInterfaceVisibilityTracker.swift",
       "sha256": "ec1b6085a205affd9b66bf1bdf79f652e41de9acc3d7ced286225b3e1cef0a4b",
-      "destination": "NeoMusic/Features/Player/FullScreenPlayer/Lyrics/LyricsScrollInterfaceVisibilityTracker.swift"
+      "destination": "Packages/FrontAM/Sources/FrontAMPlayer/Lyrics/LyricsScrollInterfaceVisibilityTracker.swift"
     },
     {
       "source": "NeoDizzy/Features/Player/NowPlaying/NowPlayingAirPlayButton.swift",
       "sha256": "8cc87c6a67e59213c609ced5569635a1f4e413478d9df2c54e4620f444a0b28c",
-      "destination": "NeoMusic/Features/Player/FullScreenPlayer/NowPlaying/NowPlayingAirPlayButton.swift"
+      "destination": "Packages/FrontAM/Sources/FrontAMPlayer/NowPlaying/NowPlayingAirPlayButton.swift"
     },
     {
       "source": "NeoDizzy/Features/Player/NowPlaying/NowPlayingArtistButton.swift",
       "sha256": "ef5b6fc8796f01b2bb74d9792df3ad0c140e549a869dc524b3f61081c0bab43f",
-      "destination": "NeoMusic/Features/Player/FullScreenPlayer/NowPlaying/NowPlayingArtistButton.swift"
+      "destination": "Packages/FrontAM/Sources/FrontAMPlayer/NowPlaying/NowPlayingArtistButton.swift"
     },
     {
       "source": "NeoDizzy/Features/Player/NowPlaying/NowPlayingArtworkBackdrop.swift",
       "sha256": "785f41b73b4b79fe2f3c6823949d0892fd05e9097cfe5912f27accb16788567b",
-      "destination": "NeoMusic/Features/Player/FullScreenPlayer/NowPlaying/NowPlayingArtworkBackdrop.swift"
+      "destination": "Packages/FrontAM/Sources/FrontAMPlayer/NowPlaying/NowPlayingArtworkBackdrop.swift"
     },
     {
       "source": "NeoDizzy/Features/Player/NowPlaying/NowPlayingArtworkPage.swift",
       "sha256": "64d5e915df10484cec4692ac1f96496c56a7bf9a0214c97489d90eed2c897e1e",
-      "destination": "NeoMusic/Features/Player/FullScreenPlayer/NowPlaying/NowPlayingArtworkPage.swift"
+      "destination": "Packages/FrontAM/Sources/FrontAMPlayer/NowPlaying/NowPlayingArtworkPage.swift"
     },
     {
       "source": "NeoDizzy/Features/Player/NowPlaying/NowPlayingBackdropImage.swift",
       "sha256": "d7253c11be9bb11015f1564ccfedc8a4f164fa992db4105e32951a1f637fc6f6",
-      "destination": "NeoMusic/Features/Player/FullScreenPlayer/NowPlaying/NowPlayingBackdropImage.swift"
+      "destination": "Packages/FrontAM/Sources/FrontAMPlayer/NowPlaying/NowPlayingBackdropImage.swift"
     },
     {
       "source": "NeoDizzy/Features/Player/NowPlaying/NowPlayingBottomControls.swift",
       "sha256": "13868ba793f9dc2c691eede3e3d30a47ee849995f99529f4bfdf096939733446",
-      "destination": "NeoMusic/Features/Player/FullScreenPlayer/NowPlaying/NowPlayingBottomControls.swift"
+      "destination": "Packages/FrontAM/Sources/FrontAMPlayer/NowPlaying/NowPlayingBottomControls.swift"
     },
     {
       "source": "NeoDizzy/Features/Player/NowPlaying/NowPlayingControls.swift",
       "sha256": "80ec4aa9ad438778eefc963249ad4677d37e6b94bf14d94d29c3573ff47cf226",
-      "destination": "NeoMusic/Features/Player/FullScreenPlayer/NowPlaying/NowPlayingControls.swift"
+      "destination": "Packages/FrontAM/Sources/FrontAMPlayer/NowPlaying/NowPlayingControls.swift"
     },
     {
       "source": "NeoDizzy/Features/Player/NowPlaying/NowPlayingInterfaceTransition.swift",
       "sha256": "b5412045402959807963ce1aed21e984efd80f52dea5f74cc4a4413971c0599e",
-      "destination": "NeoMusic/Features/Player/FullScreenPlayer/NowPlaying/NowPlayingInterfaceTransition.swift"
+      "destination": "Packages/FrontAM/Sources/FrontAMPlayer/NowPlaying/NowPlayingInterfaceTransition.swift"
     },
     {
       "source": "NeoDizzy/Features/Player/NowPlaying/NowPlayingLayout.swift",
       "sha256": "3435fadeb2b4a9eb14842184b03d4bb2f91983fbab0ae1b8fd8486a6ab39b59d",
-      "destination": "NeoMusic/Features/Player/FullScreenPlayer/NowPlaying/NowPlayingLayout.swift"
+      "destination": "Packages/FrontAM/Sources/FrontAMPlayer/NowPlaying/NowPlayingLayout.swift"
     },
     {
       "source": "NeoDizzy/Features/Player/NowPlaying/NowPlayingLyricsModel.swift",
       "sha256": "94241fcb36caae3631892a68a934332818bdec7bbf3ddceebe6fa020390e7a9d",
-      "destination": "NeoMusic/Features/Player/FullScreenPlayer/NowPlaying/NowPlayingLyricsModel.swift"
+      "destination": "Packages/FrontAM/Sources/FrontAMPlayer/NowPlaying/NowPlayingLyricsModel.swift"
     },
     {
       "source": "NeoDizzy/Features/Player/NowPlaying/NowPlayingLyricsPage.swift",
       "sha256": "20bbffd37a76aac97de15638b6e4c0b0bf22e4a1e23b756530ba83a52cebc0ea",
-      "destination": "NeoMusic/Features/Player/FullScreenPlayer/NowPlaying/NowPlayingLyricsPage.swift"
+      "destination": "Packages/FrontAM/Sources/FrontAMPlayer/NowPlaying/NowPlayingLyricsPage.swift"
     },
     {
       "source": "NeoDizzy/Features/Player/NowPlaying/NowPlayingLyricsPagePresentation.swift",
       "sha256": "ba85454a3919f291f99d6be0d3b8d900c07a313cccaa4da1c69909185cf48dd4",
-      "destination": "NeoMusic/Features/Player/FullScreenPlayer/NowPlaying/NowPlayingLyricsPagePresentation.swift"
+      "destination": "Packages/FrontAM/Sources/FrontAMPlayer/NowPlaying/NowPlayingLyricsPagePresentation.swift"
     },
     {
       "source": "NeoDizzy/Features/Player/NowPlaying/NowPlayingMarqueeText.swift",
       "sha256": "d67ae089896890be9d4b749b32db64045552143120514a47b8dcc8635b3eec6b",
-      "destination": "NeoMusic/Features/Player/FullScreenPlayer/NowPlaying/NowPlayingMarqueeText.swift"
+      "destination": "Packages/FrontAM/Sources/FrontAMPlayer/NowPlaying/NowPlayingMarqueeText.swift"
     },
     {
       "source": "NeoDizzy/Features/Player/NowPlaying/NowPlayingMotionSpec.swift",
       "sha256": "3252048a71bd3cb53070c4ea2a1f70170228dcc45d12e664e863369aca89862f",
-      "destination": "NeoMusic/Features/Player/FullScreenPlayer/NowPlaying/NowPlayingMotionSpec.swift"
+      "destination": "Packages/FrontAM/Sources/FrontAMPlayer/NowPlaying/NowPlayingMotionSpec.swift"
     },
     {
       "source": "NeoDizzy/Features/Player/NowPlaying/NowPlayingPageTransition.swift",
       "sha256": "d78fd7deed0a926896ea6f57a1eabd0031c0983788cf5056a3f774513e1f6458",
-      "destination": "NeoMusic/Features/Player/FullScreenPlayer/NowPlaying/NowPlayingPageTransition.swift"
+      "destination": "Packages/FrontAM/Sources/FrontAMPlayer/NowPlaying/NowPlayingPageTransition.swift"
     },
     {
       "source": "NeoDizzy/Features/Player/NowPlaying/NowPlayingPages.swift",
       "sha256": "20b1e1ace261fba7f47294de4ee8c4cc67ce41ff42c3f7fcb7950b9f1727998b",
-      "destination": "NeoMusic/Features/Player/FullScreenPlayer/NowPlaying/NowPlayingPages.swift"
+      "destination": "Packages/FrontAM/Sources/FrontAMPlayer/NowPlaying/NowPlayingPages.swift"
     },
     {
       "source": "NeoDizzy/Features/Player/NowPlaying/NowPlayingPlayPauseIcon.swift",
       "sha256": "4c6daa723272c54497c6a1fc64f34f11a0832e9da7f0239b507ef26ff4bcad78",
-      "destination": "NeoMusic/Features/Player/FullScreenPlayer/NowPlaying/NowPlayingPlayPauseIcon.swift"
+      "destination": "Packages/FrontAM/Sources/FrontAMPlayer/NowPlaying/NowPlayingPlayPauseIcon.swift"
     },
     {
       "source": "NeoDizzy/Features/Player/NowPlaying/NowPlayingPortraitArtwork.swift",
       "sha256": "2bc4c7517daf0ed7f084803de7f93e847bb25db00f871f136b3f04619eafa3e8",
-      "destination": "NeoMusic/Features/Player/FullScreenPlayer/NowPlaying/NowPlayingPortraitArtwork.swift"
+      "destination": "Packages/FrontAM/Sources/FrontAMPlayer/NowPlaying/NowPlayingPortraitArtwork.swift"
     },
     {
       "source": "NeoDizzy/Features/Player/NowPlaying/NowPlayingQueueList.swift",
       "sha256": "6418e778ea7b96b052ee1ce08429acce12789e95d4d6568a9503a7bca0c4f3ac",
-      "destination": "NeoMusic/Features/Player/FullScreenPlayer/NowPlaying/NowPlayingQueueList.swift"
+      "destination": "Packages/FrontAM/Sources/FrontAMPlayer/NowPlaying/NowPlayingQueueList.swift"
     },
     {
       "source": "NeoDizzy/Features/Player/NowPlaying/NowPlayingQueuePage.swift",
       "sha256": "c94fa1ed3d578c187a11a9ae283ccfb19cf54b30fd851ca8f06a9ddc6d5e1bc6",
-      "destination": "NeoMusic/Features/Player/FullScreenPlayer/NowPlaying/NowPlayingQueuePage.swift"
+      "destination": "Packages/FrontAM/Sources/FrontAMPlayer/NowPlaying/NowPlayingQueuePage.swift"
     },
     {
       "source": "NeoDizzy/Features/Player/NowPlaying/NowPlayingSkipIcon.swift",
       "sha256": "e0ed0523c4d0f8692d75e0b6882b88885a1ae1b188309e741f0e995873dc7e97",
-      "destination": "NeoMusic/Features/Player/FullScreenPlayer/NowPlaying/NowPlayingSkipIcon.swift"
+      "destination": "Packages/FrontAM/Sources/FrontAMPlayer/NowPlaying/NowPlayingSkipIcon.swift"
     },
     {
       "source": "NeoDizzy/Features/Player/NowPlaying/NowPlayingSongActions.swift",
       "sha256": "1f1ea6a18b78c3221914d7cf6e840b3512829ce3ec86524e710afdb8dca11676",
-      "destination": "NeoMusic/Features/Player/FullScreenPlayer/NowPlaying/NowPlayingSongActions.swift"
+      "destination": "Packages/FrontAM/Sources/FrontAMPlayer/NowPlaying/NowPlayingSongActions.swift"
     },
     {
       "source": "NeoDizzy/Features/Player/NowPlaying/NowPlayingSongHeader.swift",
       "sha256": "cea8cef841de487c87ab466930193798522631720bae65eaeb08f8ffb6737035",
-      "destination": "NeoMusic/Features/Player/FullScreenPlayer/NowPlaying/NowPlayingSongHeader.swift"
+      "destination": "Packages/FrontAM/Sources/FrontAMPlayer/NowPlaying/NowPlayingSongHeader.swift"
     },
     {
       "source": "NeoDizzy/Features/Player/NowPlaying/NowPlayingTrackSwipe.swift",
       "sha256": "a0824557c318b5ef91e0e9ef90cb02f151b89d420efce35c82153a83561a5105",
-      "destination": "NeoMusic/Features/Player/FullScreenPlayer/NowPlaying/NowPlayingTrackSwipe.swift"
+      "destination": "Packages/FrontAM/Sources/FrontAMPlayer/NowPlaying/NowPlayingTrackSwipe.swift"
     },
     {
       "source": "NeoDizzy/Features/Player/NowPlaying/NowPlayingTransportButtonStyle.swift",
       "sha256": "5edb30475454f44e3226b3eff660f649439ba9407a7e3e9d08d9589e1d6ee69f",
-      "destination": "NeoMusic/Features/Player/FullScreenPlayer/NowPlaying/NowPlayingTransportButtonStyle.swift"
+      "destination": "Packages/FrontAM/Sources/FrontAMPlayer/NowPlaying/NowPlayingTransportButtonStyle.swift"
     },
     {
       "source": "NeoDizzy/Features/Player/NowPlaying/NowPlayingView.swift",
       "sha256": "8bd860b0e9704d0b73f3aef3e89dfc5255d502c5fe295459e8fc2ece0cf03886",
-      "destination": "NeoMusic/Features/Player/FullScreenPlayer/NowPlaying/NowPlayingContent.swift"
+      "destination": "Packages/FrontAM/Sources/FrontAMPlayer/NowPlaying/NowPlayingContent.swift"
     },
     {
       "source": "NeoDizzy/Core/UI/ArtworkImage.swift",
       "sha256": "8e74e1f3de7cf83da4867cf577915e8c7435bbf266015586e73dceefd694e6c2",
-      "destination": "NeoMusic/Features/Player/FullScreenPlayer/Shared/ArtworkImage.swift"
+      "destination": "Packages/FrontAM/Sources/FrontAMPlayer/Shared/ArtworkImage.swift"
     },
     {
       "source": "NeoDizzy/Core/UI/ArtworkImagePipeline.swift",
@@ -191,30 +191,30 @@
     {
       "source": "NeoDizzy/Features/Player/MiniPlayerTitlePager.swift",
       "sha256": "5096aef5a11faad73ae8ebe2dbfa36c4c29cb2ddcf3c7c27876fea8162ee8364",
-      "destination": "NeoMusic/Features/Player/FullScreenPlayer/Shared/ReferenceMiniPlayerTitlePager.swift"
+      "destination": "Packages/FrontAM/Sources/FrontAMPlayer/Shared/ReferenceMiniPlayerTitlePager.swift"
     },
     {
       "source": "NeoDizzy/Features/Library/SongMenu.swift",
       "sha256": "4f9756e70b0d30dad4c9aa475fcaa4f0990d6724bfd29f9e73c51973e18102e2",
-      "destination": "NeoMusic/Features/Player/FullScreenPlayer/Shared/PlayerActions.swift",
+      "destination": "Packages/FrontAM/Sources/FrontAMPlayer/Shared/PlayerActions.swift",
       "adaptation": "selected presentation"
     },
     {
       "source": "NeoDizzy/Features/Library/FavoritesView.swift",
       "sha256": "4227e392eb431f277403b8e8b8b6905f90510cd4afe9ed5198b0201dc86d7760",
-      "destination": "NeoMusic/Features/Player/FullScreenPlayer/Shared/PlayerActions.swift",
+      "destination": "Packages/FrontAM/Sources/FrontAMPlayer/Shared/PlayerActions.swift",
       "adaptation": "selected presentation"
     },
     {
       "source": "NeoDizzy/Features/Library/SongRow.swift",
       "sha256": "3d820a6c997ad36070b42f35b8d3731a5497f3dc906de980104161d644c74474",
-      "destination": "NeoMusic/Features/Player/FullScreenPlayer/Shared/PlayerActions.swift",
+      "destination": "Packages/FrontAM/Sources/FrontAMPlayer/Shared/PlayerActions.swift",
       "adaptation": "selected presentation"
     },
     {
       "source": "NeoDizzy/Core/UI/DizzyPalette.swift",
       "sha256": "f69c457594a9d9ebabd9e976cf2bd8dda2287f35e01b58910c37119a97722cfa",
-      "destination": "NeoMusic/Features/Player/FullScreenPlayer/Shared/PlayerPalette.swift",
+      "destination": "Packages/FrontAM/Sources/FrontAMPlayer/Shared/PlayerPalette.swift",
       "adaptation": "selected presentation"
     }
   ]

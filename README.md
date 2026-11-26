@@ -23,10 +23,10 @@ open NeoMusic.xcodeproj
 NeoMusic/
   App/                          # 应用入口、运行时容器、标签导航与领域装配
   Core/                         # 本地资料库、扫描、歌词、播放引擎与网易云业务
-  Features/                     # 主页、资料库、搜索、账户与播放器（含 FullScreenPlayer.framework）
+  Features/                     # 主页、资料库、搜索、账户与播放器宿主
   Resources/                    # 图标、资源与来源声明
-Packages/                       # AudioStreaming、AudioTags、LNPopupUI、LNPopupController
-FullScreenPlayerTests/          # 全屏播放器框架单元测试
+Packages/                       # FrontAM、AudioStreaming、AudioTags、LNPopupUI、LNPopupController
+FullScreenPlayerTests/          # FrontAMPlayer 单元测试
 NeoMusicTests/                  # 应用单元测试
 NeoMusicNavigationUITests/      # 导航与交互 UI 测试
 NeoMusicFunctionalParityTests/  # 功能对照 UI 测试

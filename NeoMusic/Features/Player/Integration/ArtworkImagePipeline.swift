@@ -1,4 +1,4 @@
-import FullScreenPlayer
+import FrontAMPlayer
 // Source: NeoDizzy Core/UI/ArtworkImagePipeline.swift; see Resources/PlayerSourceNotices.txt.
 import Foundation
 import Nuke

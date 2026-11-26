@@ -14,10 +14,9 @@
 
 | Target | 类型 | 源码路径 | 依赖 |
 | --- | --- | --- | --- |
-| `NeoMusic` | Application | `NeoMusic/`（排除 `Features/Player/FullScreenPlayer`） | `FullScreenPlayer`、`AudioStreaming`、`AudioTags` (`AudioTagBridge`)、`LNPopupUI` (`LNPopupUI-Static`)、`Nuke`、`NukeUI` |
-| `FullScreenPlayer` | Framework | `NeoMusic/Features/Player/FullScreenPlayer` | 仅 Apple 系统框架 |
-| `FullScreenPlayerTests` | Unit Test | `FullScreenPlayerTests/` | `FullScreenPlayer` |
-| `NeoMusicTests` | Unit Test | `NeoMusicTests/` | `NeoMusic`、`FullScreenPlayer` |
+| `NeoMusic` | Application | `NeoMusic/` | `FrontAMCore`、`FrontAMPlayer`、`AudioStreaming`、`AudioTags` (`AudioTagBridge`)、`LNPopupUI` (`LNPopupUI-Static`)、`Nuke`、`NukeUI` |
+| `FullScreenPlayerTests` | Unit Test | `FullScreenPlayerTests/` | `FrontAMPlayer` |
+| `NeoMusicTests` | Unit Test | `NeoMusicTests/` | `NeoMusic`、`FrontAMPlayer` |
 | `NeoMusicNavigationUITests` | UI Test | `NeoMusicNavigationUITests/` | `NeoMusic` |
 | `NeoMusicFunctionalParityTests` | UI Test | `NeoMusicFunctionalParityTests/` | `NeoMusic` |
 
@@ -26,13 +25,13 @@
 | Scheme | 构建目标 | 测试目标 |
 | --- | --- | --- |
 | `NeoMusic` | `NeoMusic` | `NeoMusicTests`、`FullScreenPlayerTests`、`NeoMusicNavigationUITests` |
-| `FullScreenPlayer` | `FullScreenPlayer` | `FullScreenPlayerTests` |
 | `NeoMusicFunctionalParity` | `NeoMusic` | `NeoMusicFunctionalParityTests` |
 
 ### 依赖包
 
 | 依赖 | 来源 / 版本 | 路径 |
 | --- | --- | --- |
+| `FrontAM` | 本地包，Swift tools 6.2、Swift 6 语言模式、iOS 27.0+ | `Packages/FrontAM` |
 | `AudioStreaming` | 本地包 | `Packages/AudioStreaming` |
 | `AudioTags`（TagLib 封装） | 本地包 | `Packages/AudioTags` |
 | `LNPopupUI` | 本地包 | `Packages/LNPopupUI` |
@@ -61,20 +60,24 @@ NeoMusic/
 │   ├── Search/                       # 搜索页面
 │   ├── Account/                      # 账户页面、音质设置与 WebKit 登录页
 │   └── Player/
-│       ├── FullScreenPlayer/         # 独立编译为 FullScreenPlayer.framework 的全屏播放器
 │       ├── Integration/              # 宿主适配层（连接播放器模型、歌词、封面与 LNPopup）
 │       ├── NowPlayingModel.swift     # 宿主播放状态与队列模型
 │       ├── NowPlayingHistory.swift   # 播放历史与账号过滤
 │       ├── NowPlayingContinuation.swift # 推荐续播与队列衔接
 │       └── PlaybackQueuePersistence.swift
 └── Resources/                        # App 图标、资产与来源声明
+
+Packages/FrontAM/Sources/
+├── FrontAMCore/                       # 宿主与全屏播放器共用的封面色空间转换
+├── FrontAMPlayer/                     # 全屏播放器、Metal 着色器与来源声明
+└── FrontAM/                           # 统一导出 FrontAMCore 和 FrontAMPlayer
 ```
 
 ---
 
 ## 3. 模块依赖边界
 
-源码依赖边界由 `scripts/check-module-boundaries.py` 静态扫描 `NeoMusic/` 下全部 `.swift`、`.m`、`.mm`、`.h`、`.metal` 文件执行约束：
+`scripts/check-module-boundaries.py` 静态扫描 `NeoMusic/` 和 `Packages/FrontAM/Sources/` 下的 Swift、C 系列和 Metal 源码。
 
 ```mermaid
 flowchart TD
@@ -84,7 +87,8 @@ flowchart TD
     SearchUI["Features/Search"]
     AccountUI["Features/Account<br/>含 WebKit"]
     PlayerInt["Features/Player/Integration<br/>含 LNPopupUI / Nuke"]
-    FSP["FullScreenPlayer.framework<br/>仅 Apple 系统框架"]
+    FSP["FrontAMPlayer"]
+    FrontCore["FrontAMCore"]
 
     CoreLib["Core/Library, LocalMusic, Lyrics"]
     CorePlay["Core/Playback<br/>AVFoundation + AudioStreaming"]
@@ -100,6 +104,8 @@ flowchart TD
     App --> CoreNet
 
     PlayerInt --> FSP
+    FSP --> FrontCore
+    LibUI --> FrontCore
     PlayerInt --> CorePlay
     PlayerInt --> CoreLib
     AccountUI --> CoreNet
@@ -115,12 +121,13 @@ flowchart TD
    - `URLSession`、`HTTPCookieStorage`、`SecItem*`、`CommonCrypto` 仅允许出现在 `Core/Netease`。
    - `URLRequest`、`HTTPCookie`、`WKWebView`、`WKWebsiteDataStore`、`WebPage`、`music.163.com`、`netease.session` 仅允许出现在 `Core/Netease` 与 `Features/Account`。
    - `Core/Netease` 不得引用 `LocalLibrary*`、`LocalMusic*`、`PlaylistLibrary`、`NowPlayingModel`、`ReferencePlayer*`、`PlayerState`、`PlayerPlaybackSource`、`PlayerServices`。
-2. **`FullScreenPlayer.framework` 隔离**
-   - 仅允许导入 Apple 系统框架（`SwiftUI`、`UIKit`、`Foundation`、`Observation`、`AVKit`、`AVFoundation`、`MediaPlayer`、`MetalKit`、`CoreImage`、`CoreGraphics`、`UniformTypeIdentifiers`，以及 `NowPlayingAirPlayButton.swift` 中的 `CoreBluetooth`）。
+2. **`FrontAM` 包隔离**
+   - `FrontAMPlayer` 依赖 `FrontAMCore` 和 Apple 系统框架。宿主在 `App` 和 `Features/Player` 中接入 FrontAM，`AlbumArtworkBackdrop.swift` 直接导入 `FrontAMCore`。
+   - `FrontAMCore` 目前只导入 `Foundation`，伞形模块只导出两个包内模块。
    - 不得引用宿主实现类型（`NowPlayingModel`、`LibrarySongItem`、`LyricsReader`、`LocalLibrary*`、`ArtworkImagePipeline` 等）、`Bundle.main`、`UIImage(named:)` 或账号格式前缀。
-   - `.metal` 着色器仅允许位于 `Features/Player`。
+   - `.metal` 着色器限于 `FrontAMPlayer` 和宿主的 `Features/Player`。
 3. **定向第三方框架导入**
-   - `LNPopupUI`、`Nuke`、`NukeUI`、`MetalKit` 仅允许在 `Features/Player`（框架目录外）使用；`NeteaseArtworkCache.swift` 允许导入 `Nuke`。
+   - 宿主的 `Features/Player` 可导入 `LNPopupUI`、`Nuke`、`NukeUI`、`MetalKit`。`NeteaseArtworkCache.swift` 可导入 `Nuke`。
    - `AudioStreaming` 仅允许在 `Core/Playback/StreamingPlaybackDeck.swift` 导入。
    - `AudioTagBridge` 仅允许在 `Core/LocalMusic/DownloadedAudioTags.swift` 导入。
    - `SQLite3` 仅允许在 `Core/Netease/NeteasePageCache.swift` 导入；`Network` 仅允许在 `Core/Netease/NeteaseMusicStore.swift` 导入；`ImageIO` 额外允许在 `Core/Netease/NeteaseAvatarSnapshot.swift` 导入。
@@ -176,7 +183,7 @@ flowchart TD
 ### 播放与音频管线（`Core/Playback`、`Features/Player`）
 
 - `NowPlayingModel` 持有队列与播放状态，`PlaybackQueuePersistence` 负责队列持久化。播放队列与歌单各自通过 `BackgroundTaskPersistenceQueue` 串行写入，进入后台时使用 UIKit 后台任务完成待保存工作。
-- 迷你播放器与全屏播放器的本地封面共用 `LocalArtworkImages`。宿主与全屏播放器编译同一份 `ArtworkColorSpace`，各自计算所需的调色板。
+- 宿主通过适配层为迷你播放器和全屏播放器提供本地封面。专辑详情与全屏播放器共用 `FrontAMCore.ArtworkColorSpace`，各自计算所需的调色板。
 - `LocalPlaybackEngine` 协调音频播放，`PlaybackAudioActor` 与 `SharedAudioGraph` 管理音频图：
   - 本地文件由 `LocalFilePlaybackNode` 解码输出。
   - 在线音频流由 `StreamingPlaybackDeck`（基于 `AudioStreaming`）解码输出。
@@ -194,9 +201,9 @@ flowchart TD
 
 ---
 
-## 6. 全屏播放器框架接口（`FullScreenPlayer`）
+## 6. 全屏播放器模块（`FrontAMPlayer`）
 
-`FullScreenPlayer.framework` 的入口视图为：
+`FrontAMPlayer` 的入口视图为：
 
 ```swift
 FullScreenPlayerView(
@@ -219,7 +226,7 @@ FullScreenPlayerView(
 
 在历史记录点播歌曲时，列表通过 UIKit 滚动动画回到继续播放默认位置。浏览历史时发生被动切歌，列表保留历史位置，在最新记录一端随新行上移。
 
-宿主与框架之间通过以下公开类型解耦：
+宿主通过以下公开类型接入全屏播放器：
 
 | 类型 | 职责 |
 | --- | --- |
@@ -231,7 +238,13 @@ FullScreenPlayerView(
 
 宿主在 `Features/Player/Integration/` 中通过 `ReferenceNowPlayingView`、`NeoMusicPlayerServices`、`ReferencePlayerState`、`ReferencePlayerActions`、`ArtworkImagePipeline`、`PlayerPopup` 将上述接口连接到 `NowPlayingModel`、`LyricsReader`、Nuke 与 `LNPopupUI`。
 
+标题横滑通过 UIKit 手势代理与外层手势协调。宿主通过 `PlayerPopup` 传入展开、点按和高亮手势的角色。
+
 迷你播放器展开或收起时，LNPopupUI 只在全屏端有已布局且可见的当前歌曲封面时匹配封面位置。队列封面滚出视口时，面板使用 LN 原有的无封面匹配转场。
+
+Xcode 将 `NowPlayingStitchableShaders.metal` 编译为包资源 bundle 中的 `default.metallib`。模块通过 `ShaderLibrary.bundle(Bundle.module)` 使用着色器。播放器的 GPL-3.0 文本及来源清单随同 bundle 打包，FrontAM 原创部分采用 MIT 许可。
+
+`NeoMusic` scheme 保留独立的 `FullScreenPlayerTests` 测试 target。资源用例从播放器的实际 bundle 检查 `default.metallib` 和来源声明，并在运行环境提供 Metal 设备时加载库、检查两个着色器入口。
 
 ---
 
@@ -264,7 +277,7 @@ xcodebuild -project NeoMusic.xcodeproj -scheme NeoMusic -configuration Release \
 xcodebuild -project NeoMusic.xcodeproj -scheme NeoMusic -configuration Release \
   -destination 'platform=iOS Simulator,id=<UDID>' \
   -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO ENABLE_TESTABILITY=YES \
-  -only-testing:NeoMusicTests test
+  -only-testing:NeoMusicTests -only-testing:FullScreenPlayerTests test
 ```
 
 本机全量检查与未签名打包脚本：

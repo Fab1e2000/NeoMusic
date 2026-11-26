@@ -3,7 +3,7 @@ import SwiftUI
 import UIKit
 import LNPopupUI
 @testable import NeoMusic
-import FullScreenPlayer
+import FrontAMPlayer
 
 @MainActor
 final class PopupItemAccessibilityTests: XCTestCase {

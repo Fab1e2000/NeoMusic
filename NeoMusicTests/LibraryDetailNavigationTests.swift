@@ -4,7 +4,7 @@ import UIKit.UIGestureRecognizerSubclass
 import LNPopupController
 import Synchronization
 @testable import NeoMusic
-@testable import FullScreenPlayer
+@testable import FrontAMPlayer
 
 @MainActor @Observable
 private final class StartupLibraryProbe {

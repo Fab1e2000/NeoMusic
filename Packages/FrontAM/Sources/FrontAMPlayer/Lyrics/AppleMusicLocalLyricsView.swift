@@ -137,7 +137,7 @@ final class NativeLyricsViewportView: UIView {
     }
 }
 
-@objc(NeoMusicLyricsScrollView)
+@objc(FrontAMLyricsScrollView)
 final class NativeLyricsScrollView: UITableView, UITableViewDataSource, UITableViewDelegate {
     static let horizontalBleed: CGFloat = 24
     static let viewportOverscan: CGFloat = 160

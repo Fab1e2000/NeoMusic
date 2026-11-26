@@ -3,7 +3,7 @@ import Foundation
 import Synchronization
 import XCTest
 @testable import NeoMusic
-@testable import FullScreenPlayer
+@testable import FrontAMPlayer
 
 final class NeteaseMusicClientTests: XCTestCase, @unchecked Sendable {
     @MainActor func testPlaybackUsesMeloXIOSProfileAndKeepsCredentialsScoped() async throws {

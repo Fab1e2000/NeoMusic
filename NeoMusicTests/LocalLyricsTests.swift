@@ -1,5 +1,5 @@
 import XCTest
-@testable import FullScreenPlayer
+@testable import FrontAMPlayer
 @testable import NeoMusic
 
 final class LocalLyricsTests: XCTestCase, @unchecked Sendable {

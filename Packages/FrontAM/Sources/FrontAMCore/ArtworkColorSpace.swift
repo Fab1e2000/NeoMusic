@@ -1,11 +1,11 @@
 import Foundation
 
-enum ArtworkColorSpace {
-    static func sRGBToLinear<T: BinaryFloatingPoint>(_ value: T, power: (T, T) -> T) -> T {
+public enum ArtworkColorSpace {
+    public static func sRGBToLinear<T: BinaryFloatingPoint>(_ value: T, power: (T, T) -> T) -> T {
         value <= 0.04045 ? value / 12.92 : power((value + 0.055) / 1.055, 2.4)
     }
 
-    static func linearToOKLab<T: BinaryFloatingPoint>(r: T, g: T, b: T, cubeRoot: (T) -> T) -> (l: T, a: T, b: T) {
+    public static func linearToOKLab<T: BinaryFloatingPoint>(r: T, g: T, b: T, cubeRoot: (T) -> T) -> (l: T, a: T, b: T) {
         let l = cubeRoot(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b)
         let m = cubeRoot(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b)
         let s = cubeRoot(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b)
@@ -16,7 +16,7 @@ enum ArtworkColorSpace {
         )
     }
 
-    static func oklabToLinearSRGB(l: Float, a: Float, b: Float) -> SIMD3<Float> {
+    public static func oklabToLinearSRGB(l: Float, a: Float, b: Float) -> SIMD3<Float> {
         let lRoot = l + 0.3963377774 * a + 0.2158037573 * b
         let mRoot = l - 0.1055613458 * a - 0.0638541728 * b
         let sRoot = l - 0.0894841775 * a - 1.2914855480 * b
@@ -30,7 +30,7 @@ enum ArtworkColorSpace {
         )
     }
 
-    static func linearToSRGB(_ value: Float) -> Float {
+    public static func linearToSRGB(_ value: Float) -> Float {
         let v = min(max(value, 0), 1)
         return v <= 0.0031308 ? v * 12.92 : 1.055 * pow(v, 1.0 / 2.4) - 0.055
     }

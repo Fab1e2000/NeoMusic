@@ -1,6 +1,6 @@
 #if DEBUG
 import SwiftUI
-import FullScreenPlayer
+import FrontAMPlayer
 
 struct NativePlayerPagePreview: View {
     @State private var fixtures: NativePlayerPreviewFixtures?

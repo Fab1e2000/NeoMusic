@@ -1,6 +1,6 @@
 import SwiftUI
 import LNPopupUI
-import FullScreenPlayer
+import FrontAMPlayer
 
 @MainActor enum NeoMusicPlayerServices {
     static func make(actions: PlayerActions, library: PlayerLyricsController,

@@ -2,7 +2,7 @@ import AVFoundation
 import UIKit
 import XCTest
 @testable import NeoMusic
-@testable import FullScreenPlayer
+@testable import FrontAMPlayer
 
 @MainActor enum PlayerTestFixtures {
     @discardableResult nonisolated static func silentAudio(

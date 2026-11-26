@@ -29,5 +29,5 @@ ThirdPartyLicenses.txt.
 
 Nuke: https://github.com/kean/Nuke, version 13.2.0, MIT.
 Used by the host adapter for player image loading, decoding and caching.
-The FullScreenPlayer framework receives images through PlayerArtworkProvider.
+The FrontAMPlayer package module receives images through PlayerArtworkProvider.
 Full license text accompanies this file in Nuke-LICENSE.txt.
