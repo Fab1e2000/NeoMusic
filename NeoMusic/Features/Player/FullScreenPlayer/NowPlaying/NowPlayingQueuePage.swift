@@ -11,6 +11,7 @@ struct NowPlayingQueuePage: View {
     var showsSongHeader = true
     let onImportLyrics: (() -> Void)?
     let onScroll: (CGFloat) -> Void
+    var headerOffset: QueueHeaderOffset?
     var onViewportHeightChange: (CGFloat) -> Void = { _ in }
 
     static let songHeaderHeight = NowPlayingSongHeader.topInset + NowPlayingSongHeader.referenceHeight
@@ -30,7 +31,8 @@ struct NowPlayingQueuePage: View {
             horizontalInset: 32,
             onPlay: { player.playFromQueue(at: $0) },
             onMove: { player.moveUpcomingQueueItems(fromOffsets: $0, toOffset: $1) },
-            onScroll: onScroll
+            onScroll: onScroll,
+            headerOffset: headerOffset
         )
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { onViewportHeightChange($0) }
         .padding(.bottom, Self.bottomContentInset(layout: layout, controlsOverflow: controlsOverflow))

@@ -25,6 +25,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
     let onPlay: (Int) -> Void
     let onMove: (IndexSet, Int) -> Void
     let onScroll: (CGFloat) -> Void
+    var headerOffset: QueueHeaderOffset?
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -565,6 +566,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
         func attach(to collectionView: EdgeFadedCollectionView, initial: NowPlayingQueueList) {
             latest = initial
             self.collectionView = collectionView
+            initial.headerOffset?.queue = self
             scrollFeedback = UIImpactFeedbackGenerator(style: .soft, view: collectionView)
             let registration = UICollectionView.CellRegistration<EdgeFadedListCell, Item> {
                 [weak self] cell, _, item in
@@ -1226,6 +1228,19 @@ struct NowPlayingQueueList: UIViewRepresentable {
             }
         }
 
+        func prepareArtworkTransition(returningToQueue: Bool) {
+            guard let collectionView else { return }
+            if collectionView.isDecelerating || collectionView.isScrollAnimating {
+                collectionView.stopScrollingAndZooming()
+            }
+            if returningToQueue {
+                snapshotTargetOffset = nil
+                collectionView.layoutIfNeeded()
+                setQueueOffset(0, in: collectionView, reason: "returnFromArtwork")
+            }
+            scrollViewDidScroll(collectionView)
+        }
+
         private func animateReturnToQueue(in collectionView: EdgeFadedCollectionView, reason: String) {
             collectionView.layoutIfNeeded()
             setQueueOffset(0, in: collectionView, reason: reason, animated: true)
@@ -1311,6 +1326,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
                     playScrollFeedback()
                 }
             }
+            if let header = latest.headerOffset, header.rawPoints != -offset { header.rawPoints = -offset }
             latest.onScroll(min(offset, latest.headerHeight))
         }
 

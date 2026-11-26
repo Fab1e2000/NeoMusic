@@ -5,7 +5,7 @@ import SwiftUI
 
 @MainActor
 final class PlayerVisibilityTests: XCTestCase {
-    func testPausingDuringOffscreenArtworkPushRendersIntermediateCoverSizes() async throws {
+    func testPausingDuringQueueArtworkTransitionRendersIntermediateCoverSizes() async throws {
         let song = PlayerTrack(id: "push", title: "Push", artists: "Artist", albumTitle: "Album",
                                coverURL: URL(fileURLWithPath: "/cover.png"), duration: 180)
         let owner = PlayerTestFixtures.owner(tracks: [song])
@@ -18,16 +18,16 @@ final class PlayerVisibilityTests: XCTestCase {
             actions: PlayerTestFixtures.actions(), lyrics: .init(load: { _ in PlayerLyrics() }),
             artwork: .init(cached: { _ in cover }, load: { _ in cover })
         )
-        let change = NowPlayingPageChange(source: .queue, destination: .artwork, stationaryArtworkPage: .artwork,
-                                          startsFromRest: true)
+        let change = NowPlayingPageChange(source: .queue, destination: .artwork, stationaryArtworkPage: nil)
         let root = QueueLinkedArtwork(
             song: song, page: .artwork, pageChange: change, offset: QueueHeaderOffset(),
             artworkPageFrame: CGRect(x: 60, y: 60, width: 200, height: 200), isVisible: true,
-            holdsArtworkAboveQueue: false, pushOffset: 0, pushAnimation: nil, artworkScreenFade: nil,
+            screenTop: -84,
             fade: nil, reducesMotion: false, artworkTransition: EmptyModifier()
         )
         .environment(PlayerState(model: owner))
         .environment(services)
+        .environment(\.nowPlayingLayout, ReferenceNowPlayingLayout(contentSize: CGSize(width: 320, height: 420)))
         .background(.black)
         .ignoresSafeArea()
         let window = UIWindow(windowScene: try await applicationWindowScene())
@@ -72,12 +72,23 @@ final class PlayerVisibilityTests: XCTestCase {
         return width
     }
 
-    func testArtworkPushFadeSpansScreenTopToRestingCoverAndLetsCoverClearTheScreen() {
-        let fade = NowPlayingArtworkScreenFade(safeAreaTop: 62)
-        let artworkFrame = CGRect(x: 0, y: 11, width: 338, height: 338)
-        XCTAssertEqual(fade.topExtension, 84, accuracy: 0.5)
-        XCTAssertEqual(fade.height(to: artworkFrame.minY), 95, accuracy: 0.5)
-        XCTAssertEqual(artworkFrame.maxY + fade.pushOffset(for: artworkFrame), -fade.topExtension, accuracy: 0.5)
+    func testQueueArtworkStartsAtTheVisibleCoverOrItsNearestEdge() {
+        let header = QueueHeaderOffset()
+        header.viewportHeight = 480
+        let top = -NowPlayingSongHeader.lift
+        let bottom = header.viewportHeight + top
+        let side = NowPlayingSongHeader.referenceHeight
+        let screenTop: CGFloat = -84
+        let origins: [(CGFloat, CGFloat)] = [
+            (0, top + 1), (-24, top - 23), (450, top + 451), (-900, screenTop - side), (1500, bottom)
+        ]
+        for (offset, expectedY) in origins {
+            header.rawPoints = offset
+            let frame = header.artworkFrame(screenTop: screenTop)
+            XCTAssertEqual(frame.minY, expectedY)
+            XCTAssertEqual(frame.width, side)
+            XCTAssertEqual(frame.height, side)
+        }
     }
 
     func testPopupArtworkTargetTracksQueueCoverVisibility() async throws {
@@ -128,21 +139,21 @@ final class PlayerVisibilityTests: XCTestCase {
         return view.subviews.lazy.compactMap { self.queueCollection(in: $0) }.first
     }
 
-    func testReversingArtworkAndQueueKeepsTheOriginalArtworkEndpoint() {
+    func testQueueAndArtworkUseTheSharedCoverInBothDirectionsEvenWhenOffscreen() {
         for (source, destination) in [(NowPlayingPage.artwork, NowPlayingPage.queue), (.queue, .artwork)] {
             for originalOffscreen in [true, false] {
                 let endpoint = NowPlayingPageChange.resolveStationaryArtworkPage(
-                    from: source, to: destination, queueArtworkOffscreen: originalOffscreen, interrupting: nil
+                    from: source, to: destination, queueArtworkOffscreen: originalOffscreen
                 )
-                XCTAssertEqual(endpoint, originalOffscreen ? .artwork : nil)
-                let inFlight = NowPlayingPageChange(
-                    source: source, destination: destination, stationaryArtworkPage: endpoint, startsFromRest: true
-                )
-                XCTAssertEqual(NowPlayingPageChange.resolveStationaryArtworkPage(
-                    from: destination, to: source, queueArtworkOffscreen: !originalOffscreen, interrupting: inFlight
-                ), endpoint)
+                XCTAssertNil(endpoint)
+                XCTAssertTrue(NowPlayingPageChange(
+                    source: source, destination: destination, stationaryArtworkPage: endpoint
+                ).matchesQueueAndArtwork)
             }
         }
+        XCTAssertEqual(NowPlayingPageChange.resolveStationaryArtworkPage(
+            from: .queue, to: .lyrics, queueArtworkOffscreen: true
+        ), .lyrics)
     }
 
     func testPortraitPlayerReferenceScreenshots() async throws {

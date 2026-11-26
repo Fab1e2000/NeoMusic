@@ -63,24 +63,22 @@ struct NowPlayingPageChange {
     let id = UUID()
     let source: NowPlayingPage
     let destination: NowPlayingPage
-    // The queue has no visible artwork to match. Keep the other page's artwork size.
+    // Lyrics keep their artwork geometry when the queue cover is offscreen.
     let stationaryArtworkPage: NowPlayingPage?
-    let startsFromRest: Bool
+
+    var matchesQueueAndArtwork: Bool {
+        (source == .queue && destination == .artwork)
+            || (source == .artwork && destination == .queue)
+    }
 
     static let stationaryFade = Animation.easeInOut(duration: 0.18)
 
     static func resolveStationaryArtworkPage(
         from source: NowPlayingPage,
         to destination: NowPlayingPage,
-        queueArtworkOffscreen: Bool,
-        interrupting change: Self?
+        queueArtworkOffscreen: Bool
     ) -> NowPlayingPage? {
-        guard source == .queue || destination == .queue else { return nil }
-        let otherPage = source == .queue ? destination : source
-        // A reversal keeps the original endpoints even if the list reports a new viewport.
-        if otherPage == .artwork, let change, change.source == destination, change.destination == source {
-            return change.stationaryArtworkPage
-        }
-        return queueArtworkOffscreen ? otherPage : nil
+        queueArtworkOffscreen && NowPlayingPageTransition.isDirectLyricsQueueTransition(from: source, to: destination)
+            ? .lyrics : nil
     }
 }

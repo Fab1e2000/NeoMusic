@@ -1,6 +1,59 @@
 import XCTest
 
 final class PlayerInteractionTests: XCTestCase {
+    @MainActor func testQueueArtworkReturnsToTheCurrentTrackFromBothScrollDirections() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["-frontendReviewPreview", "player-performance"]
+        app.launch()
+        XCTAssertTrue(app.buttons["player.dismiss"].waitForExistence(timeout: 15))
+        defer { app.terminate() }
+
+        let next = app.buttons["下一首"].firstMatch
+        let titles = ["窗边的光", "沿着海岸", "晚风经过"]
+        for number in 2...13 {
+            let title = "\(number) · \(titles[(number - 1) % titles.count])"
+            next.tap()
+            XCTAssertTrue(app.staticTexts[title].firstMatch.waitForExistence(timeout: 3))
+        }
+        let currentTitle = "13 · 窗边的光"
+        let current = app.staticTexts[currentTitle].firstMatch
+        let upcoming = app.staticTexts["14 · 沿着海岸"].firstMatch
+        let queue = try XCTUnwrap(app.buttons.matching(identifier: "继续播放").allElementsBoundByIndex.first {
+            $0.isHittable
+        })
+        let queueButton = app.coordinate(withNormalizedOffset:
+            CGVector(dx: queue.frame.midX / app.frame.width, dy: queue.frame.midY / app.frame.height)
+        )
+        let artworkTitleY = current.frame.minY
+        queueButton.tap()
+        XCTAssertTrue(upcoming.waitForExistence(timeout: 5))
+        let queueTitleY = current.frame.minY
+        let upper = app.coordinate(withNormalizedOffset: CGVector(dx: 0.52, dy: 0.18))
+        let lower = app.coordinate(withNormalizedOffset: CGVector(dx: 0.52, dy: 0.60))
+
+        func leaveAndReturn() {
+            queueButton.tap()
+            XCTAssertTrue(current.waitForExistence(timeout: 3))
+            XCTAssertEqual(current.frame.minY, artworkTitleY, accuracy: 2)
+            queueButton.tap()
+            XCTAssertTrue(upcoming.waitForExistence(timeout: 3))
+            XCTAssertEqual(current.frame.minY, queueTitleY, accuracy: 2)
+        }
+
+        lower.press(forDuration: 0.04, thenDragTo: upper, withVelocity: .fast, thenHoldForDuration: 0)
+        XCTAssertFalse(current.isHittable)
+        leaveAndReturn()
+
+        for _ in 0..<2 {
+            upper.press(forDuration: 0.04, thenDragTo: lower, withVelocity: .fast, thenHoldForDuration: 0)
+        }
+        XCTAssertTrue(app.buttons["player.dismiss"].exists)
+        XCTAssertFalse(upcoming.isHittable)
+        XCTAssertFalse(current.isHittable)
+        leaveAndReturn()
+    }
+
     @MainActor func testShortTrackDragsReturnToCurrentSongForFiveRounds() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-frontendReviewPreview", "player-motion"]

@@ -751,6 +751,27 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
         }
     }
 
+    func testArtworkTransitionKeepsTheOutgoingQueueAndReturnsToTheCurrentSong() async throws {
+        let inputs = QueueListTestInputs()
+        inputs.history = (0..<24).map { _ in PlayerHistoryEntry(id: UUID(), song: inputs.song) }
+        let (window, host) = try mount(inputs)
+        defer { window.isHidden = true }
+        try await settle(host)
+        let list = try XCTUnwrap(collection(in: host.view) as? NowPlayingQueueList.EdgeFadedCollectionView)
+        let coordinator = try coordinator(in: host.view)
+        let rest = list.queueRestOffset
+        XCTAssertGreaterThan(rest, list.bounds.height)
+
+        for y in [-list.adjustedContentInset.top, rest + 24, rest + NowPlayingSongHeader.referenceHeight * 2] {
+            list.setContentOffset(CGPoint(x: 0, y: y), animated: false)
+            coordinator.prepareArtworkTransition(returningToQueue: false)
+            XCTAssertEqual(list.contentOffset.y, y, accuracy: 0.5)
+            coordinator.prepareArtworkTransition(returningToQueue: true)
+            XCTAssertEqual(list.contentOffset.y, rest, accuracy: 0.5)
+            XCTAssertFalse(list.isScrollAnimating)
+        }
+    }
+
     func testPopupDismissalAcceptsEitherMarginAtAnyQueueOffset() async throws {
         let inputs = QueueListTestInputs()
         inputs.history = [PlayerHistoryEntry(id: UUID(), song: inputs.entries[0].song)]
