@@ -109,6 +109,39 @@ final class LibraryListAccessibilityTests: XCTestCase {
                        "The row stays a container so its buttons remain reachable")
     }
 
+    func testVisibleSongKeepsCoverWhileReplacementFileIsUnavailable() async throws {
+        let window = UIWindow(windowScene: try await applicationWindowScene())
+        defer { window.isHidden = true }
+        var track = song()
+        track.artwork = .image(Image(systemName: "star.fill"))
+        let host = UIHostingController(rootView: NativePlaylistTrackList(
+            songs: [track], title: "歌曲", header: nil, banner: nil, footer: nil,
+            showsAddMusicRow: false, pageColor: .systemBackground, scheme: .light,
+            onPlaySong: { _, _ in }
+        ))
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        try await settle()
+        let collection = try XCTUnwrap(descendants(of: UICollectionView.self, in: host.view).first)
+        let cell = try XCTUnwrap(collection.visibleCells.first)
+        let cover = try XCTUnwrap(descendants(of: UIImageView.self, in: cell).first {
+            $0.contentMode == .scaleAspectFill && $0.image != nil
+        })
+        let original = try XCTUnwrap(cover.image)
+        var replacement = track
+        replacement.artwork = .file(URL.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+        XCTAssertTrue(track.publishArtwork(from: replacement))
+        try await settle()
+        XCTAssertTrue(cover.image === original)
+        replacement.artwork = .image(Image(systemName: "moon.fill"))
+        XCTAssertTrue(track.publishArtwork(from: replacement))
+        await Task.yield()
+        XCTAssertNotNil(cover.image)
+        XCTAssertFalse(cover.image === original)
+        XCTAssertEqual(cover.alpha, 1)
+        XCTAssertNil(cover.layer.animation(forKey: "opacity"))
+    }
+
     func testSongRowLabelOmitsMissingUnavailabilityReason() {
         XCTAssertEqual(CollectionTrackUI.songAccessibilityLabel(for: song()), "夜曲, 周杰伦")
         XCTAssertEqual(CollectionTrackUI.songAccessibilityLabel(for: song(reason: "暂无完整音源")),

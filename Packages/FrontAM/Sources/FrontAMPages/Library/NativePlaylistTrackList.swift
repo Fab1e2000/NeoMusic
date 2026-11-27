@@ -927,7 +927,6 @@ private final class PlaylistTrackCell: UICollectionViewListCell {
     private var downloadObservationToken = 0
     private var artworkObservationToken = 0
     private var artworkLoadTask: Task<Void, Never>?
-    private var loadedImageURL: URL?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -1069,8 +1068,7 @@ private final class PlaylistTrackCell: UICollectionViewListCell {
         downloadObservationToken &+= 1
         artworkLoadTask?.cancel()
         artworkLoadTask = nil
-        loadedImageURL = nil
-        artworkImageView.image = nil
+        displayArtwork(nil)
         playbackOverlay.isHidden = true
         setSpectrumDisplayed(false)
         setPreparingPlayback(false)
@@ -1181,35 +1179,26 @@ private final class PlaylistTrackCell: UICollectionViewListCell {
         artworkLoadTask = nil
 
         let pixels = FrontAMArtworkSize.pixelSize(48 * max(1, traitCollection.displayScale))
-        placeholderView.isHidden = false
+        if !retainingImage { displayArtwork(nil) }
         switch artwork {
         case .favorites:
             placeholderView.backgroundColor = UIColor(Artwork.favoritesBackground)
             placeholderIcon.image = UIImage(systemName: "star.fill")
             placeholderIcon.tintColor = UIColor(Artwork.favoritesRed)
-            artworkImageView.image = nil
-            loadedImageURL = nil
+            displayArtwork(nil)
         case .playlist:
             configurePlaceholder(symbol: "music.note.list")
-            artworkImageView.image = nil
-            loadedImageURL = nil
+            displayArtwork(nil)
         case .missing, .folder:
             configurePlaceholder(symbol: "music.note")
-            artworkImageView.image = nil
-            loadedImageURL = nil
+            displayArtwork(nil)
         case .deferred(let loadID, let kind):
             configurePlaceholder(symbol: kind == .playlist ? "music.note.list" : "music.note")
             if let cached = loadAction.provider.cachedResolved(loadID, pixels: pixels) {
-                loadedImageURL = loadAction.provider.resolvedURL(for: loadID)
-                artworkImageView.image = cached
-                placeholderView.isHidden = true
+                displayArtwork(cached, fadeFromPlaceholder: retainingImage)
                 return
             }
             if let resolved = loadAction.provider.resolvedURL(for: loadID) {
-                if !retainingImage || loadedImageURL != resolved {
-                    artworkImageView.image = nil
-                    loadedImageURL = nil
-                }
                 artworkLoadTask = Task { [weak self] in
                     let loaded = await self?.loadFileImage(resolved, pixels: pixels, generation: generation) ?? true
                     guard !loaded, !Task.isCancelled else { return }
@@ -1223,10 +1212,6 @@ private final class PlaylistTrackCell: UICollectionViewListCell {
                     self?.loadAction(loadID)
                 }
                 return
-            }
-            if !retainingImage {
-                artworkImageView.image = nil
-                loadedImageURL = nil
             }
             guard let resolve = loadAction.resolve else {
                 loadAction(loadID)
@@ -1245,14 +1230,8 @@ private final class PlaylistTrackCell: UICollectionViewListCell {
         case .file(let url):
             configurePlaceholder(symbol: "music.note")
             if let cached = loadAction.provider.cached(url, pixels: pixels) {
-                loadedImageURL = url
-                artworkImageView.image = cached
-                placeholderView.isHidden = true
+                displayArtwork(cached, fadeFromPlaceholder: retainingImage)
                 return
-            }
-            if !retainingImage || loadedImageURL != url {
-                artworkImageView.image = nil
-                loadedImageURL = nil
             }
             artworkLoadTask = Task { [weak self] in
                 await self?.loadFileImage(url, pixels: pixels, generation: generation)
@@ -1261,8 +1240,7 @@ private final class PlaylistTrackCell: UICollectionViewListCell {
             configurePlaceholder(symbol: "music.note")
             let renderer = ImageRenderer(content: swiftUIImage.resizable().scaledToFill().frame(width: 48, height: 48))
             renderer.scale = max(1, traitCollection.displayScale)
-            artworkImageView.image = renderer.uiImage
-            placeholderView.isHidden = artworkImageView.image != nil
+            displayArtwork(renderer.uiImage, fadeFromPlaceholder: retainingImage)
         }
     }
 
@@ -1277,19 +1255,28 @@ private final class PlaylistTrackCell: UICollectionViewListCell {
         let image = await loadAction.provider.loadThumbnail(url, pixels: pixels)
         guard !Task.isCancelled, artworkGeneration == generation else { return true }
         guard let image else { return false }
-        let shouldCrossDissolve = artworkImageView.image == nil
-            && !traitCollection.accessibilityContrast.isHigh
-            && !UIAccessibility.isReduceMotionEnabled
-        loadedImageURL = url
-        if shouldCrossDissolve {
-            UIView.transition(with: artworkImageView, duration: 0.2, options: [.transitionCrossDissolve, .allowUserInteraction]) {
-                self.artworkImageView.image = image
-            }
-        } else {
-            artworkImageView.image = image
-        }
-        placeholderView.isHidden = true
+        displayArtwork(image, fadeFromPlaceholder: true)
         return true
+    }
+
+    private func displayArtwork(_ image: UIImage?, fadeFromPlaceholder: Bool = false) {
+        guard artworkImageView.image !== image else { return }
+        let fade = fadeFromPlaceholder && artworkImageView.image == nil && image != nil
+            && window != nil && !traitCollection.accessibilityContrast.isHigh
+            && !UIAccessibility.isReduceMotionEnabled
+        artworkImageView.layer.removeAnimation(forKey: "opacity")
+        artworkImageView.image = image
+        placeholderView.isHidden = image != nil && !fade
+        artworkImageView.alpha = fade ? 0 : 1
+        if fade {
+            UIView.animate(withDuration: 0.2) {
+                self.artworkImageView.alpha = 1
+            } completion: { finished in
+                if finished && self.artworkImageView.image === image {
+                    self.placeholderView.isHidden = true
+                }
+            }
+        }
     }
 
     private func observeDownloads() {
