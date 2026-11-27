@@ -32,10 +32,12 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
     private let isActive: Bool
     private var visualsActive: Bool { isActive && scenePhase == .active }
     private var animatesPageChanges: Bool { visualsActive && !accessibilityReduceMotion }
-    private var showsResidentQueueHeader: Bool { page == .queue && pageChange == nil }
+    private var compactHeaderOffset: CGFloat {
+        page == .queue ? queueHeaderOffset.rawPoints : 0
+    }
     // Direct lyrics/queue changes keep one header resident instead of swapping its text and actions.
     private var showsSharedSongHeader: Bool {
-        page == .lyrics || (page == .queue && pageChange != nil && pageChange?.stationaryArtworkPage == nil)
+        page != .artwork && (page != .queue || !queueHeaderOffset.isArtworkOffscreen)
     }
     private var sharedSongHeaderOpacityAnimation: Animation? {
         guard animatesPageChanges else { return nil }
@@ -221,9 +223,12 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
         )
         let animation = animatesPageChanges
             ? NowPlayingPageTransition.selectionAnimation(from: page, to: destination) : nil
+        if page == .lyrics && destination == .queue {
+            queueHeaderOffset.queue?.preparePageTransition(returningToQueue: true)
+        }
         withAnimation(animation, completionCriteria: .removed) {
             if request.matchesQueueAndArtwork {
-                queueHeaderOffset.queue?.prepareArtworkTransition(returningToQueue: destination == .queue)
+                queueHeaderOffset.queue?.preparePageTransition(returningToQueue: destination == .queue)
             }
             pageChange = request
             page = destination
@@ -307,7 +312,7 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
                 onImportLyrics: importLyricsAction(for: song)
             )
             .offset(y: NowPlayingSongHeader.sharedTopInset)
-            .offset(y: page == .queue && pageChange?.stationaryArtworkPage == nil && pageChange != nil ? queueHeaderOffset.points : 0)
+            .offset(y: compactHeaderOffset)
             .offset(y: page == .artwork && !accessibilityReduceMotion ? NowPlayingPageTransition.motion.songHeaderTravel : 0)
             .animation(titleSpatialAnimation, value: page == .artwork)
             .opacity(showsSharedSongHeader ? 1 : 0)
@@ -316,6 +321,13 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
             .accessibilityHidden(!showsSharedSongHeader)
             .frame(maxHeight: .infinity, alignment: .top)
             .modifier(QueueArtworkScrollMask(page: page, pageChange: pageChange, offset: queueHeaderOffset))
+            .transaction { transaction in
+                // Reveal the entire offscreen queue header at its lyrics position in the first frame.
+                if pageChange?.source == .queue && pageChange?.stationaryArtworkPage == .lyrics {
+                    transaction.animation = nil
+                    transaction.disablesAnimations = true
+                }
+            }
         }
         .background {
             NowPlayingArtworkFrameMeasurement(onFrameChange: recordArtworkPageFrame)
@@ -327,10 +339,7 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
                 pageChange: pageChange,
                 offset: queueHeaderOffset,
                 artworkPageFrame: artworkPageFrame,
-                isVisible: page != .queue || (pageChange != nil && pageChange?.stationaryArtworkPage == nil),
                 screenTop: screenTop,
-                fade: animatesPageChanges && pageChange?.stationaryArtworkPage == .lyrics
-                    ? NowPlayingPageChange.stationaryFade : nil,
                 reducesMotion: accessibilityReduceMotion,
                 artworkTransition: artworkTransition
             )
@@ -356,7 +365,7 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
         .opacity(isVisible ? 1 : 0)
         .animation(animatesPageChanges
                    ? (isVisible ? .easeInOut(duration: 0.125).delay(0.15)
-                                : .easeInOut(duration: 0.12).delay(0.04)) : nil,
+                                : .easeInOut(duration: pageChange?.destination == .lyrics ? 0.15 : 0.12).delay(0.04)) : nil,
                    value: isVisible)
         .allowsHitTesting(isVisible)
         .accessibilityHidden(!isVisible)
@@ -393,7 +402,7 @@ struct NowPlayingContent<ArtworkTransition: ViewModifier>: View {
                 artworkNamespace: pageArtworkNamespace,
                 artworkDecodeSize: artworkPageFrame.width > 0 ? artworkPageFrame.size : nil
             ),
-            showsSongHeader: showsResidentQueueHeader,
+            showsSongHeader: false,
             onImportLyrics: importLyricsAction(for: song),
             onScroll: { _ in },
             headerOffset: queueHeaderOffset,
@@ -761,9 +770,7 @@ struct QueueLinkedArtwork<ArtworkTransition: ViewModifier>: View {
     let pageChange: NowPlayingPageChange?
     let offset: QueueHeaderOffset
     let artworkPageFrame: CGRect
-    let isVisible: Bool
     let screenTop: CGFloat
-    let fade: Animation?
     let reducesMotion: Bool
 
     let artworkTransition: ArtworkTransition
@@ -810,16 +817,20 @@ struct QueueLinkedArtwork<ArtworkTransition: ViewModifier>: View {
                     .accessibilityHidden(geometryPage == .queue && offset.isArtworkOffscreen)
             }
         }
+        .transaction { transaction in
+            guard !reducesMotion, !transaction.disablesAnimations, transaction.animation != nil,
+                  let change = pageChange else { return }
+            if change.source == .lyrics && change.destination == .artwork {
+                transaction.animation = .interpolatingSpring(mass: 1, stiffness: 324, damping: 36)
+            } else if change.source == .artwork && change.destination == .lyrics {
+                transaction.animation = .interpolatingSpring(mass: 1, stiffness: 484, damping: 44)
+            }
+        }
         .geometryGroup()
         .modifier(QueueArtworkScrollMask(
             page: page, pageChange: pageChange, offset: offset,
-            artworkTopFade: geometryPage == .artwork ? min(24, max(0, artworkPageFrame.minY)) : 0,
             artworkTransitionScreenTop: screenTop
         ))
-        .animation(fade) {
-            $0.opacity(isVisible ? 1 : 0)
-        }
-        .accessibilityHidden(!isVisible)
         .allowsHitTesting(false)
         .padding(.horizontal, -CGFloat(32))
     }
@@ -833,10 +844,9 @@ struct QueueLinkedArtwork<ArtworkTransition: ViewModifier>: View {
     private func hasPopupArtworkTarget(in viewport: CGSize) -> Bool {
         guard pageChange == nil, viewport.width > 0, viewport.height > 0 else { return false }
         if page == .queue {
-            // At rest the queue cell renders the cover; the shared view supplies its aligned LN endpoint.
             return offset.hasVisibleArtwork
         }
-        return isVisible && frame.intersects(CGRect(origin: .zero, size: viewport))
+        return frame.intersects(CGRect(origin: .zero, size: viewport))
     }
 }
 
@@ -846,7 +856,6 @@ private struct QueueArtworkScrollMask: ViewModifier {
     let page: NowPlayingPage
     let pageChange: NowPlayingPageChange?
     let offset: QueueHeaderOffset
-    var artworkTopFade: CGFloat = 0
     var artworkTransitionScreenTop: CGFloat?
 
     private var matchesQueueArtwork: Bool {
@@ -864,15 +873,21 @@ private struct QueueArtworkScrollMask: ViewModifier {
                 let startsAboveScreen = isQueue && artworkTransitionScreenTop != nil && offset.isArtworkAboveViewport
                 let top = startsAboveScreen ? artworkTransitionScreenTop ?? 0
                     : clipsQueue ? -NowPlayingSongHeader.lift
-                    : (matchesQueueArtwork ? artworkTransitionScreenTop ?? 0 : (artworkTopFade > 0 ? 0 : -overflow))
+                    : (matchesQueueArtwork ? artworkTransitionScreenTop ?? 0 : -overflow)
                 let bottomInset = NowPlayingQueuePage.bottomContentInset(layout: layout, controlsOverflow: controlsOverflow)
                 let bottom = clipsQueue || matchesQueueArtwork
                     ? max(0, min(geometry.size.height - bottomInset, layout.pageY(557)))
                     : geometry.size.height + overflow
-                let topFade = startsAboveScreen ? 0
-                    : clipsQueue ? (isQueue ? min(24, max(0, -offset.points), bottom) : 0)
-                    : (matchesQueueArtwork ? 0 : artworkTopFade)
-                let bottomFade = isQueue ? min(NowPlayingQueueList.bottomFadeHeight, max(0, bottom - topFade)) : 0
+                let topFade = isQueue && clipsQueue && !startsAboveScreen
+                    ? min(24, max(0, -offset.points), bottom) : 0
+                // A distant gradient isolates the header's plusLighter text from the backdrop.
+                // Only the cover/header near the lower edge needs this fade.
+                let compactBottom = NowPlayingSongHeader.sharedTopInset + offset.rawPoints
+                    + NowPlayingSongHeader.referenceHeight
+                let needsBottomFade = artworkTransitionScreenTop != nil
+                    || compactBottom > bottom - NowPlayingQueueList.bottomFadeHeight
+                let bottomFade = isQueue && needsBottomFade
+                    ? min(NowPlayingQueueList.bottomFadeHeight, max(0, bottom - topFade)) : 0
                 VStack(spacing: 0) {
                     NowPlayingQueueTopFade(height: topFade)
                     Rectangle()

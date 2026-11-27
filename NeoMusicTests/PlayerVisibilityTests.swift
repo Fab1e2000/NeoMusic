@@ -21,9 +21,9 @@ final class PlayerVisibilityTests: XCTestCase {
         let change = NowPlayingPageChange(source: .queue, destination: .artwork, stationaryArtworkPage: nil)
         let root = QueueLinkedArtwork(
             song: song, page: .artwork, pageChange: change, offset: QueueHeaderOffset(),
-            artworkPageFrame: CGRect(x: 60, y: 60, width: 200, height: 200), isVisible: true,
+            artworkPageFrame: CGRect(x: 60, y: 60, width: 200, height: 200),
             screenTop: -84,
-            fade: nil, reducesMotion: false, artworkTransition: EmptyModifier()
+            reducesMotion: false, artworkTransition: EmptyModifier()
         )
         .environment(PlayerState(model: owner))
         .environment(services)

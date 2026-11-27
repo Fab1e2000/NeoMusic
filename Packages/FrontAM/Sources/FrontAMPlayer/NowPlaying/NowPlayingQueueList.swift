@@ -1228,7 +1228,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
             }
         }
 
-        func prepareArtworkTransition(returningToQueue: Bool) {
+        func preparePageTransition(returningToQueue: Bool) {
             guard let collectionView else { return }
             if collectionView.isDecelerating || collectionView.isScrollAnimating {
                 collectionView.stopScrollingAndZooming()
@@ -1236,7 +1236,7 @@ struct NowPlayingQueueList: UIViewRepresentable {
             if returningToQueue {
                 snapshotTargetOffset = nil
                 collectionView.layoutIfNeeded()
-                setQueueOffset(0, in: collectionView, reason: "returnFromArtwork")
+                setQueueOffset(0, in: collectionView, reason: "returnToQueue")
             }
             scrollViewDidScroll(collectionView)
         }

@@ -765,9 +765,9 @@ final class NowPlayingQueueListUpdateTests: XCTestCase {
 
         for y in [-list.adjustedContentInset.top, rest + 24, rest + NowPlayingSongHeader.referenceHeight * 2] {
             list.setContentOffset(CGPoint(x: 0, y: y), animated: false)
-            coordinator.prepareArtworkTransition(returningToQueue: false)
+            coordinator.preparePageTransition(returningToQueue: false)
             XCTAssertEqual(list.contentOffset.y, y, accuracy: 0.5)
-            coordinator.prepareArtworkTransition(returningToQueue: true)
+            coordinator.preparePageTransition(returningToQueue: true)
             XCTAssertEqual(list.contentOffset.y, rest, accuracy: 0.5)
             XCTAssertFalse(list.isScrollAnimating)
         }

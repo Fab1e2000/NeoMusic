@@ -1,6 +1,48 @@
 import XCTest
 
 final class PlayerInteractionTests: XCTestCase {
+    @MainActor func testPausedLyricsArtworkRoundTrip() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-frontendReviewPreview", "player-performance"]
+        app.launch()
+        defer { app.terminate() }
+        if app.buttons["暂停"].firstMatch.isHittable { app.buttons["暂停"].firstMatch.tap() }
+        let lyrics = app.buttons["歌词"].firstMatch
+        XCTAssertTrue(lyrics.waitForExistence(timeout: 15))
+        for selected in [true, false, true] {
+            lyrics.tap()
+            let state = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "selected == %@", NSNumber(value: selected)), object: lyrics
+            )
+            XCTAssertEqual(XCTWaiter.wait(for: [state], timeout: 4), .completed)
+        }
+    }
+
+    @MainActor func testOffscreenQueueHeaderReturnsAtLyricsPosition() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-frontendReviewPreview", "player-performance"]
+        app.launch()
+        defer { app.terminate() }
+        let queue = app.buttons["继续播放"].firstMatch
+        let lyrics = app.buttons["歌词"].firstMatch
+        XCTAssertTrue(queue.waitForExistence(timeout: 15))
+        queue.tap()
+        let upcoming = app.staticTexts["2 · 沿着海岸"].firstMatch
+        XCTAssertTrue(upcoming.waitForExistence(timeout: 5))
+        let lower = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.60))
+        let upper = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.22))
+        lower.press(forDuration: 0.05, thenDragTo: upper, withVelocity: .fast, thenHoldForDuration: 0)
+        XCTAssertFalse(upcoming.isHittable)
+        lyrics.tap()
+        let selected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "selected == true"), object: lyrics)
+        XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 5), .completed)
+        let title = app.staticTexts["1 · 窗边的光"].firstMatch
+        let lyricsHeaderY = title.frame.minY
+        queue.tap()
+        XCTAssertTrue(upcoming.waitForExistence(timeout: 5))
+        XCTAssertEqual(title.frame.minY, lyricsHeaderY, accuracy: 1)
+    }
+
     @MainActor func testQueueArtworkReturnsToTheCurrentTrackFromBothScrollDirections() throws {
         continueAfterFailure = false
         let app = XCUIApplication()
