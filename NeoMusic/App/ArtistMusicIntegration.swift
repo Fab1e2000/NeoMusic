@@ -399,7 +399,15 @@ import Observation
         detail.errors = (store?.errors ?? [:]).filter { $0.key.hasSuffix(":\(id)") && !$0.key.hasPrefix("album:") && (owner != nil || !$0.key.hasPrefix("similar:")) }
         return detail
     }
-    func albumDetail(_ id: Int64) -> CollectionDetail? { state("album:\(id)").album }
+    func albumDetail(_ id: Int64) -> CollectionDetail? {
+        if let detail = state("album:\(id)").album { return detail }
+        guard LibraryNetworkAccess.isOffline else { return nil }
+        let tracks = container.songs.filter { $0.onlineAlbumID == id }.sorted(by: LibrarySongItem.albumOrder)
+        guard let first = tracks.first else { return nil }
+        return CollectionDetail(kind: .album, title: first.album, subtitle: first.albumArtist,
+                                artwork: first.artwork, tint: Color(.systemBackground),
+                                albumBackdrop: first.artworkBackdrop, songs: tracks, route: .album(first.albumID))
+    }
     private func makeAlbumDetail(_ id: Int64) -> CollectionDetail? {
         guard store?.userID == owner, let value = store?.albums[id] else { return nil }
         let item = albumItem(value.album)
@@ -534,70 +542,79 @@ import Observation
         default: nil
         }
     }
-    func play(_ route: LibraryRoute, song: LibrarySongItem? = nil, shuffled: Bool = false) {
-        guard owner != nil else { showsLogin = true; return }
+    func play(_ route: LibraryRoute, song: LibrarySongItem? = nil, shuffled: Bool = false, givesFeedback: Bool = true) {
+        if owner == nil, let song {
+            if let local = container.downloadedSong(for: song) {
+                player.requestPlay([local], startingAt: 0, from: local.album, givesFeedback: givesFeedback)
+            } else if LibraryNetworkAccess.allowOnlineAction() {
+                showsLogin = true
+            }
+            return
+        }
+        guard owner != nil || LibraryNetworkAccess.isOffline else { showsLogin = true; return }
         let songs: [LibrarySongItem]
         let title: String
         guard let id = Self.number(route) else { return }
         if route.isCatalogAlbum { guard let detail = albumDetail(id) else { return }; songs = detail.songs; title = detail.title }
         else { guard let detail = artistDetail(id) else { return }; songs = detail.songs; title = detail.name }
-        if let song, let index = songs.firstIndex(where: { $0.id == song.id }) { player.requestPlay(songs, startingAt: index, from: title) }
-        else { player.requestPlay(songs, from: title, shuffled: shuffled) }
+        if let song, let index = songs.firstIndex(where: { $0.id == song.id }) { player.requestPlay(songs, startingAt: index, from: title, givesFeedback: givesFeedback) }
+        else { player.requestPlay(songs, from: title, shuffled: shuffled, givesFeedback: givesFeedback) }
     }
     func toggle(_ route: LibraryRoute) {
-        guard owner != nil else { showsLogin = true; return }
+        guard owner != nil else {
+            if LibraryNetworkAccess.allowOnlineAction() { showsLogin = true }
+            return
+        }
         guard let id = Self.number(route), let store else { return }
         let current = route.isCatalogAlbum
             ? store.subscribedAlbums.contains { $0.id == id }
             : store.subscribedArtists.contains { $0.id == id }
-        subscriptionTask(route, subscribed: !current)
+        setSubscribed(route, subscribed: !current)
     }
 
     @discardableResult func collectRelease(_ item: LibraryShelfItem) -> Task<Void, Never>? {
-        guard let owner else { showsLogin = true; return nil }
+        guard let owner else {
+            if LibraryNetworkAccess.allowOnlineAction() { showsLogin = true }
+            return nil
+        }
         guard item.sourceOwnerID == nil || item.sourceOwnerID == String(owner),
               let route = item.route else { return nil }
-        return subscriptionTask(route, subscribed: true)
+        return setSubscribed(route, subscribed: true)
     }
 
-    @discardableResult private func subscriptionTask(_ route: LibraryRoute, subscribed: Bool) -> Task<Void, Never>? {
-        guard let capturedOwner = owner, let store, !account.isLoggingOut else { return nil }
-        let revision = store.sessionRevision
-        return Task {
-            guard !Task.isCancelled, owner == capturedOwner, store.sessionRevision == revision,
-                  !account.isLoggingOut else { return }
-            await setSubscribed(route, subscribed: subscribed)
-        }
-    }
-
-    func setSubscribed(_ route: LibraryRoute, subscribed: Bool) async {
-        guard owner != nil else { showsLogin = true; return }
-        guard let id = Self.number(route), let store else { return }
+    @discardableResult func setSubscribed(_ route: LibraryRoute, subscribed: Bool) -> Task<Void, Never>? {
+        guard LibraryNetworkAccess.allowOnlineAction() else { return nil }
+        guard owner != nil else { showsLogin = true; return nil }
+        guard let id = Self.number(route), let store, !account.isLoggingOut else { return nil }
         guard store.isReady, store.userID == owner else {
             container.toasts.show(.error("账户资料正在恢复，请稍后重试。"))
-            return
+            return nil
         }
         let capturedOwner = owner
         let revision = store.sessionRevision
         let current = route.isCatalogAlbum
             ? store.subscribedAlbums.contains { $0.id == id }
             : store.subscribedArtists.contains { $0.id == id }
-        guard current != subscribed else { return }
-        do {
-            try Task.checkCancellation()
-            if route.isCatalogAlbum { try await store.setAlbumSubscribed(id: id, subscribed: subscribed) }
-            else { try await store.setArtistSubscribed(id: id, subscribed: subscribed) }
-            guard !Task.isCancelled, capturedOwner == owner, revision == store.sessionRevision else { return }
-            let confirmed = route.isCatalogAlbum
-                ? store.subscribedAlbums.contains { $0.id == id }
-                : store.subscribedArtists.contains { $0.id == id }
-            guard confirmed == subscribed else { throw NeteaseAccountError.invalidResponse }
-            LibraryHaptics.success()
-            if !route.isCatalogAlbum { container.toasts.show(subscribed ? .favorited : .unfavorited) }
-        } catch is CancellationError {
-        } catch {
-            guard !Task.isCancelled, capturedOwner == owner, revision == store.sessionRevision else { return }
-            container.toasts.show(.error(error.localizedDescription))
+        guard current != subscribed else { return nil }
+        LibraryHaptics.success()
+        return Task {
+            guard !Task.isCancelled, capturedOwner == owner, revision == store.sessionRevision,
+                  !account.isLoggingOut else { return }
+            do {
+                try Task.checkCancellation()
+                if route.isCatalogAlbum { try await store.setAlbumSubscribed(id: id, subscribed: subscribed) }
+                else { try await store.setArtistSubscribed(id: id, subscribed: subscribed) }
+                guard !Task.isCancelled, capturedOwner == owner, revision == store.sessionRevision else { return }
+                let confirmed = route.isCatalogAlbum
+                    ? store.subscribedAlbums.contains { $0.id == id }
+                    : store.subscribedArtists.contains { $0.id == id }
+                guard confirmed == subscribed else { throw NeteaseAccountError.invalidResponse }
+                if !route.isCatalogAlbum { container.toasts.show(subscribed ? .favorited : .unfavorited) }
+            } catch is CancellationError {
+            } catch {
+                guard !Task.isCancelled, capturedOwner == owner, revision == store.sessionRevision else { return }
+                container.toasts.show(.error(error.localizedDescription))
+            }
         }
     }
     func songActions(_ route: LibraryRoute) -> SongMenuActions {
@@ -609,8 +626,17 @@ import Observation
         if owner == nil {
             let login: (LibrarySongItem) -> Void = { [weak self] _ in self?.showsLogin = true }
             actions.defersQueueNotice = true
-            actions.playNext = login; actions.playLater = login; actions.toggleFavorite = login
-            actions.addToPlaylist = login; actions.removeFromFavorites = login
+            func enqueue(_ song: LibrarySongItem, next: Bool) {
+                guard let local = container.downloadedSong(for: song) else { login(song); return }
+                if next { player.insertNext([local]) } else { player.appendLater([local]) }
+                container.toasts.show(next ? .playingNext : .addedToQueue)
+            }
+            actions.playNext = { enqueue($0, next: true) }
+            actions.playLater = { enqueue($0, next: false) }
+            actions.addToPlaylist = login
+            actions.isAsynchronousFavorite = { _ in true }
+            actions.toggleFavorite = { if LibraryNetworkAccess.allowOnlineAction() { login($0) } }
+            actions.removeFromFavorites = actions.toggleFavorite
         }
         return actions
     }
@@ -619,8 +645,20 @@ import Observation
         actions.defersQueueNotice = true
         actions.play = { [weak self] route, shuffle in
             guard let self else { return }
+            if LibraryNetworkAccess.isOffline, let id = Self.number(route) {
+                let selection = self.offlineCollection(route, id: id)
+                guard !selection.songs.isEmpty else { _ = LibraryNetworkAccess.allowOnlineAction(); return }
+                self.player.requestPlay(selection.songs, from: selection.title, shuffled: shuffle)
+                return
+            }
             guard let captured = self.owner else { self.showsLogin = true; return }
-            Task { if await self.loadSongs(route), captured == self.owner { self.play(route, shuffled: shuffle) } }
+            LibraryHaptics.impact()
+            Task {
+                let loaded = await self.loadSongs(route)
+                guard !Task.isCancelled, captured == self.owner else { return }
+                if loaded { self.play(route, shuffled: shuffle, givesFeedback: false) }
+                else { self.container.toasts.show(.error(self.error(route) ?? "无法载入曲目")) }
+            }
         }
         actions.toggleFavorite = { [weak self] in self?.toggle($0) }
         actions.playNext = { [weak self] route in self?.enqueue(route, next: true) }
@@ -628,19 +666,58 @@ import Observation
         actions.addToPlaylist = { [weak self] route in self?.enqueue(route, next: nil) }
         return actions
     }
+    private func offlineCollection(_ route: LibraryRoute, id: Int64) -> (songs: [LibrarySongItem], title: String) {
+        let tracks: [LibrarySongItem]
+        let title: String
+        if route.isCatalogAlbum {
+            let detail = albumDetail(id)
+            tracks = detail?.songs ?? []
+            title = detail?.title ?? "专辑"
+        } else {
+            let detail = artistDetail(id)
+            tracks = detail?.songs ?? []
+            title = detail?.name ?? "艺人"
+        }
+        let playable = tracks.compactMap { song -> LibrarySongItem? in
+            if song.displaySource.isCatalogGuest { return container.downloadedSong(for: song) }
+            return player.canPlayOffline(song) ? song : nil
+        }
+        if !playable.isEmpty { return (playable, title) }
+        let artistID = CatalogRouteIdentity.artistID(id)
+        let local = container.songs.filter { song in
+            let matches = route.isCatalogAlbum ? song.onlineAlbumID == id : song.artistReferences.contains { $0.id == artistID }
+            return matches && player.canPlayOffline(song)
+        }
+        return (local.sorted(by: LibrarySongItem.albumOrder), title)
+    }
+
     private func enqueue(_ route: LibraryRoute, next: Bool?) {
-        guard owner != nil else { showsLogin = true; return }
-        let captured = owner
+        guard let id = Self.number(route) else { return }
+        func apply(_ songs: [LibrarySongItem]) {
+            if let next {
+                if next { player.insertNext(songs) } else { player.appendLater(songs) }
+                container.toasts.show(next ? .playingNext : .addedToQueue)
+            } else {
+                playlistLibrary.pendingAddition = .init(songs: songs)
+            }
+        }
+        if LibraryNetworkAccess.isOffline {
+            let selection = offlineCollection(route, id: id)
+            guard !selection.songs.isEmpty else { _ = LibraryNetworkAccess.allowOnlineAction(); return }
+            apply(selection.songs)
+            return
+        }
+        guard let captured = owner else { showsLogin = true; return }
+        let revision = store?.sessionRevision
         Task {
             let available = await loadSongs(route)
-            guard available, captured == owner, let id = Self.number(route) else { return }
+            guard !Task.isCancelled, captured == owner, revision == store?.sessionRevision, !account.isLoggingOut else { return }
             let songs = route.isCatalogAlbum ? albumDetail(id)?.songs : artistDetail(id)?.songs
-            guard let songs else { return }
-            if let next {
-                if next { self.player.insertNext(songs) } else { self.player.appendLater(songs) }
-                container.toasts.show(next ? .playingNext : .addedToQueue)
+            guard available, let songs, !songs.isEmpty else {
+                container.toasts.show(.error(error(route) ?? "无法载入曲目"))
+                return
             }
-            else { self.playlistLibrary.pendingAddition = .init(songs: songs) }
+            apply(songs)
         }
     }
     private func openSong(_ song: LibrarySongItem, artist: String?, album: Bool, open: @escaping (LibraryRoute) -> Void) {
@@ -702,7 +779,7 @@ private struct ArtistCatalogDestination: View {
     private func album(_ id: Int64) -> some View {
         let preview = navigationPreview.flatMap { $0.route == route ? $0 : nil }
         let loadedDetail = integration.albumDetail(id)
-        let error = integration.error(route)
+        let error = LibraryNetworkAccess.isOffline && loadedDetail != nil ? nil : integration.error(route)
         let detail = loadedDetail ?? preview.map {
             CollectionDetail(kind: .album, title: $0.title, subtitle: $0.subtitle, artwork: $0.artwork,
                              tint: .clear, albumBackdrop: $0.albumBackdrop, songs: [], route: route)

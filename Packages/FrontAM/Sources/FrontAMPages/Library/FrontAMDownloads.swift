@@ -82,7 +82,6 @@ public struct CollectionDownloadButton: View {
     @Environment(\.libraryDownloads) private var downloads
     @Environment(\.collectionMenuActions) private var actions
     @Environment(\.collectionPagePalette) private var palette
-    @State private var feedback = 0
     @State private var downloadedHere = false
 
     public var body: some View {
@@ -109,23 +108,20 @@ public struct CollectionDownloadButton: View {
                 Button {
                     guard active || actions.canDownload(route) || (completed && actions.canRemoveDownload(route)) else { return }
                     if active {
-                        feedback &+= 1
                         actions.stopDownload(route)
                     } else if completed {
                         actions.removeDownload(route)
                     } else {
-                        feedback &+= 1
                         downloadedHere = true
                         actions.download(route)
                     }
                 } label: { label }
-                .buttonStyle(.plain)
+                .buttonStyle(PlainButtonStyle().preparingFeedback { LibraryHaptics.prepareImpact() })
                 .disabled(!active && !(completed ? actions.canRemoveDownload(route) : actions.canDownload(route)))
                 .accessibilityLabel(completed ? pageText("已下载，移除下载") : active ? pageText("停止下载") : failed ? pageText("重试未完成的下载") : pageText("下载"))
             }
         }
         .accessibilityValue(summary?.accessibilityValue ?? "")
-        .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.6), trigger: feedback)
     }
 
     public init(route: LibraryRoute,
@@ -148,7 +144,6 @@ public struct CollectionDownloadSummary: View {
                     .multilineTextAlignment(.center)
                 if !summary.isActive {
                     Button(pageText("重试未完成的\(summary.totalCount - summary.completedCount)首"), systemImage: "arrow.clockwise") {
-                        LibraryHaptics.impact()
                         actions.download(route)
                     }
                     .disabled(!actions.canDownload(route))
@@ -216,7 +211,6 @@ public struct SongDownloadStatus: View {
     public var secondaryStyle = AnyShapeStyle(Color.primary.opacity(0.26))
     @Environment(\.libraryDownloads) private var downloads
     @Environment(\.dynamicTypeSize) private var textSize
-    @State private var feedback = 0
     public var body: some View {
         let state = downloads?.state(of: song.id)
         Group {
@@ -224,7 +218,7 @@ public struct SongDownloadStatus: View {
             if case .failed = state {
                 Button {
                     guard downloads?.isDownloadable(song) == true else { return }
-                    feedback &+= 1; downloads?.download([song])
+                    downloads?.download([song])
                 } label: {
                     SongDownloadIndicator(state: state, secondaryStyle: secondaryStyle)
                         .frame(width: textSize.isAccessibilitySize ? 44 : 40, height: 44, alignment: .trailing)
@@ -233,7 +227,7 @@ public struct SongDownloadStatus: View {
                 .padding(.leading, -12)
                 .accessibilityLabel(pageText("下载失败，轻点重试"))
             } else if state?.isActive == true {
-                Button { feedback &+= 1; downloads?.stop([song]) } label: {
+                Button { downloads?.stop([song]) } label: {
                     SongDownloadIndicator(state: state, secondaryStyle: secondaryStyle)
                         .frame(width: textSize.isAccessibilitySize ? 44 : 40, height: 44, alignment: .trailing)
                         .contentShape(.rect)
@@ -244,7 +238,6 @@ public struct SongDownloadStatus: View {
             } else { SongDownloadIndicator(state: state, secondaryStyle: secondaryStyle) }
             }
         }
-        .buttonStyle(.plain)
-        .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.6), trigger: feedback)
+        .buttonStyle(PlainButtonStyle().preparingFeedback { LibraryHaptics.prepareImpact() })
     }
 }

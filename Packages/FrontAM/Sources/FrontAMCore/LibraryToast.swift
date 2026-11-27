@@ -95,6 +95,12 @@ public final class LibraryToastCenter {
     }
 
     public func show(_ toast: LibraryToast) {
+        switch toast {
+        case .error: LibraryHaptics.error()
+        case .playingNext, .addedToQueue: LibraryHaptics.impact()
+        case .addedToPlaylist, .addedToPlaylists: LibraryHaptics.success()
+        case .favorited, .unfavorited, .pinned, .unpinned, .movedToFolder: break
+        }
         let presentation = Presentation(toast: toast)
         current = presentation
         scheduleDismissal(for: presentation)
@@ -156,28 +162,7 @@ private struct LibraryToastFeedback: ViewModifier {
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
 
     func body(content: Content) -> some View {
-        content.sensoryFeedback(.success, trigger: center.current?.id) { _, new in
-            guard new != nil else { return false }
-            switch center.current?.toast {
-            case .favorited, .unfavorited, .pinned, .unpinned, .playingNext, .addedToQueue, .error, .movedToFolder:
-                return false
-            default:
-                return true
-            }
-        }
-        .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.6), trigger: center.current?.id) { _, new in
-            guard new != nil else { return false }
-            switch center.current?.toast {
-            case .playingNext, .addedToQueue:
-                return true
-            default:
-                return false
-            }
-        }
-        .sensoryFeedback(.error, trigger: center.current?.id) { _, new in
-            guard new != nil, case .error = center.current?.toast else { return false }
-            return true
-        }
+        content
         .onChange(of: voiceOverEnabled, initial: true) { _, enabled in
             center.updateVoiceOverEnabled(enabled)
             announceCurrentPresentation()
@@ -190,49 +175,6 @@ private struct LibraryToastFeedback: ViewModifier {
     private func announceCurrentPresentation() {
         guard voiceOverEnabled, let announcement = center.takeAccessibilityAnnouncement() else { return }
         AccessibilityNotification.Announcement(announcement).post()
-    }
-}
-
-public enum LibraryHaptics {
-    @MainActor private static let softGenerator = UIImpactFeedbackGenerator(style: .soft)
-    @MainActor private static let lightGenerator = UIImpactFeedbackGenerator(style: .light)
-    @MainActor private static let mediumGenerator = UIImpactFeedbackGenerator(style: .medium)
-    @MainActor private static let notificationGenerator = UINotificationFeedbackGenerator()
-
-    public static func impact() {
-        runOnMain {
-            softGenerator.impactOccurred(intensity: 0.6)
-            softGenerator.prepare()
-        }
-    }
-
-    public static func lightImpact() {
-        runOnMain {
-            lightGenerator.impactOccurred()
-            lightGenerator.prepare()
-        }
-    }
-
-    public static func mediumImpact() {
-        runOnMain {
-            mediumGenerator.impactOccurred()
-            mediumGenerator.prepare()
-        }
-    }
-
-    public static func success() {
-        runOnMain {
-            notificationGenerator.notificationOccurred(.success)
-            notificationGenerator.prepare()
-        }
-    }
-
-    private static func runOnMain(_ play: @escaping @MainActor () -> Void) {
-        if Thread.isMainThread {
-            MainActor.assumeIsolated(play)
-        } else {
-            Task { @MainActor in play() }
-        }
     }
 }
 

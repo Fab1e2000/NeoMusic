@@ -44,10 +44,10 @@ public struct PlaylistDetailView: View {
     @State private var durationProjection = LibraryListProjection<[LibrarySongItem], Int>()
     @State private var showsAddMusic = false
     @State private var showsEditor = false
-    @State private var showsDestinations = false
+    private let prepareAddition: ((@escaping @MainActor ([LibrarySongItem]) -> Void) -> Void)?
+    @State private var pendingAddition: FrontAMPendingPlaylistAddition?
     @State private var loadedOnlinePlaylistID: String?
     @State private var pendingPlayback: PlaylistTrackSelection?
-    @State private var actionFeedback = 0
 
     private static let coverSize: CGFloat = 266
     private static let coverTopInset: CGFloat = 14
@@ -125,7 +125,7 @@ public struct PlaylistDetailView: View {
             guard !Task.isCancelled, pendingPlayback == requestedPlayback,
                   requestedPlayback.query == query, requestedPlayback.sort == sort else { return }
             pendingPlayback = nil
-            finishPlayback(result)
+            finishPlayback(result, acknowledged: true)
         }
         .onChange(of: query) { _, _ in pendingPlayback = nil }
         .onChange(of: sort) { _, _ in pendingPlayback = nil }
@@ -144,8 +144,8 @@ public struct PlaylistDetailView: View {
         .sheet(isPresented: $showsEditor) {
             PlaylistEditorContent(playlistID: playlistID, library: library, songs: availableSongsProvider)
         }
-        .sheet(isPresented: $showsDestinations) {
-            PlaylistDestinationPicker(library: library, excluding: playlistID, songs: tracks)
+        .sheet(item: $pendingAddition) { addition in
+            PlaylistDestinationPicker(library: library, excluding: playlistID, songs: addition.songs)
         }
     }
 
@@ -272,18 +272,16 @@ public struct PlaylistDetailView: View {
                     Button {
                         guard !tracks.isEmpty else { return }
                         pendingPlayback = nil
-                        actionFeedback &+= 1
                         collectionActions.play(.playlist(playlistID), true)
                     } label: {
                         Label(pageText("随机播放"), systemImage: "shuffle")
                             .labelStyle(.iconOnly)
                     }
-                    .buttonStyle(CollectionCircleButtonStyle())
+                    .buttonStyle(CollectionCircleButtonStyle().preparingFeedback { LibraryHaptics.prepareImpact() })
                     .disabled(tracks.isEmpty)
                     Button {
                         guard !tracks.isEmpty else { return }
                         pendingPlayback = nil
-                        actionFeedback &+= 1
                         collectionActions.play(.playlist(playlistID), false)
                     } label: {
                         HStack(spacing: 5) {
@@ -299,7 +297,7 @@ public struct PlaylistDetailView: View {
                             .background(Color.primary, in: .capsule)
                             .contentShape(.capsule)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PlainButtonStyle().preparingFeedback { LibraryHaptics.prepareImpact() })
                     .disabled(tracks.isEmpty)
                     if library.canCollectPreview(playlist) {
                         Button {
@@ -307,13 +305,12 @@ public struct PlaylistDetailView: View {
                         } label: {
                             Image(systemName: "plus")
                         }
-                        .buttonStyle(CollectionCircleButtonStyle())
+                        .buttonStyle(CollectionCircleButtonStyle().preparingFeedback { LibraryHaptics.prepareSuccess() })
                         .accessibilityLabel(pageText("收藏歌单"))
                     } else {
                         CollectionDownloadButton(route: .playlist(playlistID), songs: tracks)
                     }
                 }
-                .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.6), trigger: actionFeedback)
                 .padding(.top, 15)
                 if !library.canCollectPreview(playlist) { CollectionDownloadSummary(route: .playlist(playlistID)) }
             }
@@ -347,6 +344,14 @@ public struct PlaylistDetailView: View {
     }
 
     private func requestPlayback(of song: LibrarySongItem, in playlist: LibraryPlaylistItem) {
+        if LibraryNetworkAccess.isOffline {
+            pendingPlayback = nil
+            let visible = displayedTracks
+            if let index = visible.firstIndex(where: { $0.id == song.id }) {
+                songActions.play(visible, index, playlist.title)
+            }
+            return
+        }
         let selection = PlaylistTrackSelection(playlistID: playlistID, ownerID: playlist.sourceOwnerID,
                                                songID: song.id, query: query, sort: sort)
         let input = projectionInput
@@ -355,16 +360,18 @@ public struct PlaylistDetailView: View {
             pendingPlayback = nil
             finishPlayback(selection.outcome(in: ordered))
         } else {
+            LibraryHaptics.impact()
             pendingPlayback = selection
             AccessibilityNotification.Announcement(pageText("正在准备播放")).post()
         }
     }
 
-    private func finishPlayback(_ result: PlaylistTrackSelection.Outcome) {
+    private func finishPlayback(_ result: PlaylistTrackSelection.Outcome, acknowledged: Bool = false) {
         switch result {
         case .ready(let tracks, let index):
             guard let playlist else { return }
-            songActions.play(tracks, index, playlist.title)
+            let play = acknowledged ? songActions.playAfterPreparation ?? songActions.play : songActions.play
+            play(tracks, index, playlist.title)
         case .failed(let error):
             songActions.notify(.error(error))
         case .cancelled:
@@ -390,14 +397,12 @@ public struct PlaylistDetailView: View {
         let state = downloads?.collectionState(of: route)
         if state?.isActive == true {
             Button(pageText("停止下载"), systemImage: "stop.circle.fill") {
-                LibraryHaptics.impact()
                 collectionActions.stopDownload(route)
             }
         } else if state?.isComplete == true {
             Button(pageText("已下载"), systemImage: "checkmark.circle.fill") {}.disabled(true)
         } else {
             Button((state?.failedCount ?? 0) > 0 ? pageText("重试下载") : pageText("下载"), systemImage: "arrow.down.circle.fill") {
-                LibraryHaptics.impact()
                 collectionActions.download(route)
             }
             .disabled(!collectionActions.canDownload(route))
@@ -426,12 +431,7 @@ public struct PlaylistDetailView: View {
             }
         }
         LibraryMenuContents(sections: [
-            libraryQueueMenuItems(
-                playbackSource: collectionActions.playbackSource(),
-                isDisabled: tracks.isEmpty,
-                playNext: { collectionActions.playNext(.playlist(playlistID)) },
-                playLater: { collectionActions.playLater(.playlist(playlistID)) },
-                notify: collectionActions.defersQueueNotice ? { _ in } : collectionActions.notify)
+            collectionActions.queueItems(.playlist(playlistID), isDisabled: tracks.isEmpty)
         ], firstSectionIsRow: false)
         if playlist.isSubscribed { Section {
             Button(pageText("从资料库删除"), systemImage: "trash", role: .destructive) { library.pendingDeletion = playlist }
@@ -456,7 +456,10 @@ public struct PlaylistDetailView: View {
                 library.togglePin(playlistID)
                 collectionActions.notify(removing ? .unpinned : .pinned)
             }
-            Button(pageText("添加到播放列表"), systemImage: "text.badge.plus") { showsDestinations = true }.disabled(tracks.isEmpty)
+            Button(pageText("添加到播放列表"), systemImage: "text.badge.plus") {
+                if let prepareAddition { prepareAddition { pendingAddition = .init(songs: $0) } }
+                else { pendingAddition = .init(songs: tracks) }
+            }.disabled(tracks.isEmpty)
         }
         Section {
             if !playlist.isReadOnly { Button(pageText("编辑"), systemImage: "pencil") { showsEditor = true } }
@@ -479,12 +482,7 @@ public struct PlaylistDetailView: View {
             .disabled(library.folders.isEmpty)
         }
         LibraryMenuContents(sections: [
-            libraryQueueMenuItems(
-                playbackSource: collectionActions.playbackSource(),
-                isDisabled: tracks.isEmpty,
-                playNext: { collectionActions.playNext(.playlist(playlistID)) },
-                playLater: { collectionActions.playLater(.playlist(playlistID)) },
-                notify: collectionActions.notify)
+            collectionActions.queueItems(.playlist(playlistID), isDisabled: tracks.isEmpty)
         ], firstSectionIsRow: false)
         if !playlist.isReadOnly || playlist.isSubscribed { Section {
             Button(pageText("从资料库删除"), systemImage: "trash", role: .destructive) { library.pendingDeletion = playlist }
@@ -497,7 +495,9 @@ public struct PlaylistDetailView: View {
                 availableSongs: (@MainActor () -> [LibrarySongItem])? = nil,
                 externalActions: ExternalPlaylistActions? = nil,
                 externalArtwork: AnyView? = nil,
-                recentlyPlayedSongs: [LibrarySongItem] = []) {
+                recentlyPlayedSongs: [LibrarySongItem] = [],
+                prepareAddition: ((@escaping @MainActor ([LibrarySongItem]) -> Void) -> Void)? = nil) {
+        self.prepareAddition = prepareAddition
         self.playlistID = playlistID
         self.library = library
         self.songs = songs

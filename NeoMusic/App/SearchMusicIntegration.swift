@@ -288,7 +288,11 @@ final class SearchMusicIntegration {
         let candidates = model.submitted ? model.groups.flatMap(\.items) : model.suggestions
         let songs = candidates.compactMap(\.song)
         guard let index = songs.firstIndex(where: { $0.id == target.id }) else { return }
-        if requiresLogin(for: target) { showsLogin = true; return }
+        if requiresLogin(for: target), !player.canPlayOffline(target) {
+            guard LibraryNetworkAccess.allowOnlineAction() else { return }
+            showsLogin = true
+            return
+        }
         player.requestPlay(songs, startingAt: index, from: model.query)
     }
 
@@ -300,11 +304,25 @@ final class SearchMusicIntegration {
     var songActions: SongMenuActions {
         var actions = container.songActions(for: .category(.songs))
         let next = actions.playNext, later = actions.playLater, favorite = actions.toggleFavorite, add = actions.addToPlaylist
+        actions.defersQueueNotice = true
         func authorized(_ song: LibrarySongItem, _ action: (LibrarySongItem) -> Void) {
-            if requiresLogin(for: song) { showsLogin = true } else { action(song) }
+            if requiresLogin(for: song) {
+                if LibraryNetworkAccess.allowOnlineAction() { showsLogin = true }
+            } else { action(song) }
         }
-        actions.playNext = { authorized($0, next) }; actions.playLater = { authorized($0, later) }
-        actions.toggleFavorite = { authorized($0, favorite) }; actions.addToPlaylist = { authorized($0, add) }
+        func enqueue(_ song: LibrarySongItem, action: (LibrarySongItem) -> Void, notice: LibraryToast) {
+            let selected = container.downloadedSong(for: song) ?? song
+            authorized(selected) { track in
+                action(track)
+                container.toasts.show(notice)
+            }
+        }
+        actions.playNext = { enqueue($0, action: next, notice: .playingNext) }
+        actions.playLater = { enqueue($0, action: later, notice: .addedToQueue) }
+        let removeFavorite = actions.removeFromFavorites
+        actions.toggleFavorite = { authorized($0, favorite) }
+        actions.removeFromFavorites = { authorized($0, removeFavorite) }
+        actions.addToPlaylist = { authorized($0, add) }
         return actions
     }
 }

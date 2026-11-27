@@ -18,6 +18,11 @@ typealias AppLibrary = LocalLibrary
 extension AppContainer {
     var songs: [LibrarySongItem] { runtime.localSongs }
     var allSongs: [LibrarySongItem] { runtime.allSongs }
+    func downloadedSong(for song: LibrarySongItem) -> LibrarySongItem? {
+        guard let file = songLibrary.downloadedFileID?(song.id) else { return nil }
+        return songLibrary.song(id: file)
+    }
+
     private func song(id: String) -> LibrarySongItem? {
         guard let song = songLibrary.song(id: id), song.isOnline || !deletedAlbums.ids.contains(song.albumID) else { return nil }
         return song
@@ -228,8 +233,20 @@ extension AppContainer {
         }
     }
 
-    private func playLibraryArtist(_ id: LibraryArtistIdentity, shuffled: Bool) async {
-        guard let artist = libraryArtist(id) else { return }
+    private func playLibraryArtist(_ id: LibraryArtistIdentity, shuffled: Bool) -> Task<Void, Never>? {
+        guard let artist = libraryArtist(id) else { return nil }
+        if LibraryNetworkAccess.isOffline {
+            let tracks = artist.songs.filter { player.canPlayOffline($0) }
+            guard !tracks.isEmpty else { _ = LibraryNetworkAccess.allowOnlineAction(); return nil }
+            player.requestPlay(tracks, from: artist.name, shuffled: shuffled)
+            return nil
+        }
+        LibraryHaptics.impact()
+        return Task { await loadAndPlayLibraryArtist(artist, shuffled: shuffled) }
+    }
+
+    private func loadAndPlayLibraryArtist(_ artist: LibraryArtistEntry, shuffled: Bool) async {
+        let id = artist.id
         let session = catalog.activeArtistSession?()
         let ownedAlbums = artist.albums.filter { $0.sourceOwnerID != nil && $0.isFavorite }
         var loaded: [LibrarySongItem] = []
@@ -265,7 +282,7 @@ extension AppContainer {
             toasts.show(.error(failure ?? "该艺人在资料库中没有可播放的歌曲"))
             return
         }
-        player.requestPlay(playable, from: current.name, shuffled: shuffled)
+        player.requestPlay(playable, from: current.name, shuffled: shuffled, givesFeedback: false)
         if failure != nil { toasts.show(.error("部分专辑未能读取，正在播放已可用的歌曲")) }
     }
 
@@ -292,7 +309,7 @@ extension AppContainer {
             isPinned: pinnedAlbums.ids.contains(id), songs: orderedSongs, route: .album(id))
     }
     func playlistDetail(_ id: String) -> CollectionDetail? {
-        guard let playlist = playlists.first(where: { $0.id == id }) else { return nil }
+        guard let playlist = playlistLibrary.playlist(id) else { return nil }
         return CollectionDetail(kind: .playlist, title: playlist.title, subtitle: nil, caption: nil,
             artwork: playlist.artwork, tint: Color(.systemBackground), isFavorite: playlist.isFavorite,
             isPinned: playlist.isPinned, songs: id == "favorites" ? favorites : playlistLibrary.songs(in: id), route: .playlist(id))
@@ -335,8 +352,16 @@ extension AppContainer {
                        openAudioQualitySettings: (() -> Void)?) -> PlayerActions {
         let openRoute: (LibraryRoute) -> Void = { navigate($0, nil) }
         return PlayerActions(
-            isFavorite: { id in self.song(id: id)?.isFavorite == true },
-            toggleFavorite: { self.songLibrary.toggleFavorite($0) },
+            isFavorite: { id in self.playerNavigationSong(id: id)?.isFavorite == true },
+            toggleFavorite: { id in
+                guard let song = self.playerNavigationSong(id: id) else {
+                    if OnlineSongIdentity.hasReservedPrefix(id), LibraryNetworkAccess.allowOnlineAction() {
+                        self.toasts.show(.error("请登录原网易云账号后重试"))
+                    }
+                    return
+                }
+                self.songLibrary.setFavorite(id, !song.isFavorite)
+            },
             addToPlaylist: { id in
                 guard let song = self.song(id: id) else { return }
                 if let prepareSongForLibraryAction = self.prepareSongForLibraryAction {
@@ -364,9 +389,9 @@ extension AppContainer {
                 guard let song = self.playerNavigationSong(id: id) else { return }
                 if let ref = song.artistReferences.first(where: { $0.name == name }) { openRoute(.artist(ref.id)) }
                 else if song.isNeteaseCatalogSong || self.catalog.downloadedOnlineSongID?(id) != nil { self.catalog.openSongArtist?(song, name, openRoute) }
-            }, feedback: { LibraryHaptics.success() }, notify: { self.toasts.show(LibraryToast($0)) }, completesFavoriteSynchronously: { id in
+            }, prepareFavoriteFeedback: { LibraryHaptics.prepareSuccess() }, feedback: { LibraryHaptics.success() }, notify: { self.toasts.show(LibraryToast($0)) }, completesFavoriteSynchronously: { id in
                 guard let song = self.song(id: id) else { return false }
-                return !song.isNeteaseCatalogSong && !self.downloads.canRemove(song)
+                return !self.favoriteRequiresAccount(song)
             }, audioQuality: { id in
                 guard self.player.hasCurrent, self.player.current.id == id else { return nil }
                 if !self.player.current.isOnline {
@@ -403,26 +428,34 @@ extension AppContainer {
         }
     }
 
-    private func withCollection(_ route: LibraryRoute,
-                                       perform: @escaping @MainActor ((title: String, songs: [LibrarySongItem])) -> Void) {
-        guard case .playlist(let id) = route, let item = playlistLibrary.playlist(id) else {
-            if let value = collection(route) { perform(value) }
+    private func withCollection(_ route: LibraryRoute, beforeLoading: () -> Void = {},
+                                perform: @escaping @MainActor ((title: String, songs: [LibrarySongItem])) -> Void) {
+        guard let current = collection(route) else { return }
+        guard case .playlist(let id) = route, let item = playlistLibrary.playlist(id),
+              !item.isDownloadedSnapshot,
+              item.sourceOwnerID != nil || playlistLibrary.onlineHasMore.contains(id) || (item.isSystem && playbackAccountID != nil),
+              !playlistLibrary.loadedOnlinePlaylistIDs.contains(id) || playlistLibrary.onlineHasMore.contains(id) else {
+            perform(current)
+            return
+        }
+        if LibraryNetworkAccess.isOffline {
+            let available = current.songs.filter { player.canPlayOffline($0) }
+            guard !available.isEmpty else {
+                _ = LibraryNetworkAccess.allowOnlineAction()
+                return
+            }
+            perform((current.title, available))
             return
         }
         let owner = item.sourceOwnerID
         let accountID = playbackAccountID
-        let needsOnline = owner != nil || playlistLibrary.onlineHasMore.contains(id)
-            || (id == "favorites" && accountID != nil)
-        guard needsOnline else {
-            if let value = collection(route) { perform(value) }
-            return
-        }
         let complete = playlistLibrary.completeOnlinePlaylist
         let load = playlistLibrary.loadOnlinePlaylist
         guard complete != nil || load != nil else {
             toasts.show(.error("请登录网易云账号后重试"))
             return
         }
+        beforeLoading()
         Task {
             let completed: Bool
             if let complete { completed = await complete(id) }
@@ -449,13 +482,31 @@ extension AppContainer {
         CollectionMenuActions(
             play: { route, shuffled in
                 if self.catalog.handles(route) { self.catalog.actions.play(route, shuffled); return }
-                self.withCollection(route) { collection in
-                    guard !collection.songs.isEmpty else { return }
-                    self.player.requestPlay(collection.songs, from: collection.title, shuffled: shuffled, collection: self.playbackCollection(route))
+                var acknowledged = false
+                self.withCollection(route, beforeLoading: {
+                    LibraryHaptics.impact()
+                    acknowledged = true
+                }) { collection in
+                    self.player.requestPlay(collection.songs, from: collection.title, shuffled: shuffled,
+                                            collection: self.playbackCollection(route), givesFeedback: !acknowledged)
                 }
             },
-            playNext: { route in if self.catalog.handles(route) { self.catalog.actions.playNext(route); return }; self.withCollection(route) { self.player.insertNext($0.songs) } },
-            playLater: { route in if self.catalog.handles(route) { self.catalog.actions.playLater(route); return }; self.withCollection(route) { self.player.appendLater($0.songs) } },
+            playNext: { route in
+                if self.catalog.handles(route) { self.catalog.actions.playNext(route); return }
+                self.withCollection(route) { collection in
+                    guard !collection.songs.isEmpty else { return }
+                    self.player.insertNext(collection.songs)
+                    self.toasts.show(.playingNext)
+                }
+            },
+            playLater: { route in
+                if self.catalog.handles(route) { self.catalog.actions.playLater(route); return }
+                self.withCollection(route) { collection in
+                    guard !collection.songs.isEmpty else { return }
+                    self.player.appendLater(collection.songs)
+                    self.toasts.show(.addedToQueue)
+                }
+            },
             toggleFavorite: { route in
                 if self.catalog.handles(route) { self.catalog.actions.toggleFavorite(route); return }
                 switch route {
@@ -512,8 +563,11 @@ extension AppContainer {
             },
             delete: { route in
                 switch route {
-                case .playlist(let id): self.playlistLibrary.deletePlaylist(id)
+                case .playlist(let id):
+                    if !self.playlistLibrary.canUnsubscribe(id) { LibraryHaptics.mediumImpact() }
+                    self.playlistLibrary.deletePlaylist(id)
                 case .album(let id):
+                    LibraryHaptics.mediumImpact()
                     let removed = self.albumSongs(id)
                     self.deletedAlbums.insert(id)
                     self.playlistLibrary.removeSongsEverywhere(Set(removed.map(\.id)))
@@ -522,6 +576,7 @@ extension AppContainer {
                 }
             },
             notify: { self.toasts.show($0) },
+            defersQueueNotice: true,
             removeDownload: { route in
                 if self.collectionDownloads.remove?(route) == true { return }
                 if case .album(let id) = route { self.downloads.requestRemoval(self.albumSongs(id)) }
@@ -532,9 +587,19 @@ extension AppContainer {
             },
             canDownload: { self.collectionDownloads.canDownload?($0) ?? false },
             canRemoveDownload: { self.collectionDownloads.canRemoveDownload?($0) ?? false },
-            stopDownload: { self.collectionDownloads.stop?($0) },
+            stopDownload: { route in
+                if case .album(let id) = route, !CatalogRouteIdentity.isCatalogID(id) {
+                    self.downloads.stop(self.albumSongs(id))
+                } else {
+                    self.collectionDownloads.stop?(route)
+                }
+            },
             downloads: downloads
         )
+    }
+
+    private func favoriteRequiresAccount(_ song: LibrarySongItem) -> Bool {
+        song.isOnline || song.displaySource.isCatalogGuest || catalog.downloadedOnlineSongID?(song.id) != nil
     }
 
     private var songActions: SongMenuActions {
@@ -543,7 +608,7 @@ extension AppContainer {
             play: { songs, index, source in self.player.requestPlay(songs, startingAt: index, from: source) },
             playNext: { self.player.insertNext([$0]) },
             toggleFavorite: { self.songLibrary.toggleFavorite($0.id) },
-            removeFromFavorites: { self.songLibrary.setFavorite($0.id, false, playsSuccessHaptic: false) },
+            removeFromFavorites: { self.songLibrary.setFavorite($0.id, false) },
             togglePin: { self.songLibrary.togglePin($0.id) },
             addToPlaylist: { song in
                 if let prepareSongForLibraryAction = self.prepareSongForLibraryAction {
@@ -568,7 +633,7 @@ extension AppContainer {
                 else if song.isNeteaseCatalogSong || self.catalog.downloadedOnlineSongID?(song.id) != nil { self.catalog.openSongArtist?(song, nil, open) }
             },
             notify: { self.toasts.show($0) },
-            isAsynchronousFavorite: { $0.isNeteaseCatalogSong || self.downloads.canRemove($0) }
+            isAsynchronousFavorite: favoriteRequiresAccount
         )
     }
 
@@ -576,6 +641,9 @@ extension AppContainer {
         var actions = songActions
         actions.play = { songs, index, source in
             self.player.requestPlay(songs, startingAt: index, from: source, collection: self.playbackCollection(route))
+        }
+        actions.playAfterPreparation = { songs, index, source in
+            self.player.requestPlay(songs, startingAt: index, from: source, collection: self.playbackCollection(route), givesFeedback: false)
         }
         return actions
     }
@@ -613,7 +681,15 @@ extension AppContainer {
     }
 
     func playAlbums(_ ids: [String], shuffled: Bool) {
+        if LibraryNetworkAccess.isOffline, ids.contains(where: CatalogRouteIdentity.isCatalogID) {
+            let albums = Set(ids)
+            let tracks = songs.filter { albums.contains($0.albumID) }.sorted(by: LibrarySongItem.albumOrder)
+            guard !tracks.isEmpty else { _ = LibraryNetworkAccess.allowOnlineAction(); return }
+            player.requestPlay(tracks, from: "专辑", shuffled: shuffled)
+            return
+        }
         if ids.contains(where: CatalogRouteIdentity.isCatalogID) {
+            LibraryHaptics.impact()
             Task {
                 do {
                     var songs: [LibrarySongItem] = []
@@ -621,7 +697,7 @@ extension AppContainer {
                         if CatalogRouteIdentity.isCatalogID(id), let load = catalog.loadAlbumSongs { songs += try await load(id) }
                         else { songs += albumDetail(id)?.songs ?? [] }
                     }
-                    player.requestPlay(songs, from: "专辑", shuffled: shuffled)
+                    player.requestPlay(songs, from: "专辑", shuffled: shuffled, givesFeedback: false)
                 } catch is CancellationError { } catch { toasts.show(.error(error.localizedDescription)) }
             }
             return
@@ -647,7 +723,7 @@ extension AppContainer {
         case .album(let id): albumDetail(id).map { CollectionDetailView(detail: $0) }
         case .libraryArtist(let id):
             if let artist = libraryArtist(id) {
-                LibraryArtistDetailView(artist: artist, play: { await self.playLibraryArtist(id, shuffled: $0) },
+                LibraryArtistDetailView(artist: artist, beginPlay: { self.playLibraryArtist(id, shuffled: $0) },
                     isCatalogAlbum: { CatalogRouteIdentity.parseAlbumID($0) != nil })
             } else {
                 ContentUnavailableView("艺人已不可用", systemImage: "music.microphone")
@@ -660,7 +736,12 @@ extension AppContainer {
             }
         case .playlist(let id):
             if id == "favorites" { LocalFavoritesDetail(container: self) }
-            else { PlaylistDetailView(playlistID: id, library: playlistLibrary, songs: [], availableSongs: { self.allSongs }, recentlyPlayedSongs: recentPlaybackFixture) }
+            else {
+                PlaylistDetailView(playlistID: id, library: playlistLibrary, songs: [], availableSongs: { self.allSongs },
+                                   recentlyPlayedSongs: recentPlaybackFixture, prepareAddition: { present in
+                    self.withCollection(.playlist(id)) { present($0.songs) }
+                })
+            }
         case .artist, .artistSection, .searchCategory: EmptyView()
         }
     }

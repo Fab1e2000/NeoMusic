@@ -311,6 +311,29 @@ final class DownloadedPlaybackTests: XCTestCase {
         await model.flushQueuePersistence()
     }
 
+    func testOfflineRequestsPreserveSelectionAndOnlyAcknowledgePlayableMusic() {
+        let local = song("local.m4a"), downloaded = song("netease:42:1"), remote = song("netease:42:2")
+        let model = NowPlayingModel(queue: [local], currentIndex: 0, isPlaying: false)
+        model.configureOfflineSongs { $0 == downloaded.id ? downloaded : nil }
+        model.appendLater([local])
+        var denied = 0
+        var feedback: [LibraryHaptics.Feedback] = []
+        LibraryNetworkAccess.$override.withValue(.init(isOffline: { true }, reportOffline: { denied += 1 })) {
+            LibraryHaptics.$output.withValue(.init { feedback.append($0) }) {
+                model.requestPlay([remote, local, downloaded], startingAt: 0, from: "Search")
+                XCTAssertNil(model.pendingPlay)
+                XCTAssertTrue(feedback.isEmpty)
+                model.requestPlay([remote, local, downloaded], startingAt: 2, from: "Album")
+                XCTAssertEqual(model.pendingPlay?.songs.map(\.id), [local.id, downloaded.id])
+                XCTAssertEqual(model.pendingPlay?.startingIndex, 1)
+                model.requestPlay([remote, downloaded], from: "Album", shuffled: true)
+                XCTAssertEqual(model.pendingPlay?.songs.map(\.id), [downloaded.id])
+                XCTAssertEqual(feedback, [.impact, .impact])
+                XCTAssertEqual(denied, 1)
+            }
+        }
+    }
+
     private func song(_ id: String) -> LibrarySongItem {
         LibrarySongItem(id: id, title: "Downloaded song", artist: "Artist", album: "Album",
             albumArtist: "Artist", trackNumber: 1, artwork: .favorites, duration: 10)

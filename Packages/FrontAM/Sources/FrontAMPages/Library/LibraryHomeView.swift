@@ -88,6 +88,7 @@ public struct LibraryHomeView: View {
                     PinnedCollectionView(items: pinned, isEditing: isEditingPinned, tapActions: $tapActions,
                                 reorder: reorderPinned) { item in
                         guard let route = item.route else { return }
+                        LibraryHaptics.success()
                         withAnimation { actions.togglePin(route) }
                     }
                         .frame(maxHeight: .infinity, alignment: .top)

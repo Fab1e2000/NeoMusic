@@ -286,6 +286,30 @@ import XCTest
         XCTAssertEqual(player.queue.map(\.id), queued)
     }
 
+    func testOfflineGuestActionsReportOfflineWithoutOpeningLoginOrConfirmingQueue() {
+        let account = NeteaseAccount(readSession: { nil }, saveSession: { _ in }, deleteSession: {},
+            validateCredential: { _ in throw NeteaseAccountError.authenticationRequired }, cachedAvatar: { _ in nil },
+            loadAvatar: { _ in Data() }, clearAvatarCache: {})
+        let integration = SearchMusicIntegration(account: account)
+        let guest = LibrarySongItem(id: "netease:search-guest:1", title: "Song", artist: "Artist",
+            album: "Album", albumArtist: "Artist", trackNumber: 1, artwork: .missing)
+        var errors = 0
+        let unavailable = LibraryNetworkAccess(isOffline: { true }, reportOffline: { errors += 1 })
+        LibraryNetworkAccess.$override.withValue(unavailable) {
+            LibraryHaptics.$output.withValue(.init { _ in XCTFail("Guest action emitted positive feedback") }) {
+                let actions = integration.songActions
+                XCTAssertTrue(actions.defersQueueNotice)
+                actions.playNext(guest)
+                actions.playLater(guest)
+                actions.addToPlaylist(guest)
+                actions.toggleFavorite(guest)
+                integration.songActions.removeFromFavorites(guest)
+            }
+        }
+        XCTAssertEqual(errors, 5)
+        XCTAssertFalse(integration.showsLogin)
+    }
+
     func testExpiredSearchSessionRequiresLoginEvenWithRetainedProfile() async throws {
         let profile = NeteaseProfile(userID: 42, nickname: "Fixture", avatarURL: nil)
         let saved = NeteaseSavedSession(profile: profile, credential: try .init(musicU: "fixture"))

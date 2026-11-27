@@ -76,6 +76,26 @@ enum NeteaseAccountError: Error, LocalizedError, Equatable, Sendable {
         }
     }
 
+    // A server response can disagree with a completed write. A failed transport
+    // cannot confirm it, and a second request would repeat the same wait.
+    static func shouldReconcileWrite(after error: Error) -> Bool {
+        if error is CancellationError { return false }
+        let code: URLError.Code
+        if let urlError = error as? URLError { code = urlError.code }
+        else if case .network(let networkCode) = error as? NeteaseAccountError { code = networkCode }
+        else { return true }
+        switch code {
+        case .cancelled, .notConnectedToInternet, .timedOut, .networkConnectionLost,
+             .cannotConnectToHost, .cannotFindHost, .dnsLookupFailed, .dataNotAllowed,
+             .internationalRoamingOff, .callIsActive, .secureConnectionFailed,
+             .serverCertificateHasBadDate, .serverCertificateUntrusted, .serverCertificateHasUnknownRoot,
+             .serverCertificateNotYetValid, .clientCertificateRejected, .clientCertificateRequired:
+            return false
+        default:
+            return true
+        }
+    }
+
     var technicalDetails: String? {
         switch self {
         case .network(let code): "NSURLErrorDomain (\(code.rawValue))"

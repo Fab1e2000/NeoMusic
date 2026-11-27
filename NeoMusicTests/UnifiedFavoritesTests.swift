@@ -22,14 +22,11 @@ final class UnifiedFavoritesTests: XCTestCase {
     func testOnlineLikeDelegatesWithoutPublishingSuccess() {
         let library = SongLibrary(songs: [song("local")])
         library.replaceOnline([song("netease:1:1"), song("netease:1:1")])
-        var request: (String, Bool, Bool)?
-        library.onlineFavoriteAction = { request = ($0, $1, $2) }
+        var request: (String, Bool)?
+        library.onlineFavoriteAction = { request = ($0, $1) }
         library.toggleFavorite("netease:1:1")
         XCTAssertEqual(request?.0, "netease:1:1")
         XCTAssertEqual(request?.1, false)
-        XCTAssertEqual(request?.2, true)
-        library.setFavorite("netease:1:1", false, playsSuccessHaptic: false)
-        XCTAssertEqual(request?.2, false)
         XCTAssertTrue(library.onlineSongs[0].isFavorite)
         XCTAssertEqual(library.onlineSongs.count, 1)
         library.replaceOnline([])
@@ -50,6 +47,29 @@ final class UnifiedFavoritesTests: XCTestCase {
         XCTAssertEqual(restoredTime.timeIntervalSince1970, time.timeIntervalSince1970)
         restored.setFavorite("old", false)
         XCTAssertNil(restored.songs[0].favoriteAddedAt)
+    }
+
+    func testRestoredPlayerFavoriteUsesAuthenticatedSnapshotBeforeLibraryPublication() async {
+        let container = AppContainer()
+        let snapshotURL = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { container.player.shutdownPlayback(); try? FileManager.default.removeItem(at: snapshotURL) }
+        container.player.configurePlayback(resolveURL: { _ in nil }, persistenceURL: snapshotURL)
+        let track = song("netease:12:34")
+        let saved = NowPlayingModel.SavedQueue(ids: [track.id], index: 0, elapsed: 0, repeatMode: .off,
+            shuffled: false, songs: [PlaybackSongSnapshot(track)])
+        XCTAssertTrue(container.player.restoreQueue(songs: [], restoredState: .success(saved)))
+        container.player.restoreOnlineIdentity(ownerID: "12")
+        container.playbackAccountID = "12"
+        var writes: [Bool] = []
+        container.songLibrary.onlineFavoriteAction = { _, liked in writes.append(liked) }
+        let actions = container.playerActions(navigate: { _, _ in }, openAudioQualitySettings: nil)
+        let current = PlayerTrack(id: track.id, title: track.title, artists: track.artist,
+            albumTitle: track.album, coverURL: nil, duration: 100)
+        XCTAssertNil(container.songLibrary.song(id: track.id))
+        XCTAssertTrue(actions.isFavorite(current))
+        actions.toggleFavorite(current)
+        XCTAssertEqual(writes, [false])
+        await container.player.flushQueuePersistence()
     }
 
     func testPlayerActionsDefersFavoriteFeedbackForAsynchronousTracks() {

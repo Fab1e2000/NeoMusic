@@ -65,17 +65,14 @@ final class OnlineLibraryIntegration {
             let stream = try await music.stream(songID: parts.song)
             return PlaybackResource(url: stream.url, expiresAt: stream.expiresAt, quality: stream.quality.rawValue)
         }
-        container.songLibrary.onlineFavoriteAction = { [weak music, toasts = container.toasts] id, liked, playsSuccessHaptic in
+        container.songLibrary.onlineFavoriteAction = { [weak music, toasts = container.toasts] id, liked in
             guard let music, let parts = OnlineSongIdentity.parse(id), music.userID == parts.owner else {
-                toasts.show(.error("请登录原网易云账号后重试"))
+                if LibraryNetworkAccess.allowOnlineAction() { toasts.show(.error("请登录原网易云账号后重试")) }
                 return
             }
             let revision = music.sessionRevision
-            Task {
-                await OnlineFavoriteAction.perform(music: music, revision: revision, songID: parts.song,
-                    liked: liked, playsSuccessHaptic: playsSuccessHaptic, toasts: toasts,
-                    isCurrent: { music.userID == parts.owner })
-            }
+            OnlineFavoriteAction.perform(music: music, revision: revision, songID: parts.song,
+                liked: liked, toasts: toasts, isCurrent: { music.userID == parts.owner })
         }
         container.playlistLibrary.loadOnlinePlaylist = { [weak self, weak music] id in
             guard let self, let music, let playlistID = Self.playlistID(id, music: music) else { return }
@@ -243,8 +240,11 @@ final class OnlineLibraryIntegration {
             playlistID = nil
         }
         guard let playlistID else { return false }
+        guard LibraryNetworkAccess.allowOnlineAction() else { return true }
+        LibraryHaptics.success()
         let revision = music.sessionRevision
         Task {
+            guard revision == music.sessionRevision, music.userID == owner, account.profile?.userID == owner else { return }
             do {
                 try await music.setPlaylistSubscribed(id: playlistID, subscribed: subscribed)
                 guard revision == music.sessionRevision, music.userID == owner,
@@ -252,7 +252,6 @@ final class OnlineLibraryIntegration {
                 if !subscribed, music.playlists.contains(where: { $0.id == playlistID && $0.isSubscribed == true }) == false {
                     container.playlistLibrary.releaseRetainedOnlinePlaylist(PlaylistRouteIdentity.accountID(owner: owner, playlistID: playlistID))
                 }
-                if subscribed { LibraryHaptics.success() }
                 onSubscribedChanged?()
             } catch is CancellationError { }
             catch {
@@ -265,7 +264,10 @@ final class OnlineLibraryIntegration {
     }
 
     private func changePlaylistCollection(_ id: String, subscribed: Bool) {
-        _ = Self.changePlaylistSubscription(id, subscribed: subscribed, account: account, container: container)
+        if !Self.changePlaylistSubscription(id, subscribed: subscribed, account: account, container: container),
+           LibraryNetworkAccess.allowOnlineAction() {
+            container.toasts.show(.error("请登录原网易云账号后重试"))
+        }
     }
 
     private static func playlistID(_ id: String, music: NeteaseMusicStore) -> Int64? {

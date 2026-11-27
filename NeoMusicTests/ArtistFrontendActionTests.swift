@@ -9,7 +9,7 @@ import Synchronization
         let refreshedAt: [String: Date] = [:]
     }
 
-    private func fixture(offline: Bool = false) async throws -> (ArtistMusicIntegration, NeteaseArtistStore, URL) {
+    private func fixture(offline: Bool = false, container: AppContainer = .shared) async throws -> (ArtistMusicIntegration, NeteaseArtistStore, URL) {
         ArtistFrontendProtocol.state.withLock { $0 = .init(offline: offline) }
         let directory = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let cache = NeteasePageCache(directory: directory.appendingPathComponent("Pages"))
@@ -25,7 +25,59 @@ import Synchronization
             clearAvatarCache: {}, artists: store)
         await account.restoreCachedContent()
         if let current = LocalLibrary.toasts.current { LocalLibrary.toasts.dismiss(current) }
-        return (ArtistMusicIntegration(account: account), store, directory)
+        return (ArtistMusicIntegration(account: account, container: container), store, directory)
+    }
+
+    func testOfflineCollectionActionsUseDownloadedTracksAndRejectMissingCollectionsBeforeLoading() async throws {
+        let container = AppContainer()
+        let (integration, store, directory) = try await fixture(container: container)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let song = LibrarySongItem(id: "Downloads/one.flac", title: "Song", artist: "Artist", album: "Album",
+                                   albumArtist: "Artist", trackNumber: 1, artwork: .missing, onlineAlbumID: 8,
+                                   artistReferences: [.init(id: "catalog:artist:7", name: "Artist")])
+        container.songLibrary.replace([song])
+        let actions = integration.collectionActions
+        var denied = 0
+        var feedback: [LibraryHaptics.Feedback] = []
+        let previousPaths = ArtistFrontendProtocol.state.withLock { $0.paths }
+        LibraryNetworkAccess.$override.withValue(.init(isOffline: { true }, reportOffline: { denied += 1 })) {
+            LibraryHaptics.$output.withValue(.init { feedback.append($0) }) {
+                actions.playNext(.album("catalog:album:8"))
+                actions.playLater(.artist("catalog:artist:7"))
+                actions.addToPlaylist(.album("catalog:album:8"))
+                XCTAssertEqual(container.player.queue.map(\.id), [song.id, song.id])
+                XCTAssertEqual(container.playlistLibrary.pendingAddition?.songs.map(\.id), [song.id])
+                container.playlistLibrary.pendingAddition = nil
+                actions.playNext(.artist("catalog:artist:90"))
+                actions.playLater(.album("catalog:album:90"))
+                actions.addToPlaylist(.artist("catalog:artist:90"))
+                XCTAssertNil(container.playlistLibrary.pendingAddition)
+                XCTAssertEqual(container.player.queue.count, 2)
+                XCTAssertEqual(denied, 3)
+                XCTAssertEqual(feedback, [.impact, .impact])
+            }
+        }
+        XCTAssertEqual(ArtistFrontendProtocol.state.withLock { $0.paths }, previousPaths)
+        await store.invalidate()
+    }
+
+    func testOnlineCollectionLoadFailurePublishesOneErrorAndLeavesQueueEmpty() async throws {
+        let container = AppContainer()
+        let (integration, store, directory) = try await fixture(offline: true, container: container)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let pulse = expectation(description: "Failed album load publishes an error")
+        var feedback: [LibraryHaptics.Feedback] = []
+        await LibraryHaptics.$output.withValue(.init { feedback.append($0); if $0 == .error { pulse.fulfill() } }) {
+            LibraryNetworkAccess.$override.withValue(.init(isOffline: { false }, reportOffline: { XCTFail() })) {
+                integration.collectionActions.playNext(.album("catalog:album:8"))
+            }
+            await fulfillment(of: [pulse], timeout: 2)
+        }
+        guard case .error = container.toasts.current?.toast else { return XCTFail("Missing load error") }
+        XCTAssertEqual(feedback, [.error])
+        XCTAssertTrue(container.player.queue.isEmpty)
+        XCTAssertNil(container.playlistLibrary.pendingAddition)
+        await store.invalidate()
     }
 
     func testArtistEntryUsesOnlyTheCurrentArtworksTheme() {
@@ -45,9 +97,9 @@ import Synchronization
         let (integration, store, directory) = try await fixture()
         defer { try? FileManager.default.removeItem(at: directory) }
         let route = LibraryRoute.album("catalog:album:8")
-        await integration.setSubscribed(route, subscribed: true)
+        await integration.setSubscribed(route, subscribed: true)?.value
         XCTAssertEqual(store.subscribedAlbums.map(\.id), [8])
-        await integration.setSubscribed(route, subscribed: true)
+        await integration.setSubscribed(route, subscribed: true)?.value
         XCTAssertEqual(store.subscribedAlbums.map(\.id), [8])
         XCTAssertEqual(ArtistFrontendProtocol.state.withLock { $0.writes }, 1)
         XCTAssertNil(LocalLibrary.toasts.current, "Album collection uses its confirmed button state")
@@ -57,7 +109,7 @@ import Synchronization
     func testArtistSuccessFeedbackFollowsConfirmedSubscription() async throws {
         let (integration, store, directory) = try await fixture()
         defer { try? FileManager.default.removeItem(at: directory) }
-        await integration.setSubscribed(.artist("catalog:artist:7"), subscribed: true)
+        await integration.setSubscribed(.artist("catalog:artist:7"), subscribed: true)?.value
         XCTAssertEqual(store.subscribedArtists.map(\.id), [7])
         let presentation = try XCTUnwrap(LocalLibrary.toasts.current)
         XCTAssertEqual(presentation.toast.title, "已喜爱")
@@ -69,9 +121,9 @@ import Synchronization
         let (integration, store, directory) = try await fixture()
         defer { try? FileManager.default.removeItem(at: directory) }
         let route = LibraryRoute.artist("catalog:artist:7")
-        await integration.setSubscribed(route, subscribed: true)
+        await integration.setSubscribed(route, subscribed: true)?.value
         XCTAssertEqual(store.subscribedArtists.map(\.id), [7])
-        await integration.setSubscribed(route, subscribed: false)
+        await integration.setSubscribed(route, subscribed: false)?.value
         XCTAssertTrue(store.subscribedArtists.isEmpty)
         XCTAssertEqual(ArtistFrontendProtocol.state.withLock { $0.paths }, [
             "/weapi/artist/sub", "/eapi/artist/sublist", "/weapi/artist/unsub", "/eapi/artist/sublist"
@@ -84,7 +136,7 @@ import Synchronization
         let (integration, store, directory) = try await fixture()
         defer { try? FileManager.default.removeItem(at: directory) }
         ArtistFrontendProtocol.state.withLock { $0.rejectArtistWrite = true }
-        await integration.setSubscribed(.artist("catalog:artist:7"), subscribed: true)
+        await integration.setSubscribed(.artist("catalog:artist:7"), subscribed: true)?.value
         XCTAssertTrue(store.subscribedArtists.isEmpty)
         XCTAssertEqual(ArtistFrontendProtocol.state.withLock { $0.paths }, ["/weapi/artist/sub", "/eapi/artist/sublist"])
         let presentation = try XCTUnwrap(LocalLibrary.toasts.current)
@@ -96,7 +148,7 @@ import Synchronization
     func testArtistFailureDoesNotPublishSuccess() async throws {
         let (integration, store, directory) = try await fixture(offline: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        await integration.setSubscribed(.artist("catalog:artist:7"), subscribed: true)
+        await integration.setSubscribed(.artist("catalog:artist:7"), subscribed: true)?.value
         XCTAssertTrue(store.subscribedArtists.isEmpty)
         let presentation = try XCTUnwrap(LocalLibrary.toasts.current)
         guard case .error = presentation.toast else { return XCTFail("Failure must remain an error") }
@@ -108,7 +160,7 @@ import Synchronization
         let (integration, store, directory) = try await fixture()
         defer { try? FileManager.default.removeItem(at: directory) }
         await store.invalidate()
-        await integration.setSubscribed(.artist("catalog:artist:7"), subscribed: true)
+        await integration.setSubscribed(.artist("catalog:artist:7"), subscribed: true)?.value
         XCTAssertEqual(ArtistFrontendProtocol.state.withLock { $0.writes }, 0)
         let presentation = try XCTUnwrap(LocalLibrary.toasts.current)
         guard case .error = presentation.toast else { return XCTFail("Unready content must not report success") }

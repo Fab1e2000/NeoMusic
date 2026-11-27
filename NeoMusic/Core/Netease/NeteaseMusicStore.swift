@@ -28,6 +28,7 @@ final class NeteaseMusicStore {
             if isCellular, cellularQuality != oldValue { onQualityChange?() }
         }
     }
+    private(set) var isOffline = false
     private(set) var isCellular = false
     private var playbackQuality: NeteaseMusicQuality { isCellular ? cellularQuality : wifiQuality }
     @ObservationIgnored var onChange: (() -> Void)?
@@ -67,8 +68,10 @@ final class NeteaseMusicStore {
         wifiQuality = NeteaseMusicQuality(rawValue: defaults.string(forKey: AppDefaultsKey.neteaseWiFiQuality) ?? "") ?? .lossless
         cellularQuality = NeteaseMusicQuality(rawValue: defaults.string(forKey: AppDefaultsKey.neteaseCellularQuality) ?? "") ?? .high
         monitor.pathUpdateHandler = { [weak self] path in
+            let offline = path.status == .unsatisfied
             let cellular = path.usesInterfaceType(.cellular)
             Task { @MainActor [weak self] in
+                self?.isOffline = offline
                 self?.updateNetworkType(isCellular: cellular)
             }
         }
@@ -427,6 +430,7 @@ final class NeteaseMusicStore {
         } catch is CancellationError { throw CancellationError() }
         catch {
             guard generation == revision else { throw CancellationError() }
+            guard NeteaseAccountError.shouldReconcileWrite(after: error) else { throw error }
             failure = error
         }
         let value = try await run { [client] in try await client.playlists(userID: userID, credential: $0) }
@@ -451,7 +455,9 @@ final class NeteaseMusicStore {
             guard revision == generation, !Task.isCancelled else { throw CancellationError() }
         } catch {
             guard generation == revision else { throw CancellationError() }
-            if await confirmedLiked(songID, liked: liked, userID: userID, revision: revision) { return }
+            if !Task.isCancelled, NeteaseAccountError.shouldReconcileWrite(after: error),
+               await confirmedLiked(songID, liked: liked, userID: userID, revision: revision) { return }
+            guard generation == revision else { throw CancellationError() }
             restoreLiked(previous)
             onChange?()
             throw error

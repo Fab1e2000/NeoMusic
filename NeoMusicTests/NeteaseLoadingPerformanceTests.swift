@@ -499,6 +499,46 @@ import SwiftUI
         await store.invalidate()
     }
 
+    func testFavoriteActionGatesOptimisticWriteAndEmitsOneImmediateSuccess() async throws {
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let network = network(try playlistFixtures(count: 3, favorites: true))
+        defer { network.invalidateAndCancel() }
+        let store = NeteaseMusicStore(client: client(network), directory: root, artworkSession: network)
+        await store.activate(try session())
+        let toasts = LibraryToastCenter()
+        var pulses: [LibraryHaptics.Feedback] = []
+        let errorPulse = expectation(description: "single offline error")
+        func unlike() -> Task<Void, Never>? {
+            OnlineFavoriteAction.perform(music: store, revision: store.sessionRevision, songID: 1, liked: false,
+                toasts: toasts, isCurrent: { true })
+        }
+        let before = LoadingProtocol.state.withLock { $0.startedPaths }
+        let offline = LibraryNetworkAccess(isOffline: { true }, reportOffline: { toasts.show(.error("断网")) })
+        await LibraryHaptics.$output.withValue(.init { feedback in
+            pulses.append(feedback)
+            if feedback == .error { errorPulse.fulfill() }
+        }) {
+            LibraryNetworkAccess.$override.withValue(offline) {
+                XCTAssertNil(unlike())
+                XCTAssertTrue(store.likedIDs.contains(1))
+                XCTAssertEqual(toasts.current?.toast.title, "断网")
+                XCTAssertEqual(LoadingProtocol.state.withLock { $0.startedPaths }, before)
+            }
+            await fulfillment(of: [errorPulse], timeout: 1)
+            XCTAssertEqual(pulses, [.error])
+            let available = LibraryNetworkAccess(isOffline: { false }, reportOffline: { XCTFail() })
+            let task = LibraryNetworkAccess.$override.withValue(available) { unlike() }
+            XCTAssertEqual(pulses, [.error, .success])
+            XCTAssertEqual(toasts.current?.toast.title, "断网")
+            await task?.value
+            XCTAssertFalse(store.likedIDs.contains(1))
+            XCTAssertEqual(toasts.current?.toast.title, "已取消喜爱")
+            XCTAssertEqual(pulses, [.error, .success])
+        }
+        await store.invalidate()
+    }
+
     func testUnlikingSongUpdatesFavoritesWithoutReloadingWholePlaylist() async throws {
         let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

@@ -21,9 +21,9 @@ public enum CenteredActionSheet {
     }
 
     public static func confirmRemoveFromLiked(_ perform: @escaping () -> Void) {
+        LibraryHaptics.prepareSuccess()
         present(message: coreText("确定要从喜欢歌曲中移除这首歌吗？"), actions: [
             .init(title: coreText("从喜欢歌曲移除"), isDestructive: true) {
-                LibraryHaptics.lightImpact()
                 perform()
             }
         ])

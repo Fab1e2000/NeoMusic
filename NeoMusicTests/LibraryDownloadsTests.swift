@@ -7,6 +7,38 @@ import Observation
         .init(id: id, title: "歌曲", artist: "艺人", album: "专辑", albumArtist: "艺人", trackNumber: 1, artwork: .missing)
     }
 
+    func testOfflineRetryReportsErrorAndActiveDownloadCanStillStop() {
+        var events: [String] = []
+        let downloads = LibraryDownloads()
+        let track = song("online")
+        downloads.isDownloadable = { _ in true }
+        downloads.downloadAction = { _ in events.append("start") }
+        downloads.stopAction = { _ in events.append("stop") }
+        let offline = LibraryNetworkAccess(isOffline: { true }, reportOffline: { events.append("offline") })
+        LibraryHaptics.$output.withValue(.init { events.append(String(describing: $0)) }) {
+            LibraryNetworkAccess.$override.withValue(offline) {
+                downloads.update(states: [track.id: .failed("连接中断")], collections: [:])
+                downloads.download([track])
+                XCTAssertEqual(downloads.state(of: track.id), .failed("连接中断"))
+                downloads.update(states: [track.id: .waiting], collections: [:])
+                downloads.stop([track])
+            }
+        }
+        XCTAssertEqual(events, ["offline", "impact", "stop"])
+    }
+
+    func testDownloadSignalsImpactBeforeSubmittingTransfer() {
+        var events: [String] = []
+        let downloads = LibraryDownloads()
+        downloads.isDownloadable = { _ in true }
+        downloads.downloadAction = { _ in events.append("start") }
+        let online = LibraryNetworkAccess(isOffline: { false }, reportOffline: { XCTFail("Unexpected offline feedback") })
+        LibraryHaptics.$output.withValue(.init { events.append(String(describing: $0)) }) {
+            LibraryNetworkAccess.$override.withValue(online) { downloads.download([song("online")]) }
+        }
+        XCTAssertEqual(events, ["impact", "start"])
+    }
+
     func testImportedSongsRemainPlayableButCannotBeRemovedAsDownloads() {
         let downloads = LibraryDownloads(), imported = song("Imported/song.flac")
         var removals: [[String]] = []

@@ -301,6 +301,15 @@ import Observation
     private var radarPlaylist: NeteaseHomeFeed.Resource? {
         displayFeedBlocks.first { $0.category == .radarPlaylists }?.resources.first { $0.isDisplayable && ["list", "playlist"].contains($0.resourceType?.lowercased() ?? "") }
     }
+    func canOpenCachedQuickAction(_ action: NeteaseHomeQuickAction) -> Bool {
+        switch action {
+        case .dailySongs: daily?.date == Self.day() && daily?.songs.isEmpty == false
+        case .hotSongs: hotChart?.numericID.flatMap { cachedDetail(id: $0) }?.hasInitialPage == true
+        case .privateRadar: radarPlaylist?.numericID.flatMap { cachedDetail(id: $0) }?.hasInitialPage == true
+        default: false
+        }
+    }
+
     func quickActionArtwork(_ action: NeteaseHomeQuickAction) -> URL? {
         switch action {
         case .dailySongs: daily?.songs.first?.artworkURL

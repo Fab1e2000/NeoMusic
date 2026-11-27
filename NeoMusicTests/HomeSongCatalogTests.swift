@@ -14,6 +14,31 @@ import XCTest
         integration.songActions(.artist("catalog:artist:1")).playNext(song)
         XCTAssertTrue(integration.showsLogin)
     }
+    func testGuestArtistCanPlayAndQueueDownloadedTrackWithoutLogin() {
+        let app = AppContainer()
+        let account = NeteaseAccount(readSession: { nil }, saveSession: { _ in }, deleteSession: {},
+            validateCredential: { _ in throw NeteaseAccountError.authenticationRequired },
+            cachedAvatar: { _ in nil }, loadAvatar: { _ in Data() }, clearAvatarCache: {})
+        let integration = ArtistMusicIntegration(account: account, container: app)
+        let local = LibrarySongItem(id: "Downloads/one.m4a", title: "Song", artist: "Artist", album: "Album",
+                                    albumArtist: "Artist", trackNumber: 1, artwork: .missing)
+        let guest = LibrarySongItem(id: "catalog-guest:7", title: "Song", artist: "Artist", album: "Album",
+                                    albumArtist: "Artist", trackNumber: 1, artwork: .missing)
+        app.songLibrary.replace([local])
+        XCTAssertEqual(DownloadMusicIntegration.guestDownloadSongID("home-guest:7"), 7)
+        XCTAssertNil(DownloadMusicIntegration.guestDownloadSongID("home-guest::7"))
+        XCTAssertNil(DownloadMusicIntegration.guestDownloadSongID("local:7"))
+        app.songLibrary.downloadedFileID = { DownloadMusicIntegration.guestDownloadSongID($0) == 7 ? local.id : nil }
+        LibraryNetworkAccess.$override.withValue(.init(isOffline: { true }, reportOffline: { XCTFail() })) {
+            let actions = integration.songActions(.artist("catalog:artist:1"))
+            actions.play([guest], 0, "Artist")
+            actions.playNext(guest)
+            actions.playLater(guest)
+            XCTAssertEqual(app.player.queue.map(\.id), [local.id, local.id, local.id])
+            XCTAssertFalse(integration.showsLogin)
+        }
+    }
+
     func testIndependentExternalSourcesDoNotOverwriteEachOther() {
         let library = SongLibrary(songs: [], defaults: UserDefaults(suiteName: UUID().uuidString)!)
         func song(_ id: Int) -> LibrarySongItem { .init(id: "netease:1:\(id)", title: "Song", artist: "Artist", album: "Album", albumArtist: "Artist", trackNumber: 0, artwork: .missing) }
@@ -28,7 +53,7 @@ import XCTest
         let library = SongLibrary(songs: [], defaults: defaults)
         let song = LibrarySongItem(id: "netease:1:42", title: "Recommended", artist: "Artist", album: "Album", albumArtist: "Artist", trackNumber: 0, artwork: .missing)
         var requested: String?
-        library.onlineFavoriteAction = { id, liked, _ in if liked { requested = id } }
+        library.onlineFavoriteAction = { id, liked in if liked { requested = id } }
         library.replaceExternalSongs([song, song])
         XCTAssertTrue(library.songs.isEmpty)
         XCTAssertTrue(library.onlineSongs.isEmpty)

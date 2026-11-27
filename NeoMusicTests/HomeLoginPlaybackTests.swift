@@ -154,6 +154,70 @@ import XCTest
             XCTAssertNotEqual(nextID, preparedID)
         }
     }
+    func testNavigationQuickActionsStaySilentAndPlaybackActionsGiveOneImpact() async throws {
+        try await withQuickActionIntegration { account, _, integration, _ in
+            try await account.completeLogin(credential: .init(musicU: "test"))
+            var pulses: [LibraryHaptics.Feedback] = []
+            LibraryHaptics.$output.withValue(.init { pulses.append($0) }) {
+                for action in [HomeQuickAction.dailySongs, .hotSongs, .privateRadar] {
+                    integration.requestQuickAction(action)
+                    XCTAssertTrue(pulses.isEmpty)
+                }
+                for action in [HomeQuickAction.privateRoaming, .heartMode, .similarSongs] {
+                    pulses.removeAll()
+                    integration.requestQuickAction(action)
+                    XCTAssertEqual(pulses, [.impact])
+                }
+                integration.cancelPendingPlayback()
+            }
+        }
+    }
+
+    func testOfflineCollectionActionsUseKnownTracksOrFailBeforeLoading() async throws {
+        try await withQuickActionIntegration { account, _, integration, player in
+            try await account.completeLogin(credential: .init(musicU: "test"))
+            let id = "home:playlist:91"
+            let item = LibraryPlaylistItem(id: id, title: "List", artwork: .playlist, sourceOwnerID: "42")
+            let songs = [1, 2].map { number in
+                LibrarySongItem(id: "netease:42:\(number)", title: "Track", artist: "", album: "",
+                                albumArtist: "", trackNumber: number, artwork: .missing)
+            }
+            let detail = integration.detailLibrary
+            detail.setExternalCollection(item: item, songs: songs)
+            detail.setPlaylistDetailReceived(true, for: id)
+            var denials = 0
+            var accepted: [[String]] = []
+            LibraryNetworkAccess.$override.withValue(.init(isOffline: { true }, reportOffline: { denials += 1 })) {
+                let accept: @MainActor ([LibrarySongItem]) -> Void = { accepted.append($0.map(\.id)) }
+                integration.withCollectionSongs(id, action: accept)
+                XCTAssertEqual(accepted, [songs.map(\.id)])
+                detail.setOnlineHasMore(id, true)
+                integration.withCollectionSongs(id, action: accept)
+                XCTAssertEqual(denials, 1)
+                XCTAssertEqual(accepted.count, 1)
+                player.configureOfflineSongs { $0 == songs[1].id ? songs[1] : nil }
+                integration.withCollectionSongs(id, action: accept)
+                XCTAssertEqual(accepted, [songs.map(\.id), [songs[1].id]])
+                XCTAssertEqual(denials, 1)
+            }
+        }
+    }
+
+    func testOfflineQuickActionDoesNotStartOrRequestLogin() async throws {
+        try await withQuickActionIntegration { _, home, integration, player in
+            var denied = 0
+            LibraryNetworkAccess.$override.withValue(.init(isOffline: { true }, reportOffline: { denied += 1 })) {
+                LibraryHaptics.$output.withValue(.init { _ in XCTFail("Unexpected positive feedback") }) {
+                    integration.requestQuickAction(.privateRoaming)
+                    XCTAssertEqual(denied, 1)
+                    XCTAssertFalse(integration.showsLogin)
+                    XCTAssertNil(home.quickActionStates[.privateRoaming])
+                    XCTAssertNil(player.pendingPlay)
+                }
+            }
+        }
+    }
+
     func testQuickActionFailuresKeepQueueAndPublishLocalRetryState() async throws {
         try await withQuickActionIntegration { account, home, integration, player in
             try await account.completeLogin(credential: .init(musicU: "test"))

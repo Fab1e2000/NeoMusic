@@ -136,7 +136,6 @@ public enum CollectionTrackUI {
             let active = action == .stopDownload
             let download = UIContextualAction(style: .normal, title: nil) { _, _, done in
                 done(true)
-                LibraryHaptics.impact()
                 if active { downloads?.stop([song]) } else { downloads?.download([song]) }
             }
             download.image = UIImage(systemName: active ? "stop.fill" : "arrow.down")
@@ -149,6 +148,7 @@ public enum CollectionTrackUI {
                 done(true)
                 let asyncFavorite = songActions.isAsynchronousFavorite(song)
                 CenteredActionSheet.confirmRemoveFromLiked {
+                    if !asyncFavorite { LibraryHaptics.success() }
                     if animateFavoriteRemoval && !UIAccessibility.isReduceMotionEnabled {
                         withAnimation { songActions.removeFromFavorites(song) }
                     } else {
@@ -1302,10 +1302,8 @@ private final class PlaylistTrackCell: UICollectionViewListCell {
             guard let self, let song = self.song, let downloads = self.downloads else { return }
             if case .failed = state {
                 guard downloads.isDownloadable(song) else { return }
-                LibraryHaptics.impact()
                 downloads.download([song])
             } else if state?.isActive == true {
-                LibraryHaptics.impact()
                 downloads.stop([song])
             }
         }
@@ -1362,6 +1360,7 @@ private final class PlaylistDownloadBadgeView: UIView {
         progressLayer.isHidden = true
         layer.addSublayer(progressLayer)
 
+        button.addAction(UIAction { _ in LibraryHaptics.prepareImpact() }, for: .touchDown)
         button.addAction(UIAction { [weak self] _ in self?.tapHandler?() }, for: .touchUpInside)
         button.translatesAutoresizingMaskIntoConstraints = false
         addSubview(button)

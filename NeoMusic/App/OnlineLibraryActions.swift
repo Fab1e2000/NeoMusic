@@ -43,19 +43,23 @@ enum ReferencedLibrarySongs {
 
 @MainActor
 enum OnlineFavoriteAction {
-    static func perform(music: NeteaseMusicStore, revision: UUID, songID: Int64, liked: Bool,
-                        playsSuccessHaptic: Bool, toasts: LibraryToastCenter,
-                        beforeFeedback: (() async -> Void)? = nil, isCurrent: () -> Bool,
-                        canReportError: () -> Bool = { true }) async {
-        do {
-            try await music.setLiked(songID: songID, liked: liked)
-            await beforeFeedback?()
-            guard revision == music.sessionRevision, isCurrent() else { return }
-            if playsSuccessHaptic { LibraryHaptics.success() }
-            toasts.show(liked ? .favorited : .unfavorited)
-        } catch is CancellationError {
-        } catch {
-            if canReportError() { toasts.show(.error(error.localizedDescription)) }
+    @discardableResult static func perform(music: NeteaseMusicStore, revision: UUID, songID: Int64, liked: Bool,
+                        toasts: LibraryToastCenter,
+                        beforeConfirmation: (() async -> Void)? = nil, isCurrent: @escaping () -> Bool) -> Task<Void, Never>? {
+        guard LibraryNetworkAccess.allowOnlineAction() else { return nil }
+        LibraryHaptics.success()
+        return Task {
+            guard !Task.isCancelled, revision == music.sessionRevision, isCurrent() else { return }
+            do {
+                try await music.setLiked(songID: songID, liked: liked)
+                await beforeConfirmation?()
+                guard revision == music.sessionRevision, isCurrent() else { return }
+                toasts.show(liked ? .favorited : .unfavorited)
+            } catch is CancellationError {
+            } catch {
+                guard revision == music.sessionRevision, isCurrent() else { return }
+                toasts.show(.error(error.localizedDescription))
+            }
         }
     }
 }

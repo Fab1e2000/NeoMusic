@@ -126,9 +126,13 @@ final class LibraryInteractionTests: XCTestCase {
             app.buttons["library-audit.reset"].tap()
             app.buttons["library-audit.settings.done"].tap()
         }
-        app.staticTexts["停止按钮核验曲目"].firstMatch.tap()
+        app.buttons["停止按钮核验曲目"].tap()
         settings.tap()
         XCTAssertEqual(app.staticTexts["library-audit.count.play"].label, "播放次数、1")
+        app.buttons["library-audit.settings.done"].tap()
+        app.buttons["播放"].tap()
+        settings.tap()
+        XCTAssertEqual(app.staticTexts["library-audit.count.play"].label, "播放次数、2")
     }
 
     @MainActor func testPlayerDismissButtonAcceptsRepeatedEdgeTaps() {

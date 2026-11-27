@@ -241,33 +241,53 @@ final class NowPlayingModel {
         prepareNext(); saveQueue()
     }
 
+    func canPlayOffline(_ song: LibrarySongItem) -> Bool {
+        if song.isOnline || song.displaySource.isCatalogGuest { return offlineSong?(song.id) != nil }
+        return song.unavailabilityReason == nil
+    }
+
     func requestPlay(_ songs: [LibrarySongItem], from source: String, shuffled: Bool,
                      collection: PlaybackCollectionReference? = nil,
-                     continuation: PlaybackQueueContinuation? = nil, onStarted: (() -> Void)? = nil) {
-        guard !songs.isEmpty else { return }
-        if hasUserQueuedUpcoming {
-            pendingPlay = PendingPlay(songs: songs, source: source, shuffled: shuffled, collection: collection, continuation: continuation, onStarted: onStarted)
-        } else {
-            play(songs, from: source, shuffled: shuffled, collection: collection, continuation: continuation)
-            onStarted?()
-        }
+                     continuation: PlaybackQueueContinuation? = nil, givesFeedback: Bool = true,
+                     onStarted: (() -> Void)? = nil) {
+        requestPlay(PendingPlay(songs: songs, source: source, shuffled: shuffled, collection: collection,
+                                continuation: continuation, onStarted: onStarted), givesFeedback: givesFeedback)
     }
 
     func requestPlay(_ songs: [LibrarySongItem], startingAt index: Int, from source: String,
                      collection: PlaybackCollectionReference? = nil,
-                     continuation: PlaybackQueueContinuation? = nil, onStarted: (() -> Void)? = nil) {
+                     continuation: PlaybackQueueContinuation? = nil, givesFeedback: Bool = true,
+                     onStarted: (() -> Void)? = nil) {
         guard songs.indices.contains(index) else { return }
-        if hasUserQueuedUpcoming {
-            pendingPlay = PendingPlay(songs: songs, source: source, shuffled: false, startingIndex: index, collection: collection, continuation: continuation, onStarted: onStarted)
-        } else {
-            play(songs, startingAt: index, from: source, collection: collection, continuation: continuation)
-            onStarted?()
+        requestPlay(PendingPlay(songs: songs, source: source, shuffled: false, startingIndex: index,
+                                collection: collection, continuation: continuation, onStarted: onStarted),
+                    givesFeedback: givesFeedback)
+    }
+
+    private func requestPlay(_ request: PendingPlay, givesFeedback: Bool) {
+        guard !request.songs.isEmpty else { return }
+        var selection = request
+        if LibraryNetworkAccess.isOffline {
+            let indices = request.songs.indices.filter { canPlayOffline(request.songs[$0]) }
+            if indices.isEmpty || request.startingIndex.map({ !indices.contains($0) }) == true {
+                _ = LibraryNetworkAccess.allowOnlineAction()
+                return
+            }
+            selection.startingIndex = request.startingIndex.flatMap { indices.firstIndex(of: $0) }
+            selection.songs = indices.map { request.songs[$0] }
         }
+        if givesFeedback { LibraryHaptics.impact() }
+        if hasUserQueuedUpcoming { pendingPlay = selection }
+        else { start(selection) }
     }
 
     func confirmPendingPlay() {
         guard let pending = pendingPlay else { return }
         pendingPlay = nil
+        start(pending)
+    }
+
+    private func start(_ pending: PendingPlay) {
         if let index = pending.startingIndex {
             play(pending.songs, startingAt: index, from: pending.source, collection: pending.collection, continuation: pending.continuation)
         } else {

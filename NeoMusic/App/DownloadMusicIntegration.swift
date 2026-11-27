@@ -57,22 +57,28 @@ final class DownloadMusicIntegration {
             self?.scheduleMetadataPublication(removeMissingFiles: true)
         }
         container.songLibrary.downloadedFileID = { [weak self] id in
-            guard let self, let songID = self.songID(id) else { return nil }
+            guard let self else { return nil }
+            if let songID = self.songID(id) { return self.availablePaths[songID] }
+            guard let songID = Self.guestDownloadSongID(id) else { return nil }
             return self.availablePaths[songID]
         }
         container.catalog.downloadedOnlineSongID = { [weak self] id in
-            guard let self, let songID = self.songID(id), store.records[songID] != nil else { return nil }
-            return songID
+            guard let self else { return nil }
+            if let songID = self.songID(id), store.records[songID] != nil { return songID }
+            // A restored record may arrive before its background metadata projection.
+            guard self.needsAvailabilityRefresh else { return nil }
+            return store.records.values.first { $0.relativePath == id }?.songID
         }
-        container.songLibrary.downloadedFavoriteAction = { [weak self, toasts = container.toasts] song, liked, playsSuccessHaptic in
-            guard let self, let id = self.songID(song.id), store.records[id] != nil else { return false }
-            guard let music = self.account.music, let owner = music.userID else { self.requestLogin?(); return true }
-            let revision = music.sessionRevision
-            Task {
-                await OnlineFavoriteAction.perform(music: music, revision: revision, songID: id,
-                    liked: liked, playsSuccessHaptic: playsSuccessHaptic, toasts: toasts,
-                    beforeFeedback: { await self.publishMetadataAsync() }, isCurrent: { music.userID == owner })
+        container.songLibrary.downloadedFavoriteAction = { [weak self, weak container, toasts = container.toasts] song, liked in
+            guard let self, let id = container?.catalog.downloadedOnlineSongID?(song.id) else { return false }
+            guard let music = self.account.music, let owner = music.userID,
+                  self.account.profile?.userID == owner, !self.account.isLoggingOut else {
+                if LibraryNetworkAccess.allowOnlineAction() { self.requestLogin?() }
+                return true
             }
+            let revision = music.sessionRevision
+            OnlineFavoriteAction.perform(music: music, revision: revision, songID: id, liked: liked, toasts: toasts,
+                beforeConfirmation: { await self.publishMetadataAsync() }, isCurrent: { music.userID == owner })
             return true
         }
         container.prepareSongForLibraryAction = { [weak self] song in
@@ -104,6 +110,7 @@ final class DownloadMusicIntegration {
             },
             stop: { [weak self] route in
                 guard let self else { return }
+                LibraryHaptics.impact()
                 let preparation = self.resolving[route]
                 preparation?.task.cancel()
                 if let key = self.collectionKey(route) { Task { await store.stopCollection(key: key) } }
@@ -360,6 +367,13 @@ final class DownloadMusicIntegration {
         }
     }
 
+    static func guestDownloadSongID(_ id: String) -> Int64? {
+        let parts = id.split(separator: ":", omittingEmptySubsequences: false)
+        guard parts.count == 2, parts[0] == "catalog-guest" || parts[0] == "home-guest",
+              let songID = Int64(parts[1]), songID > 0 else { return nil }
+        return songID
+    }
+
     private func songID(_ id: String) -> Int64? {
         if let value = byPath[id] { return value }
         return OnlineSongIdentity.parseOwnerAndSong(id)?.songID
@@ -429,11 +443,13 @@ final class DownloadMusicIntegration {
     private func download(_ route: LibraryRoute) -> Bool {
         guard let store = account.downloads else { return false }
         if collectionKey(route) == nil, let ids = localPlaylistIDs(route), !ids.isEmpty {
+            guard container.downloads.beginDownload() else { return true }
             enqueue(route: route, songIDs: ids) { try await store.enqueue(songIDs: ids) }
             return true
         }
         guard let key = collectionKey(route),
               let id = key.split(separator: ":").last.flatMap({ Int64($0) }) else { return false }
+        guard container.downloads.beginDownload() else { return true }
         enqueue(route: route) {
             if key.hasPrefix("album:") { try await store.enqueueAlbum(id: id) }
             else { try await store.enqueuePlaylist(id: id) }

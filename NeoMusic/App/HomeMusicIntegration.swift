@@ -706,6 +706,22 @@ import Observation
         guard let selection = Self.feedPlayback(feed, section: section, item: item) else { return }
         cancelPendingPlayback()
         pendingQuickAction = nil
+        if LibraryNetworkAccess.isOffline, owner == nil {
+            let localSongs = selection.songs.compactMap { value in
+                container.downloadedSong(for: mapSong(value)).map { (value.id, $0) }
+            }
+            let target = selection.songs[selection.index].id
+            guard let index = localSongs.firstIndex(where: { $0.0 == target }) else {
+                _ = LibraryNetworkAccess.allowOnlineAction()
+                return
+            }
+            player.requestPlay(localSongs.map(\.1), startingAt: index, from: selection.title)
+            return
+        }
+        if LibraryNetworkAccess.isOffline {
+            player.requestPlay(selection.songs.map(mapSong), startingAt: selection.index, from: selection.title)
+            return
+        }
         guard let userID = account.profile?.userID, account.validationState == .valid,
               account.home?.userID == userID, account.music?.userID == userID else {
             pendingFeedPlayback = selection
@@ -769,7 +785,14 @@ import Observation
         if model.quickActionStates != states { model.quickActionStates = states }
     }
 
+    private func allowsQuickAction(_ action: HomeQuickAction) -> Bool {
+        let businessAction = NeteaseHomeQuickAction(rawValue: action.rawValue)!
+        if account.home?.canOpenCachedQuickAction(businessAction) == true { return true }
+        return LibraryNetworkAccess.allowOnlineAction()
+    }
+
     func requestQuickAction(_ action: HomeQuickAction) {
+        guard allowsQuickAction(action) else { return }
         cancelPendingPlayback()
         pendingFeedPlayback = nil
         pendingQuickAction = nil
@@ -793,6 +816,7 @@ import Observation
         pendingQuickAction = nil
         completingLogin = showsLogin
         showsLogin = false
+        guard allowsQuickAction(action) else { return }
         runQuickAction(action)
     }
 
@@ -825,17 +849,22 @@ import Observation
                     self.publishNavigation(preview)
                 case .songs(let songs):
                     guard !songs.isEmpty, userID != nil else { return }
-                    self.player.requestPlay(songs.map(self.mapSong), from: action.title, shuffled: false)
+                    self.player.requestPlay(songs.map(self.mapSong), from: action.title, shuffled: false, givesFeedback: false)
                 case .roaming(let id, let songs):
                     guard !songs.isEmpty, let userID else { return }
                     let continuation = PlaybackQueueContinuation(ownerID: String(userID))
-                    self.player.requestPlay(songs.map(self.mapSong), from: action.title, shuffled: false, continuation: continuation, onStarted: { [weak self, weak selectedHome = home] in
+                    self.player.requestPlay(songs.map(self.mapSong), from: action.title, shuffled: false, continuation: continuation, givesFeedback: false, onStarted: { [weak self, weak selectedHome = home] in
                         guard let self, let selectedHome, selectedHome.sessionRevision == revision else { return }
                         selectedHome.consumeRoamingBatch(id: id)
                         self.beginRoamingContinuation(continuation)
                     })
                 }
-            } catch {}
+            } catch is CancellationError {
+            } catch {
+                guard let self, !Task.isCancelled, self.playbackRevision == playbackID,
+                      home.sessionRevision == revision, self.account.profile?.userID == userID else { return }
+                self.container.toasts.show(.error(error.localizedDescription))
+            }
         }
     }
 
@@ -1054,7 +1083,7 @@ import Observation
         let container = container
         var actions = ExternalPlaylistActions(addSongs: { [weak self] in
             guard let self else { return }
-            self.withCompleteCollection(id) { songs in
+            self.withCollectionSongs(id) { songs in
                 container.playlistLibrary.pendingAddition = .init(songs: songs)
             }
         })
@@ -1067,55 +1096,89 @@ import Observation
         var collection = container.menuActions
         collection.defersQueueNotice = true
         collection.play = { [weak self] _, shuffled in self?.requestPlayback(id, songID: nil, shuffled: shuffled) }
-        collection.playNext = { [weak self] _ in self?.withCompleteCollection(id) { [weak self] in self?.player.insertNext($0); container.toasts.show(.playingNext) } }
-        collection.playLater = { [weak self] _ in self?.withCompleteCollection(id) { [weak self] in self?.player.appendLater($0); container.toasts.show(.addedToQueue) } }
+        collection.playNext = { [weak self] _ in self?.withCollectionSongs(id) { [weak self] in self?.player.insertNext($0); container.toasts.show(.playingNext) } }
+        collection.playLater = { [weak self] _ in self?.withCollectionSongs(id) { [weak self] in self?.player.appendLater($0); container.toasts.show(.addedToQueue) } }
         var songs = container.songActions(for: route)
         songs.defersQueueNotice = true
-        songs.play = { [weak self] list, index, _ in
+        let play: ([LibrarySongItem], Int, Bool) -> Void = { [weak self] list, index, givesFeedback in
             guard list.indices.contains(index) else { return }
             let target = list[index]
             guard let songID = target.onlineSongID ?? container.catalog.downloadedOnlineSongID?(target.id) else { return }
-            self?.requestPlayback(id, songID: songID, shuffled: false)
+            self?.requestPlayback(id, songID: songID, shuffled: false, givesFeedback: givesFeedback)
         }
-        songs.playNext = { [weak self] song in guard self?.owner != nil else { self?.showsLogin = true; return }; self?.player.insertNext([song]); container.toasts.show(.playingNext) }
-        songs.playLater = { [weak self] song in guard self?.owner != nil else { self?.showsLogin = true; return }; self?.player.appendLater([song]); container.toasts.show(.addedToQueue) }
+        songs.play = { list, index, _ in play(list, index, true) }
+        songs.playAfterPreparation = { list, index, _ in play(list, index, false) }
+        func enqueue(_ song: LibrarySongItem, next: Bool) {
+            let local = container.downloadedSong(for: song)
+            guard owner != nil || local != nil else { showsLogin = true; return }
+            if next { player.insertNext([local ?? song]) } else { player.appendLater([local ?? song]) }
+            container.toasts.show(next ? .playingNext : .addedToQueue)
+        }
+        songs.playNext = { enqueue($0, next: true) }
+        songs.playLater = { enqueue($0, next: false) }
         songs.addToPlaylist = { [weak self] song in guard self?.owner != nil else { self?.showsLogin = true; return }; container.playlistLibrary.pendingAddition = .init(songs: [song]) }
-        songs.toggleFavorite = { [weak self] song in self?.setOnlineLiked(song, liked: !song.isFavorite, playsSuccessHaptic: !song.isFavorite) }
-        songs.removeFromFavorites = { [weak self] song in self?.setOnlineLiked(song, liked: false, playsSuccessHaptic: false) }
+        songs.isAsynchronousFavorite = { _ in true }
+        songs.toggleFavorite = { [weak self] song in self?.setOnlineLiked(song, liked: !song.isFavorite) }
+        songs.removeFromFavorites = { [weak self] song in self?.setOnlineLiked(song, liked: false) }
         return AnyView(HomeCollectionDetailView(playlistID: id, library: detailLibrary, actions: actions,
             onAppear: { [weak self] in self?.detailAppeared(id) },
             onDisappear: { [weak self] in self?.detailDisappeared(id) })
             .environment(\.collectionMenuActions, collection).environment(\.songMenuActions, songs))
     }
 
-    private func setOnlineLiked(_ song: LibrarySongItem, liked: Bool, playsSuccessHaptic: Bool) {
+    private func setOnlineLiked(_ song: LibrarySongItem, liked: Bool) {
         guard let owner,
               let number = song.onlineSongID ?? container.catalog.downloadedOnlineSongID?(song.id) else {
-            showsLogin = true
+            if LibraryNetworkAccess.allowOnlineAction() { showsLogin = true }
             return
         }
+        guard let music = account.music, music.userID.map(String.init) == owner else {
+            if LibraryNetworkAccess.allowOnlineAction() { container.toasts.show(.error("账户资料正在恢复，请稍后重试。")) }
+            return
+        }
+        OnlineFavoriteAction.perform(music: music, revision: music.sessionRevision, songID: number,
+            liked: liked, toasts: container.toasts, isCurrent: { [self] in
+                self.owner == owner && account.profile.map { String($0.userID) } == owner
+            })
+    }
+
+    func withCollectionSongs(_ id: String, action: @escaping @MainActor ([LibrarySongItem]) -> Void) {
+        guard let home = account.home, home.userID == account.profile?.userID,
+              owner == home.userID.map(String.init), !account.isLoggingOut else {
+            if LibraryNetworkAccess.allowOnlineAction() { showsLogin = true }
+            return
+        }
+        let songs = detailLibrary.songs(in: id)
+        if owner != nil, detailLibrary.hasReceivedPlaylistDetail(for: id), !detailLibrary.onlineHasMore.contains(id) {
+            if !songs.isEmpty { action(songs) }
+            return
+        }
+        if LibraryNetworkAccess.isOffline {
+            let available = songs.compactMap { song -> LibrarySongItem? in
+                if let local = container.downloadedSong(for: song) { return local }
+                return owner != nil && player.canPlayOffline(song) ? song : nil
+            }
+            if available.isEmpty { _ = LibraryNetworkAccess.allowOnlineAction() }
+            else { action(available) }
+            return
+        }
+        guard let owner else { showsLogin = true; return }
+        let revision = home.sessionRevision
         Task { [weak self] in
-            guard let self, self.owner == owner, self.account.profile.map({ String($0.userID) }) == owner,
-                  let music = self.account.music, music.userID.map(String.init) == owner else { return }
-            let matchesOwner = { [self] in self.owner == owner && account.profile.map { String($0.userID) } == owner }
-            await OnlineFavoriteAction.perform(music: music, revision: music.sessionRevision, songID: number,
-                liked: liked, playsSuccessHaptic: playsSuccessHaptic, toasts: container.toasts,
-                isCurrent: matchesOwner, canReportError: matchesOwner)
+            guard let self, home.sessionRevision == revision, self.owner == owner else { return }
+            do {
+                try await self.load(id, complete: true)
+                guard !Task.isCancelled, home.sessionRevision == revision, self.owner == owner,
+                      self.account.profile.map({ String($0.userID) }) == owner else { return }
+                let songs = self.detailLibrary.songs(in: id)
+                if !songs.isEmpty { action(songs) }
+            } catch is CancellationError {} catch {
+                guard !Task.isCancelled, home.sessionRevision == revision, self.owner == owner else { return }
+                container.toasts.show(.error(error.localizedDescription))
+            }
         }
     }
 
-    private func withCompleteCollection(_ id: String, action: @escaping @MainActor ([LibrarySongItem]) -> Void) {
-        guard let owner else { showsLogin = true; return }
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                try await self.load(id, complete: true)
-                guard !Task.isCancelled, self.owner == owner,
-                      self.account.profile.map({ String($0.userID) }) == owner else { return }
-                action(self.detailLibrary.songs(in: id))
-            } catch is CancellationError {} catch { container.toasts.show(.error(error.localizedDescription)) }
-        }
-    }
     private func isPlaylistSubscribed(_ id: Int64) -> Bool {
         guard let owner, account.music?.userID.map(String.init) == owner else { return false }
         return account.music?.playlists.contains { $0.id == id && $0.isSubscribed == true } == true
@@ -1134,18 +1197,38 @@ import Observation
                   container: container,
                   onSubscribedChanged: { [weak self] in self?.syncCollectedPlaylists() }
               ) else {
-            showsLogin = true
+            if LibraryNetworkAccess.allowOnlineAction() { showsLogin = true }
             return
         }
     }
 
     private enum RetainAction { case favorite, pin, folder }
     private func retain(_ id: String, action: RetainAction) {
-        guard let owner, case .homePlaylist(let number) = PlaylistRouteIdentity(id) else { showsLogin = true; return }
+        guard let owner, case .homePlaylist(let number) = PlaylistRouteIdentity(id) else {
+            if action == .folder || LibraryNetworkAccess.allowOnlineAction() { showsLogin = true }
+            return
+        }
+        guard let home = account.home, home.userID.map(String.init) == owner,
+              account.profile.map({ String($0.userID) }) == owner, account.music?.userID.map(String.init) == owner else {
+            if LibraryNetworkAccess.allowOnlineAction() { container.toasts.show(.error("账户资料正在恢复，请稍后重试。")) }
+            return
+        }
+        let cached = home.cachedDetail(id: number)
+        let checkDisk = action != .folder && cached == nil && LibraryNetworkAccess.isOffline
+        if action != .folder, !checkDisk {
+            guard cached?.isComplete == true || LibraryNetworkAccess.allowOnlineAction() else { return }
+            LibraryHaptics.success()
+        }
         Task { [weak self] in
             guard let self, self.owner == owner, self.account.profile.map({ String($0.userID) }) == owner,
-                  self.account.home?.userID.map(String.init) == owner, self.account.music?.userID.map(String.init) == owner else { return }
+                  home.userID.map(String.init) == owner, self.account.music?.userID.map(String.init) == owner else { return }
             do {
+                if checkDisk {
+                    let detail = try await home.restoreCachedDetail(id: number)
+                    guard self.owner == owner, home.userID.map(String.init) == owner else { return }
+                    guard detail?.isComplete == true || LibraryNetworkAccess.allowOnlineAction() else { return }
+                    LibraryHaptics.success()
+                }
                 try await self.load(id, complete: true)
                 guard self.owner == owner, self.account.profile.map({ String($0.userID) }) == owner, let detail = self.detailLibrary.playlist(id) else { return }
                 let stableID = PlaylistRouteIdentity.accountID(owner: owner, playlistID: number)
@@ -1166,10 +1249,8 @@ import Observation
                     }
                     switch action {
                     case .favorite:
-                        LibraryHaptics.success()
                         container.toasts.show(retained.isFavorite ? .favorited : .unfavorited)
                     case .pin:
-                        LibraryHaptics.success()
                         container.toasts.show(retained.isPinned ? .pinned : .unpinned)
                     case .folder: break
                     }
@@ -1193,11 +1274,22 @@ import Observation
         pendingQuickAction = nil
         cancelPendingPlayback()
     }
-    func requestPlayback(_ id: String, songID: Int64?, shuffled: Bool) {
+    func requestPlayback(_ id: String, songID: Int64?, shuffled: Bool, givesFeedback: Bool = true) {
         cancelPendingPlayback()
         pendingQuickAction = nil
         pendingFeedPlayback = nil
-        pending = Pending(route: id, songID: songID, shuffled: shuffled)
+        let request = Pending(route: id, songID: songID, shuffled: shuffled)
+        if LibraryNetworkAccess.isOffline {
+            guard let owner, loaded[id] != nil else {
+                _ = LibraryNetworkAccess.allowOnlineAction()
+                return
+            }
+            do { try playLoadedCollection(request, owner: owner, givesFeedback: givesFeedback) }
+            catch { container.toasts.show(.error(error.localizedDescription)) }
+            return
+        }
+        if givesFeedback { LibraryHaptics.impact() }
+        pending = request
         if owner == nil { showsLogin = true } else { resumePendingPlayback() }
     }
     func cancelPendingPlayback() {
@@ -1215,31 +1307,37 @@ import Observation
         playbackTask = Task { [weak self] in
             guard let self else { return }
             do {
-                try await self.load(request.route, complete: true)
+                if self.loaded[request.route] == nil || self.detailLibrary.onlineHasMore.contains(request.route) {
+                    try await self.load(request.route, complete: true)
+                }
                 guard !Task.isCancelled, revision == self.playbackRevision, self.account.profile.map({ String($0.userID) }) == owner, self.activeRoute == request.route,
                       self.account.home?.userID == userID, self.account.music?.userID == userID else { return }
-                let list = self.detailLibrary.songs(in: request.route)
-                let routeIdentity = PlaylistRouteIdentity(request.route)
-                let daily: Bool
-                let referenceID: String
-                switch routeIdentity {
-                case .daily(_, let date):
-                    daily = true
-                    referenceID = date
-                case .homePlaylist(let id):
-                    daily = false
-                    referenceID = String(id)
-                default:
-                    daily = false
-                    referenceID = request.route.split(separator: ":").last.map(String.init) ?? request.route
-                }
-                let reference = PlaybackCollectionReference(kind: daily ? .daily : .onlinePlaylist, id: referenceID, ownerID: owner, title: self.detailLibrary.playlist(request.route)?.title ?? "播放列表")
-                if let songID = request.songID {
-                    guard let index = list.firstIndex(where: { $0.onlineSongID == songID }) else { throw NeteaseAccountError.invalidResponse }
-                    self.player.requestPlay(list, startingAt: index, from: reference.title, collection: reference)
-                }
-                else { self.player.requestPlay(list, from: reference.title, shuffled: request.shuffled, collection: reference) }
+                try self.playLoadedCollection(request, owner: owner, givesFeedback: false)
             } catch is CancellationError {} catch { container.toasts.show(.error(error.localizedDescription)) }
         }
+    }
+
+    private func playLoadedCollection(_ request: Pending, owner: String, givesFeedback: Bool) throws {
+        let list = detailLibrary.songs(in: request.route)
+        let routeIdentity = PlaylistRouteIdentity(request.route)
+        let daily: Bool
+        let referenceID: String
+        switch routeIdentity {
+        case .daily(_, let date):
+            daily = true
+            referenceID = date
+        case .homePlaylist(let id):
+            daily = false
+            referenceID = String(id)
+        default:
+            daily = false
+            referenceID = request.route.split(separator: ":").last.map(String.init) ?? request.route
+        }
+        let reference = PlaybackCollectionReference(kind: daily ? .daily : .onlinePlaylist, id: referenceID, ownerID: owner, title: detailLibrary.playlist(request.route)?.title ?? "播放列表")
+        if let songID = request.songID {
+            guard let index = list.firstIndex(where: { $0.onlineSongID == songID }) else { throw NeteaseAccountError.invalidResponse }
+            player.requestPlay(list, startingAt: index, from: reference.title, collection: reference, givesFeedback: givesFeedback)
+        }
+        else { player.requestPlay(list, from: reference.title, shuffled: request.shuffled, collection: reference, givesFeedback: givesFeedback) }
     }
 }

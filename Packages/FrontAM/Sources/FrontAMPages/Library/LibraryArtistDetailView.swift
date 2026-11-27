@@ -8,7 +8,7 @@ public struct LibraryArtistDetailView: View {
     }
 
     public let artist: LibraryArtistEntry
-    public let play: (Bool) async -> Void
+    private let beginPlay: (Bool) -> Task<Void, Never>?
     public var isCatalogAlbum: (String) -> Bool = { _ in false }
 
     @Environment(\.collectionMenuActions) private var actions
@@ -128,6 +128,7 @@ public struct LibraryArtistDetailView: View {
                 actions.toggleFavorite(route)
             }],
             [.init(title: artist.isPinned ? pageText("取消置顶") : pageText("置顶艺人"), systemImage: artist.isPinned ? "pin.slash" : "pin") {
+                LibraryHaptics.success()
                 actions.togglePin(route)
             }]
         ]
@@ -139,7 +140,7 @@ public struct LibraryArtistDetailView: View {
 
     private func startPlayback(_ shuffled: Bool) {
         playTask?.cancel()
-        playTask = Task { await play(shuffled) }
+        playTask = beginPlay(shuffled)
     }
 
     private func displayAlbum(_ album: LibraryShelfItem) -> LibraryShelfItem {
@@ -165,8 +166,13 @@ public struct LibraryArtistDetailView: View {
     public init(artist: LibraryArtistEntry,
                 play: @escaping (Bool) async -> Void,
                 isCatalogAlbum: @escaping (String) -> Bool = { _ in false }) {
+        self.init(artist: artist, beginPlay: { shuffled in Task { await play(shuffled) } }, isCatalogAlbum: isCatalogAlbum)
+    }
+
+    public init(artist: LibraryArtistEntry, beginPlay: @escaping (Bool) -> Task<Void, Never>?,
+                isCatalogAlbum: @escaping (String) -> Bool = { _ in false }) {
         self.artist = artist
-        self.play = play
+        self.beginPlay = beginPlay
         self.isCatalogAlbum = isCatalogAlbum
     }
 }

@@ -16,3 +16,4 @@
 "确定要从喜欢歌曲中移除这首歌吗？" = "Remove this song from Favorites?";
 "确定要从该播放列表中移除这首歌吗？" = "Remove this song from this playlist?";
 "移除" = "Remove";
+"无网络连接，请联网后重试" = "No network connection. Reconnect and try again.";

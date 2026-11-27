@@ -1,4 +1,5 @@
 // Source: NeoDizzy / MeloX-derived song menu presentation (GPL-3.0).
+import FrontAMCore
 import SwiftUI
 import UIKit
 
@@ -69,6 +70,7 @@ struct ReferenceSongMenuContents: View {
 }
 
 @MainActor @Observable public final class PlayerActions {
+    fileprivate let prepareFavoriteFeedback: @MainActor () -> Void
     private let feedbackAction: () -> Void
     private let favoriteLookup: (String) -> Bool
     private let favoriteAction: (String) -> Void
@@ -85,6 +87,7 @@ struct ReferenceSongMenuContents: View {
          addToPlaylist: @escaping (String) -> Void, openAlbum: @escaping (String) -> Void,
          openArtist: @escaping (String) -> Void, artistNames: ((String) -> [String])? = nil,
          openNamedArtist: ((String, String) -> Void)? = nil,
+         prepareFavoriteFeedback: @escaping @MainActor () -> Void = {},
          feedback: @escaping () -> Void = {},
          notify: @escaping (PlayerNotice) -> Void = { _ in },
          completesFavoriteSynchronously: ((String) -> Bool)? = nil,
@@ -93,6 +96,7 @@ struct ReferenceSongMenuContents: View {
         artistLookup = artistNames; namedArtistAction = openNamedArtist
         favoriteLookup = isFavorite; favoriteAction = toggleFavorite; favoriteCompletesSynchronously = completesFavoriteSynchronously
         playlistAction = addToPlaylist; albumAction = openAlbum; artistAction = openArtist
+        self.prepareFavoriteFeedback = prepareFavoriteFeedback
         feedbackAction = feedback
         notifyAction = notify
         audioQualityLookup = audioQuality
@@ -192,7 +196,7 @@ struct FavoriteButton: View {
                 reducesMotion: reducesMotion,
                 diameter: 44,
                 showsHighlight: false
-            ))
+            ).preparingFeedback(actions.prepareFavoriteFeedback))
             .accessibilityLabel(liked ? "取消喜欢" : "喜欢")
         } else {
             Button { actions.toggleFavorite(track) } label: {

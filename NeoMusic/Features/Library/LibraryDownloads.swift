@@ -81,8 +81,24 @@ final class LibraryDownloads {
         } / Double(songs.count)
     }
     func canRemove(_ song: LibrarySongItem) -> Bool { managedSongIDs.contains(song.id) && isRemovable(song) }
-    func download(_ songs: [LibrarySongItem]) { downloadAction(songs.filter(isDownloadable)) }
-    func stop(_ songs: [LibrarySongItem]) { stopAction(songs.filter { state(of: $0.id)?.isActive == true }) }
+    func beginDownload() -> Bool {
+        guard LibraryNetworkAccess.allowOnlineAction() else { return false }
+        LibraryHaptics.impact()
+        return true
+    }
+
+    func download(_ songs: [LibrarySongItem]) {
+        let selection = songs.filter(isDownloadable)
+        guard !selection.isEmpty, beginDownload() else { return }
+        downloadAction(selection)
+    }
+
+    func stop(_ songs: [LibrarySongItem]) {
+        let selection = songs.filter { state(of: $0.id)?.isActive == true }
+        guard !selection.isEmpty else { return }
+        LibraryHaptics.impact()
+        stopAction(selection)
+    }
     func remove(_ songs: [LibrarySongItem]) {
         let removable = songs.filter(canRemove)
         if !removable.isEmpty { removeAction(removable) }

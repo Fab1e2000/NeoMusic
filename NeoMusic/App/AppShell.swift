@@ -107,6 +107,9 @@ struct AppShell<Library: View>: View {
             .onChange(of: playlistLibrary.pendingAddition != nil) { _, pending in
                 if pending { isPlayerPresented = false }
             }
+            .onChange(of: nowPlaying?.errorMessage != nil, initial: true) { _, showsPlaybackError in
+                if showsPlaybackError { LibraryHaptics.error() }
+            }
             .alert("无法播放", isPresented: Binding(get: { nowPlaying?.errorMessage != nil }, set: {
                 if !$0 { nowPlaying?.errorMessage = nil }
             })) {

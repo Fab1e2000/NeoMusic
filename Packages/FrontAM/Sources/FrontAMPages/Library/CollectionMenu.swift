@@ -171,7 +171,6 @@ public struct CollectionMenuActions {
         let summary = downloads?.collectionState(of: route)
         if summary?.isActive == true {
             return LibraryMenuItem(title: pageText("停止下载"), systemImage: "stop.circle.fill") {
-                LibraryHaptics.impact()
                 stopDownload(route)
             }
         }
@@ -180,13 +179,16 @@ public struct CollectionMenuActions {
         }
         let failed = (summary?.failedCount ?? 0) > 0
         return LibraryMenuItem(title: failed ? pageText("重试下载") : pageText("下载"), systemImage: failed ? "arrow.clockwise" : "arrow.down.circle.fill", isDisabled: !canDownload(route)) {
-            LibraryHaptics.impact()
             download(route)
         }
     }
 
     private func toggleFavoriteAndNotify(_ item: LibraryShelfItem, _ route: LibraryRoute) {
-        let hasImmediateFeedback = !usesManagedCollectionActions(item.id)
+        let hasImmediateFeedback = switch route {
+        case .album(let id), .artist(let id): !usesManagedCollectionActions(id)
+        case .libraryArtist: false
+        default: !usesManagedCollectionActions(item.id)
+        }
         if hasImmediateFeedback { LibraryHaptics.success() }
         toggleFavorite(route)
         if hasImmediateFeedback { notify(item.isFavorite ? .unfavorited : .favorited) }
@@ -223,8 +225,8 @@ public struct CollectionMenuActions {
         }
     }
 
-    private func queueItems(_ route: LibraryRoute) -> [LibraryMenuItem] {
-        libraryQueueMenuItems(playbackSource: playbackSource(),
+    func queueItems(_ route: LibraryRoute, isDisabled: Bool = false) -> [LibraryMenuItem] {
+        libraryQueueMenuItems(playbackSource: playbackSource(), isDisabled: isDisabled,
                               playNext: { playNext(route) }, playLater: { playLater(route) },
                               notify: defersQueueNotice ? { _ in } : notify)
     }
@@ -237,7 +239,10 @@ public struct CollectionMenuActions {
     public func pinnedSections(for item: LibraryShelfItem, route: LibraryRoute, tapAction: PinnedTapAction,
                         setTapAction: @escaping (PinnedTapAction) -> Void) -> LibraryMenuSections {
         if case .libraryArtist = route {
-            return [[LibraryMenuItem(title: pageText("取消置顶"), systemImage: "pin.slash") { togglePin(route) }]]
+            return [[LibraryMenuItem(title: pageText("取消置顶"), systemImage: "pin.slash") {
+                LibraryHaptics.success()
+                togglePin(route)
+            }]]
         }
         let options = PinnedTapAction.allCases.map { option in
             LibraryMenuItem(title: option.title(for: route), systemImage: "",
@@ -403,7 +408,6 @@ public struct CollectionCardLink<Label: View>: View {
                 .padding(-8)
                 .alert("", isPresented: $isConfirmingDeletion) {
                     Button(pageText("从资料库删除"), role: .destructive) {
-                        LibraryHaptics.mediumImpact()
                         withAnimation(reducesMotion ? nil : .default) { actions.delete(route) }
                     }
                     Button(pageText("取消"), role: .cancel) {}
@@ -453,6 +457,7 @@ extension LibraryShelfItem {
 public struct SongMenuActions {
     public var downloads: (any FrontAMDownloadSource)? = nil
     public var play: (_ songs: [LibrarySongItem], _ startAt: Int, _ source: String) -> Void = { _, _, _ in }
+    public var playAfterPreparation: (([LibrarySongItem], Int, String) -> Void)?
     public var playNext: (LibrarySongItem) -> Void = { _ in }
     public var toggleFavorite: (LibrarySongItem) -> Void = { _ in }
     public var removeFromFavorites: (LibrarySongItem) -> Void = { _ in }
@@ -481,20 +486,17 @@ public struct SongMenuActions {
         if state == .downloaded { return nil }
         if state?.isActive == true {
             return LibraryMenuItem(title: pageText("停止下载"), systemImage: "stop.circle.fill") {
-                LibraryHaptics.impact()
                 downloads.stop([song])
             }
         }
         if case .failed(let message) = state {
             guard downloads.isDownloadable(song) else { return nil }
             return LibraryMenuItem(title: pageText("重试下载"), subtitle: message, systemImage: "arrow.clockwise") {
-                LibraryHaptics.impact()
                 downloads.download([song])
             }
         }
         guard downloads.isDownloadable(song) else { return nil }
         return LibraryMenuItem(title: pageText("下载"), systemImage: "arrow.down.circle.fill") {
-            LibraryHaptics.impact()
             downloads.download([song])
         }
     }
@@ -507,6 +509,7 @@ public struct SongMenuActions {
         var quick = [favoriteItem(isFavorite: song.isFavorite) {
             if song.isFavorite {
                 CenteredActionSheet.confirmRemoveFromLiked {
+                    if !asyncFavorite { LibraryHaptics.success() }
                     removeFromFavorites(song)
                     if !asyncFavorite { notify(.unfavorited) }
                 }
@@ -643,14 +646,12 @@ public struct OnlineSongTrailingSwipeButtons: View {
                 .tint(.pink)
             case .download:
                 Button(pageText("下载"), systemImage: "arrow.down") {
-                    LibraryHaptics.impact()
                     downloads?.download([song])
                 }
                 .labelStyle(.iconOnly)
                 .tint(.blue)
             case .stopDownload:
                 Button(pageText("停止下载"), systemImage: "stop.fill") {
-                    LibraryHaptics.impact()
                     downloads?.stop([song])
                 }
                 .labelStyle(.iconOnly)
@@ -663,6 +664,7 @@ public struct OnlineSongTrailingSwipeButtons: View {
             Button(pageText("从喜欢歌曲移除"), systemImage: "trash") {
                 let asyncFavorite = songActions.isAsynchronousFavorite(song)
                 CenteredActionSheet.confirmRemoveFromLiked {
+                    if !asyncFavorite { LibraryHaptics.success() }
                     if animateRemoval {
                         withAnimation { songActions.removeFromFavorites(song) }
                     } else {

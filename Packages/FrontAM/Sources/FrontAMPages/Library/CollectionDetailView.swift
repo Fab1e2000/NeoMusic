@@ -440,7 +440,6 @@ private struct CollectionActions: View {
     @Environment(\.collectionMenuActions) private var actions
     @Environment(\.dynamicTypeSize) private var textSize
     @Environment(\.collectionPagePalette) private var palette
-    @State private var actionFeedback = 0
 
     private var canPlay: Bool { detail.route != nil && !detail.songs.isEmpty }
 
@@ -452,13 +451,11 @@ private struct CollectionActions: View {
             layout {
                 circleButton(pageText("随机播放"), systemImage: "shuffle") {
                     guard canPlay, let route = detail.route else { return }
-                    actionFeedback &+= 1
                     actions.play(route, true)
                 }
                 .disabled(!canPlay)
                 Button {
                     guard canPlay, let route = detail.route else { return }
-                    actionFeedback &+= 1
                     actions.play(route, false)
                 } label: {
                     HStack(spacing: 5.5) {
@@ -474,7 +471,7 @@ private struct CollectionActions: View {
                     .background(Color.primary, in: .capsule)
                     .contentShape(.capsule)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PlainButtonStyle().preparingFeedback { LibraryHaptics.prepareImpact() })
                 .disabled(!canPlay)
                 switch detail.kind {
                 case .album:
@@ -489,7 +486,6 @@ private struct CollectionActions: View {
                     if let route = detail.route { CollectionDownloadButton(route: route, songs: detail.songs) }
                 }
             }
-            .sensoryFeedback(.impact(flexibility: .soft, intensity: 0.6), trigger: actionFeedback)
             if let route = detail.route { CollectionDownloadSummary(route: route) }
         }
     }
@@ -502,7 +498,7 @@ private struct CollectionActions: View {
             Image(systemName: detail.isFavorite ? "arrow.down" : "plus")
                 .contentTransition(.symbolEffect(.replace))
         }
-        .buttonStyle(CollectionCircleButtonStyle())
+        .buttonStyle(CollectionCircleButtonStyle().preparingFeedback { LibraryHaptics.prepareSuccess() })
         .accessibilityLabel(pageText("收藏专辑"))
         .accessibilityIdentifier("album-collection-action")
     }
@@ -511,7 +507,7 @@ private struct CollectionActions: View {
                               action: @escaping () -> Void) -> some View {
         Button(title, systemImage: systemImage, action: action)
             .labelStyle(.iconOnly)
-            .buttonStyle(CollectionCircleButtonStyle())
+            .buttonStyle(CollectionCircleButtonStyle().preparingFeedback { LibraryHaptics.prepareImpact() })
     }
 }
 

@@ -379,8 +379,8 @@ final class NeteaseArtistStore {
             do {
                 if artist { try await client.setArtistSubscribed(id: id, subscribed: subscribed, credential: credential) }
                 else { try await client.setAlbumSubscribed(id: id, subscribed: subscribed, credential: credential) }
-            } catch let error as URLError where error.code == .notConnectedToInternet { throw error }
-            catch {
+            } catch {
+                guard NeteaseAccountError.shouldReconcileWrite(after: error) else { throw error }
                 sessionScope.report(error, revision: token, signedIn: true)
                 failure = error
             }

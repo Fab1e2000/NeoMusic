@@ -220,7 +220,6 @@ private struct SongListRowModifier: ViewModifier {
         case .libraryDownloads:
             if downloads?.state(of: song.id)?.isActive == true {
                 Button(pageText("停止下载"), systemImage: "stop.fill") {
-                    LibraryHaptics.impact()
                     downloads?.stop([song])
                 }
                 .labelStyle(.iconOnly)
@@ -233,7 +232,6 @@ private struct SongListRowModifier: ViewModifier {
                 .tint(.red)
             } else if downloads?.isDownloadable(song) == true {
                 Button(pageText("下载"), systemImage: "arrow.down") {
-                    LibraryHaptics.impact()
                     downloads?.download([song])
                 }
                 .labelStyle(.iconOnly)

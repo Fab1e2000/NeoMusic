@@ -21,6 +21,8 @@ struct NeoMusicApp: App {
             ArtworkImagePipeline.configureMemoryCache()
         }
         let runtime = AppRuntime()
+        LibraryNetworkAccess.configure(isOffline: { [music = runtime.account.music] in music?.isOffline == true },
+                                       toasts: runtime.container.toasts)
         _runtime = State(initialValue: runtime)
         #if DEBUG
         if !DebugLaunchRouter.isPreviewLaunch { runtime.start() }

@@ -428,17 +428,50 @@ final class NeteaseMusicClientTests: XCTestCase, @unchecked Sendable {
         XCTAssertEqual(offsets, [0, 200])
     }
 
-    @MainActor func testFailedLikeReadsBackWithoutReportingSuccessOrRetryingWrite() async throws {
+    @MainActor func testRejectedLikeReadsBackWithoutReportingSuccessOrRetryingWrite() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }
-        let client = makeClient([#"{"code":200,"playlist":[],"more":false}"#, #"{"code":200,"ids":[]}"#, "offline", #"{"code":200,"ids":[]}"#])
+        let client = makeClient([#"{"code":200,"playlist":[],"more":false}"#, #"{"code":200,"ids":[]}"#, #"{"code":500}"#, #"{"code":200,"ids":[]}"#])
         let store = NeteaseMusicStore(client: client, directory: folder)
         await store.activate(try .init(profile: .init(userID: 1, nickname: "User", avatarURL: nil), credential: credential()))
         do { try await store.setLiked(songID: 8, liked: true); XCTFail("Failed write must not appear successful") } catch {}
         XCTAssertFalse(store.likedIDs.contains(8))
         XCTAssertNil(store.likedAt[8])
-        XCTAssertEqual(MusicFixtureProtocol.paths.withLock { $0.filter { $0.contains("radio/like") }.count }, 1)
+        let paths = MusicFixtureProtocol.paths.withLock { $0 }
+        XCTAssertEqual(paths.filter { $0 == "/eapi/radio/like" }.count, 1)
+        XCTAssertEqual(Array(paths.suffix(2)), ["/eapi/radio/like", "/eapi/song/like/get"])
         await store.invalidate()
+    }
+
+    func testOnlyTransportAndCancellationErrorsSkipWriteConfirmation() {
+        XCTAssertFalse(NeteaseAccountError.shouldReconcileWrite(after: NeteaseAccountError.network(.cannotConnectToHost)))
+        XCTAssertFalse(NeteaseAccountError.shouldReconcileWrite(after: CancellationError()))
+        XCTAssertTrue(NeteaseAccountError.shouldReconcileWrite(after: URLError(.cannotParseResponse)))
+        XCTAssertTrue(NeteaseAccountError.shouldReconcileWrite(after: NeteaseAccountError.server(500)))
+    }
+
+    @MainActor func testTransportFailureRollsBackLikeAndSkipsBothConfirmationReads() async throws {
+        for (fixture, code) in [("offline", URLError.Code.notConnectedToInternet),
+                                ("timeout", .timedOut), ("lostConnection", .networkConnectionLost)] {
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: folder) }
+            let store = NeteaseMusicStore(client: makeClient([fixture, fixture]), directory: folder)
+            await store.activate(try .init(profile: .init(userID: 1, nickname: "User", avatarURL: nil),
+                                           credential: credential()), refresh: false)
+            do {
+                try await store.setLiked(songID: 8, liked: true)
+                XCTFail("Failed like was accepted")
+            } catch { XCTAssertEqual((error as? URLError)?.code, code) }
+            XCTAssertFalse(store.likedIDs.contains(8))
+            XCTAssertNil(store.likedAt[8])
+            do {
+                try await store.setPlaylistSubscribed(id: 9, subscribed: true)
+                XCTFail("Failed subscription was accepted")
+            } catch { XCTAssertEqual((error as? URLError)?.code, code) }
+            XCTAssertTrue(store.playlists.isEmpty)
+            XCTAssertEqual(MusicFixtureProtocol.paths.withLock { $0 }, ["/eapi/radio/like", "/weapi/playlist/subscribe"])
+            await store.invalidate()
+        }
     }
 
     @MainActor func testOldLikeWriteCannotPublishToNewSession() async throws {
@@ -920,7 +953,8 @@ private final class MusicFixtureProtocol: URLProtocol, @unchecked Sendable {
             return responses.removeFirst()
         }
         if response == "offline" { client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet)); return }
-        if let code: URLError.Code = ["tls": .secureConnectionFailed, "certificate": .serverCertificateUntrusted, "cancelled": .cancelled][response] {
+        if let code: URLError.Code = ["tls": .secureConnectionFailed, "certificate": .serverCertificateUntrusted,
+                                      "timeout": .timedOut, "lostConnection": .networkConnectionLost, "cancelled": .cancelled][response] {
             client?.urlProtocol(self, didFailWithError: URLError(code)); return
         }
         if response == "pending" {

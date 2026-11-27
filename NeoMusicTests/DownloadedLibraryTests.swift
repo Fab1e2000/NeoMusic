@@ -35,7 +35,7 @@ final class DownloadedLibraryTests: XCTestCase {
         let downloaded = song("Downloads/one.flac"), imported = song("Imported/two.flac")
         let library = SongLibrary(songs: [downloaded, imported], defaults: defaults)
         var requested: [(String, Bool)] = []
-        library.downloadedFavoriteAction = { song, liked, _ in
+        library.downloadedFavoriteAction = { song, liked in
             guard song.id == downloaded.id else { return false }
             requested.append((song.id, liked))
             return true
@@ -94,6 +94,117 @@ final class DownloadedLibraryTests: XCTestCase {
         XCTAssertEqual(library.playlists.map(\.id), ["local"])
         XCTAssertNil(library.playlist(snapshot.id))
         XCTAssertEqual(library.songs(in: snapshot.id), [])
+    }
+
+    func testOfflinePlayMenusUseDownloadedTracksFromSnapshotsAndPartialLists() {
+        let app = AppContainer(), library = app.playlistLibrary
+        let track = song("netease:1:10"), stream = song("netease:1:11")
+        let snapshot = LibraryPlaylistItem(id: "downloaded:playlist:7", title: "Snapshot", artwork: .playlist)
+        let online = LibraryPlaylistItem(id: "netease-playlist:1:7", title: "Online", artwork: .playlist, sourceOwnerID: "1")
+        library.replaceDownloadedPlaylists(items: [snapshot], songs: [snapshot.id: [track]], onlineAliases: [snapshot.id: online.id])
+        library.replaceOnlinePlaylists(items: [online], songs: [online.id: [stream, track]], ownerID: "1")
+        library.loadedOnlinePlaylistIDs.insert(online.id)
+        library.completeOnlinePlaylist = { _ in XCTFail("Requested tracks while offline"); return false }
+        app.player.configureOfflineSongs { $0 == track.id ? track : nil }
+        var denied = 0
+        var feedback: [LibraryHaptics.Feedback] = []
+        LibraryNetworkAccess.$override.withValue(.init(isOffline: { true }, reportOffline: { denied += 1 })) {
+            LibraryHaptics.$output.withValue(.init { feedback.append($0) }) {
+                app.menuActions.play(.playlist(snapshot.id), false)
+                XCTAssertEqual(app.player.queue.map(\.id), [track.id])
+                app.menuActions.play(.playlist(online.id), true)
+                XCTAssertEqual(app.player.queue.map(\.id), [track.id])
+                library.setOnlineHasMore(online.id, true)
+                app.menuActions.play(.playlist(online.id), false)
+                app.menuActions.play(.playlist(online.id), true)
+                XCTAssertEqual(app.player.queue.map(\.id), [track.id])
+                XCTAssertEqual(denied, 0)
+                app.player.configureOfflineSongs { _ in nil }
+                app.menuActions.play(.playlist(online.id), false)
+                XCTAssertEqual(denied, 1)
+                XCTAssertEqual(feedback, [.impact, .impact, .impact, .impact])
+            }
+        }
+    }
+
+    func testOfflineCollectionMenusPublishOnlyCompletedQueueActions() throws {
+        let app = AppContainer(), library = app.playlistLibrary
+        let remote = song("netease:1:10"), local = song("Imported/one.flac")
+        let online = LibraryPlaylistItem(id: "netease-playlist:1:7", title: "Online", artwork: .playlist, sourceOwnerID: "1")
+        library.replaceOnlinePlaylists(items: [online], songs: [online.id: [remote]], ownerID: "1")
+        library.setOnlineHasMore(online.id, true)
+        library.completeOnlinePlaylist = { _ in XCTFail("Requested tracks while offline"); return false }
+        let snapshot = LibraryPlaylistItem(id: "downloaded:playlist:8", title: "Snapshot", artwork: .playlist)
+        library.replaceDownloadedPlaylists(items: [snapshot], songs: [snapshot.id: [local]], onlineAliases: [:])
+        let localPlaylist = try XCTUnwrap(library.createPlaylist(named: "Local", artwork: .playlist, in: nil))
+        XCTAssertEqual(library.addSongs([local], to: localPlaylist.id), 1)
+        app.songLibrary.replace([local])
+        let album = try XCTUnwrap(app.albums.first { $0.id == local.albumID })
+
+        let first = "text.line.first.and.arrowtriangle.forward"
+        let last = "text.line.last.and.arrowtriangle.forward"
+        func select(_ icon: String, in item: LibraryShelfItem, route: LibraryRoute) throws {
+            let items = app.menuActions.sections(for: item, route: route).flatMap { $0 }
+            try XCTUnwrap(items.first { $0.systemImage == icon }).perform()
+        }
+        var denied = 0
+        var pulses: [LibraryHaptics.Feedback] = []
+        try LibraryNetworkAccess.$override.withValue(.init(isOffline: { true }, reportOffline: { denied += 1 })) {
+            try LibraryHaptics.$output.withValue(.init { pulses.append($0) }) {
+                let route = LibraryRoute.playlist(online.id)
+                try select(first, in: online.shelfItem, route: route)
+                try select(last, in: online.shelfItem, route: route)
+                app.menuActions.addToPlaylist(route)
+                XCTAssertEqual(denied, 3)
+                XCTAssertNil(library.pendingAddition)
+                XCTAssertNil(app.toasts.current)
+                XCTAssertTrue(app.player.queue.isEmpty)
+                XCTAssertTrue(pulses.isEmpty)
+
+                for item in [snapshot.shelfItem, localPlaylist.shelfItem, album] {
+                    let route = try XCTUnwrap(item.route)
+                    let count = pulses.count
+                    try select(first, in: item, route: route)
+                    XCTAssertEqual(app.toasts.current?.toast.title, LibraryToast.playingNext.title)
+                    try select(last, in: item, route: route)
+                    XCTAssertEqual(app.toasts.current?.toast.title, LibraryToast.addedToQueue.title)
+                    XCTAssertEqual(Array(pulses.dropFirst(count)), [.impact, .impact])
+                }
+                XCTAssertEqual(app.player.queue.map(\.id), Array(repeating: local.id, count: 6))
+                app.player.configureOfflineSongs { $0 == remote.id ? remote : nil }
+                try select(last, in: online.shelfItem, route: route)
+                app.menuActions.addToPlaylist(route)
+                XCTAssertEqual(library.pendingAddition?.songs.map(\.id), [remote.id])
+                XCTAssertEqual(app.player.queue.last?.id, remote.id)
+                XCTAssertEqual(denied, 3)
+            }
+        }
+    }
+
+    func testOnlineQueueMenuReportsLoadFailureWithoutAnnouncingInsertion() async throws {
+        let app = AppContainer(), library = app.playlistLibrary
+        let item = LibraryPlaylistItem(id: "netease-playlist:1:7", title: "Online", artwork: .playlist, sourceOwnerID: "1")
+        let route = LibraryRoute.playlist(item.id)
+        library.replaceOnlinePlaylists(items: [item], songs: [item.id: [song("netease:1:10")]], ownerID: "1")
+        library.setOnlineHasMore(item.id, true)
+        library.completeOnlinePlaylist = { _ in false }
+        let action = try XCTUnwrap(app.menuActions.sections(for: item.shelfItem, route: route)
+            .flatMap { $0 }.first { $0.systemImage == "text.line.first.and.arrowtriangle.forward" })
+        let failure = expectation(description: "Load failure")
+        var pulses: [LibraryHaptics.Feedback] = []
+        await LibraryNetworkAccess.$override.withValue(.init(isOffline: { false }, reportOffline: { XCTFail() })) {
+            await LibraryHaptics.$output.withValue(.init { feedback in
+                pulses.append(feedback)
+                if feedback == .error { failure.fulfill() }
+            }) {
+                action.perform()
+                XCTAssertNil(app.toasts.current)
+                XCTAssertTrue(pulses.isEmpty)
+                await fulfillment(of: [failure], timeout: 2)
+                XCTAssertEqual(pulses, [.error])
+                XCTAssertTrue(app.player.queue.isEmpty)
+            }
+        }
     }
 
     func testDownloadedSnapshotsStayOutOfEditablePlaylistPersistence() async throws {
