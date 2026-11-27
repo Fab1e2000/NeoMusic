@@ -46,8 +46,6 @@ targets:
         product: FrontAMPages
       - package: Nuke
         product: Nuke
-      - package: Nuke
-        product: NukeUI
     info:
       path: NeoMusic/Info.plist
       properties:

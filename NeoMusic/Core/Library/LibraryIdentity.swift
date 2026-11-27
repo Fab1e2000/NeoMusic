@@ -100,10 +100,6 @@ enum PlaylistRouteIdentity: Equatable, Hashable, Sendable {
         "home:playlist:\(playlistID)"
     }
 
-    static func dailyID(owner: some CustomStringConvertible, date: String) -> String {
-        "home:daily:\(owner):\(date)"
-    }
-
     static func downloadedID(_ playlistID: some CustomStringConvertible) -> String {
         "downloaded:playlist:\(playlistID)"
     }

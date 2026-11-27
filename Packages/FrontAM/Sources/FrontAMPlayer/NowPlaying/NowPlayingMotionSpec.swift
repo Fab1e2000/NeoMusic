@@ -11,13 +11,6 @@ struct NowPlayingAnimationSpec: Equatable, Sendable {
     enum Curve: Equatable, Sendable {
         case smooth
         case easeInOut
-        case spring(bounce: Double)
-        case cubicBezier(
-            x1: Double,
-            y1: Double,
-            x2: Double,
-            y2: Double
-        )
         case interpolatingSpring(
             mass: Double,
             stiffness: Double,
@@ -46,16 +39,6 @@ struct NowPlayingAnimationSpec: Equatable, Sendable {
             .smooth(duration: duration)
         case .easeInOut:
             .easeInOut(duration: duration)
-        case let .spring(bounce):
-            .spring(duration: duration, bounce: bounce)
-        case let .cubicBezier(x1, y1, x2, y2):
-            .timingCurve(
-                x1,
-                y1,
-                x2,
-                y2,
-                duration: duration
-            )
         case let .interpolatingSpring(
             mass,
             stiffness,
@@ -102,11 +85,7 @@ struct NowPlayingMotionSpec: Equatable, Sendable {
         let coreHide: NowPlayingAnimationSpec
         let controlShowOpacity: NowPlayingAnimationSpec
         let controlHideOpacity: NowPlayingAnimationSpec
-        let utilityShow: NowPlayingAnimationSpec
-        let utilityHide: NowPlayingAnimationSpec
         let controlDuration: TimeInterval
-        let utilityHiddenOffset: CGFloat
-        let utilityHiddenScale: CGFloat
         let progress: LayerMotion
         let transport: LayerMotion
         let volume: LayerMotion
@@ -187,18 +166,7 @@ struct NowPlayingMotionSpec: Equatable, Sendable {
                 .smooth,
                 duration: 0.18
             ),
-            utilityShow: NowPlayingAnimationSpec(
-                .smooth,
-                duration: 0.24,
-                delay: 0.12
-            ),
-            utilityHide: NowPlayingAnimationSpec(
-                .smooth,
-                duration: 0.18
-            ),
             controlDuration: 0.36,
-            utilityHiddenOffset: 64,
-            utilityHiddenScale: 0.82,
             progress: InterfaceMotion.LayerMotion(
                 hiddenOffset: 245,
                 showDelay: 0,

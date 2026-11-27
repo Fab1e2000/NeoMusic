@@ -14,7 +14,7 @@
 
 | Target | 类型 | 源码路径 | 依赖 |
 | --- | --- | --- | --- |
-| `NeoMusic` | Application | `NeoMusic/` | `FrontAMCore`、`FrontAMPlayer`、`FrontAMPopup`、`FrontAMNavigation`、`FrontAMPages`、`AudioStreaming`、`AudioTags` (`AudioTagBridge`)、`Nuke`、`NukeUI` |
+| `NeoMusic` | Application | `NeoMusic/` | `FrontAMCore`、`FrontAMPlayer`、`FrontAMPopup`、`FrontAMNavigation`、`FrontAMPages`、`AudioStreaming`、`AudioTags` (`AudioTagBridge`)、`Nuke` |
 | `FullScreenPlayerTests` | Unit Test | `FullScreenPlayerTests/`、`Packages/FrontAM/Tests/FrontAMPlayerTests/` | `FrontAMPlayer` |
 | `NeoMusicTests` | Hosted Unit Test | `NeoMusicTests/` | `NeoMusic`、`FrontAMPlayer` |
 | `NeoMusicNavigationUITests` | UI Test | `NeoMusicNavigationUITests/` | `NeoMusic` |
@@ -131,7 +131,7 @@ flowchart TD
    - FrontAM 源码禁止引用宿主实现类型（`NowPlayingModel`、`PlaylistLibrary`、`LibraryDownloads`、`Netease*`、`LocalLibrary*`、`ArtworkImagePipeline` 等）、`Bundle.main`、`UIImage(named:)` 或账号格式前缀。
    - `.metal` 着色器限于 `FrontAMPlayer` 和宿主的 `Features/Player`。
 3. **定向第三方框架导入**
-   - 包源码中只有 `FrontAMPopup` 可导入 `LNPopupUI`。宿主的 `Features/Player` 可导入 `Nuke`、`NukeUI`、`MetalKit`。`NeteaseArtworkCache.swift` 可导入 `Nuke`。
+   - 包源码中只有 `FrontAMPopup` 可导入 `LNPopupUI`。宿主的 `Features/Player` 可导入 `Nuke`、`MetalKit`。`NeteaseArtworkCache.swift` 可导入 `Nuke`。
    - `AudioStreaming` 仅允许在 `Core/Playback/StreamingPlaybackDeck.swift` 导入。
    - `AudioTagBridge` 仅允许在 `Core/LocalMusic/DownloadedAudioTags.swift` 导入。
    - `SQLite3` 仅允许在 `Core/Netease/NeteasePageCache.swift` 导入；`Network` 仅允许在 `Core/Netease/NeteaseMusicStore.swift` 导入；`ImageIO` 额外允许在 `Core/Netease/NeteaseAvatarSnapshot.swift` 导入。
@@ -164,7 +164,7 @@ flowchart TD
 
 ### 封面路由（`AppRuntime.requestArtwork(for:)`）
 
-按 `DeferredArtworkKey` 的 `domain`（`.music` / `.libraryPlaylist`、`.home` / `.homePlaylist`、`.artists`、`.search`）分发到对应 Integration 请求或查询缓存文件。\`DeferredArtworkRoute\` 校验会话和缓存返回结果，Online 与 Home 共用 16 ms 封面发布合批器。五个 Integration 共用引用曲目查找、喜爱反馈或曲目投影中的相应组件。
+按 `DeferredArtworkKey` 的 `domain`（`.music` / `.libraryPlaylist`、`.home` / `.homePlaylist`、`.artists`、`.search`）分发到对应 Integration 请求或查询缓存文件。`DeferredArtworkRoute` 校验会话和缓存返回结果，Online 与 Home 共用 16 ms 封面发布合批器。五个 Integration 共用引用曲目查找、喜爱反馈或曲目投影中的相应组件。
 
 首页来源的播放队列封面由当前与下一曲、可见队列项及 UIKit 预取回调触发。`NeteaseHomeStore` 按会话管理请求，`NeteaseArtworkCache` 将前台需求提交为高优先级，并在写入新下载前验证图像可解码。
 
@@ -180,7 +180,7 @@ flowchart TD
 - `LibraryRoute.libraryArtist` 打开资料库艺人详情，`LibraryRoute.artist` 打开在线艺人主页。已下载专辑可以从资料库艺人详情进入基于本机曲目的专辑页。本地专辑沿用目录分组和文件中的年份标签。
 - 资料库艺人头像由列表、详情和置顶卡片按需读取。`NeteaseArtistStore` 按账号缓存头像元数据，复用订阅、艺人详情和图片缓存，并限制同时进行的资料库头像请求数。头像文件就绪后通过 Observation 更新对应视图。
 - `AppStoragePaths` 声明音乐目录、应用状态与缓存路径。`AtomicJSONStore` 统一原子 JSON 读写，`AppDefaultsKey` 集中管理偏好键。封面取色共用 `Caches/ArtworkBackdrops.json`。
-- `ImageSourceThumbnail` 负责封面、头像与选图的 ImageIO 缩略图解码。普通缩略图加载与详情页的背景取色分别触发。
+- `ImageSourceThumbnail` 负责封面、头像与选图的 ImageIO 缩略图解码。普通缩略图加载与详情页的背景取色分别触发。歌曲列表以封面显示宽度和屏幕倍率请求缩略图。同一首歌更换封面文件时保留现图直至新图就绪，已有图片直接替换，占位图加载出封面时可淡入。
 - 全部歌曲、专辑、歌单与喜爱歌曲共用 `NativePlaylistTrackList`。按名称或艺人排序的全部歌曲使用 UIKit diffable data source 提供 Section 和原生索引。专辑与歌单的列表使用 `GenericCollectionList`，其网格与资料库艺人专辑共用 `LibraryCollectionGrid`。
 - 歌单移到文件夹时，由 `LibraryToastCenter` 显示可打开目标文件夹的提示。
 
@@ -226,7 +226,7 @@ FullScreenPlayerView(
 
 从待播列表向上返回时，惯性最远停在继续播放默认位置。到达该位置后，可以另起一次下拉展开历史。上下两个方向都可通过 `scrollViewWillEndDragging` 将 UIKit 的惯性目标设为停靠点，延续松手速度。下拉从继续播放默认位置开始、速度达到 1 pt/ms 且吸附目标为历史停靠点时使用此机制。上推从历史区开始、速度达到 1 pt/ms、松手位置仍在继续播放停靠点之前且吸附目标为该停靠点时也使用此机制。UIKit 未进入减速时，以及短拉回正、常速进出历史和歌曲标题收放时，通过 `setContentOffset(_:animated:)` 快速吸附。历史内部与待播列表的自由滚动使用 UIKit 惯性。队列两侧留白始终可发起播放器的下拉关闭手势。
 
-封面页、歌词页和跨播放器页面切换使用共享封面视图。队列页停留期间，当前歌曲封面由歌曲标题单元格承载，随列表滚动并在列表边缘裁切、淡出。与队列切页时，仅在当前歌曲封面与列表视口相交时衔接其几何位置；封面完全离屏时，共享封面保持目标尺寸，随歌名、艺人一起向下推入或向上推出。封面渐隐区从屏幕顶端延伸至封面落位的上沿，拉手在封面前方。快速反向点按沿用当前转场的封面路径。队列与歌词页之间的离屏封面仍在原位淡出或淡入。切页保留队列的浏览位置。历史记录的「清除」按钮打开系统确认弹窗。确认后立即清除当前播放历史并回到继续播放默认位置。
+封面、歌词和队列三个页面共用一个当前歌曲封面视图。歌词页与封面页互切时，同一张封面随位置和尺寸变化。队列滚动时，封面和歌曲头部随列表偏移，在视口边缘渐隐。队列头部完全滚出后切到歌词页，封面与歌名直接出现在歌词页的头部位置。由歌词或封面页返回队列时，列表定位到当前歌曲。清除播放历史需要系统弹窗确认，确认后列表回到继续播放的默认位置。
 
 在历史记录点播歌曲时，列表通过 UIKit 滚动动画回到继续播放默认位置。浏览历史时发生被动切歌，列表保留历史位置，在最新记录一端随新行上移。
 

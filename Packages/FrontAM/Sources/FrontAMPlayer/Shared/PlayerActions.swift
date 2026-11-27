@@ -68,14 +68,6 @@ struct ReferenceSongMenuContents: View {
     }
 }
 
-extension SongMenuConfiguration {
-    var trailingSongActions: [SongRowAction] {
-        let items = primary + secondary
-        return ["favorite", "download"].compactMap { id in items.first { $0.id == id && !$0.disabled } }
-            + extras.filter { $0.role == .destructive && !$0.disabled }
-    }
-}
-
 @MainActor @Observable public final class PlayerActions {
     private let feedbackAction: () -> Void
     private let favoriteLookup: (String) -> Bool

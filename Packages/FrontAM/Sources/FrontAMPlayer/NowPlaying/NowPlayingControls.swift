@@ -9,10 +9,6 @@ struct NowPlayingHighlightTiming {
     var animation: Animation {
         (easesOutOnly ? Animation.easeOut(duration: duration) : .easeInOut(duration: duration)).delay(delay)
     }
-
-    var uiKitOptions: UIView.AnimationOptions {
-        [.allowUserInteraction, .beginFromCurrentState, easesOutOnly ? .curveEaseOut : .curveEaseInOut]
-    }
 }
 
 struct NowPlayingHighlightFeedback {

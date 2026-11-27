@@ -438,7 +438,6 @@ private struct CollectionActions: View {
     let detail: CollectionDetail
     let albumBackground: Color?
     @Environment(\.collectionMenuActions) private var actions
-    @Environment(\.libraryDownloads) private var downloads
     @Environment(\.dynamicTypeSize) private var textSize
     @Environment(\.collectionPagePalette) private var palette
     @State private var actionFeedback = 0

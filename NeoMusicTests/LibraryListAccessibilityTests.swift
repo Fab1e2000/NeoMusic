@@ -38,12 +38,6 @@ final class LibraryListAccessibilityTests: XCTestCase {
         )
     }
 
-    func testGenericCollectionListRequiresStringIdentifiers() {
-        XCTAssertTrue(PlaylistEntry.ID.self == String.self)
-        let list = playlistList(deselectsImmediately: false)
-        XCTAssertEqual(list.items.map(\.id), ["playlist"])
-    }
-
     func testActionRowsDeselectImmediatelyWhileNavigationRowsKeepSelection() async throws {
         let scene = try await applicationWindowScene()
         let window = UIWindow(windowScene: scene)

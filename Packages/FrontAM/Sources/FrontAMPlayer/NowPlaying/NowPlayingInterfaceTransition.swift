@@ -6,14 +6,6 @@ enum NowPlayingInterfaceTransition {
 
     private static let motion = NowPlayingMotionSpec.appleMusic26.interface
 
-    static var utilityHiddenOffset: CGFloat {
-        motion.utilityHiddenOffset
-    }
-
-    static var utilityHiddenScale: CGFloat {
-        motion.utilityHiddenScale
-    }
-
     static func interfaceAnimation(
         isVisible: Bool,
         reducesMotion: Bool
@@ -22,16 +14,6 @@ enum NowPlayingInterfaceTransition {
         return isVisible
             ? motion.coreShow.animation
             : motion.coreHide.animation
-    }
-
-    static func utilityAnimation(
-        isVisible: Bool,
-        reducesMotion: Bool
-    ) -> Animation? {
-        guard !reducesMotion else { return nil }
-        return isVisible
-            ? motion.utilityShow.animation
-            : motion.utilityHide.animation
     }
 
     static func hiddenOffset(

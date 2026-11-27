@@ -119,11 +119,6 @@
       "destination": "Packages/FrontAM/Sources/FrontAMPlayer/NowPlaying/NowPlayingPageTransition.swift"
     },
     {
-      "source": "NeoDizzy/Features/Player/NowPlaying/NowPlayingPages.swift",
-      "sha256": "20b1e1ace261fba7f47294de4ee8c4cc67ce41ff42c3f7fcb7950b9f1727998b",
-      "destination": "Packages/FrontAM/Sources/FrontAMPlayer/NowPlaying/NowPlayingPages.swift"
-    },
-    {
       "source": "NeoDizzy/Features/Player/NowPlaying/NowPlayingPlayPauseIcon.swift",
       "sha256": "4c6daa723272c54497c6a1fc64f34f11a0832e9da7f0239b507ef26ff4bcad78",
       "destination": "Packages/FrontAM/Sources/FrontAMPlayer/NowPlaying/NowPlayingPlayPauseIcon.swift"

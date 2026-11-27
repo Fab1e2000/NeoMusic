@@ -85,11 +85,7 @@ struct NowPlayingSongHeader: View {
 
             NowPlayingTrackSwipe(song: song, rowSpacing: 2, viewportInsets: .header) { track, marqueeActive in
                 NowPlayingMarqueeText(text: track.title, isActive: marqueeActive)
-                    .font(
-                        usesReferenceLayout
-                            ? .headline
-                            : .headline
-                    )
+                    .font(.headline)
                     .nowPlayingPrimary()
                     .lineLimit(1)
                     .offset(y: usesReferenceLayout ? 5 : 0)
@@ -127,10 +123,5 @@ struct NowPlayingSongHeader: View {
 
     private var artworkSize: CGFloat {
         usesReferenceLayout ? Self.referenceHeight : 68
-    }
-
-    private var artistText: String {
-        guard usesReferenceLayout else { return song.artists }
-        return song.artists
     }
 }

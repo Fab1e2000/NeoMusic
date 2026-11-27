@@ -16,14 +16,6 @@ nonisolated struct LyricPhysicalSpringParameters: Equatable, Sendable {
         self.damping = Self.nonnegativeFinite(damping, fallback: 0)
     }
 
-    var dampingRatio: Double {
-        damping / (2 * sqrt(mass * stiffness))
-    }
-
-    var undampedPeriod: TimeInterval {
-        2 * .pi * sqrt(mass / stiffness)
-    }
-
     private static func positiveFinite(
         _ value: Double,
         fallback: Double

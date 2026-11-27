@@ -426,30 +426,6 @@ final class NeteaseAccount {
         guard loginID == id, logoutID == nil else { throw CancellationError() }
     }
 
-    func cancelLogin() async {
-        let revision = generation
-        let task = loginTask
-        loginID = nil
-        task?.cancel()
-        let recovery = loginRecoveryTask
-        recovery?.cancel()
-        let result = await task?.result
-        await recovery?.value
-        if loginID == nil {
-            loginTask = nil
-            loginRecoveryTask = nil
-            isAuthenticating = false
-            let restored = await transitionStores(to: session, clearSignedOutMusic: false) {
-                generation == revision && loginID == nil && logoutID == nil && !Task.isCancelled
-            }
-            guard restored else { return }
-            if validationID == nil { validationTask = nil }
-            if avatarID == nil { avatarTask = nil }
-            if validationState == .validating, validationID == nil { validationState = .unverified }
-            if case .failure(let failure as CredentialRollbackFailure) = result { setError(failure) }
-        }
-    }
-
     func logout() async throws {
         if let logoutTask { try await logoutTask.value; return }
         let id = UUID()

@@ -7,7 +7,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 COMMON_IMPORTS = {"SwiftUI", "UIKit", "AVKit", "PhotosUI", "UniformTypeIdentifiers", "Foundation",
                   "AVFoundation", "MediaPlayer", "Observation", "ImageIO", "CryptoKit"}
-PLAYER_IMPORTS = {"Nuke", "NukeUI", "CoreImage", "CoreGraphics", "MetalKit"}
+PLAYER_IMPORTS = {"Nuke", "CoreImage", "CoreGraphics", "MetalKit"}
 FRONTAM_SOURCES = Path("Packages/FrontAM/Sources")
 FRONTAM_PLAYER = FRONTAM_SOURCES / "FrontAMPlayer"
 FRONTAM_POPUP = FRONTAM_SOURCES / "FrontAMPopup"

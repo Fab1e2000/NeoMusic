@@ -14,7 +14,6 @@
 		0452F2B725177777A31D679E /* NowPlayingHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A7C9749C07962FEC43DFAA6 /* NowPlayingHistory.swift */; };
 		04C3618D1B2EA420BD2EE2CF /* NeteaseArtworkCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61C08696934B9A673962321E /* NeteaseArtworkCache.swift */; };
 		05A9B66B45669E5D0B3828F6 /* NavigationDiagnosticTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B2843EBAF0A32D010751792 /* NavigationDiagnosticTests.swift */; };
-		06E1D2E86ED92F9A302AE7FF /* NukeUI in Frameworks */ = {isa = PBXBuildFile; productRef = 4CFE63EEDDC845EC9CED9159 /* NukeUI */; };
 		0B4410FA02418F5F3FF105F8 /* TestFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC3B997400F310399E770044 /* TestFixtures.swift */; };
 		0CF2C4F3D39822431EC3AE5C /* NeteaseHomeSupplementalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25F28B52637A31094FC3A5F2 /* NeteaseHomeSupplementalTests.swift */; };
 		0DC32606BC9C6B7BCC11E568 /* FrontAMPlayer in Frameworks */ = {isa = PBXBuildFile; productRef = 8C5D460BD6D10D7CA180B52B /* FrontAMPlayer */; };
@@ -507,7 +506,6 @@
 				8344B3EB084B2925DCAC8C86 /* AudioTagBridge in Frameworks */,
 				118C29A25E59C97B49021DD4 /* FrontAMPages in Frameworks */,
 				3A3527C872156EE2F0B3A12C /* Nuke in Frameworks */,
-				06E1D2E86ED92F9A302AE7FF /* NukeUI in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1026,7 +1024,6 @@
 				15BA51EB2A8C3B90A636BCC4 /* AudioTagBridge */,
 				7703F7DD2793D36942AEE3C1 /* FrontAMPages */,
 				71D88B6110CCAE92DDD50367 /* Nuke */,
-				4CFE63EEDDC845EC9CED9159 /* NukeUI */,
 			);
 			productName = NeoMusic;
 			productReference = AFE814DF062BCE6616BFB333 /* NeoMusic.app */;
@@ -1846,11 +1843,6 @@
 		15BA51EB2A8C3B90A636BCC4 /* AudioTagBridge */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = AudioTagBridge;
-		};
-		4CFE63EEDDC845EC9CED9159 /* NukeUI */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 998860E0D22C944E36B29EBE /* XCRemoteSwiftPackageReference "Nuke" */;
-			productName = NukeUI;
 		};
 		5336772344A485C28BE1F618 /* AudioStreaming */ = {
 			isa = XCSwiftPackageProductDependency;
