@@ -6,8 +6,15 @@ public enum PlayerTrackSwipeGestureRole: Sendable {
     case yieldsToTrackSwipe
 }
 
+private struct PlayerTrackSwipeGestureRoleKey: EnvironmentKey {
+    static let defaultValue: @MainActor @Sendable (UIGestureRecognizer) -> PlayerTrackSwipeGestureRole? = { _ in nil }
+}
+
 extension EnvironmentValues {
-    @Entry public var playerTrackSwipeGestureRole: (@MainActor @Sendable (UIGestureRecognizer) -> PlayerTrackSwipeGestureRole?) = { _ in nil }
+    public var playerTrackSwipeGestureRole: @MainActor @Sendable (UIGestureRecognizer) -> PlayerTrackSwipeGestureRole? {
+        get { self[PlayerTrackSwipeGestureRoleKey.self] }
+        set { self[PlayerTrackSwipeGestureRoleKey.self] = newValue }
+    }
 }
 
 @Observable @MainActor

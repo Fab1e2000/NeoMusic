@@ -60,5 +60,5 @@ if [ -n "$working_tree" ]; then
     exit 1
 fi
 
-echo "推送前运行本机完整检查，包含脚本回归、边界与 Vendor 说明检查、AudioStreaming 测试、XcodeGen 和 NeoMusicTests／FullScreenPlayerTests Release。"
+echo "推送前运行本机完整检查，包含脚本回归、边界与 Vendor 说明检查、AudioStreaming 与 FrontAM 包测试、FrontAMShowcase 构建、XcodeGen 和 NeoMusicTests／FullScreenPlayerTests Release。"
 bash scripts/ci.sh

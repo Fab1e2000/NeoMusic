@@ -64,6 +64,20 @@ print(device["udid"])
 PY
 )
 
+repo_root=$PWD
+
+(cd Packages/FrontAM && xcodebuild test -scheme FrontAM-Package \
+  -destination "platform=iOS Simulator,id=$simulator_id" \
+  -derivedDataPath "$repo_root/build/ci/FrontAMDerivedData" \
+  -parallel-testing-enabled NO \
+  CODE_SIGNING_ALLOWED=NO) 2>&1 | tee build/ci/frontam-package.log
+
+(cd Packages/FrontAM/Examples/FrontAMShowcase && xcodegen generate && \
+  xcodebuild build -project FrontAMShowcase.xcodeproj -scheme FrontAMShowcase \
+  -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+  -derivedDataPath "$repo_root/build/ci/FrontAMShowcaseDerivedData" \
+  CODE_SIGNING_ALLOWED=NO) 2>&1 | tee build/ci/frontam-showcase.log
+
 xcodebuild -project NeoMusic.xcodeproj -scheme NeoMusic -configuration Release \
   -destination "platform=iOS Simulator,id=$simulator_id" \
   -derivedDataPath "${NEOMUSIC_DERIVED_DATA:-build/ci/DerivedData}" \

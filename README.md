@@ -36,7 +36,7 @@ scripts/                        # 边界检查、本机 CI、推送门禁与打�
 
 ## 本机验证
 
-日常改动运行 `python3 scripts/check-module-boundaries.py`，并按影响范围选择测试。推送代码前使用 `bash scripts/ci.sh`，脚本会检查模块边界与第三方来源声明、运行脚本回归和 AudioStreaming 测试、重新生成工程，并在 iPhone 模拟器运行 Release 配置的 `NeoMusicTests` 和 `FullScreenPlayerTests`。
+日常改动运行 `python3 scripts/check-module-boundaries.py`，并按影响范围选择测试。推送代码前使用 `bash scripts/ci.sh`，脚本会检查模块边界与第三方来源声明、运行脚本回归与 AudioStreaming / FrontAM 包测试、验证 `FrontAMShowcase` 构建、重新生成工程，并在 iPhone 模拟器运行 Release 配置的 `NeoMusicTests` 和 `FullScreenPlayerTests`。
 
 ## 文档
 

@@ -8,7 +8,7 @@ The package manifest requires SwiftPM tools 6.2 or newer. Use Xcode with an iOS 
 
 | Product | Responsibility | Direct FrontAM dependencies |
 | --- | --- | --- |
-| `FrontAMCore` | Design tokens, artwork and color extraction, ImageIO thumbnail caching, shared controls and read-only track playback state | — |
+| `FrontAMCore` | Design tokens, artwork and color extraction, ImageIO thumbnail caching, shared controls, haptics/offline-access hooks and read-only track playback state | — |
 | `FrontAMPlayer` | Full-screen artwork, Metal backdrop, timed lyrics and editable playback queue | Core |
 | `FrontAMPopup` | Persistent mini-player, controls and matched artwork transition | Player, Core |
 | `FrontAMNavigation` | Tab ordering, independent navigation stacks, interactive Zoom and player handoff | Core |
@@ -40,6 +40,8 @@ struct CoverTile: View {
 
 For the player, wrap your `PlayerPlaybackSource` in `PlayerState` and supply a `PlayerServices` with playback actions, lyrics and artwork. Inject the state into `FrontAMPlayerPopup` and use the same state and services in its `FullScreenPlayerView`. For browsing, use `FrontAMHomeFeedView`, `FrontAMSearchPageView` and `FrontAMLibraryHomeView`. The home and search models carry display items and callbacks. Use `FrontAMTrackItem`, `FrontAMShelfItem` and `FrontAMRoute` for tracks, collections and navigation. Implement `FrontAMPlaylistSource` to connect your playlist store to the library and editing pages. Existing public spellings remain source-compatible.
 
+If your app has online actions, call `LibraryNetworkAccess.configure(isOffline:toasts:)` during startup so offline taps fail fast with a localized toast instead of issuing doomed requests. Use `LibraryHaptics` and `.preparingFeedback(_:)` to coordinate positive/error haptic pulses with `LibraryToastCenter`.
+
 ## Run FrontAMShowcase
 
 Use Xcode with an iOS 27+ iPhone simulator and XcodeGen. Run these commands from the FrontAM package directory.
@@ -61,7 +63,7 @@ Select the `FrontAMShowcase` scheme and an iPhone simulator, then run the app. I
 
 The five modules ship English and Simplified Chinese resource tables with a Simplified Chinese development fallback. Built-in browsing copy and the mini-player use the selected bundle language. The full-screen player uses these resources for the package-owned controls, such as lyrics, Up Next, repeat mode, volume and audio quality. Attributed upstream player views retain their existing copy. Host-supplied labels and catalog content are supplied in the host’s language.
 
-Open `Package.swift` in Xcode and select an iOS simulator to run the package tests. They cover artwork color math and ImageIO caching, tab ordering and independent storage keys, playlist menu capabilities, and player contracts and volume inertia. NeoMusic’s `FullScreenPlayerTests` target shares the player contract and inertia source files.
+Open `Package.swift` in Xcode and select an iOS simulator to run the package tests. They cover artwork color math and ImageIO caching, haptic/toast coordination, tab ordering and independent storage keys, playlist menu capabilities, and player contracts and volume inertia. The player contract and volume inertia test files are standalone and can also be included in a host app’s unit test target.
 
 ## Licenses
 
