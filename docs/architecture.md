@@ -15,7 +15,7 @@
 | Target | 类型 | 源码路径 | 依赖 |
 | --- | --- | --- | --- |
 | `NeoMusic` | Application | `NeoMusic/` | `FrontAMCore`、`FrontAMPlayer`、`FrontAMPopup`、`FrontAMNavigation`、`FrontAMPages`、`AudioStreaming`、`AudioTags` (`AudioTagBridge`)、`Nuke` |
-| `FullScreenPlayerTests` | Unit Test | `FullScreenPlayerTests/`、`Packages/FrontAM/Tests/FrontAMPlayerTests/` | `FrontAMPlayer` |
+| `FullScreenPlayerTests` | Unit Test | `FullScreenPlayerTests/` | `FrontAMPlayer` |
 | `NeoMusicTests` | Hosted Unit Test | `NeoMusicTests/` | `NeoMusic`、`FrontAMPlayer` |
 | `NeoMusicNavigationUITests` | UI Test | `NeoMusicNavigationUITests/` | `NeoMusic` |
 | `NeoMusicFunctionalParityTests` | UI Test | `NeoMusicFunctionalParityTests/` | `NeoMusic` |
@@ -31,14 +31,12 @@
 
 | 依赖 | 来源 / 版本 | 路径 |
 | --- | --- | --- |
-| `FrontAM` | 本地包，Swift tools 6.2、Swift 6 语言模式、iOS 27.0+ | `Packages/FrontAM` |
+| `FrontAM` | 远程 SPM 包（`0.1.1+`，Swift tools 6.2、Swift 6 语言模式、iOS 27.0+，内含 vendored `LNPopupUI` / `LNPopupController`） | `https://github.com/Fab1e2000/FrontAM.git` |
 | `AudioStreaming` | 本地包 | `Packages/AudioStreaming` |
 | `AudioTags`（TagLib 封装） | 本地包 | `Packages/AudioTags` |
-| `LNPopupUI` | FrontAM 本地依赖（`LNPopupUI-Static`） | `Packages/FrontAM/Vendor/LNPopupUI` |
-| `LNPopupController` | LNPopupUI 本地依赖 | `Packages/FrontAM/Vendor/LNPopupController` |
 | `Nuke` | SPM `13.2.0` | 远程包 |
-| `LNSwiftUIUtils` | SPM `1.1.5` | 远程包 |
-| `LNSystemMarqueeLabel` | SPM `0.1.2` | 远程包 |
+| `LNSwiftUIUtils` | SPM `1.1.5`（由 `FrontAM` 传递引入） | 远程包 |
+| `LNSystemMarqueeLabel` | SPM `0.1.2`（由 `FrontAM` 传递引入） | 远程包 |
 
 ---
 
@@ -80,7 +78,7 @@ Packages/FrontAM/Sources/
 
 ## 3. 模块依赖边界
 
-`scripts/check-module-boundaries.py` 静态扫描 `NeoMusic/` 和 `Packages/FrontAM/Sources/` 下的 Swift、C 系列和 Metal 源码。
+`scripts/check-module-boundaries.py` 静态扫描 `NeoMusic/` 下的 Swift、C 系列和 Metal 源码（`FrontAM` 内部边界由其独立仓库的 `scripts/check-boundaries.py` 维护）。
 
 ```mermaid
 flowchart TD
@@ -244,7 +242,7 @@ FullScreenPlayerView(
 
 Xcode 将 `NowPlayingStitchableShaders.metal` 编译为包资源 bundle 中的 `default.metallib`。模块通过 `ShaderLibrary.bundle(Bundle.module)` 使用着色器。播放器的 GPL-3.0 文本及来源清单随同 bundle 打包，FrontAM 原创部分采用 MIT 许可。
 
-`NeoMusic` scheme 保留独立的 `FullScreenPlayerTests` 测试 target。资源用例从播放器的实际 bundle 检查 `default.metallib` 和来源声明，并在运行环境提供 Metal 设备时加载库、检查两个着色器入口。播放器契约与音量惯性测试源同时用于 Xcode 和 SwiftPM。包内另有 Core、Navigation 和 Pages 测试。NeoMusic scheme 的测试动作指定 `zh-Hans`。
+`NeoMusic` scheme 保留独立的 `FullScreenPlayerTests` 测试 target，从实际链接的 `FrontAMPlayer` bundle 检查 `default.metallib`、着色器入口、来源声明与歌词模型行为；包契约与音量惯性测试随 `FrontAM` 独立仓库维护。NeoMusic scheme 的测试动作指定 `zh-Hans`。
 ### 迷你播放器模块（`FrontAMPopup`）
 
 `FrontAMPlayerPopup` 从 SwiftUI 环境读取 `PlayerState`。调用者传入展开状态 binding、可选的暂时隐藏曲目状态、迷你栏配色和关闭回调，并通过 `PlayerArtworkProvider` 提供同步缓存、即时备用位图、异步读取和预取。缺失封面及展开内容由 ViewBuilder 接入，展开内容收到当前活动状态与关闭动作。活动状态回调可用于诊断日志。

@@ -10,7 +10,8 @@ settings:
     SWIFT_VERSION: "6.0"
 packages:
   FrontAM:
-    path: Packages/FrontAM
+    url: https://github.com/Fab1e2000/FrontAM.git
+    from: "0.1.1"
   AudioStreaming:
     path: Packages/AudioStreaming
   AudioTags:
@@ -78,7 +79,6 @@ targets:
     platform: iOS
     sources:
       - path: FullScreenPlayerTests
-      - path: Packages/FrontAM/Tests/FrontAMPlayerTests
     dependencies:
       - package: FrontAM
         product: FrontAMPlayer

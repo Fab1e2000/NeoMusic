@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check native dependencies, FrontAM isolation and NetEase account ownership."""
+"""Check native dependencies, FrontAM host import boundaries and NetEase account ownership."""
 from pathlib import Path
 import re
 import sys
@@ -8,55 +8,11 @@ ROOT = Path(__file__).resolve().parents[1]
 COMMON_IMPORTS = {"SwiftUI", "UIKit", "AVKit", "PhotosUI", "UniformTypeIdentifiers", "Foundation",
                   "AVFoundation", "MediaPlayer", "Observation", "ImageIO", "CryptoKit"}
 PLAYER_IMPORTS = {"Nuke", "CoreImage", "CoreGraphics", "MetalKit"}
-FRONTAM_SOURCES = Path("Packages/FrontAM/Sources")
-FRONTAM_PLAYER = FRONTAM_SOURCES / "FrontAMPlayer"
-FRONTAM_POPUP = FRONTAM_SOURCES / "FrontAMPopup"
-FRONTAM_NAVIGATION = FRONTAM_SOURCES / "FrontAMNavigation"
-FRONTAM_PAGES = FRONTAM_SOURCES / "FrontAMPages"
-FRONTAM_CORE = FRONTAM_SOURCES / "FrontAMCore"
-FRONTAM_UMBRELLA = FRONTAM_SOURCES / "FrontAM"
-FRONTAM_SHOWCASE = Path("Packages/FrontAM/Examples/FrontAMShowcase/Sources")
 SOURCE_EXTENSIONS = {".swift", ".metal", ".m", ".mm", ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".s"}
-COMPONENT_IMPORTS = {"SwiftUI", "UIKit", "Foundation", "Observation", "AVKit", "AVFoundation",
-                     "MediaPlayer", "MetalKit", "CoreImage", "CoreGraphics", "UniformTypeIdentifiers"}
 NETEASE_IMPORTS = {"Foundation", "Observation", "CryptoKit", "CommonCrypto", "Security"}
 SWIFT_IMPORT = re.compile(r"(?:^|;)\s*(?:@\w+(?:\([^\n]*?\))?\s+)*(?:(?:public|package|internal|fileprivate|private)\s+)?"
                           r"import\s+(?:(?:typealias|struct|class|enum|protocol|let|var|func)\s+)?(\w+)",
                           re.MULTILINE)
-C_IMPORT = re.compile(r'^\s*(?:@import\s+|#\s*(?:import|include)\s+[<"])([\w./+-]+)', re.MULTILINE)
-FRONTAM_HOST_REFERENCE = re.compile(
-    r"\b(?:NeoMusic\w*|Nuke(?:UI)?|NowPlayingModel|ReferenceLibrary|"
-    r"ReferenceLyricsReader|LyricsReader|LyricsDocument|LocalLibrary\w*|LocalArtworkImages|LocalMusic\w*|"
-    r"PlaylistLibrary\w*|LibraryDownloads|PerformanceDiagnostics|NavigationDiagnostics|"
-    r"OnlineSongIdentity|CatalogRouteIdentity|DeferredArtworkKey|PlaylistRouteIdentity|"
-    r"ArtworkImagePipeline|AppContainer|AppRuntime|AppShell|AppLogger|AppDefaultsKey|AppStoragePaths|"
-    r"AccountPage|MusicQualitySettingsPage|HomeMusicIntegration|ArtistMusicIntegration|SearchMusicIntegration)\b"
-)
-FRONTAM_PAGE_PRESENTATION = re.compile(r"\b(?:LibrarySongItem|SearchPageModel|LibraryRoute|LibraryNavigationPreview)\b")
-FRONTAM_VISUAL_PRESENTATION = re.compile(r"\b(?:LibraryToast\w*|LibraryHaptics|ArtworkLoadAction|ArtworkView)\b")
-NAVIGATION_HOST_REFERENCE = re.compile(
-    r"\b(?:SearchPageModel|LibraryRoute|LibraryNavigationPreview|AlbumArtworkBackdrop)\b"
-)
-
-
-def frontam_imports(relative: Path) -> set[str]:
-    if relative.is_relative_to(FRONTAM_CORE):
-        return {"Foundation", "SwiftUI", "UIKit", "Observation", "CoreImage", "CoreGraphics", "ImageIO"}
-    if relative.is_relative_to(FRONTAM_PLAYER):
-        imports = COMPONENT_IMPORTS | {"FrontAMCore"}
-        if relative == FRONTAM_PLAYER / "NowPlaying/NowPlayingAirPlayButton.swift":
-            imports |= {"CoreBluetooth"}
-        return imports
-    if relative.is_relative_to(FRONTAM_POPUP):
-        return {"Foundation", "SwiftUI", "UIKit", "FrontAMCore", "FrontAMPlayer", "LNPopupUI"}
-    if relative.is_relative_to(FRONTAM_NAVIGATION):
-        return {"Foundation", "SwiftUI", "UIKit", "FrontAMCore"}
-    if relative.is_relative_to(FRONTAM_PAGES):
-        return {"Foundation", "SwiftUI", "UIKit", "Observation", "CoreImage", "CoreGraphics",
-                "PhotosUI", "UniformTypeIdentifiers", "FrontAMCore", "FrontAMNavigation"}
-    if relative.is_relative_to(FRONTAM_UMBRELLA):
-        return {"FrontAMCore", "FrontAMPlayer", "FrontAMPopup", "FrontAMNavigation", "FrontAMPages"}
-    return set()
 
 
 def check_source(relative: Path, text: str) -> list[str]:
@@ -66,12 +22,8 @@ def check_source(relative: Path, text: str) -> list[str]:
     app = relative.is_relative_to("NeoMusic/App")
     feature = relative.is_relative_to("NeoMusic/Features")
     player = relative.is_relative_to("NeoMusic/Features/Player")
-    frontam = relative.is_relative_to(FRONTAM_SOURCES)
-    frontam_player = relative.is_relative_to(FRONTAM_PLAYER)
-    showcase = relative.is_relative_to(FRONTAM_SHOWCASE)
-    package_imports = frontam_imports(relative) if frontam else set()
-    if relative.suffix == ".metal" and not (player or frontam_player):
-        errors.append("player shaders belong in FrontAMPlayer or Features/Player")
+    if relative.suffix == ".metal" and not player:
+        errors.append("player shaders belong in Features/Player")
     if "Modules" in relative.parts:
         errors.append("online source code belongs in Core/Netease")
     if feature and re.search(r"\bLocalLibrary\s*\.", text):
@@ -97,39 +49,8 @@ def check_source(relative: Path, text: str) -> list[str]:
                 Path("NeoMusic/Core/Library/LibrarySongSource.swift"),
             } and module == "FrontAMCore"
             allowed |= relative == Path("NeoMusic/Core/Library/LibrarySongSource.swift") and module == "FrontAMPages"
-            if frontam:
-                allowed = module in package_imports
-            if showcase:
-                allowed = module in {"FrontAM", "Foundation", "Observation", "SwiftUI", "UIKit"}
             if not allowed:
                 errors.append(f"import {module} is outside this source's dependency boundary")
-    if showcase:
-        if relative.suffix != ".swift":
-            errors.append("FrontAMShowcase app sources must be Swift")
-        if FRONTAM_HOST_REFERENCE.search(text) or re.search(r"\bNetease\w*\b|网易云", text, re.IGNORECASE):
-            errors.append("FrontAMShowcase must use independent demo data")
-    if frontam:
-        if not package_imports:
-            errors.append("FrontAM source must belong to a declared module")
-        if relative.suffix != ".swift":
-            native_headers = {module for module in package_imports if not module.startswith("FrontAM")} - {"LNPopupUI"}
-            if frontam_player and relative.suffix == ".metal":
-                native_headers.add("metal_stdlib")
-            for header in C_IMPORT.findall(text):
-                if header.split("/", 1)[0].split(".", 1)[0] not in native_headers:
-                    errors.append(f"import {header} is outside this source's dependency boundary")
-        if FRONTAM_HOST_REFERENCE.search(text):
-            errors.append("FrontAM presentation must consume host interfaces")
-        if not relative.is_relative_to(FRONTAM_PAGES) and FRONTAM_PAGE_PRESENTATION.search(text):
-            errors.append("Page models belong in FrontAMPages")
-        if not (relative.is_relative_to(FRONTAM_CORE) or relative.is_relative_to(FRONTAM_PAGES)) and FRONTAM_VISUAL_PRESENTATION.search(text):
-            errors.append("Shared page visuals belong in FrontAMCore and FrontAMPages")
-        if relative.is_relative_to(FRONTAM_NAVIGATION) and NAVIGATION_HOST_REFERENCE.search(text):
-            errors.append("FrontAMNavigation must use host-supplied routes, chrome and content")
-        if not relative.is_relative_to(FRONTAM_POPUP) and re.search(r"\bLNPopup\w*\b", text):
-            errors.append("LNPopup integration belongs in FrontAMPopup")
-        if re.search(r'\bBundle\s*\.\s*main\b|\[\s*NSBundle\s+mainBundle\b|\bUIImage\s*\(\s*named\s*:|"(?:netease[-:]|catalog:|catalog-guest:|home:playlist:|preview\.appearance)', text):
-            errors.append("FrontAM resources and identities must be independent of the app bundle and account format")
     # Literal paths from the shared storage registry should not count as type references.
     type_text = re.sub(r'"[A-Za-z_][\w./-]*"', '""', text)
     if not (netease or account_ui or app) and re.search(r"\bNetease\w*\b", type_text):
@@ -146,15 +67,12 @@ def check_source(relative: Path, text: str) -> list[str]:
 
 
 def main() -> int:
-    sources = sorted(path for directory in (Path("NeoMusic"), FRONTAM_SOURCES, FRONTAM_SHOWCASE)
-                     for path in (ROOT / directory).rglob("*")
+    sources = sorted(path for path in (ROOT / "NeoMusic").rglob("*")
                      if path.is_file() and path.suffix.lower() in SOURCE_EXTENSIONS)
     errors = [error for source in sources
               for error in check_source(source.relative_to(ROOT), source.read_text())]
-    for directory in (Path("NeoMusic"), FRONTAM_CORE, FRONTAM_PLAYER, FRONTAM_POPUP, FRONTAM_NAVIGATION,
-                      FRONTAM_PAGES, FRONTAM_UMBRELLA, FRONTAM_SHOWCASE):
-        if not any(source.is_relative_to(ROOT / directory) for source in sources):
-            errors.append(f"No sources found in {directory}")
+    if not sources:
+        errors.append("No sources found in NeoMusic")
     if errors:
         print("\n".join(errors), file=sys.stderr)
         return 1

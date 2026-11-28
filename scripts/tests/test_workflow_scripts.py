@@ -251,7 +251,6 @@ class PrePushTests(RepositoryFixture):
 class CIRecordTests(RepositoryFixture):
     def setUp(self):
         super().setUp()
-        (self.directory / "Packages/FrontAM/Examples/FrontAMShowcase").mkdir(parents=True, exist_ok=True)
         self.write("scripts/ci.sh", (ROOT / "scripts/ci.sh").read_text())
         self.write("scripts/tests/test_gate.py", textwrap.dedent('''
             import os
@@ -267,23 +266,15 @@ class CIRecordTests(RepositoryFixture):
             echo "FIXTURE_SWIFT $*"
             exit "${FIXTURE_SWIFT_EXIT:-0}"
         ''')
-        self.executable("bin/xcodegen", '#!/bin/bash\necho "FIXTURE_XCODEGEN $PWD"\n')
+        self.executable("bin/xcodegen", '#!/bin/bash\necho "FIXTURE_XCODEGEN"\n')
         self.executable("bin/xcrun", '''
             #!/bin/bash
             echo '{"devices":{"com.apple.CoreSimulator.SimRuntime.iOS-27-0":[{"isAvailable":true,"name":"iPhone 18 Pro","state":"Booted","udid":"fixture"}]}}'
         ''')
         self.executable("bin/xcodebuild", '''
             #!/bin/bash
-            echo "FIXTURE_XCODEBUILD $*"
+            echo "FIXTURE_XCODEBUILD"
             if [ "$1" = "-version" ]; then exit 0; fi
-            case "$*" in
-              *"-scheme FrontAM-Package"*)
-                exit "${FIXTURE_FRONTAM_PACKAGE_EXIT:-0}"
-                ;;
-              *"-scheme FrontAMShowcase"*)
-                exit "${FIXTURE_FRONTAM_SHOWCASE_EXIT:-0}"
-                ;;
-            esac
             mkdir -p build/ci/TestResults.xcresult
             exit "${FIXTURE_XCODE_EXIT:-0}"
         ''')
@@ -305,10 +296,6 @@ class CIRecordTests(RepositoryFixture):
         self.assertIn("FIXTURE_SWIFT test --package-path Packages/AudioStreaming", result.stdout)
         self.assertIn("FIXTURE_SWIFT test --package-path Packages/AudioStreaming",
                       (self.directory / "build/ci/audio-streaming.log").read_text())
-        self.assertIn("-scheme FrontAM-Package",
-                      (self.directory / "build/ci/frontam-package.log").read_text())
-        self.assertIn("-scheme FrontAMShowcase",
-                      (self.directory / "build/ci/frontam-showcase.log").read_text())
         state = self.state()
         self.assertEqual(state["commit"], self.head)
         self.assertFalse(state["dirty"])
@@ -341,20 +328,6 @@ class CIRecordTests(RepositoryFixture):
         result = self.run_ci({"FIXTURE_SWIFT_EXIT": "8"})
         self.assertEqual(result.returncode, 8)
         self.assertNotIn("FIXTURE_XCODEGEN", result.stdout)
-        self.assertEqual(self.state()["status"], "failed")
-
-    def test_frontam_package_failure_stops_before_showcase_and_host_tests(self):
-        result = self.run_ci({"FIXTURE_FRONTAM_PACKAGE_EXIT": "6"})
-        self.assertEqual(result.returncode, 6)
-        self.assertNotIn("-scheme FrontAMShowcase", result.stdout)
-        self.assertNotIn("-scheme NeoMusic", result.stdout)
-        self.assertEqual(self.state()["status"], "failed")
-
-    def test_frontam_showcase_failure_stops_before_host_tests(self):
-        result = self.run_ci({"FIXTURE_FRONTAM_SHOWCASE_EXIT": "5"})
-        self.assertEqual(result.returncode, 5)
-        self.assertIn("-scheme FrontAM-Package", result.stdout)
-        self.assertNotIn("-scheme NeoMusic", result.stdout)
         self.assertEqual(self.state()["status"], "failed")
 
     def test_existing_result_is_rotated_with_its_source_record(self):
@@ -451,8 +424,6 @@ class VendorBaselineTests(unittest.TestCase):
         output = subprocess.check_output(
             [sys.executable, str(ROOT / "scripts/check-vendor-notices.py"), "--baseline"], text=True)
         for package_path, revision, file in [
-            ("FrontAM/Vendor/LNPopupController", "fe0d1b8ce3c6464a63f0dc5e82d4c1b641adb8cc", "Package.swift"),
-            ("FrontAM/Vendor/LNPopupUI", "60853564423524c9ed15cc74c5969d3e1ca666f1", "Sources/LNPopupUI/LNPopupUI.swift"),
             ("AudioStreaming", "3b937b3682f6274ef6157aef156cd59d32ba3dc5", None),
             ("AudioTags", "deadc2990767dfbda0701e0ab35fdeea653db08f", "Sources/AudioTagBridge/AudioTagBridge.mm"),
         ]:

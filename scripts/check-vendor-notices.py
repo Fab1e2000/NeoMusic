@@ -9,8 +9,6 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 NOTICES = (
-    "FrontAM/Vendor/LNPopupController/NEOMUSIC-PATCHES.md",
-    "FrontAM/Vendor/LNPopupUI/NEOMUSIC-PATCHES.md",
     "AudioStreaming/NOTICE.md",
     "AudioTags/PROVENANCE.md",
 )
@@ -49,13 +47,7 @@ def baseline_report(packages: Path) -> None:
         package = notice.parent.name
         references = re.findall(r"`([^`]+)`", "\n".join(lines))
         paths = []
-        if package == "LNPopupController":
-            baseline = [line for line in lines if line.startswith("Upstream ")]
-            paths = [item for item in references if item.startswith("LNPopupController/")] + ["Package.swift"]
-        elif package == "LNPopupUI":
-            baseline = [line for line in lines if line.startswith(("Upstream:", "Revision:"))]
-            paths = [item for item in references if item.startswith("Sources/")]
-        elif package == "AudioStreaming":
+        if package == "AudioStreaming":
             baseline = [line for line in lines if line.startswith(("Source:", "Version:", "NeoMusic trial baseline:"))]
             paths = [item for item in references if item.startswith("Sources/") or item == "Tests/AudioStreamingTests"]
         else:

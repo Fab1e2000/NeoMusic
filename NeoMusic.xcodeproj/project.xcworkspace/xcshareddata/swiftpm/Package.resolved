@@ -1,6 +1,14 @@
 {
-  "originHash" : "6781692117a111f090c03b50d13a8ea0ac36c13b6235cad4b64da2d393a431c6",
   "pins" : [
+    {
+      "identity" : "frontam",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/Fab1e2000/FrontAM.git",
+      "state" : {
+        "revision" : "67b5398508013e999b2c6e37c99de05d019f0d5d",
+        "version" : "0.1.1"
+      }
+    },
     {
       "identity" : "lnswiftuiutils",
       "kind" : "remoteSourceControl",
@@ -29,5 +37,5 @@
       }
     }
   ],
-  "version" : 3
+  "version" : 2
 }

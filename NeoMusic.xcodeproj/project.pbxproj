@@ -27,7 +27,6 @@
 		15D096B2A34FCA9BEC89FC9A /* PlayerSourceNotices.txt in Resources */ = {isa = PBXBuildFile; fileRef = E0BE1837F92268E064FDA4B5 /* PlayerSourceNotices.txt */; };
 		1835E60E65963B1E198BAEE7 /* NeteaseHomeSupplemental.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC28E0C2E23FC68413C9A2B7 /* NeteaseHomeSupplemental.swift */; };
 		190F6BD16F1A19104BA85187 /* PlaylistPersistenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BD83D3BFFE6E6FF3EB5DAE9 /* PlaylistPersistenceTests.swift */; };
-		1A0FE9AE4B2109FC1AD7CDB3 /* PlayerContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72C6CCA6EC45ECE5B00BBD23 /* PlayerContractTests.swift */; };
 		1B84657493B9F01070976D1B /* PlaybackMediaSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAA3CB13131E853FF55C29F8 /* PlaybackMediaSession.swift */; };
 		1B8CDB3AB0CB3358E5287255 /* ArtistMusicIntegration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 21F4E3E1B3B82ECE91524A06 /* ArtistMusicIntegration.swift */; };
 		1E95D4F3E8F80FE8D27C4ECB /* ResilienceAndEdgeCaseTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DFC14C8687B3503B8C9280C /* ResilienceAndEdgeCaseTests.swift */; };
@@ -69,7 +68,6 @@
 		390D45785A303CD17260A7CB /* DownloadedLibraryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 056C7FC4AB9FED2435B833FA /* DownloadedLibraryTests.swift */; };
 		3950561FB6FB7035DB67F591 /* NeteaseAccountErrorPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 924F9002A28972944C344EB7 /* NeteaseAccountErrorPresentationTests.swift */; };
 		3A10A056F207231545A82237 /* NeteaseHomeModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F2072B4AEA914C60411EDE5 /* NeteaseHomeModels.swift */; };
-		3A2A21DD1FF3F6C463AC38FA /* VolumeInertiaPhysicsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B62EFB15CBE3172046551188 /* VolumeInertiaPhysicsTests.swift */; };
 		3A3527C872156EE2F0B3A12C /* Nuke in Frameworks */ = {isa = PBXBuildFile; productRef = 71D88B6110CCAE92DDD50367 /* Nuke */; };
 		3B08B81FA1103FC647A16F7C /* NowPlayingControlsPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B79944F75F62AF2554CA88F /* NowPlayingControlsPreview.swift */; };
 		3DD0F6B7AB929523A6815B76 /* FeatureModules.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57A38C53ADD221C1CACF3188 /* FeatureModules.swift */; };
@@ -372,7 +370,6 @@
 		700B9513799A7EB11A9163B6 /* NeteasePageCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NeteasePageCacheTests.swift; sourceTree = "<group>"; };
 		7083C426A196A4BA9F3DAE76 /* NeteaseCredentialStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NeteaseCredentialStoreTests.swift; sourceTree = "<group>"; };
 		713451666C0B853EC8B5E7DE /* OnlineMusicIntegration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnlineMusicIntegration.swift; sourceTree = "<group>"; };
-		72C6CCA6EC45ECE5B00BBD23 /* PlayerContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerContractTests.swift; sourceTree = "<group>"; };
 		732223954BD88588687B5112 /* PlaylistLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaylistLibrary.swift; sourceTree = "<group>"; };
 		77744BE81A8BF29E1817F296 /* NeteaseDownloadClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NeteaseDownloadClient.swift; sourceTree = "<group>"; };
 		78C0B07E0112BE535B5135BA /* DownloadSourceNotices.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = DownloadSourceNotices.txt; sourceTree = "<group>"; };
@@ -395,7 +392,6 @@
 		8B82D256801E1E8F51FCACBC /* FrontendMaintainabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrontendMaintainabilityTests.swift; sourceTree = "<group>"; };
 		8C461799B9C134DD088E8174 /* NeteaseMusicModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NeteaseMusicModels.swift; sourceTree = "<group>"; };
 		8D33D4318C8EA9D2B4CE3729 /* AccountAvatar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountAvatar.swift; sourceTree = "<group>"; };
-		8ED27B6C38858A0D2A3EACB4 /* FrontAM */ = {isa = PBXFileReference; lastKnownFileType = folder; name = FrontAM; path = Packages/FrontAM; sourceTree = SOURCE_ROOT; };
 		902EC3BB6EB4CED830114900 /* PlaybackMediaSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaybackMediaSessionTests.swift; sourceTree = "<group>"; };
 		905A8D046BD7EF925F9ED951 /* NeteaseCredentialStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NeteaseCredentialStore.swift; sourceTree = "<group>"; };
 		924F9002A28972944C344EB7 /* NeteaseAccountErrorPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NeteaseAccountErrorPresentationTests.swift; sourceTree = "<group>"; };
@@ -431,7 +427,6 @@
 		B42C22F7D0E15BD226E18C22 /* GPL-3.0.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "GPL-3.0.txt"; sourceTree = "<group>"; };
 		B4459DEA7650431A0953A2FB /* PlaylistLibraryOnlineCollections.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaylistLibraryOnlineCollections.swift; sourceTree = "<group>"; };
 		B48BD3C18CF5A28D2C4FAF42 /* LocalArtworkImages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalArtworkImages.swift; sourceTree = "<group>"; };
-		B62EFB15CBE3172046551188 /* VolumeInertiaPhysicsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VolumeInertiaPhysicsTests.swift; sourceTree = "<group>"; };
 		B66088506604DC29B9785489 /* PlaylistLibraryPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlaylistLibraryPresentation.swift; sourceTree = "<group>"; };
 		B736BBAB008478DE24EA9DA1 /* NeteaseAvatarSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NeteaseAvatarSnapshot.swift; sourceTree = "<group>"; };
 		B8E3C4DF91406523072F9BFB /* NeteaseArtistStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NeteaseArtistStoreTests.swift; sourceTree = "<group>"; };
@@ -696,16 +691,6 @@
 			path = Search;
 			sourceTree = "<group>";
 		};
-		57AA9F8DB9FED10791BDA2A0 /* FrontAMPlayerTests */ = {
-			isa = PBXGroup;
-			children = (
-				72C6CCA6EC45ECE5B00BBD23 /* PlayerContractTests.swift */,
-				B62EFB15CBE3172046551188 /* VolumeInertiaPhysicsTests.swift */,
-			);
-			name = FrontAMPlayerTests;
-			path = Packages/FrontAM/Tests/FrontAMPlayerTests;
-			sourceTree = "<group>";
-		};
 		64CDADC4365D16425CF7F2B4 /* Library */ = {
 			isa = PBXGroup;
 			children = (
@@ -867,7 +852,6 @@
 		B5FA0FEA0F59601DD326B727 = {
 			isa = PBXGroup;
 			children = (
-				57AA9F8DB9FED10791BDA2A0 /* FrontAMPlayerTests */,
 				A4DF5A5CD7C433780D16FFEE /* FullScreenPlayerTests */,
 				E1CA294273DDB2BE80AC1A26 /* NeoMusic */,
 				32DD943AE14EE7655C364B1A /* NeoMusicFunctionalParityTests */,
@@ -932,7 +916,6 @@
 			children = (
 				7C9E453720489435F5FEB2F0 /* AudioStreaming */,
 				C3DBF6A84AB892B802E83236 /* AudioTags */,
-				8ED27B6C38858A0D2A3EACB4 /* FrontAM */,
 			);
 			path = Packages;
 			sourceTree = "<group>";
@@ -1113,12 +1096,12 @@
 			mainGroup = B5FA0FEA0F59601DD326B727;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				BD7435D2A47674B9E2D3B59B /* XCRemoteSwiftPackageReference "FrontAM" */,
 				C02C17E386CF78EC7B5B3295 /* XCRemoteSwiftPackageReference "LNSwiftUIUtils" */,
 				5457280C3D8A27416BB865E8 /* XCRemoteSwiftPackageReference "LNSystemMarqueeLabel" */,
 				998860E0D22C944E36B29EBE /* XCRemoteSwiftPackageReference "Nuke" */,
 				8DD23727CD000FC8D596FB04 /* XCLocalSwiftPackageReference "Packages/AudioStreaming" */,
 				F69566D29C681BE03FB0D9A4 /* XCLocalSwiftPackageReference "Packages/AudioTags" */,
-				D6CEDCCEEB574E9FF76E9272 /* XCLocalSwiftPackageReference "Packages/FrontAM" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 23D3786D2FD177BD7D1A0DFF /* Products */;
@@ -1183,9 +1166,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				1A0FE9AE4B2109FC1AD7CDB3 /* PlayerContractTests.swift in Sources */,
 				7BD417FDB137F7E3FE0C59C5 /* PlayerResourceAndLyricsTests.swift in Sources */,
-				3A2A21DD1FF3F6C463AC38FA /* VolumeInertiaPhysicsTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1794,10 +1775,6 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/AudioStreaming;
 		};
-		D6CEDCCEEB574E9FF76E9272 /* XCLocalSwiftPackageReference "Packages/FrontAM" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = Packages/FrontAM;
-		};
 		F69566D29C681BE03FB0D9A4 /* XCLocalSwiftPackageReference "Packages/AudioTags" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/AudioTags;
@@ -1821,6 +1798,14 @@
 				version = 13.2.0;
 			};
 		};
+		BD7435D2A47674B9E2D3B59B /* XCRemoteSwiftPackageReference "FrontAM" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/Fab1e2000/FrontAM.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.1.1;
+			};
+		};
 		C02C17E386CF78EC7B5B3295 /* XCRemoteSwiftPackageReference "LNSwiftUIUtils" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/LeoNatan/LNSwiftUIUtils.git";
@@ -1834,10 +1819,12 @@
 /* Begin XCSwiftPackageProductDependency section */
 		00B17F0D3B82DBE4A03A27BC /* FrontAMCore */ = {
 			isa = XCSwiftPackageProductDependency;
+			package = BD7435D2A47674B9E2D3B59B /* XCRemoteSwiftPackageReference "FrontAM" */;
 			productName = FrontAMCore;
 		};
 		1002C118AAD791E2DD28CFB0 /* FrontAMPopup */ = {
 			isa = XCSwiftPackageProductDependency;
+			package = BD7435D2A47674B9E2D3B59B /* XCRemoteSwiftPackageReference "FrontAM" */;
 			productName = FrontAMPopup;
 		};
 		15BA51EB2A8C3B90A636BCC4 /* AudioTagBridge */ = {
@@ -1855,22 +1842,27 @@
 		};
 		7703F7DD2793D36942AEE3C1 /* FrontAMPages */ = {
 			isa = XCSwiftPackageProductDependency;
+			package = BD7435D2A47674B9E2D3B59B /* XCRemoteSwiftPackageReference "FrontAM" */;
 			productName = FrontAMPages;
 		};
 		8C5D460BD6D10D7CA180B52B /* FrontAMPlayer */ = {
 			isa = XCSwiftPackageProductDependency;
+			package = BD7435D2A47674B9E2D3B59B /* XCRemoteSwiftPackageReference "FrontAM" */;
 			productName = FrontAMPlayer;
 		};
 		A15CC0C596C4518542E37D39 /* FrontAMNavigation */ = {
 			isa = XCSwiftPackageProductDependency;
+			package = BD7435D2A47674B9E2D3B59B /* XCRemoteSwiftPackageReference "FrontAM" */;
 			productName = FrontAMNavigation;
 		};
 		C0EB1C170E73BAE0360775C5 /* FrontAMPlayer */ = {
 			isa = XCSwiftPackageProductDependency;
+			package = BD7435D2A47674B9E2D3B59B /* XCRemoteSwiftPackageReference "FrontAM" */;
 			productName = FrontAMPlayer;
 		};
 		CB99D91A6E359DB1287593A9 /* FrontAMPlayer */ = {
 			isa = XCSwiftPackageProductDependency;
+			package = BD7435D2A47674B9E2D3B59B /* XCRemoteSwiftPackageReference "FrontAM" */;
 			productName = FrontAMPlayer;
 		};
 /* End XCSwiftPackageProductDependency section */

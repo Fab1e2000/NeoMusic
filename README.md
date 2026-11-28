@@ -25,7 +25,7 @@ NeoMusic/
   Core/                         # 本地资料库、扫描、歌词、播放引擎与网易云业务
   Features/                     # 主页、资料库、搜索、账户与播放器宿主
   Resources/                    # 图标、资源与来源声明
-Packages/                       # FrontAM（含 LNPopup）、AudioStreaming、AudioTags
+Packages/                       # AudioStreaming、AudioTags（FrontAM 作为远程 SPM 包引入）
 FullScreenPlayerTests/          # FrontAMPlayer 单元测试
 NeoMusicTests/                  # 应用单元测试
 NeoMusicNavigationUITests/      # 导航与交互 UI 测试
@@ -36,7 +36,7 @@ scripts/                        # 边界检查、本机 CI、推送门禁与打�
 
 ## 本机验证
 
-日常改动运行 `python3 scripts/check-module-boundaries.py`，并按影响范围选择测试。推送代码前使用 `bash scripts/ci.sh`，脚本会检查模块边界与第三方来源声明、运行脚本回归与 AudioStreaming / FrontAM 包测试、验证 `FrontAMShowcase` 构建、重新生成工程，并在 iPhone 模拟器运行 Release 配置的 `NeoMusicTests` 和 `FullScreenPlayerTests`。
+日常改动运行 `python3 scripts/check-module-boundaries.py`，并按影响范围选择测试。推送代码前使用 `bash scripts/ci.sh`，脚本会检查模块边界与第三方来源声明、运行脚本回归和 AudioStreaming 测试、重新生成工程，并在 iPhone 模拟器运行 Release 配置的 `NeoMusicTests` 和 `FullScreenPlayerTests`。
 
 ## 文档
 
@@ -53,5 +53,4 @@ scripts/                        # 边界检查、本机 CI、推送门禁与打�
   - [网易云协议来源声明](NeoMusic/Resources/NeteaseSourceNotices.txt)
   - [第三方许可](NeoMusic/Features/Player/ThirdPartyLicenses.txt)、[GPL-3.0](NeoMusic/Features/Player/Resources/GPL-3.0.txt)、[Nuke 许可](NeoMusic/Features/Player/Resources/Nuke-LICENSE.txt)
   - [AudioStreaming 声明](Packages/AudioStreaming/NOTICE.md)、[AudioTags 来源](Packages/AudioTags/PROVENANCE.md)
-  - [FrontAM 第三方许可与来源](Packages/FrontAM/THIRD_PARTY_NOTICES.md)
-  - [LNPopupUI 修改说明](Packages/FrontAM/Vendor/LNPopupUI/NEOMUSIC-PATCHES.md)、[LNPopupController 修改说明](Packages/FrontAM/Vendor/LNPopupController/NEOMUSIC-PATCHES.md)
+  - [FrontAM 独立仓库与许可声明](https://github.com/Fab1e2000/FrontAM)（含 `THIRD_PARTY_NOTICES.md` 及 vendored `LNPopupUI` / `LNPopupController` 修改说明）
