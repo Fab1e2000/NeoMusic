@@ -65,7 +65,7 @@ NeoMusic/
 │       └── PlaybackQueuePersistence.swift
 └── Resources/                        # App 图标、资产与来源声明
 
-Packages/FrontAM/Sources/
+FrontAM（远程 SPM 包 Fab1e2000/FrontAM）Sources/
 ├── FrontAMCore/                       # 封面读取、取色、视觉组件与曲目播放状态接口
 ├── FrontAMPlayer/                     # 全屏播放器、Metal 着色器与来源声明
 ├── FrontAMPopup/                      # 迷你播放器与共享封面转场
@@ -88,7 +88,7 @@ flowchart TD
     Pages["FrontAMPages<br/>首页、搜索、资料库与编辑器"]
     Navigation["FrontAMNavigation"]
     Popup["FrontAMPopup"]
-    LN["LNPopupUI-Static"]
+    LN["LNPopupUI（FrontAM 内部 target）"]
     FSP["FrontAMPlayer"]
     FrontCore["FrontAMCore"]
 
@@ -125,7 +125,7 @@ flowchart TD
    - `URLRequest`、`HTTPCookie`、`WKWebView`、`WKWebsiteDataStore`、`WebPage`、`music.163.com`、`netease.session` 仅允许出现在 `Core/Netease` 与 `Features/Account`。
    - `Core/Netease` 不得引用 `LocalLibrary*`、`LocalMusic*`、`PlaylistLibrary`、`NowPlayingModel`、`ReferencePlayer*`、`PlayerState`、`PlayerPlaybackSource`、`PlayerServices`。
 2. **`FrontAM` 包隔离**
-   - 浏览线由 `FrontAMCore`、`FrontAMNavigation`、`FrontAMPages` 构成，仅使用 Apple 系统框架。`FrontAMNavigation` 依赖 `FrontAMCore`，`FrontAMPages` 依赖两者。播放线由 `FrontAMPlayer` 与 `FrontAMPopup` 构成，共用 `FrontAMCore`。`FrontAMPopup` 依赖 `FrontAMPlayer` 和 `LNPopupUI-Static`。伞形模块导出五个模块。
+   - 浏览线由 `FrontAMCore`、`FrontAMNavigation`、`FrontAMPages` 构成，仅使用 Apple 系统框架。`FrontAMNavigation` 依赖 `FrontAMCore`，`FrontAMPages` 依赖两者。播放线由 `FrontAMPlayer` 与 `FrontAMPopup` 构成，共用 `FrontAMCore`。`FrontAMPopup` 依赖 `FrontAMPlayer` 和 `FrontAM` 内部 vendored 的 `LNPopupUI` target。伞形模块导出五个模块。
    - FrontAM 源码禁止引用宿主实现类型（`NowPlayingModel`、`PlaylistLibrary`、`LibraryDownloads`、`Netease*`、`LocalLibrary*`、`ArtworkImagePipeline` 等）、`Bundle.main`、`UIImage(named:)` 或账号格式前缀。
    - `.metal` 着色器限于 `FrontAMPlayer` 和宿主的 `Features/Player`。
 3. **定向第三方框架导入**
